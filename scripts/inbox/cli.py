@@ -94,8 +94,9 @@ def cmd_reply(store: InboxStore, me: str, args: argparse.Namespace) -> None:
 
 
 def cmd_close(store, me, args):
-    close_reason(args.kind, " ".join(args.detail))
-    submit(store, outbox.record("close", me, {"kind": args.kind, "detail": " ".join(args.detail)}, item=args.id))
+    detail = " ".join(args.detail)
+    close_reason(args.kind, detail)
+    submit(store, outbox.record("close", me, {"kind": args.kind, "detail": detail}, item=args.id))
 
 
 def submit(store, record):
@@ -142,8 +143,8 @@ def _apply_close(store, me, record):
 
 
 def _closed_by(store: InboxStore, item, me: str) -> bool:
-    closing = next((entry for entry in reversed(store.history(item.id)) if "state" in entry), {})
-    return closing.get("state") == item.state and store.names.resolve(closing.get("by", "")) == store.names.resolve(me)
+    closing = [entry for entry in store.history(item.id) if "state" in entry][-1]
+    return closing["state"] == item.state and store.names.resolve(closing["by"]) == store.names.resolve(me)
 
 
 APPLY = {"send": _apply_send, "reply": _apply_reply, "close": _apply_close, "post": outbox.apply_post}

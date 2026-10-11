@@ -1,13 +1,19 @@
 import json
+from contextlib import contextmanager
 
 import pytest
-import redis
 
 from hooks import config
 from scripts.inbox import cli, outbox
 from scripts.inbox.store import Contended, DuplicateItem, InboxStore
 
 pytestmark = pytest.mark.xdist_group("fakeredis")
+
+
+def lost(text):
+    import redis
+
+    return redis.ConnectionError(text)
 
 
 class Outage:
@@ -19,6 +25,7 @@ class Outage:
         self.redis = fakeredis.FakeRedis(decode_responses=True)
         self.down = False
         self.failures = []
+        self.environs = []
         monkeypatch.setattr("scripts.swarm.store.redis_client", self.client)
         original = type(self.redis.pipeline()).execute
 
@@ -26,17 +33,18 @@ class Outage:
             writing = any(command[0][0] == "RPUSH" for command in pipe.command_stack)
             mode = self.failures.pop(0) if writing and self.failures else ""
             if mode == "before":
-                raise redis.ConnectionError("connection lost before the send landed")
+                raise lost("connection lost before the send landed")
             result = original(pipe, *args, **kwargs)
             if mode == "after":
-                raise redis.ConnectionError("connection lost after the send landed")
+                raise lost("connection lost after the send landed")
             return result
 
         monkeypatch.setattr(type(self.redis.pipeline()), "execute", execute)
 
     def client(self, environ=None):
+        self.environs.append(environ)
         if self.down:
-            raise redis.ConnectionError("Error 111 connecting to localhost:6379. Connection refused.")
+            raise lost("Error 111 connecting to localhost:6379. Connection refused.")
         return self.redis
 
     def texts(self, address):
@@ -88,8 +96,9 @@ def test_sends_failing_mid_pipeline_arrive_exactly_once_in_send_order(outage, ca
     outage.failures = ["after", "before"]
     for text in ("one", "two", "three"):
         assert run("send", "bob", text) == 0
-    states = [json.loads(line)["state"] for line in capsys.readouterr().out.splitlines()]
-    assert states == ["queued", "queued", "pending"]
+    rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [row["state"] for row in rows] == ["queued", "queued", "pending"]
+    assert (rows[2]["from"], rows[2]["to"]) == ("alice", "bob")
     assert records() == []
     assert outage.texts("bob") == ["one", "two", "three"]
     assert outbox.flush(InboxStore(outage.redis)).applied == []
@@ -124,7 +133,10 @@ def test_a_corrupt_record_is_reported_and_skipped_never_replayed_twice(outage, c
     assert capsys.readouterr().err.count("a corrupt outbox record was skipped") == 2
     assert outage.texts("bob") == ["before", "after"]
     assert records() == []
-    assert len(outbox.skipped_path().read_text().splitlines()) == 2
+    assert [json.loads(line) for line in outbox.skipped_path().read_text().splitlines()] == [
+        {"reason": "corrupt", "line": json.dumps(tampered) + "\n"},
+        {"reason": "corrupt", "line": "{not json\n"},
+    ]
 
     again = outbox.flush(InboxStore(outage.redis))
     assert (again.corrupt, again.applied) == (0, [])
@@ -136,6 +148,7 @@ def test_a_record_redis_refuses_on_replay_is_reported_and_set_aside(outage, caps
     outage.down = True
     assert run("close", "nosuchitem", "cancel") == 0
     assert run("send", "bob", "still arrives") == 0
+    refused = outbox.path().read_text().splitlines(keepends=True)[0]
     capsys.readouterr()
     outage.down = False
     report = outbox.flush(InboxStore(outage.redis))
@@ -143,7 +156,7 @@ def test_a_record_redis_refuses_on_replay_is_reported_and_set_aside(outage, caps
     assert "no message nosuchitem" in capsys.readouterr().err
     assert outage.texts("bob") == ["still arrives"]
     assert records() == []
-    assert json.loads(outbox.skipped_path().read_text())["reason"] == "no message nosuchitem"
+    assert json.loads(outbox.skipped_path().read_text()) == {"reason": "no message nosuchitem", "line": refused}
 
 
 def test_replies_and_closes_made_while_redis_is_down_replay_once(outage, monkeypatch, capsys):
@@ -172,7 +185,7 @@ def test_a_reply_whose_close_failed_mid_call_replays_only_the_close(outage, monk
     asked = store.send("alice", "bob", "can you review")
     monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", "bob")
     close = InboxStore.close
-    monkeypatch.setattr(InboxStore, "close", lambda *args: (_ for _ in ()).throw(redis.ConnectionError("lost")))
+    monkeypatch.setattr(InboxStore, "close", lambda *args: (_ for _ in ()).throw(lost("lost")))
     assert run("reply", asked.id, "on it") == 0
     answer = json.loads(capsys.readouterr().out)["id"]
     assert [item.id for item in store.inbox("alice")] == [answer]
@@ -228,7 +241,7 @@ def test_a_fully_replayed_record_left_in_the_file_is_not_applied_again(outage, m
     monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", "bob")
     outage.down = True
     assert run("reply", asked.id, "on it") == 0
-    assert run("close", told.id, "done", "rebased") == 0
+    assert run("close", told.id, "done", "rebased", "cleanly") == 0
     assert run("send", "alice", "rebased and pushed") == 0
     kept = outbox.path().read_text()
     outage.down = False
@@ -236,10 +249,11 @@ def test_a_fully_replayed_record_left_in_the_file_is_not_applied_again(outage, m
     histories = [store.history(item.id) for item in (asked, told)]
     outbox.path().write_text(kept)
     report = outbox.flush(store)
-    assert (report.applied, report.rejected, len(report.already)) == ([], [], 3)
+    assert (report.applied, report.rejected) == ([], [])
+    assert report.already == [json.loads(line)["item"] for line in kept.splitlines()]
     assert [item.text for item in store.inbox("alice")] == ["on it", "rebased and pushed"]
     assert [store.history(item.id) for item in (asked, told)] == histories
-    assert store.get(told.id).reason == "done: rebased"
+    assert store.get(told.id).reason == "done: rebased cleanly"
 
 
 def test_a_send_with_a_given_id_refuses_a_second_write(outage):
@@ -262,7 +276,8 @@ def test_a_full_outbox_refuses_loudly_and_keeps_the_oldest_record(outage, monkey
     assert "outbox holds" in capsys.readouterr().err
     assert run("send", "bob", "refused") == 1
     err = capsys.readouterr().err
-    assert "outbox is full" in err and "nothing queued was dropped" in err
+    assert "outbox is full" in err
+    assert "this message was not queued and nothing queued was dropped: bring Redis back so the outbox replays" in err
     assert [record["args"]["text"] for record in records()] == ["oldest", "newer"]
 
 
@@ -385,3 +400,72 @@ def test_a_live_close_that_meets_contention_is_queued_and_replays(outage, monkey
     monkeypatch.setattr(InboxStore, "close", close)
     assert outbox.flush(store).applied == [asked.id]
     assert store.get(asked.id).reason == "done: answered"
+
+
+def test_the_outbox_bounds_take_an_exact_fit_and_warn_at_the_threshold(outage, monkeypatch, capsys):
+    entry = outbox.record("send", "alice", {"address": "bob", "text": "fits", "fyi": False})
+    size = len(json.dumps(entry)) + 1
+    monkeypatch.setenv(outbox.MAX_ENV, str(size))
+    monkeypatch.setenv(outbox.WARN_ENV, str(size))
+    outbox.append(entry)
+    assert f"holds {size} bytes of its {size} byte limit" in capsys.readouterr().err
+    with pytest.raises(outbox.OutboxFull, match=rf"full \({size} of {size} bytes"):
+        outbox.append(outbox.record("send", "alice", {"address": "bob", "text": "over", "fyi": False}))
+    assert records() == [entry]
+
+
+def test_a_flush_skips_while_another_process_holds_the_outbox(outage, monkeypatch):
+    outage.down = True
+    assert run("send", "bob", "waits") == 0
+    outage.down = False
+    asked = []
+
+    @contextmanager
+    def held(blocking=True):
+        asked.append(blocking)
+        yield False
+
+    monkeypatch.setattr(outbox, "locked", held)
+    report = outbox.flush(InboxStore(outage.redis))
+    assert (asked, report.applied, len(records())) == ([False], [], 1)
+
+
+def test_a_live_reply_and_a_repeated_close_report_what_happened(outage, monkeypatch, capsys):
+    store = InboxStore(outage.redis)
+    asked = store.send("alice", "bob", "can you review")
+    told = store.send("alice", "bob", "please rebase")
+    monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", "bob")
+    assert run("reply", asked.id, "on it") == 0
+    answer = store.inbox("alice")[0].id
+    assert json.loads(capsys.readouterr().out) == {"id": answer, "to": "alice", "closed": asked.id}
+    assert run("close", told.id, "done", "rebased", "cleanly") == 0
+    capsys.readouterr()
+    assert run("close", told.id, "done", "rebased", "cleanly") == 1
+    assert f"message {told.id} is already closed: done: rebased cleanly" in capsys.readouterr().err
+
+
+def test_store_replies_get_fresh_answers_and_refuse_a_replayed_answer(outage):
+    store = InboxStore(outage.redis)
+    one, two = store.send("alice", "bob", "one"), store.send("alice", "bob", "two")
+    first, second = store.reply(one.id, "bob", "first"), store.reply(two.id, "bob", "second")
+    assert first.id != second.id and not first.fyi
+    with pytest.raises(DuplicateItem, match=f"message {one.id} was already answered with message {first.id}"):
+        store.reply(one.id, "bob", "first", answer_id=first.id)
+
+
+def test_a_close_that_keeps_meeting_contention_raises_contended(outage, monkeypatch):
+    from redis.exceptions import WatchError
+
+    store = InboxStore(outage.redis)
+    asked = store.send("alice", "bob", "can you review")
+    monkeypatch.setattr(InboxStore, "_try_move", lambda *args: (_ for _ in ()).throw(WatchError()))
+    with pytest.raises(Contended, match=f"message {asked.id} changed meanwhile; run the command again"):
+        store.close(asked.id, "bob", "done", "answered")
+
+
+def test_connect_reaches_redis_with_the_given_environment(outage):
+    from scripts.inbox.store import connect
+
+    environ = {"REDIS_URL": "redis://elsewhere:6379"}
+    connect(environ)
+    assert outage.environs[-1] is environ

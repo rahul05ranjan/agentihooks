@@ -8,11 +8,12 @@ import hashlib
 import json
 import os
 import sys
+import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from scripts.inbox.store import Contended, DuplicateItem, InboxError, new_item_id, now_ms
+from scripts.inbox.store import Contended, DuplicateItem, InboxError, new_item_id
 
 NAME = "inbox-outbox.jsonl"
 SKIPPED = "inbox-outbox.skipped.jsonl"
@@ -61,11 +62,11 @@ def bounds(environ=None) -> tuple[int, int]:
 
 
 def checksum(body: dict) -> str:
-    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
 
 
 def record(op: str, by: str, args: dict, item: str = "") -> dict:
-    body = {"op": op, "by": by, "item": item or new_item_id(), "args": args, "at": now_ms()}
+    body = {"op": op, "by": by, "item": item or new_item_id(), "args": args}
     return {**body, "sum": checksum(body)}
 
 
@@ -81,7 +82,7 @@ def parse(line: str) -> dict | None:
 
 
 def waiting() -> bool:
-    return path().exists() and path().stat().st_size > 0
+    return path().exists()
 
 
 @contextmanager
@@ -100,7 +101,7 @@ def locked(blocking=True):
 
 
 def append(entry: dict) -> None:
-    line = json.dumps(entry, sort_keys=True) + "\n"
+    line = json.dumps(entry) + "\n"
     limit, warn = bounds()
     with locked():
         size = path().stat().st_size if path().exists() else 0
@@ -113,8 +114,7 @@ def append(entry: dict) -> None:
         with path().open("a") as handle:
             handle.write(line)
             _sync(handle)
-        if not size:
-            _sync_home()
+        _sync_home()
     if grown >= warn:
         print(
             f"agentihooks msg: warning: the local inbox outbox holds {grown} bytes of its {limit} byte limit",
@@ -184,13 +184,17 @@ def _keep(lines: list[str], report: Report) -> None:
 
 def _set_aside(line: str, reason: str) -> None:
     with skipped_path().open("a") as handle:
-        handle.write(json.dumps({"reason": reason, "line": line.rstrip("\n")}) + "\n")
+        handle.write(json.dumps({"reason": reason, "line": line}) + "\n")
         _sync(handle)
 
 
 def _rewrite(lines: list[str]) -> None:
-    staged = path().with_suffix(".tmp")
-    with staged.open("w") as handle:
+    if not lines:
+        path().unlink()
+        _sync_home()
+        return
+    descriptor, staged = tempfile.mkstemp(dir=home())
+    with os.fdopen(descriptor, "w") as handle:
         handle.write("".join(lines))
         _sync(handle)
     os.replace(staged, path())
