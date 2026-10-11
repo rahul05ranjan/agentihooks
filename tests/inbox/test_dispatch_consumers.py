@@ -63,7 +63,7 @@ def test_the_claude_channel_pushes_nothing_while_an_owner_holds_the_recipient(st
         ready = anyio.Event()
         ready.set()
         with pytest.raises(Stop):
-            await channel._push(store, "bob", Write(), ready, PubSub())
+            await channel._push(store, "bob", Write(), ready)
 
     monkeypatch.setattr(channel, "SETTLE_S", 0)
     monkeypatch.setattr(channel, "_recheck", stop)
