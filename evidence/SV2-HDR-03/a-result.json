@@ -9,7 +9,7 @@
   "observed": {
     "checks": {
       "each_registration_maps_to_its_own_execution": true,
-      "boundary_bound_to_verified_incarnation": true,
+      "verdicts_keyed_by_endpoint_incarnation": true,
       "two_workers_beside_local": true,
       "store_matches_catalog": true,
       "nothing_refused": true,
@@ -25,6 +25,7 @@
         },
         "refused": {},
         "retired": [],
+        "unverified": [],
         "drift": {
           "missing": 2
         },
@@ -37,6 +38,7 @@
         },
         "refused": {},
         "retired": [],
+        "unverified": [],
         "drift": {},
         "herdr_registration_drift": 0
       },

@@ -208,9 +208,10 @@ def test_the_store_round_trips_a_private_sorted_document(tmp_path):
 
 
 def test_the_store_creates_a_private_parent(tmp_path):
-    store = Store(tmp_path / "new" / "registrations.json")
+    store = Store(tmp_path / "new" / "deeper" / "registrations.json")
     store.save({})
     assert stat.S_IMODE(store.path.parent.stat().st_mode) == 0o700
+    assert store.load() == {}
 
 
 @pytest.mark.parametrize(
@@ -554,3 +555,62 @@ def test_the_store_syncs_the_record_before_and_its_folder_after_the_replace(tmp_
         (tmp_path / ".registrations.json.tmp", '{\n  "version": 1,\n  "registrations": []\n}\n', False),
         (tmp_path, None, True),
     ]
+
+
+def test_a_verified_registration_survives_an_unreachable_probe(tmp_path):
+    registrations, herdr, desired = world(tmp_path)
+    first = registrations.reconcile(desired[:1], Verdicts())
+    later = registrations.reconcile(desired[:1], Verdicts(Unreachable("x")))
+    assert (later.registered, later.unverified, later.refused) == (first.registered, [EXE_A], {})
+    assert first.unverified == []
+    assert herdr.mutating()[-1][:3] == ["herdr", "machine", "add"]
+
+
+def test_recorded_names_the_committed_profile_only(tmp_path):
+    registrations, herdr, desired = world(tmp_path)
+    assert registrations.recorded(desired[0]) is None
+    herdr.unanswered.add(TARGET_A)
+    refusal(lambda: registrations.register(desired[0]))
+    assert registrations.recorded(desired[0]) is None
+    herdr.unanswered.clear()
+    assert registrations.recorded(desired[0]) is None
+    assert registrations.recorded(desired[0]) != registrations.register(desired[0])
+    assert registrations.recorded(desired[0]) == herdr.machines[0]["id"]
+
+
+def test_every_label_and_target_collision_is_counted(tmp_path):
+    desired = cases.endpoints()
+    listed = [machine("m1", desired[0].name, "ssh://devbox"), machine("m2", "devbox", desired[1].target)]
+    registrations, herdr, _ = world(tmp_path, listed)
+    for endpoint in desired + desired:
+        refusal(lambda endpoint=endpoint: registrations.register(endpoint))
+    assert registrations.drift == {"missing": 4, "collision": 4}
+    assert herdr.mutating() == []
+
+
+def test_every_moved_profile_is_counted(tmp_path):
+    registrations, herdr, desired = world(tmp_path)
+    registrations.register(desired[0])
+    for old_target in ("ssh://old-1", "ssh://old-2"):
+        herdr.machines[0]["target"] = old_target
+        registrations.register(desired[0])
+    assert registrations.drift == {"missing": 1, "moved": 2}
+
+
+def test_every_relabelled_profile_is_counted(tmp_path):
+    registrations, herdr, desired = world(tmp_path)
+    registrations.register(desired[0])
+    for label in ("by-hand-1", "by-hand-2"):
+        herdr.machines[0]["label"] = label
+        registrations.register(desired[0])
+    assert registrations.drift == {"missing": 1, "label": 2}
+
+
+def test_every_adopted_interrupted_add_is_counted(tmp_path):
+    registrations, herdr, desired = world(tmp_path)
+    herdr.unanswered.update(endpoint.target for endpoint in desired)
+    first = registrations.reconcile(desired, Verdicts())
+    herdr.unanswered.clear()
+    second = registrations.reconcile(desired, Verdicts())
+    assert first.refused == {EXE_A: "catalog_unreachable", EXE_B: "catalog_unreachable"}
+    assert (second.drift, sorted(second.registered)) == ({"interrupted": 2}, [EXE_A, EXE_B])

@@ -31,15 +31,15 @@ class Record:
 def _entry(entry: dict) -> Record:
     record = Record(**entry)
     if not isinstance(record.before, list | tuple):
-        raise ValueError(record.execution_id)
+        raise ValueError
     before = tuple(record.before)
     texts = (record.execution_id, record.label, record.target, record.session, *before)
     if not all(isinstance(text, str) and text for text in texts):
-        raise ValueError(record.execution_id)
+        raise ValueError
     if type(record.generation) is not int or record.generation < 1:
-        raise ValueError(record.execution_id)
+        raise ValueError
     if record.profile_id is not None and not (isinstance(record.profile_id, str) and record.profile_id):
-        raise ValueError(record.execution_id)
+        raise ValueError
     return replace(record, before=before)
 
 
@@ -48,6 +48,7 @@ class Report:
     registered: dict[str, str] = field(default_factory=dict)
     refused: dict[str, str] = field(default_factory=dict)
     retired: list[str] = field(default_factory=list)
+    unverified: list[str] = field(default_factory=list)
     drift: dict[str, int] = field(default_factory=dict)
 
     def herdr_registration_drift(self) -> int:
@@ -76,7 +77,7 @@ class Store:
         try:
             document = json.loads(self.path.read_text())
             if document["version"] != VERSION:
-                raise ValueError(document["version"])
+                raise ValueError
             records = [_entry(entry) for entry in document["registrations"]]
         except (OSError, ValueError, TypeError, KeyError):
             raise EndpointRefused("ownership_unreadable", "the registration ownership record is unreadable") from None
@@ -206,6 +207,11 @@ class Registrations:
             self.drift["retired"] += 1
         self._drop(records, execution_id, saved.profile_id if saved else None)
 
+    def recorded(self, endpoint: Endpoint) -> str | None:
+        with self.store.locked():
+            record = self.store.load().get(endpoint.scope.execution_id)
+        return None if record is None else record.profile_id
+
     def withdraw(self, endpoint: Endpoint) -> None:
         with self.store.locked():
             records = self.store.load()
@@ -214,18 +220,24 @@ class Registrations:
 
     def _admit(
         self, endpoint: Endpoint, records: dict[str, Record], machines: tuple[Machine, ...], qualifier: Qualifier
-    ) -> str:
+    ) -> tuple[str, bool]:
+        record = records.get(endpoint.scope.execution_id)
+        recorded = None if record is None else record.profile_id
         profile_id = self._register(endpoint, records, machines)
         try:
-            reason = "" if qualifier.verdict(endpoint.name, endpoint.incarnation).compatible else "incompatible"
+            verdict = qualifier.verdict(endpoint.name, endpoint.incarnation)
         except Unreachable:
+            if profile_id == recorded:
+                return profile_id, False
             reason = "unreachable"
         except Incompatible:
             reason = "incompatible"
+        else:
+            reason = "" if verdict.compatible else "incompatible"
         if reason:
             self._drop(records, endpoint.scope.execution_id, profile_id)
             raise EndpointRefused(reason, f"{endpoint.name} did not qualify: {reason}")
-        return profile_id
+        return profile_id, True
 
     def reconcile(self, desired: Iterable[Endpoint], qualifier: Qualifier) -> Report:
         with self.store.locked():
@@ -242,7 +254,10 @@ class Registrations:
         report = Report()
         for execution_id in sorted(wanted):
             try:
-                report.registered[execution_id] = self._admit(wanted[execution_id], records, machines, qualifier)
+                profile_id, verified = self._admit(wanted[execution_id], records, machines, qualifier)
+                report.registered[execution_id] = profile_id
+                if not verified:
+                    report.unverified.append(execution_id)
             except EndpointRefused as refused:
                 report.refused[execution_id] = refused.reason
         for execution_id in sorted(set(records) - set(wanted)):
