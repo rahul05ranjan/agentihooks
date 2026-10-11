@@ -66,7 +66,8 @@ Usage: ledger.py --slug SLUG --as NAME <command> [args]
                                       refused while the same write names a plan_slice or slice;
                                       proof.KEY=VALUE and contract.KEY=VALUE pairs form one object, e.g.
                                       proof.command=C proof.output=O; contract pairs update only the keys they
-                                      name, e.g. contract.push=yes
+                                      name, e.g. contract.push=yes; --quote with rank=R relays the
+                                      operator's words so the rank stays his and the dispatcher keeps it
   plan-backfill                       compute missing plan lines for linked unfinished tasks; list missing slices
   prompt                              print the join paragraph for a launch prompt
   url                                 print the ledger page link for the operator (no --as needed)
@@ -734,7 +735,8 @@ def cmd_task(args):
             sys.exit(f"task set takes {name}=VALUE or {name}.KEY=VALUE pairs, not both")
         fields.setdefault(name, {})[sub] = fields.pop(dotted)
     refuse_plain_objects(fields)
-    send(args, "task_update", item=f"tasks/{args.id}", fields=fields)
+    quoted = {"quote": args.quote} if args.quote else {}
+    send(args, "task_update", item=f"tasks/{args.id}", fields=fields, **quoted)
     print(json.dumps({"task": args.id, **fields}))
 
 
@@ -879,6 +881,7 @@ def build_parser():
     task.add_argument("--profile")
     task.add_argument("--overlays", help="comma separated overlays this task's agent wears, at most three")
     task.add_argument("--rank", help="queue rank: urgent, high, normal (default) or low; next means urgent")
+    task.add_argument("--quote", default="", help="task set rank=...: the operator's words, so the rank stays his")
     task.add_argument("--plan-slice", default="", help="task slice anchor; computes its plan lines")
     task.add_argument(
         "--follow-up", action="store_true", help="a follow up task: no slice in a sliced phase, judged by its text"

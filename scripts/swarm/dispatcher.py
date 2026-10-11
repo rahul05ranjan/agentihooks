@@ -1,8 +1,8 @@
 """The dispatcher's tick step: rank by the open work each task unblocks, grouping and the priority sweep, by autonomy.
 
 Each tick it orders the claimable tasks in focus by leverage. At delegate and full it raises the top ones to high and
-lowers a high rank it set itself once that task leaves the top, never changing a rank someone else set; below delegate
-it proposes each raise to the master. Every action is a gate log row, a dispatch metrics row naming its rule and, for
+lowers a high rank once that task leaves the top. A master or planner rank is a default it reorders; only an operator
+rank, set by him or relayed with his quoted words, stays fixed. Below delegate it proposes each raise to the master. Every action is a gate log row, a dispatch metrics row naming its rule and, for
 a rank, a comment on the task.
 """
 
@@ -15,6 +15,7 @@ from scripts.swarm import bottleneck, freeze, grouping, metrics_outbox, priority
 from scripts.swarm.ledger_client import LedgerRefused
 from scripts.swarm.ledger_events import Mail
 from scripts.swarm.store import SwarmError
+from scripts.swarm_ledger import ledger_rank
 from scripts.swarm_ledger.repository import hierarchy
 
 AUTHOR = "dispatcher"
@@ -83,18 +84,20 @@ def ordered(doc: dict, named: str, scores: dict) -> list[str]:
 def rank_pass(slug, config, store, ledger, doc, now_ms):
     from scripts.swarm import tick
 
-    scores, known, owned = leverage(doc), {t["id"]: t for t in doc["tasks"]}, _owned(doc)
+    scores, known, owned, fixed = leverage(doc), {t["id"]: t for t in doc["tasks"]}, _owned(doc), _fixed(doc)
     named = bottleneck.read(store, slug).get("bottleneck")
     graph, fix = hierarchy.project(doc)[0], freeze.fix_phase(config)
-    queue = [task_id for task_id in ordered(doc, named, scores) if tick.ready(known[task_id], known, doc, graph, fix)]
-    top = [task_id for task_id in queue if task_id in owned or known[task_id].get("rank") in WINDOW][:TOP]
+    claimable = {task_id for task_id, t in known.items() if tick.ready(t, known, doc, graph, fix)}
+    queue = [task_id for task_id in ordered(doc, named, scores) if task_id in claimable]
+    top = [task_id for task_id in queue if task_id not in fixed or known[task_id].get("rank") in WINDOW][:TOP]
     raises = [
         (known[task_id], _work(scores[task_id]))
         for task_id in top
-        if known[task_id].get("rank") != RANK and (task_id in owned or "rank" not in known[task_id])
+        if known[task_id].get("rank") not in WINDOW[1:] and task_id not in fixed
     ]
     if config.autonomy in APPLIES:
-        stale = [t for t in doc["tasks"] if t["id"] in owned and t.get("rank") == RANK and _open(t)]
+        mine = owned | (claimable - fixed)
+        stale = [t for t in doc["tasks"] if t["id"] in mine and t.get("rank") == RANK and _open(t)]
         lowers = [(t, _why(t["id"], queue, scores)) for t in stale if t["id"] not in top]
         steps = [partial(_lower, slug, ledger, *row) for row in lowers]
         steps += [partial(_raise, slug, ledger, *row) for row in raises]
@@ -195,9 +198,17 @@ def _open(task):
 
 
 def _owned(doc):
+    return _ranked_by(doc, AUTHOR)
+
+
+def _fixed(doc):
+    return _ranked_by(doc, ledger_rank.OPERATOR)
+
+
+def _ranked_by(doc, author):
     stamps = doc.get("_meta", {}).get("stamps", {})
     return {
-        t["id"] for t in doc["tasks"] if "rank" in t and stamps.get(f"tasks/{t['id']}/rank", {}).get("by") == AUTHOR
+        t["id"] for t in doc["tasks"] if "rank" in t and stamps.get(f"tasks/{t['id']}/rank", {}).get("by") == author
     }
 
 

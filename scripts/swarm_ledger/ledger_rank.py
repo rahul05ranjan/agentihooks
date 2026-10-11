@@ -49,9 +49,8 @@ def apply(doc, op, ctx):
         ctx.refused.append(refusal)
         return False
     rank, path = canonical(op["rank"]), f"{op['item']}/rank"
-    owner = author(ctx, path) if op.get("if_owned") and "rank" in task else by
-    if owner != by:
-        ctx.refused.append(f"task {task_id} has rank {task['rank']} set by {owner or 'someone else'}")
+    if op.get("if_owned") and "rank" in task and author(ctx, path) == OPERATOR:
+        ctx.refused.append(f"task {task_id} has rank {task['rank']} set by {OPERATOR}")
         return False
     if task.get("rank") != rank or author(ctx, path) != by:
         task["rank"] = rank

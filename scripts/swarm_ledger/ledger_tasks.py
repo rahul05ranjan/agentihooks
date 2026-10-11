@@ -62,6 +62,11 @@ WORKER_LANES = ("eng", "ci")
 SWARM = "swarm"
 RANK_AUTHORS = ("operator", SWARM, "dispatcher")
 RANK_LANES = ("master", "dispatch")
+QUOTED = "task_update takes quote, the operator's words, only with a rank"
+UNRELAYED = (
+    "a rank relay needs the ledger's orchestrator and words the hooks recorded from the operator: "
+    "set the rank without a quote or quote his exact words"
+)
 PROPOSE = 'propose the work with agentihooks ledger followup add "<plain words>" and the master decides'
 PUBLISH = (
     "publish the plan with agentihooks ledger publish-plan <file> --phase <phase id>, then link each task with "
@@ -117,6 +122,7 @@ def check(op):
     if "state" in fields and fields["state"] not in STATES:
         raise ValueError(f"state must be one of {STATES}")
     check_guards(op)
+    check_quote(op)
     check_lists(fields)
     check_stack(fields)
     check_bools(fields)
@@ -132,6 +138,21 @@ def check_guards(op: dict) -> None:
     guard = op.get("if_state", [])
     if not isinstance(guard, list) or not all(state in STATES for state in guard):
         raise ValueError(f"if_state must be a list of states from {STATES}")
+
+
+def check_quote(op: dict) -> None:
+    if "quote" not in op:
+        return
+    quote = op["quote"]
+    if not isinstance(quote, str) or not quote.strip() or set(op["fields"]) != {"rank"}:
+        raise ValueError(QUOTED)
+
+
+def relayed_words(op: dict, ctx) -> str:
+    from scripts.swarm_ledger import ledger_relay
+
+    master = ctx.meta["members"].get(op["by"], {}).get("role") == "orchestrator"
+    return ledger_relay.verified(op["by"], op["quote"]) if master else ""
 
 
 def check_stack(fields):
@@ -289,6 +310,8 @@ def _add(doc, op, ctx):
         return False
     tasks.append(task)
     ctx.record(op["by"], "added", f"tasks/{task['id']}", text=task["title"])
+    if "rank" in task:
+        ctx.stamp(f"tasks/{task['id']}/rank", op["by"])
     return True
 
 
@@ -456,6 +479,25 @@ def _update(doc, op, ctx):
     return True
 
 
+def _relay_rank(doc, op, ctx):
+    from scripts.swarm_ledger.ledger_relay import RELAYED_FROM
+
+    task = next((t for t in doc.get("tasks", []) if t["id"] == op["item"].split("/")[1]), None)
+    if task is None:
+        return False
+    words = relayed_words(op, ctx)
+    if refusal := update_refusal(doc, op, ctx.meta) or ("" if words else UNRELAYED):
+        ctx.refused.append(refusal)
+        return False
+    rank = ledger_rank.canonical(op["fields"]["rank"])
+    task["rank"] = rank
+    ctx.stamp(f"{op['item']}/rank", ledger_rank.OPERATOR)
+    marks = {"relayed_by": op["by"], "relayed_from": RELAYED_FROM, "quote": words}
+    ctx.record(ledger_rank.OPERATOR, "rank set", op["item"], text=rank, **marks)
+    ctx.dirty = True
+    return True
+
+
 def _changed(task, fields, op, ctx):
     changed = {k: v for k, v in fields.items() if task.get(k) != v}
     if "rank" in fields and ledger_rank.author(ctx, f"{op['item']}/rank") != op["by"]:
@@ -564,6 +606,8 @@ def _set_slice(doc: dict, op: dict, ctx) -> bool:
 def apply(doc, op, ctx):
     if op["op"] == "task_add":
         return _add(doc, op, ctx)
+    if "quote" in op:
+        return _relay_rank(doc, op, ctx)
     if op.get("if_plan_lines_missing") and any(
         t["id"] == op["item"].split("/")[1] and t.get("plan_lines") for t in doc.get("tasks", [])
     ):
