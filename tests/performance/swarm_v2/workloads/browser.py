@@ -1,6 +1,7 @@
-"""Browser heavy workload: headless Chromium with one isolated page per child, each rendering and scripting a large page."""
+"""Browser heavy workload: one headless Chromium process per child, each rendering and scripting a large page."""
 
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 
@@ -33,19 +34,27 @@ def page(root: Path) -> Path:
     return path
 
 
+def browse(url: str) -> int:
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        tab = browser.new_page()
+        tab.goto(url)
+        totals = [tab.evaluate(SCRIPT) for _ in range(2)]
+        browser.close()
+    return 0 if all(totals) else 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--children", type=int, required=True)
+    parser.add_argument("--url", default="")
     args = parser.parse_args()
+    if args.url:
+        return browse(args.url)
     url = page(Path.cwd()).as_uri()
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        pages = [browser.new_context().new_page() for _ in range(max(args.children, 1))]
-        for tab in pages:
-            tab.goto(url)
-        totals = [tab.evaluate(SCRIPT) for tab in pages for _ in range(2)]
-        browser.close()
-    return 0 if all(totals) else 1
+    command = [sys.executable, __file__, "--children", "0", "--url", url]
+    children = [subprocess.Popen(command) for _ in range(max(args.children, 1))]
+    return max(child.wait() for child in children)
 
 
 if __name__ == "__main__":

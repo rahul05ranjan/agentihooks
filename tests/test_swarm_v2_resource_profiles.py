@@ -22,6 +22,8 @@ def run(cls, children, repeat, rss, **extra):
         "repeat": repeat,
         "peak_rss_mib": rss,
         "peak_pss_mib": extra.get("pss", rss * 0.8),
+        "peak_parent_rss_mib": 30,
+        "peak_children_rss_mib": rss - 30,
         "peak_cores": cores,
         "cpu_seconds": cores * 2,
         "wall_seconds": 3.0,
@@ -187,36 +189,76 @@ def test_compare_ignores_changes_within_tolerance():
 
 def test_promote_decides_first_replay_stale_conflict_requalify_and_upgrade():
     accepted = profiles.derive(measured(memory_runs()), NODES, POLICY)
-    assert profiles.promote(None, accepted, POLICY) == {"decision": "promoted", "accepted": accepted, "changes": None}
+    first = profiles.promote(None, accepted, POLICY, "")
+    assert first == {"decision": "promoted", "accepted": accepted, "changes": None}
     replay = json.loads(json.dumps(accepted))
-    assert profiles.promote(accepted, replay, POLICY) == {"decision": "replayed", "accepted": accepted, "changes": None}
+    assert profiles.promote(accepted, replay, POLICY, "") == {
+        "decision": "replayed",
+        "accepted": accepted,
+        "changes": None,
+    }
     stale = profiles.derive(measured(memory_runs(), 0), NODES, POLICY)
-    assert profiles.promote(accepted, stale, POLICY) == {"decision": "stale", "accepted": accepted, "changes": None}
+    assert profiles.promote(accepted, stale, POLICY, "op") == {
+        "decision": "stale",
+        "accepted": accepted,
+        "changes": None,
+    }
     clash = profiles.derive(measured(memory_runs(2.0), 1), NODES, POLICY)
-    assert profiles.promote(accepted, clash, POLICY) == {"decision": "conflict", "accepted": accepted, "changes": None}
+    assert profiles.promote(accepted, clash, POLICY, "op") == {
+        "decision": "conflict",
+        "accepted": accepted,
+        "changes": None,
+    }
     grown = profiles.derive(measured(memory_runs(1.5), 2, {**TOOLS, "workload:memory": "2"}), NODES, POLICY)
-    held = profiles.promote(accepted, grown, POLICY)
-    assert held == {"decision": "requalify", "accepted": accepted, "changes": profiles.compare(accepted, grown, POLICY)}
+    changes = profiles.compare(accepted, grown, POLICY)
+    held = profiles.promote(accepted, grown, POLICY, "")
+    assert held == {"decision": "requalify", "accepted": accepted, "changes": changes}
     assert held["accepted"] is accepted
     upgraded = profiles.derive(measured(memory_runs(), 3, {**TOOLS, "python": "3.12.2"}), NODES, POLICY)
-    moved = profiles.promote(accepted, upgraded, POLICY)
-    assert moved["decision"] == "promoted" and moved["accepted"] is upgraded
-    assert moved["changes"] == {"material": [], "missing": [], "tools_changed": {"python": ["3.12.1", "3.12.2"]}}
+    tools_only = profiles.promote(accepted, upgraded, POLICY, "")
+    assert tools_only["decision"] == "requalify" and tools_only["accepted"] is accepted
+    assert tools_only["changes"] == {"material": [], "missing": [], "tools_changed": {"python": ["3.12.1", "3.12.2"]}}
+    same = profiles.derive(measured(memory_runs(1.05), 4), NODES, POLICY)
+    assert profiles.promote(accepted, same, POLICY, "") == {
+        "decision": "promoted",
+        "accepted": same,
+        "changes": {"material": [], "missing": [], "tools_changed": {}},
+    }
 
 
-def test_accept_writes_only_a_promoted_report(tmp_path):
+def test_a_named_reviewer_requalifies_a_held_report():
+    accepted = profiles.derive(measured(memory_runs()), NODES, POLICY)
+    grown = profiles.derive(measured(memory_runs(1.5), 2), NODES, POLICY)
+    outcome = profiles.promote(accepted, grown, POLICY, "operator")
+    assert outcome == {
+        "decision": "requalified",
+        "accepted": grown,
+        "changes": {**profiles.compare(accepted, grown, POLICY), "requalified_by": "operator"},
+    }
+
+
+def test_accept_writes_only_a_promoted_report_and_rollback_restores_the_one_it_replaced(tmp_path):
     folder = tmp_path / "reports"
     folder.mkdir()
     path = folder / "accepted.json"
+    assert profiles.rollback(path) is None
     accepted = profiles.derive(measured(memory_runs()), NODES, POLICY)
-    assert profiles.accept(path, accepted, POLICY)["decision"] == "promoted"
+    assert profiles.accept(path, accepted, POLICY, "")["decision"] == "promoted"
     assert path.read_text() == json.dumps(accepted, indent=2, sort_keys=True) + "\n"
+    assert sorted(p.name for p in folder.iterdir()) == ["accepted.json"]
     before = path.read_bytes()
     grown = profiles.derive(measured(memory_runs(1.5), 2), NODES, POLICY)
-    assert profiles.accept(path, grown, POLICY)["decision"] == "requalify"
-    assert profiles.accept(path, accepted, POLICY)["decision"] == "replayed"
+    assert profiles.accept(path, grown, POLICY, "")["decision"] == "requalify"
+    assert profiles.accept(path, accepted, POLICY, "")["decision"] == "replayed"
     assert path.read_bytes() == before
     assert sorted(p.name for p in folder.iterdir()) == ["accepted.json"]
+    assert profiles.accept(path, grown, POLICY, "operator")["decision"] == "requalified"
+    assert json.loads(path.read_text()) == grown
+    assert (folder / "accepted.json.previous").read_bytes() == before
+    assert profiles.rollback(path) == 1
+    assert path.read_bytes() == before
+    assert sorted(p.name for p in folder.iterdir()) == ["accepted.json"]
+    assert profiles.rollback(path) is None
 
 
 def test_markdown_names_every_profile_refusal_and_node():

@@ -53,15 +53,19 @@ def proc(tmp_path):
 
 def test_read_parses_a_process_whose_name_holds_parentheses(proc):
     proc_entry(proc, 40, 7, 40, ticks=(30, 12), pages=5, pss_kb=8)
-    assert sampling.read(proc, 40) == sampling.Process(40, 7, 40, 42, 5 * sampling.PAGE, 8 * 1024)
+    assert sampling.read(proc, 40) == sampling.Process(40, 7, 40, 42, 5 * sampling.PAGE)
 
 
-def test_read_falls_back_to_rss_when_pss_is_unreadable_or_absent(proc):
+def test_pss_reads_smaps_rollup_and_falls_back_to_rss(proc):
+    proc_entry(proc, 40, 7, 40, pages=5, pss_kb=8)
     proc_entry(proc, 41, 7, 40, pages=3)
-    assert sampling.read(proc, 41).pss_bytes == 3 * sampling.PAGE
     proc_entry(proc, 45, 7, 40, pages=2)
     (proc / "45" / "smaps_rollup").write_text("Rss: 8 kB\n")
-    assert sampling.read(proc, 45).pss_bytes == 2 * sampling.PAGE
+    assert [sampling.pss(proc, sampling.read(proc, pid)) for pid in (40, 41, 45)] == [
+        8 * 1024,
+        3 * sampling.PAGE,
+        2 * sampling.PAGE,
+    ]
 
 
 def test_read_treats_a_vanished_process_as_gone(proc):
@@ -106,43 +110,59 @@ def test_members_of_a_gone_root_are_empty(proc):
     assert sampling.members(sampling.table(proc), 10) == []
 
 
-def test_snapshot_sums_the_tree(proc):
+def test_snapshot_sums_the_tree_and_keeps_the_root_apart(proc):
     proc_entry(proc, 10, 1, 10, ticks=(5, 5), pages=2, pss_kb=4)
     proc_entry(proc, 11, 10, 10, ticks=(1, 2), pages=3)
     snap = sampling.snapshot(proc, 10, at=2.5)
-    assert snap == sampling.Snapshot(2.5, 2, 5 * sampling.PAGE, 4 * 1024 + 3 * sampling.PAGE, {10: 10, 11: 3})
+    pages = sampling.PAGE
+    assert snap == sampling.Snapshot(2.5, 2, 5 * pages, 4 * 1024 + 3 * pages, 2 * pages, {10: 10, 11: 3})
+    assert sampling.snapshot(proc, 99, at=1.0) == sampling.Snapshot(1.0, 0, 0, 0, 0, {})
 
 
-def test_peaks_keep_maxima_and_count_cores_over_whole_windows():
+def test_peaks_keep_maxima_and_count_cores_of_children_that_exited_inside_a_window():
     t = sampling.TICKS
     peaks = sampling.Peaks()
-    peaks.add(sampling.Snapshot(0.0, 2, 100, 80, {1: 10, 2: 10}), 5)
-    peaks.add(sampling.Snapshot(0.5, 3, 300, 90, {1: 10 + t, 2: 10, 3: t // 2}), 9)
+    peaks.add(sampling.Snapshot(0.0, 2, 100, 80, 60, {1: 10, 2: 10}), 5)
+    peaks.add(sampling.Snapshot(0.5, 3, 300, 90, 50, {1: 10 + t, 2: 10, 3: t // 2}), 9)
     assert peaks.cores == 0.0
-    peaks.add(sampling.Snapshot(1.0, 3, 200, 85, {1: 10 + 2 * t, 2: 10 + t, 3: t}), 7)
-    peaks.add(sampling.Snapshot(2.5, 1, 50, 40, {1: 10 + 3 * t}), 1)
+    peaks.add(sampling.Snapshot(1.0, 2, 200, 85, 70, {1: 10 + 2 * t, 2: 10 + t}), 7)
+    assert peaks.cores == pytest.approx(3.5)
+    peaks.add(sampling.Snapshot(2.5, 1, 50, 40, 50, {1: 10 + 3 * t}), 1)
     assert (peaks.processes, peaks.rss_bytes, peaks.pss_bytes, peaks.storage_bytes) == (3, 300, 90, 9)
-    assert peaks.cores == pytest.approx(4.0)
+    assert (peaks.parent_rss_bytes, peaks.children_rss_bytes) == (70, 250)
+    assert peaks.cores == pytest.approx(3.5)
     assert peaks.samples == 4
-    assert peaks.ticks == {1: 10 + 3 * t, 2: 10 + t, 3: t}
+    assert peaks.ticks == {1: 10 + 3 * t, 2: 10 + t, 3: t // 2}
     peaks.store(12)
     assert (peaks.storage_bytes, peaks.samples) == (12, 4)
 
 
 def test_peaks_ignore_a_snapshot_inside_the_window():
     peaks = sampling.Peaks()
-    peaks.add(sampling.Snapshot(1.0, 1, 1, 1, {1: 0}), 0)
-    peaks.add(sampling.Snapshot(1.0 + sampling.CORE_WINDOW / 2, 1, 1, 1, {1: 500}), 0)
+    peaks.add(sampling.Snapshot(1.0, 1, 1, 1, 1, {1: 0}), 0)
+    peaks.add(sampling.Snapshot(1.0 + sampling.CORE_WINDOW / 2, 1, 1, 1, 1, {1: 500}), 0)
     assert peaks.cores == 0.0
 
 
 def test_summary_rounds_every_figure_and_takes_the_larger_cpu_count():
-    peaks = sampling.Peaks(3, 5 * sampling.MIB + 12345, 3 * sampling.MIB + 6789, 2 * sampling.MIB + 600000, 1.23456, 7)
-    peaks.ticks = {1: sampling.TICKS, 2: sampling.TICKS}
+    mib = sampling.MIB
+    peaks = sampling.Peaks(
+        processes=3,
+        rss_bytes=5 * mib + 12345,
+        pss_bytes=3 * mib + 6789,
+        parent_rss_bytes=mib + 7000,
+        children_rss_bytes=4 * mib + 9000,
+        storage_bytes=2 * mib + 600000,
+        cores=1.23456,
+        samples=7,
+        ticks={1: sampling.TICKS, 2: sampling.TICKS},
+    )
     usage = SimpleNamespace(ru_utime=2.25, ru_stime=0.50049)
     assert sampling.summary(peaks, usage, 3.14159, 256, False) == {
         "peak_rss_mib": 5.01,
         "peak_pss_mib": 3.01,
+        "peak_parent_rss_mib": 1.01,
+        "peak_children_rss_mib": 4.01,
         "peak_processes": 3,
         "peak_cores": 1.235,
         "cpu_seconds": 2.75,
@@ -181,6 +201,8 @@ def test_measure_reports_the_whole_tree_of_a_live_workload(tmp_path, capfd):
     assert 3 <= result["peak_processes"] < 10
     assert 96 <= result["peak_rss_mib"] < 2048
     assert 96 <= result["peak_pss_mib"] < 2048
+    assert 96 <= result["peak_children_rss_mib"] < result["peak_rss_mib"]
+    assert 0 < result["peak_parent_rss_mib"] < 96
     assert 0 < result["cpu_seconds"] < 30
     assert 0 < result["peak_cores"] <= os.cpu_count() * 2
     assert result["samples"] >= 5
@@ -215,6 +237,15 @@ def test_measure_runs_the_command_in_the_workdir(tmp_path):
     script = "import os, pathlib; pathlib.Path('cwd').write_text(os.getcwd())"
     sampling.measure([sys.executable, "-c", script], tmp_path, {}, 0.05, 30)
     assert (tmp_path / "cwd").read_text() == str(tmp_path)
+
+
+def test_measure_keeps_sampling_at_exactly_the_timeout(tmp_path, monkeypatch):
+    readings = iter([0.0])
+    clock = SimpleNamespace(monotonic=lambda: next(readings, 10.0), sleep=lambda seconds: time.sleep(1.0))
+    monkeypatch.setattr(sampling, "time", clock)
+    result = sampling.measure([sys.executable, "-c", "import time; time.sleep(0.3)"], tmp_path, {}, 0.05, 10.0)
+    assert not result["timed_out"] and result["exit_code"] == 0
+    assert result["wall_seconds"] == 10.0
 
 
 def test_measure_kills_the_whole_group_on_timeout(tmp_path):

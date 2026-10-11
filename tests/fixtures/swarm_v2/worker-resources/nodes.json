@@ -1,5 +1,9 @@
 {
-  "read_at": "2026-10-11T12:29:17Z",
+  "read_at": "2026-10-11T12:28:53Z",
+  "inputs": {
+    "nodes": "eb2845f1d3acd8f1f6343d938f3c1e2814975df93d8e152bfa9234e9fd5bfa8c",
+    "pods": "1eb4ba6114f9c57e8b0ebdf6d9af65f8bbf31d05fabc99c35a8fb0583e67d3ab"
+  },
   "nodes": [
     {
       "name": "anton-ec2-0396dfd54e94477e5",

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 import subprocess
@@ -324,6 +325,14 @@ def test_cli_runs_reads_nodes_derives_and_renders(tmp_path):
     capacity = json.loads(nodes.read_text())
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00", capacity["read_at"])
     assert capacity["nodes"] == bench.nodes(NODE_LISTING, {"items": []})
+    assert capacity["inputs"] == {
+        "nodes": hashlib.sha256((files / "listing.json").read_bytes()).hexdigest(),
+        "pods": hashlib.sha256((files / "pods.json").read_bytes()).hexdigest(),
+    }
+    stamped = files / "stamped.json"
+    listing_args = ["--nodes", str(files / "listing.json"), "--pods", str(files / "pods.json")]
+    assert bench.main(["nodes", *listing_args, "--read-at", "2026-10-11T12:29:17Z", "--output", str(stamped)]) == 0
+    assert json.loads(stamped.read_text())["read_at"] == "2026-10-11T12:29:17Z"
     report, page = files / "report.json", files / "report.md"
     derive = ["derive", "--measurements", str(measurements), "--nodes", str(nodes), "--output", str(report)]
     assert bench.main([*derive, "--markdown", str(page)]) == 0
@@ -381,6 +390,22 @@ def test_cli_promote_holds_a_material_change_with_the_default_tolerance(tmp_path
     assert json.loads(accepted.read_text())["generation"] == 2
 
 
+def test_cli_requalifies_a_held_report_for_a_named_reviewer_and_rolls_it_back(tmp_path, capsys):
+    accepted, candidate = tmp_path / "accepted.json", tmp_path / "candidate.json"
+    accepted.write_text(json.dumps(report_with(1, 100)))
+    candidate.write_text(json.dumps(report_with(2, 200)))
+    promote = ["promote", "--accepted", str(accepted), "--candidate", str(candidate)]
+    assert bench.main([*promote, "--requalified-by", "operator"]) == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["decision"] == "requalified" and printed["changes"]["requalified_by"] == "operator"
+    assert json.loads(accepted.read_text())["generation"] == 2
+    assert bench.main(["rollback", "--accepted", str(accepted)]) == 0
+    assert capsys.readouterr().out == '{"restored": 1}\n'
+    assert json.loads(accepted.read_text())["generation"] == 1
+    assert bench.main(["rollback", "--accepted", str(accepted)]) == 1
+    assert capsys.readouterr().out == '{"restored": null}\n'
+
+
 @pytest.mark.parametrize(
     "argv",
     [
@@ -395,6 +420,7 @@ def test_cli_promote_holds_a_material_change_with_the_default_tolerance(tmp_path
         ["derive", "--measurements", "m", "--nodes", "n"],
         ["derive", "--measurements", "m", "--nodes", "n", "--output", "o", "--min-repeats", "x"],
         ["promote", "--accepted", "a"],
+        ["rollback"],
     ],
 )
 def test_cli_refuses_a_missing_or_malformed_argument(argv):

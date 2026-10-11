@@ -51,8 +51,11 @@ jobs:
           python -m scripts.swarm_v2.resource_bench run --suite tests/performance/swarm_v2/workloads/suite.json \
             --root "$RUNNER_TEMP/worker-resources" --generation "$((GITHUB_RUN_NUMBER * 10))" \
             --source "$source" --output "$EVIDENCE/measurements.json"
-          python -m scripts.swarm_v2.resource_bench run --suite tests/performance/swarm_v2/workloads/suite-update.json \
+          python -m scripts.swarm_v2.resource_bench run --suite tests/performance/swarm_v2/workloads/suite.json \
             --root "$RUNNER_TEMP/worker-resources" --generation "$((GITHUB_RUN_NUMBER * 10 + 1))" \
+            --source "$source, independent repeat" --output "$EVIDENCE/repeat.json"
+          python -m scripts.swarm_v2.resource_bench run --suite tests/performance/swarm_v2/workloads/suite-update.json \
+            --root "$RUNNER_TEMP/worker-resources" --generation "$((GITHUB_RUN_NUMBER * 10 + 2))" \
             --source "$source" --output "$EVIDENCE/update.json"
 
       - name: Derive profiles against the recorded Anton nodes
@@ -63,7 +66,9 @@ jobs:
           cat "$EVIDENCE/report.md" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Refuse to publish a record holding the fake credential
-        run: '! grep -rl "$SV2_FAKE_CREDENTIAL" "$EVIDENCE"'
+        run: |
+          test -s "$EVIDENCE/measurements.json"
+          if grep -rlq "$SV2_FAKE_CREDENTIAL" "$EVIDENCE"; then exit 1; fi
 
       - uses: actions/upload-artifact@v4
         if: always()

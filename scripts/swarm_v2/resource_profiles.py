@@ -12,7 +12,17 @@ IDLE = "idle"
 IDLE_REFUSAL = "an idle sample cannot size a worker"
 CHILDLESS_REFUSAL = "no child activity"
 FAILED_REFUSAL = "a run failed or timed out"
-METRICS = ("peak_rss_mib", "peak_pss_mib", "peak_cores", "cpu_seconds", "peak_storage_mib", "peak_processes")
+METRICS = (
+    "peak_rss_mib",
+    "peak_pss_mib",
+    "peak_parent_rss_mib",
+    "peak_children_rss_mib",
+    "peak_cores",
+    "cpu_seconds",
+    "peak_storage_mib",
+    "peak_processes",
+)
+INSTALLS = ("promoted", "requalified")
 COMPARED = ("peak_rss_mib", "peak_cores", "peak_storage_mib", "peak_processes")
 
 
@@ -175,8 +185,11 @@ def _canonical(report: dict) -> str:
     return json.dumps(report, sort_keys=True)
 
 
-def promote(accepted: dict | None, candidate: dict, policy: Policy) -> dict:
-    """Decide whether candidate replaces the accepted report; a material change holds it for requalification."""
+def promote(accepted: dict | None, candidate: dict, policy: Policy, requalified_by: str) -> dict:
+    """Decide whether candidate replaces the accepted report.
+
+    A material change, a missing class or a tool change holds it until a named reviewer requalifies it.
+    """
     if accepted is None:
         return {"decision": "promoted", "accepted": candidate, "changes": None}
     if candidate["generation"] < accepted["generation"]:
@@ -185,19 +198,46 @@ def promote(accepted: dict | None, candidate: dict, policy: Policy) -> dict:
         same = _canonical(candidate) == _canonical(accepted)
         return {"decision": "replayed" if same else "conflict", "accepted": accepted, "changes": None}
     changes = compare(accepted, candidate, policy)
-    if changes["material"] or changes["missing"]:
-        return {"decision": "requalify", "accepted": accepted, "changes": changes}
-    return {"decision": "promoted", "accepted": candidate, "changes": changes}
+    if not (changes["material"] or changes["missing"] or changes["tools_changed"]):
+        return {"decision": "promoted", "accepted": candidate, "changes": changes}
+    if requalified_by:
+        return {
+            "decision": "requalified",
+            "accepted": candidate,
+            "changes": {**changes, "requalified_by": requalified_by},
+        }
+    return {"decision": "requalify", "accepted": accepted, "changes": changes}
 
 
-def accept(path: Path, candidate: dict, policy: Policy) -> dict:
+def _previous(path: Path) -> Path:
+    return path.with_name(f"{path.name}.previous")
+
+
+def _install(path: Path, report: dict) -> None:
+    staged = path.with_name(f".{path.name}.{os.getpid()}")
+    staged.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    staged.replace(path)
+
+
+def accept(path: Path, candidate: dict, policy: Policy, requalified_by: str) -> dict:
+    """Install candidate when promote allows it, keeping the report it replaces for rollback."""
     current = json.loads(path.read_text()) if path.exists() else None
-    outcome = promote(current, candidate, policy)
-    if outcome["decision"] == "promoted":
-        staged = path.with_name(f".{path.name}.{os.getpid()}")
-        staged.write_text(json.dumps(candidate, indent=2, sort_keys=True) + "\n")
-        staged.replace(path)
+    outcome = promote(current, candidate, policy, requalified_by)
+    if outcome["decision"] in INSTALLS:
+        if current is not None:
+            _install(_previous(path), current)
+        _install(path, candidate)
     return outcome
+
+
+def rollback(path: Path) -> int | None:
+    """Restore the accepted report that the last promotion replaced; None when there is none."""
+    previous = _previous(path)
+    if not previous.exists():
+        return None
+    restored = json.loads(previous.read_text())
+    previous.replace(path)
+    return restored["generation"]
 
 
 def _cell(value: float) -> str:
