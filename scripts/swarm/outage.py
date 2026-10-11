@@ -1,19 +1,27 @@
 import fcntl
 import json
+from functools import wraps
 from pathlib import Path
 
+from redis.exceptions import RedisError
+
+from scripts.swarm.store import SwarmError
 from scripts.swarm_v2.records import _write
 
-HOME = Path.home() / ".agentihooks" / "swarm"
+HOME = None
+
+
+def home() -> Path:
+    return HOME if HOME is not None else Path.home() / ".agentihooks" / "swarm"
 
 
 def read(slug: str) -> dict:
-    path = HOME / slug / "outages.json"
+    path = home() / slug / "outages.json"
     return json.loads(path.read_text()) if path.exists() else {}
 
 
 def observe(slug: str, kind: str, evidence: list[str], now_ms: int) -> None:
-    folder = HOME / slug
+    folder = home() / slug
     folder.mkdir(parents=True, exist_ok=True)
     with (folder / "outages.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -40,3 +48,44 @@ def providers(store, slug: str, runtime, now_ms: int) -> None:
     ]
     if evidence or (observed and all(pane.provider_checked for _, pane in observed)):
         observe(slug, "provider", evidence, now_ms)
+
+
+def redis_state(evidence: list[str], now_ms: int) -> None:
+    root = home()
+    slugs = [path.name for path in root.iterdir() if path.is_dir()] if root.exists() else []
+    for slug in slugs or ["_controller"]:
+        observe(slug, "redis", evidence, now_ms)
+
+
+def connect_tick(connector, clock):
+    try:
+        store = connector()
+    except (SwarmError, RedisError) as exc:
+        evidence = f"Redis connect check failed: {type(exc).__name__}"
+        redis_state([evidence], clock())
+        print(evidence)
+        return None
+    redis_state([], clock())
+    return store
+
+
+def guard_tick(function):
+    @wraps(function)
+    def guarded(store, slug, *args, **kwargs):
+        from scripts.swarm.cli import now_ms
+
+        try:
+            store.redis.ping()
+        except RedisError as exc:
+            evidence = f"Redis ping check failed: {type(exc).__name__}"
+            observe(slug, "redis", [evidence], now_ms())
+            return [evidence]
+        observe(slug, "redis", [], now_ms())
+        try:
+            return function(store, slug, *args, **kwargs)
+        except RedisError as exc:
+            evidence = f"Redis operation failed: {type(exc).__name__}"
+            observe(slug, "redis", [evidence], now_ms())
+            return [evidence]
+
+    return guarded

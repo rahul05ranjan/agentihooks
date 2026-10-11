@@ -3,7 +3,7 @@ from redis.exceptions import ConnectionError
 
 from scripts.swarm import cli, outage
 from scripts.swarm.store import SwarmError
-from tests.swarm.test_tick import FakeLedger, FakeRuntime, tasks
+from tests.swarm.test_tick import FakeRuntime, tasks
 from tests.swarm.test_tick import store as store
 
 pytestmark = pytest.mark.unit
@@ -36,12 +36,12 @@ def test_a_tick_records_redis_failure_and_recovery_before_its_work(store, tmp_pa
             raise ConnectionError("unreachable")
 
         broken.setattr(store.redis, "ping", unavailable)
-        assert cli.run_tick(store, "sw", FakeLedger(tasks()), FakeRuntime()) == [
+        assert cli.run_tick(store, "sw", tasks(), FakeRuntime()) == [
             "Redis ping check failed: ConnectionError"
         ]
     assert outage.read("sw")["redis"]["started_at"] == 1000
     monkeypatch.setattr(cli, "now_ms", lambda: 2000)
-    cli.run_tick(store, "sw", FakeLedger(tasks()), FakeRuntime())
+    cli.run_tick(store, "sw", tasks(), FakeRuntime())
     assert outage.read("sw")["redis"]["ended_at"] == 2000
 
 
@@ -54,5 +54,5 @@ def test_a_redis_failure_during_a_tick_is_recorded_without_raising(store, tmp_pa
         raise ConnectionError("lost connection")
 
     monkeypatch.setattr(lease, "acquire", unavailable)
-    assert cli.run_tick(store, "sw", FakeLedger(tasks()), FakeRuntime()) == ["Redis operation failed: ConnectionError"]
+    assert cli.run_tick(store, "sw", tasks(), FakeRuntime()) == ["Redis operation failed: ConnectionError"]
     assert outage.open_records("sw")[0]["kind"] == "redis"
