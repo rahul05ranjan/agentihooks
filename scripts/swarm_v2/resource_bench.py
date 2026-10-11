@@ -141,6 +141,7 @@ def _environment(workdir: Path, children: int) -> dict[str, str]:
 def run(suite: Path, root: Path, generation: int, tools: Mapping[str, Sequence[str]] = TOOLS, source: str = "") -> dict:
     """Measure every workload at every child count and repeat, each in a fresh workdir removed afterwards."""
     plan = json.loads(suite.read_text())
+    root = root.resolve()
     root.mkdir(parents=True, exist_ok=True)
     started = host()
     found = versions(tools)
@@ -150,7 +151,12 @@ def run(suite: Path, root: Path, generation: int, tools: Mapping[str, Sequence[s
         for children in workload["children"]:
             for repeat in range(1, plan["repeats"] + 1):
                 workdir = Path(tempfile.mkdtemp(prefix=f"{workload['name']}-", dir=root))
-                values = {"python": sys.executable, "children": children, "workloads": suite.parent, "workdir": workdir}
+                values = {
+                    "python": sys.executable,
+                    "children": children,
+                    "workloads": suite.resolve().parent,
+                    "workdir": workdir,
+                }
                 command = [part.format(**values) for part in workload["command"]]
                 env = _environment(workdir, children)
                 measured = sampling.measure(command, workdir, env, plan["interval"], workload.get("timeout", 600))
