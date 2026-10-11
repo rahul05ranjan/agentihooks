@@ -182,6 +182,27 @@ def test_a_set_exporter_is_copied_into_the_launch_record():
     assert api.created == [material({**RECORD, "exporter": ["python", "-m", "exporter"]})]
 
 
+def test_the_launch_record_names_the_restore_the_recovery_decided_for_the_attempt():
+    api, asked = Api(pod()), []
+    directive = {"checkpoint_id": "ckpt-1", "recovery": "native", "session_id": "s-1", "watermark": 4096}
+
+    def restores(execution_id):
+        asked.append(execution_id)
+        return directive
+
+    granting = PodGrants(api, SLUG, verify, Supervision("claude", None, CONTROL), restores=restores)
+    assert granting.hand(agent(), GRANT) == Hand(True, "handed", False)
+    assert asked == [EXECUTION]
+    assert api.created == [material({**RECORD, "restore": directive})]
+
+
+def test_an_attempt_no_recovery_admitted_carries_no_restore():
+    assert grants(Api(pod())).restores(EXECUTION) is None
+    record = json.loads(Supervision("claude", None, CONTROL).record(registration(), "engineer"))
+    assert "restore" not in record
+    assert json.loads(Supervision("claude", None, CONTROL).record(registration(), "engineer", {}))["restore"] == {}
+
+
 def test_the_supervisor_loads_the_handed_record_against_the_registered_authority(tmp_path):
     api = Api(pod())
     grants(api).hand(agent(), GRANT)

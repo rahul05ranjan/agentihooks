@@ -15,6 +15,7 @@ import pytest
 
 from scripts.swarm_v2 import filesystem, worker_home
 from scripts.swarm_v2.broadcast_bridge import API_URL, GRANT_NAME
+from scripts.swarm_v2.checkpoints import restore
 from scripts.swarm_v2.supervision import Launch, LaunchRefused
 from scripts.swarm_v2.worker import start
 
@@ -404,6 +405,69 @@ def test_an_answer_that_is_not_an_object_refuses(tmp_path):
     assert (
         refusal(tmp_path, material(tmp_path), controller) == "registration answer does not match the launch authority"
     )
+
+
+FRESH_RESTORE = {"checkpoint_id": "", "recovery": "fresh", "session_id": "", "watermark": 4096}
+NATIVE_RESTORE = {"checkpoint_id": "ckpt-1", "recovery": "native", "session_id": "s-1", "watermark": 4096}
+
+
+def test_a_launch_naming_no_restore_writes_no_restore_record(tmp_path):
+    prepare(tmp_path, material(tmp_path), Controller((200, ANSWER)))
+    assert not (tmp_path / "attempts" / EXECUTION / start.RESTORED).exists()
+    assert start.RESTORED == "restore.json"
+
+
+def test_a_fresh_restore_is_recorded_before_the_registration_record(tmp_path):
+    prepare(tmp_path, material(tmp_path, {**RECORD, "restore": FRESH_RESTORE}), Controller((200, ANSWER)))
+    attempt = tmp_path / "attempts" / EXECUTION
+    recorded = attempt / start.RESTORED
+    expected = {"recovery": "fresh", "checkpoint_id": "", "watermark": 4096, "session_id": "", "command": []}
+    assert json.loads(recorded.read_text()) == expected
+    assert stat.S_IMODE(recorded.stat().st_mode) == 0o600
+    assert json.loads((attempt / "registration.json").read_text()) == AUTHORITY
+
+
+def test_the_launch_restore_runs_after_bootstrap_with_the_launch_record(tmp_path):
+    seen = []
+
+    def restoring(spec):
+        seen.append((spec["restore"], (tmp_path / "attempts" / EXECUTION / "run").is_dir()))
+        return restore.Restored("native", "ckpt-1", 41, "s-1", ("claude", "--resume", "s-1"))
+
+    launch = material(tmp_path, {**RECORD, "restore": NATIVE_RESTORE})
+    attempt = tmp_path / "attempts" / EXECUTION
+    start.prepare(attempt, launch, Controller((200, ANSWER)).send, None, Boot(), shipped(tmp_path), restoring=restoring)
+    assert seen == [(NATIVE_RESTORE, True)]
+    recorded = json.loads((attempt / start.RESTORED).read_text())
+    assert recorded == {
+        "recovery": "native",
+        "checkpoint_id": "ckpt-1",
+        "watermark": 41,
+        "session_id": "s-1",
+        "command": ["claude", "--resume", "s-1"],
+    }
+
+
+def test_a_checkpoint_restore_without_a_store_refuses_the_start_and_registers_nothing(tmp_path):
+    launch = material(tmp_path, {**RECORD, "restore": NATIVE_RESTORE})
+    with pytest.raises(restore.RestoreRefused) as refused:
+        prepare(tmp_path, launch, Controller((200, ANSWER)))
+    assert str(refused.value) == restore.STORE_MISSING
+    attempt = tmp_path / "attempts" / EXECUTION
+    assert not (attempt / "registration.json").exists()
+    assert not (attempt / start.RESTORED).exists()
+    assert not (attempt / "run" / GRANT_NAME).exists()
+
+
+def test_a_refused_restore_is_a_refused_start(tmp_path, monkeypatch, capsys):
+    def refused(attempt, launch):
+        raise restore.RestoreRefused("version_changed")
+
+    monkeypatch.setattr(start.os, "umask", lambda mask: 0o022)
+    monkeypatch.setattr(start, "prepare", refused)
+    monkeypatch.setattr(start.supervision_runtime, "main", lambda argv: pytest.fail("supervisor ran"))
+    assert start.main(["a", "b"]) == 64
+    assert capsys.readouterr().err == "ERROR worker start refused: version_changed\n"
 
 
 def test_the_start_runs_the_supervisor_on_the_prepared_attempt_under_a_private_umask(tmp_path, monkeypatch):
