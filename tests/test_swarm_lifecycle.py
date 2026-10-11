@@ -461,19 +461,28 @@ def test_settling_reports_when_the_records_keep_changing(store, monkeypatch):
 
     from scripts.swarm.store import SwarmError
 
+    real = store.redis.pipeline
+
     class Busy:
+        def __init__(self, *args, **kwargs):
+            self.pipe = real(*args, **kwargs)
+
         def __enter__(self):
+            self.pipe.__enter__()
             return self
 
         def __exit__(self, *exc):
-            return False
+            return self.pipe.__exit__(*exc)
+
+        def __getattr__(self, name):
+            return getattr(self.pipe, name)
 
         def watch(self, *keys):
             raise WatchError("busy")
 
     agent = kube(store)
     record = ask(store, agent, "drain")
-    monkeypatch.setattr(store.redis, "pipeline", lambda: Busy())
+    monkeypatch.setattr(store.redis, "pipeline", Busy)
     with pytest.raises(SwarmError):
         lifecycle.execute(store, SLUG, {"argv": ["drain", agent.name, record["op"]]}, lambda argv: "")
     saved = json.loads(store.redis.hget(store.key(SLUG, "lifecycle-ops"), record["op"]))
