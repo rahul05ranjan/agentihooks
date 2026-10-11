@@ -1,5 +1,6 @@
 import pytest
 
+from scripts.swarm_v2.artifacts.base import ArtifactError
 from scripts.swarm_v2.checkpoints import publisher
 from scripts.swarm_v2.worker import supervisor
 from tests.sv2_ckp04_cases import Clock, LostAck, checkpoint, make, pointers
@@ -129,6 +130,45 @@ def test_a_drain_capture_past_its_budget_leaves_the_last_checkpoint(root):
     assert sched.publisher.latest() == "ckpt-g2-s1"
     assert len(pointers(root)) == 1
     assert sched.metrics()["checkpoint_publish_failures"] == {"drain_budget_exceeded": 1}
+
+
+def test_a_drain_capture_ending_on_its_deadline_still_publishes(root):
+    clock = Clock()
+    capture = Capture(clock, took=10.0)
+    sched = schedule(root, clock, capture)
+    drained = sched.drain()
+    assert (drained.promoted, drained.reason) == (True, "promoted")
+
+
+def test_a_capture_past_the_drain_budget_is_discarded_not_republished(root):
+    clock = Clock()
+    capture = Capture(clock, took=11.0)
+    sched = schedule(root, clock, capture)
+    assert sched.drain().reason == "drain_budget_exceeded"
+    capture.took = 1.0
+    assert sched.tick().promoted
+    assert capture.sequences == [1, 2]
+    assert make(root).latest() == "ckpt-g2-s2"
+
+
+def test_an_artifact_error_in_publish_counts_interrupted_and_keeps_the_capture(root):
+    clock = Clock()
+    capture = Capture(clock)
+    sched = schedule(root, clock, capture)
+    publish = sched.publisher.publish
+    failures = [ArtifactError("local reported a successful write but the read back does not match")]
+
+    def flaky(doc, materials):
+        if failures:
+            raise failures.pop()
+        return publish(doc, materials)
+
+    sched.publisher.publish = flaky
+    assert sched.tick() is None
+    assert sched.metrics()["checkpoint_publish_failures"] == {"interrupted": 1}
+    clock.now += 300
+    assert sched.tick().promoted
+    assert capture.sequences == [1]
 
 
 def test_drain_retries_a_lost_acknowledgement_within_its_attempts(root):

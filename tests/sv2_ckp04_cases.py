@@ -3,6 +3,7 @@ import json
 import tempfile
 from pathlib import Path
 
+from scripts.swarm_v2 import contracts
 from scripts.swarm_v2.artifacts import local
 from scripts.swarm_v2.artifacts.base import VERIFIED, ArtifactRef
 from scripts.swarm_v2.checkpoints import model, publisher
@@ -273,6 +274,22 @@ def _recovery_fixture(root: Path) -> dict:
         "old_checkpoint_after_reclaim": ckp02.shown(crashed.validator.verify("ckpt-g2-s1")),
         "republished": shown(crashed.publish(*checkpoint(2, payload=b"second"))),
         "latest_after_republish": crashed.latest(),
+        **_rollback(crashed),
+    }
+
+
+def _rollback(pub: publisher.Publisher) -> dict:
+    loaded = contracts.load()
+    compat = loaded["compat"]["contracts"]
+    lowered = {**compat, "checkpoint": {**compat["checkpoint"], "write_minor": 1}}
+    rolled = publisher.Publisher(
+        model.Validator(pub.store, {**loaded, "compat": {**loaded["compat"], "contracts": lowered}})
+    )
+    return {
+        "rollback_publish": shown(rolled.publish(*checkpoint(3))),
+        "latest_after_rollback": rolled.latest(),
+        "restored_publish": shown(pub.publish(*checkpoint(3))),
+        "latest_after_restore": pub.latest(),
     }
 
 
@@ -300,6 +317,10 @@ def _recovery() -> tuple[dict, bool]:
         first["old_object_state_after_reclaim"] == VERIFIED,
         first["old_checkpoint_after_reclaim"]["authoritative"],
         first["latest_after_republish"] == "ckpt-g2-s2",
+        first["rollback_publish"]["reason"] == "promotion_disabled",
+        first["latest_after_rollback"] == "ckpt-g2-s2",
+        first["restored_publish"]["promoted"],
+        first["latest_after_restore"] == "ckpt-g2-s3",
     ]
     return observed, all(checks)
 

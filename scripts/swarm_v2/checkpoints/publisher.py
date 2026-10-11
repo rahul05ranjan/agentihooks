@@ -14,6 +14,7 @@ SUPERSEDED = "superseded_generation"
 STALE = "stale_sequence"
 SCOPE = "scope_mismatch"
 CONFLICT = "identity_conflict"
+INVALID = "invalid_sequence"
 WIDTH = 10
 
 
@@ -41,13 +42,18 @@ def _listed(doc: dict, materials: dict[str, bytes]) -> dict:
     }
 
 
+def _encoded(doc: dict) -> bytes:
+    return json.dumps(doc, sort_keys=True).encode()
+
+
 def _read(store: ArtifactStore, key: str) -> dict:
     return json.loads(store.backend.read(key, 0, store.backend.size(key)))
 
 
 class Publisher:
-    """Only a pointer makes a checkpoint current. It is written once its manifest verifies and is never replaced; a
-    newer generation's pointer fences every older attempt, and the latest lookup reads the newest generation alone."""
+    """Only a pointer makes a checkpoint current. The generation's single owner writes it once its manifest verifies;
+    a newer generation's pointer fences an older attempt before its manifest commit, before and after its pointer
+    write, and the latest lookup reads the newest generation alone."""
 
     def __init__(self, validator: model.Validator) -> None:
         self.validator = validator
@@ -70,23 +76,45 @@ class Publisher:
         if claimed != (scope.task_id, scope.execution_id, scope.generation):
             return self.refuse(SCOPE)
         checkpoint_id, sequence = doc["checkpoint_id"], doc["checkpoint_sequence"]
+        if type(sequence) is not int or sequence < 0:
+            return self.refuse(INVALID)
         listed = _listed(doc, materials)
+        recorded = self.store.recorded(checkpoint_id)
+        if recorded not in (None, ArtifactRef.of(_encoded(listed))):
+            return self.refuse(CONFLICT)
         blocked = self._blocked(checkpoint_id, sequence)
         if blocked == REPLAYED:
-            if self.store.recorded(checkpoint_id) != ArtifactRef.of(json.dumps(listed, sort_keys=True).encode()):
-                return self.refuse(CONFLICT)
-            return Publication(True, REPLAYED, self.validator.verify(checkpoint_id))
+            return self._replayed(checkpoint_id)
         if blocked:
             return self.refuse(blocked)
-        for role, data in materials.items():
-            self.store.put(f"{checkpoint_id}.{role}", data)
-        verdict = self.validator.commit(listed)
+        if recorded is None:
+            self.reclaim(checkpoint_id)
+        return self._promote(listed, materials)
+
+    def _replayed(self, checkpoint_id: str) -> Publication:
+        verdict = self.validator.verify(checkpoint_id)
         if not verdict.authoritative:
             return self.refuse(verdict.reason, verdict)
-        if self._newest() > scope.generation:
+        return Publication(True, REPLAYED, verdict)
+
+    def _promote(self, doc: dict, materials: dict[str, bytes]) -> Publication:
+        checkpoint_id = doc["checkpoint_id"]
+        for role, data in materials.items():
+            self.store.put(f"{checkpoint_id}.{role}", data)
+        if self._superseded():
+            return self.refuse(SUPERSEDED)
+        verdict = self.validator.commit(doc)
+        if not verdict.authoritative:
+            return self.refuse(verdict.reason, verdict)
+        if self._superseded():
             return self.refuse(SUPERSEDED, verdict)
-        self._point(checkpoint_id, sequence)
+        self._point(checkpoint_id, doc["checkpoint_sequence"])
+        if self._superseded():
+            return self.refuse(SUPERSEDED, verdict)
         return Publication(True, PROMOTED, verdict)
+
+    def _superseded(self) -> bool:
+        return self._newest() > self.store.scope.generation
 
     def latest(self) -> str:
         found = self._pointers()
@@ -101,8 +129,9 @@ class Publisher:
         return max(own, default=0)
 
     def reclaim(self, checkpoint_id: str) -> list[str]:
-        """Removes the materials of a checkpoint whose manifest never committed; an object another record names stays."""
-        if self.store.recorded(checkpoint_id) is not None:
+        """Removes the records of a checkpoint no pointer names, never a newer generation's record; an object another
+        record names stays."""
+        if checkpoint_id in {pointer.document["checkpoint_id"] for pointer in self._pointers()}:
             return []
         scope, backend = self.store.scope, self.store.backend
         prefix = scope.key("artifacts") + "/"
@@ -112,13 +141,14 @@ class Publisher:
         owned = sorted(
             name
             for name, record in records.items()
-            if name.startswith(checkpoint_id + ".") and record["generation"] <= scope.generation
+            if (name == checkpoint_id or name.startswith(checkpoint_id + "."))
+            and record["generation"] <= scope.generation
         )
         kept = {record["sha256"] for name, record in records.items() if name not in owned}
         for name in owned:
             backend.remove(f"{prefix}{name}.json")
-            if records[name]["sha256"] not in kept:
-                backend.remove(scope.key("objects", records[name]["sha256"]))
+        for digest in sorted({records[name]["sha256"] for name in owned} - kept):
+            backend.remove(scope.key("objects", digest))
         return owned
 
     def _blocked(self, checkpoint_id: str, sequence: int) -> str | None:
