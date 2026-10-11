@@ -4,11 +4,10 @@ import time
 from types import SimpleNamespace
 
 import pytest
-from scripts.swarm.models import AgentRecord, SwarmConfig
 
 from scripts.inbox import wake, waker
 from scripts.inbox.store import InboxStore, now_ms
-from scripts.swarm.store import RedisStore
+from scripts.swarm.store import AgentRecord, RedisStore, SwarmConfig
 
 pytestmark = pytest.mark.xdist_group("fakeredis")
 
