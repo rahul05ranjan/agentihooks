@@ -36,6 +36,7 @@ def fire(redis, slug: str, stage: str, reading: Reading, now_ms: int) -> dict:
     if reading.episode not in episodes:
         episodes, fired = [*episodes, reading.episode][-EPISODES:], fired + 1
     row = {
+        **old,
         "stage": stage,
         "value": reading.value,
         "threshold": reading.threshold,
@@ -46,6 +47,23 @@ def fire(redis, slug: str, stage: str, reading: Reading, now_ms: int) -> dict:
         "first_at": old.get("first_at", now_ms),
         "updated_at": now_ms,
     }
+    redis.hset(key(slug), stage, json.dumps(row))
+    return row
+
+
+def update_detector(redis, slug: str, reading: dict, now_ms: int) -> dict:
+    stage = reading["stage"]
+    raw = redis.hget(key(slug), stage)
+    old = json.loads(raw) if raw else {}
+    if old.get("detector") == reading:
+        return old
+    row = old
+    for episode in reading["episodes"]:
+        if episode not in row.get("episodes", []):
+            row = fire(redis, slug, stage, Reading(reading["seconds"] / 3600, 0.0, "task hours", episode), now_ms)
+    if not row:
+        row = fire(redis, slug, stage, Reading(reading["seconds"] / 3600, 0.0, "task hours", stage), now_ms)
+    row = {**row, "detector": reading, "updated_at": now_ms}
     redis.hset(key(slug), stage, json.dumps(row))
     return row
 
