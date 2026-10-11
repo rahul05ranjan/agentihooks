@@ -166,6 +166,7 @@ def _rejection_fixture(root: Path) -> dict:
 
     racing.validator.commit = interleaved
     raced = racing.publish(*checkpoint(1))
+    restoring = make(root, "e3", 4).latest()
     corrected = newer.publish(*checkpoint(2, 3, "e2"))
     return {
         "superseded": shown(superseded),
@@ -176,7 +177,7 @@ def _rejection_fixture(root: Path) -> dict:
         "refusals_left_store_unchanged": after_refusals == protected,
         "raced_during_upload": shown(raced),
         "raced_pointers": pointers(root / "race"),
-        "latest_for_restoring_attempt": make(root, "e3", 4).latest(),
+        "latest_for_restoring_attempt": restoring,
         "latest_for_stale_attempt": stale.latest(),
         "stale_metrics": stale.metrics(),
         "newer_metrics": newer.metrics(),
