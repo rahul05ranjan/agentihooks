@@ -368,7 +368,7 @@ def test_a_settled_decision_is_not_reopened_by_a_later_failure(world):
 def test_the_replacement_starts_on_a_pending_pod_whatever_the_old_target(world):
     old = world.store.execution(cases.SLUG, world.old.execution_id)
     bound = replace(old, runtime_target={**old.runtime_target, "pod_name": "swarm-old"})
-    replacement = world.store.execution(cases.SLUG, world.recovery(world.live)._replace(bound))
+    replacement = world.store.execution(cases.SLUG, world.recovery(world.live)._replace(bound).execution_id)
     assert replacement.runtime_target == {"pod_namespace": world.api.namespace, "pod_name": "swarm-pending"}
 
 
