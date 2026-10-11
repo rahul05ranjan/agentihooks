@@ -8,6 +8,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from dataclasses import asdict
 from http.client import HTTPException
 from pathlib import Path
 from subprocess import SubprocessError
@@ -15,12 +16,14 @@ from urllib.parse import urlsplit
 
 from scripts.swarm_v2 import supervision_runtime, worker_home
 from scripts.swarm_v2.broadcast_bridge import API_URL, AUTHORIZATION, GRANT_NAME, JSON_HEADERS
+from scripts.swarm_v2.checkpoints import restore
 from scripts.swarm_v2.supervision import SCHEMA_VERSION, LaunchRefused, checked_authority
 
 TEMPLATES = Path("/opt/agentihooks/templates")
 BUNDLE = Path("/var/run/swarm/bundle")
 REGISTER = "/v2/executions/register"
 RECORD = "registration.json"
+RESTORED = "restore.json"
 BUSY = 503
 REGISTER_ATTEMPTS = 10
 RETRY_SECONDS = 2
@@ -132,6 +135,7 @@ def prepare(
     boot: Callable[[worker_home.Request], dict] = worker_home.bootstrap,
     templates: Path = TEMPLATES,
     bundle: Path = BUNDLE,
+    restoring: Callable[[dict], restore.Restored | None] = restore.launched,
 ) -> dict:
     bundle = delivered(bundle)
     spec = _launch(launch, templates, bundle)
@@ -154,7 +158,10 @@ def prepare(
             bundle,
         )
     )
+    restored = restoring(spec)
     worker_home.store_grant(attempt, grant)
+    if restored is not None:
+        _private(attempt / RESTORED, asdict(restored))
     _private(attempt / RECORD, authority)
     return record
 

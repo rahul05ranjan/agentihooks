@@ -2,6 +2,7 @@
 attempt's task waits on recovery on the ledger."""
 
 from collections.abc import Callable
+from functools import partial
 from typing import TYPE_CHECKING, Protocol
 
 from scripts.swarm import lease
@@ -14,6 +15,8 @@ if TYPE_CHECKING:
 
 LAUNCHED = "attempt-replacement-launches"
 MARKED = "recovery-pending-tasks"
+RECOVERY = "recovery"
+RECORDED = "attempt-recovery-records"
 CLEARED = ""
 SUPERSEDED = "superseded"
 STARTED = (Status.OK, Status.AMBIGUOUS)
@@ -40,6 +43,7 @@ class Replacements:
             if decision is not None and decision.replacement:
                 launched[execution_id] = self._launch(decision)
         self._mark()
+        self._record()
         return launched
 
     def _key(self, name: str) -> str:
@@ -55,6 +59,7 @@ class Replacements:
         self.controller.require()
         if occupant.execution_id != successor.execution_id:
             self._launched(decision)
+            self.store.redis.hset(self._key(RECORDED), decision.execution_id, SUPERSEDED)
             return SUPERSEDED
         task = {
             "id": successor.task,
@@ -68,6 +73,20 @@ class Replacements:
         if outcome.status in STARTED:
             self._launched(decision)
         return outcome.status.value
+
+    def _record(self) -> None:
+        """The ledger names how each launched replacement continues and from which durable watermark; a refused write
+        is retried on the next pass."""
+        recorded = set(self.store.redis.hkeys(self._key(RECORDED)))
+        for execution_id, successor in sorted(self.store.redis.hgetall(self._key(LAUNCHED)).items()):
+            restore = None if execution_id in recorded else self.recovery.restore(successor)
+            if restore is not None:
+                task = self.store.execution(self.slug, successor).task
+                self._ledgered(task, partial(self._recovered, execution_id, restore))
+
+    def _recovered(self, execution_id: str, restore: dict, task: str) -> None:
+        self.ledger.update_task(self.slug, task, {RECOVERY: restore})
+        self.store.redis.hset(self._key(RECORDED), execution_id, restore["recovery"])
 
     def _launched(self, decision: Decision) -> None:
         self.controller.require()
