@@ -1,0 +1,18 @@
+{
+  "package": "SV2-PRF-01",
+  "tested_commit": "fc61d6a2bf62fbca63aed1d1e641003643a286f8",
+  "measured_commit": "9122150d620de942b10046f8e9d9d976c4d0cb76",
+  "inputs": {
+    "tests/fixtures/swarm_v2/worker-resources/measurements.json": "70c4d31a3bfc4365abb5047663ec606fbd5785efa3e644ca0e25596d4cd799ab",
+    "tests/fixtures/swarm_v2/worker-resources/update.json": "49d000237be74dc0c610a9c8ca8f5b61f13ef5677646a47587f7983fa206f27d",
+    "tests/fixtures/swarm_v2/worker-resources/nodes.json": "09216bf5c06d80e03ab661b93e7b020cc8fd5f2f6b833cc25c5a0ac409e237ff",
+    "tests/fixtures/swarm_v2/worker-resources/disclosure.json": "5619b504a31319971f751190ca09241f1e9ac8bef2c9454d660f46662d65041c",
+    "tests/performance/swarm_v2/workloads/suite.json": "4dc097b09fb184df9a3e9fd889421bbea50c2026cf22fa13173b1069ef354b9c",
+    "tests/performance/swarm_v2/workloads/suite-update.json": "72559460df0f2d2370c9ad99e5f42af845cf62805703a8bf44363d3bd94c52e2",
+    "tests/performance/swarm_v2/workloads/general.py": "707735e2a52b9f88096d75510b3d02ec1fb17e4b894785f44563c6388305251d",
+    "tests/performance/swarm_v2/workloads/compiler.py": "7712d7576451b013e141d0895137347e608d9d2f93c9275a3a919a17be6c4917",
+    "tests/performance/swarm_v2/workloads/browser.py": "bef5f3acdee2343ee1053c9f87f19fb9dda1f138583b47a37031e18ae655fff3",
+    "tests/performance/swarm_v2/workloads/memory.py": "d45dd766ca8fc33fc2da17d41d8c9392369486334d6dfc587bc2fcc5c62e58e3",
+    "tests/performance/swarm_v2/workloads/idle.py": "fa5992c463e78783ea4484c6b0ad0aa907525f3c767e737c025ff4135dce4a03"
+  }
+}
