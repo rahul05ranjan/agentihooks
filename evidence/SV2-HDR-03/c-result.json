@@ -7,6 +7,17 @@
     "herdr-capabilities.json": "c15bb685e5bb4e2f53aa9a51a8ee80701aebe75a222093d120787b4839c45940"
   },
   "observed": {
+    "checks": {
+      "restart_restores_the_missing_registration": true,
+      "restart_duplicates_nothing": true,
+      "replay_has_no_drift": true,
+      "label_drift_renamed_back": true,
+      "new_generation_keeps_its_profile": true,
+      "stale_generation_cannot_overwrite": true,
+      "retired_registration_removed_only": true,
+      "interrupted_add_left_pending": true,
+      "interrupted_add_adopted_not_duplicated": true
+    },
     "restart": {
       "accepted": {
         "registered": {
@@ -75,6 +86,7 @@
         "drift": {},
         "herdr_registration_drift": 0
       },
+      "generation_after_stale": 3,
       "retired": {
         "registered": {
           "exe-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": "1fd37913c66d88de9c4405d58e184635"
@@ -98,9 +110,9 @@
           "herdr",
           "machine",
           "rename",
+          "eda75d4e8494f54c8a6fe05759524de3",
           "--label",
-          "swarm-exe-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-terminal",
-          "eda75d4e8494f54c8a6fe05759524de3"
+          "swarm-exe-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-terminal"
         ]
       ],
       "records": {
@@ -110,7 +122,8 @@
           "label": "swarm-exe-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-terminal",
           "target": "ssh://swarm-exe-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-terminal.swarm-workers.svc.cluster.local",
           "session": "default",
-          "profile_id": "1fd37913c66d88de9c4405d58e184635"
+          "profile_id": "1fd37913c66d88de9c4405d58e184635",
+          "before": []
         }
       },
       "sidebar": [
@@ -157,7 +170,8 @@
           "label": "swarm-exe-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-terminal",
           "target": "ssh://swarm-exe-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-terminal.swarm-workers.svc.cluster.local",
           "session": "default",
-          "profile_id": "eda75d4e8494f54c8a6fe05759524de3"
+          "profile_id": "eda75d4e8494f54c8a6fe05759524de3",
+          "before": []
         },
         "exe-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": {
           "execution_id": "exe-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -165,7 +179,8 @@
           "label": "swarm-exe-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-terminal",
           "target": "ssh://swarm-exe-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-terminal.swarm-workers.svc.cluster.local",
           "session": "default",
-          "profile_id": "eefed520946b717557bfbc5ef89d91ee"
+          "profile_id": "eefed520946b717557bfbc5ef89d91ee",
+          "before": []
         }
       }
     }

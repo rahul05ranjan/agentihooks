@@ -321,7 +321,8 @@ def test_a_manual_machine_with_the_same_label_is_refused_not_adopted(tmp_path):
     runner.listed = subprocess.CompletedProcess([], 0, json.dumps([saved("m1", NAME, "ssh://devbox")]), "")
     assert refusal(lambda: found.attach(scope(), HOST_KEY)) == (
         "label_collision",
-        f"{NAME} is the label of a machine this controller does not own",
+        f"{NAME} is the label of a machine this controller does not own; "
+        "audit it and remove it with herdr machine remove before this endpoint registers",
     )
     assert not any(command[:3] == ["herdr", "machine", "add"] for command in runner.commands)
     assert found.registrations.store.load() == {}
@@ -402,6 +403,15 @@ def test_an_invalid_namespace_is_counted(tmp_path):
 def test_an_incompatible_server_is_a_verdict_not_an_auth_failure(tmp_path):
     found, runner = terminal(tmp_path)
     runner.herdr = sv2_hdr01_cases.Runner(sv2_hdr01_cases.fixture()["missing_forwarding_server"])
+    runner.listed = subprocess.CompletedProcess([], 0, json.dumps([saved(PROFILE, NAME, f"ssh://{HOST}")]), "")
     verdict = found.attach(scope(), HOST_KEY)
     assert "herdr server lacks surface_interest=true" in verdict.refusals
+    assert runner.commands[-1] == ["herdr", "machine", "remove", PROFILE]
+    assert found.registrations.store.load() == {}
     assert found.terminal_endpoint_auth_failures() == {}
+
+
+def test_a_compatible_attach_keeps_its_registration(tmp_path):
+    found, runner = terminal(tmp_path)
+    found.attach(scope(), HOST_KEY)
+    assert not any(command[:3] == ["herdr", "machine", "remove"] for command in runner.commands)

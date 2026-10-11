@@ -105,6 +105,7 @@
         ".ssh",
         ".ssh/config",
         ".ssh/swarm-terminals",
+        ".ssh/swarm-terminals/.registrations.json.lock",
         ".ssh/swarm-terminals/bin",
         ".ssh/swarm-terminals/bin/ssh",
         ".ssh/swarm-terminals/certificates",

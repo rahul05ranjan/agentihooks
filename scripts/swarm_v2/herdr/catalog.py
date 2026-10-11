@@ -69,7 +69,7 @@ class Catalog:
         return found.group(1)
 
     def rename(self, profile_id: str, label: str) -> None:
-        command = ["herdr", "machine", "rename", "--label", label, profile_id]
+        command = ["herdr", "machine", "rename", profile_id, "--label", label]
         self._do(command, "rename_refused", f"herdr could not rename {profile_id}")
 
     def remove(self, profile_id: str) -> None:

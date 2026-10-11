@@ -183,9 +183,6 @@ class Terminal:
             reason = _classify(str(done.stderr))
             raise EndpointRefused(reason, f"{endpoint.name} terminal refused the connection: {reason}")
 
-    def _save(self, endpoint: Endpoint) -> None:
-        self.registrations.register(endpoint)
-
     def _refuse(self, refused: EndpointRefused) -> NoReturn:
         self.failures[refused.reason] += 1
         raise refused
@@ -194,10 +191,13 @@ class Terminal:
         try:
             endpoint = self.register(scope, host_public)
             self._connect(endpoint)
-            self._save(endpoint)
+            self.registrations.register(endpoint)
         except EndpointRefused as refused:
             self._refuse(refused)
-        return self.qualifier.verdict(endpoint.name, endpoint.incarnation)
+        verdict = self.qualifier.verdict(endpoint.name, endpoint.incarnation)
+        if not verdict.compatible:
+            self.registrations.withdraw(endpoint)
+        return verdict
 
     def terminal_endpoint_auth_failures(self) -> dict[str, int]:
         return {reason: count for reason, count in self.failures.items() if reason in AUTH_FAILURES}

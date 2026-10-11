@@ -1,8 +1,10 @@
+import fcntl
 import json
 import os
 from collections import Counter
-from collections.abc import Iterable
-from dataclasses import asdict, dataclass, field
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 from scripts.swarm_v2.herdr.capabilities import Incompatible, Qualifier, Unreachable
@@ -15,7 +17,7 @@ VERSION = 1
 
 @dataclass(frozen=True)
 class Record:
-    """A None profile id is an add whose outcome is unknown: herdr may or may not have saved it."""
+    """A None profile id is an add whose outcome is unknown; profiles listed in before are never adopted for it."""
 
     execution_id: str
     generation: int
@@ -23,6 +25,18 @@ class Record:
     target: str
     session: str
     profile_id: str | None
+    before: tuple[str, ...] = ()
+
+
+def _entry(entry: dict) -> Record:
+    record = Record(**entry)
+    before = tuple(record.before)
+    texts = (record.execution_id, record.label, record.target, record.session, *before)
+    if not all(isinstance(text, str) and text for text in texts):
+        raise ValueError(record.execution_id)
+    if type(record.generation) is not int or not isinstance(record.profile_id, str | None):
+        raise ValueError(record.execution_id)
+    return replace(record, before=before)
 
 
 @dataclass
@@ -42,6 +56,16 @@ class Store:
     def __init__(self, path: Path) -> None:
         self.path = path
 
+    @contextmanager
+    def locked(self) -> Iterator[None]:
+        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        lock = os.open(self.path.with_name(f".{self.path.name}.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            yield
+        finally:
+            os.close(lock)
+
     def load(self) -> dict[str, Record]:
         if not self.path.exists():
             return {}
@@ -49,8 +73,8 @@ class Store:
             document = json.loads(self.path.read_text())
             if document["version"] != VERSION:
                 raise ValueError(document["version"])
-            records = [Record(**entry) for entry in document["registrations"]]
-        except (ValueError, TypeError, KeyError):
+            records = [_entry(entry) for entry in document["registrations"]]
+        except (OSError, ValueError, TypeError, KeyError):
             raise EndpointRefused("ownership_unreadable", "the registration ownership record is unreadable") from None
         return {record.execution_id: record for record in records}
 
@@ -61,6 +85,8 @@ class Store:
         staged.unlink(missing_ok=True)
         with os.fdopen(os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as handle:
             handle.write(json.dumps(document, indent=2) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
         staged.replace(self.path)
 
 
@@ -73,6 +99,7 @@ def owned(record: Record | None, machines: Iterable[Machine]) -> Machine | None:
         machine
         for machine in machines
         if (machine.label, machine.target, machine.session) == (record.label, record.target, record.session)
+        and machine.profile_id not in record.before
     ]
     if len(found) > 1:
         raise EndpointRefused("catalog_ambiguous", f"{record.label} was saved more than once after an interrupted add")
@@ -88,8 +115,9 @@ def newest(desired: Iterable[Endpoint]) -> dict[str, Endpoint]:
     return wanted
 
 
-LABEL_TAKEN = "is the label of a machine this controller does not own"
-TARGET_TAKEN = "is already saved by a machine this controller does not own"
+AUDIT = "audit it and remove it with herdr machine remove before this endpoint registers"
+LABEL_TAKEN = f"is the label of a machine this controller does not own; {AUDIT}"
+TARGET_TAKEN = f"is already saved by a machine this controller does not own; {AUDIT}"
 
 
 class Registrations:
@@ -113,7 +141,8 @@ class Registrations:
     def _add(self, endpoint: Endpoint, records: dict[str, Record], machines: tuple[Machine, ...]) -> str:
         self._collision(endpoint, machines, None)
         execution_id = endpoint.scope.execution_id
-        records[execution_id] = self._record(endpoint, None)
+        before = tuple(sorted(machine.profile_id for machine in machines))
+        records[execution_id] = replace(self._record(endpoint, None), before=before)
         self.store.save(records)
         try:
             return self.catalog.add(endpoint.name, endpoint.target, self.session)
@@ -148,8 +177,8 @@ class Registrations:
         return profile_id
 
     def register(self, endpoint: Endpoint) -> str:
-        records = self.store.load()
-        return self._register(endpoint, records, self.catalog.machines())
+        with self.store.locked():
+            return self._register(endpoint, self.store.load(), self.catalog.machines())
 
     def _drop(self, records: dict[str, Record], execution_id: str, profile_id: str | None) -> None:
         if profile_id is not None:
@@ -163,7 +192,15 @@ class Registrations:
             self.drift["retired"] += 1
         self._drop(records, execution_id, saved.profile_id if saved else None)
 
-    def _sync(self, endpoint: Endpoint, records, machines, qualifier: Qualifier, report: Report) -> None:
+    def withdraw(self, endpoint: Endpoint) -> None:
+        with self.store.locked():
+            records = self.store.load()
+            if endpoint.scope.execution_id in records:
+                self._retire(records, self.catalog.machines(), endpoint.scope.execution_id)
+
+    def _admit(
+        self, endpoint: Endpoint, records: dict[str, Record], machines: tuple[Machine, ...], qualifier: Qualifier
+    ) -> str:
         profile_id = self._register(endpoint, records, machines)
         try:
             compatible = qualifier.verdict(endpoint.name, endpoint.incarnation).compatible
@@ -174,17 +211,24 @@ class Registrations:
         if not compatible:
             self._drop(records, endpoint.scope.execution_id, profile_id)
             raise EndpointRefused("incompatible", f"{endpoint.name} serves an incompatible herdr")
-        report.registered[endpoint.scope.execution_id] = profile_id
+        return profile_id
 
     def reconcile(self, desired: Iterable[Endpoint], qualifier: Qualifier) -> Report:
+        with self.store.locked():
+            return self._reconcile(newest(desired), self.store.load(), self.catalog.machines(), qualifier)
+
+    def _reconcile(
+        self,
+        wanted: dict[str, Endpoint],
+        records: dict[str, Record],
+        machines: tuple[Machine, ...],
+        qualifier: Qualifier,
+    ) -> Report:
         before = Counter(self.drift)
-        records = self.store.load()
-        machines = self.catalog.machines()
-        wanted = newest(desired)
         report = Report()
         for execution_id in sorted(wanted):
             try:
-                self._sync(wanted[execution_id], records, machines, qualifier, report)
+                report.registered[execution_id] = self._admit(wanted[execution_id], records, machines, qualifier)
             except EndpointRefused as refused:
                 report.refused[execution_id] = refused.reason
         for execution_id in sorted(set(records) - set(wanted)):

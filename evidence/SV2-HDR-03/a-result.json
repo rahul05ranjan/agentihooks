@@ -7,6 +7,15 @@
     "herdr-capabilities.json": "c15bb685e5bb4e2f53aa9a51a8ee80701aebe75a222093d120787b4839c45940"
   },
   "observed": {
+    "checks": {
+      "each_registration_maps_to_its_own_execution": true,
+      "two_workers_beside_local": true,
+      "store_matches_catalog": true,
+      "nothing_refused": true,
+      "manual_machine_untouched": true,
+      "replay_adds_nothing": true,
+      "independent_repeat_identical": true
+    },
     "first": {
       "first": {
         "registered": {
@@ -51,7 +60,8 @@
           "label": "swarm-exe-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-terminal",
           "target": "ssh://swarm-exe-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-terminal.swarm-workers.svc.cluster.local",
           "session": "default",
-          "profile_id": "eda75d4e8494f54c8a6fe05759524de3"
+          "profile_id": "eda75d4e8494f54c8a6fe05759524de3",
+          "before": []
         },
         "exe-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": {
           "execution_id": "exe-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -59,7 +69,8 @@
           "label": "swarm-exe-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-terminal",
           "target": "ssh://swarm-exe-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-terminal.swarm-workers.svc.cluster.local",
           "session": "default",
-          "profile_id": "eefed520946b717557bfbc5ef89d91ee"
+          "profile_id": "eefed520946b717557bfbc5ef89d91ee",
+          "before": []
         }
       },
       "sidebar": [

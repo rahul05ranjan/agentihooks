@@ -83,9 +83,13 @@ class Herdr:
         return subprocess.CompletedProcess(command, 0, reply, "")
 
     def _rename(self, command: list[str]) -> subprocess.CompletedProcess:
+        if len(command) != 6 or command[4] != "--label":
+            return subprocess.CompletedProcess(
+                command, 2, "", "usage: herdr machine rename <profile-id> --label <label>\n"
+            )
         for machine in self.machines:
-            if machine["id"] == command[-1]:
-                machine["label"] = _flag(command, "--label")
+            if machine["id"] == command[3]:
+                machine["label"] = command[5]
                 return subprocess.CompletedProcess(command, 0, "", "")
         return subprocess.CompletedProcess(command, 1, "", "unknown machine")
 
@@ -161,25 +165,29 @@ def _positive() -> tuple[dict, bool]:
     first, second = _positive_once(), _positive_once()
     desired = endpoints()
     registrations = first["registrations"]
-    mapped = all(
-        registrations[endpoint.scope.execution_id]["label"] == endpoint.name
-        and registrations[endpoint.scope.execution_id]["target"] == endpoint.target
-        and registrations[endpoint.scope.execution_id]["session"] == "default"
-        for endpoint in desired
-    )
-    passed = (
-        first == second
-        and mapped
-        and len({entry["id"] for entry in registrations.values()}) == 2
-        and first["first"]["refused"] == {}
-        and first["replayed"]["registered"] == first["first"]["registered"]
+    checks = {
+        "each_registration_maps_to_its_own_execution": all(
+            registrations[endpoint.scope.execution_id]
+            == {
+                "id": first["first"]["registered"][endpoint.scope.execution_id],
+                "label": endpoint.name,
+                "target": endpoint.target,
+                "session": "default",
+            }
+            for endpoint in desired
+        )
+        and len({entry["id"] for entry in registrations.values()}) == 2,
+        "two_workers_beside_local": first["sidebar"] == ["Local", "devbox", desired[0].name, desired[1].name],
+        "store_matches_catalog": {key: record["profile_id"] for key, record in first["records"].items()}
+        == first["first"]["registered"],
+        "nothing_refused": first["first"]["refused"] == {} and first["first"]["retired"] == [],
+        "manual_machine_untouched": first["manual_untouched"] and not first["commands_naming_manual"],
+        "replay_adds_nothing": first["replayed"]["registered"] == first["first"]["registered"]
         and first["replayed"]["herdr_registration_drift"] == 0
-        and first["sidebar"] == ["Local", "devbox", desired[0].name, desired[1].name]
-        and first["manual_untouched"]
-        and not first["commands_naming_manual"]
-        and len(first["mutating"]) == 2
-    )
-    return {"first": first, "second_identical": first == second}, passed
+        and len(first["mutating"]) == 2,
+        "independent_repeat_identical": first == second,
+    }
+    return {"checks": checks, "first": first, "second_identical": first == second}, all(checks.values())
 
 
 def _records(client: Client) -> dict | str:
@@ -276,41 +284,76 @@ SCENARIOS = {
 }
 
 
+def _isolation() -> dict:
+    with tempfile.TemporaryDirectory() as tmp:
+        desired, manual = endpoints(), copy.deepcopy(fixture()["manual"])
+        manual["label"] = desired[0].name
+        herdr = Herdr([manual], {endpoint.target for endpoint in desired})
+        client = Client(herdr, Path(tmp) / "registrations.json")
+        refused = client.reconcile(desired)
+        herdr.machines[0]["label"] = "devbox"
+        retried = client.reconcile(desired)
+        return {
+            "refused": _report(refused),
+            "after_the_operator_renamed_the_manual_machine": _report(retried),
+            "manual_after": herdr.machines[0],
+        }
+
+
+def _discloses(entry: dict) -> bool:
+    manual = fixture()["manual"]
+    shown = json.dumps({key: entry.get(key) for key in ("refusal", "report", "message")})
+    return manual["id"] in shown or manual["target"] in shown
+
+
 def _rejection() -> tuple[dict, bool]:
-    observed = {name: _scenario(change) for name, change in SCENARIOS.items()} | {"direct": _direct_collision()}
+    observed = {name: _scenario(change) for name, change in SCENARIOS.items()}
+    observed |= {"direct": _direct_collision(), "recovery_isolation": _isolation()}
     exe_a, exe_b = (endpoint.scope.execution_id for endpoint in endpoints())
+    scenarios = [observed[name] for name in SCENARIOS]
     refused = {
         name: (observed[name]["report"] or {}).get("refused")
         for name in ("label_collision", "target_collision", "incompatible_server", "server_not_ready")
     }
-    passed = (
-        refused
+    isolation = observed["recovery_isolation"]
+    checks = {
+        "conflicts_refused_by_reason": refused
         == {
             "label_collision": {exe_a: "label_collision"},
             "target_collision": {exe_a: "target_collision"},
             "incompatible_server": {exe_b: "incompatible"},
             "server_not_ready": {exe_b: "machine_refused"},
-        }
-        and all(
-            entry["manual_before"] == entry["manual_after"] for entry in observed.values() if "manual_before" in entry
+        },
+        "manual_machine_never_mutated": all(
+            entry["manual_before"] == entry["manual_after"] and not entry["commands_naming_manual"]
+            for entry in scenarios
+        ),
+        "refused_endpoints_hold_no_ownership": all(
+            sorted(observed[name]["records"]) == [exe_b] for name in ("label_collision", "target_collision")
         )
-        and not any(entry["commands_naming_manual"] for entry in observed.values() if "manual_before" in entry)
-        and all(sorted(observed[name]["records"]) == [exe_b] for name in ("label_collision", "target_collision"))
-        and all(sorted(observed[name]["records"]) == [exe_a] for name in ("incompatible_server", "server_not_ready"))
-        and observed["incompatible_server"]["mutating"][-1][:3] == ["herdr", "machine", "remove"]
-        and observed["unreadable_catalog"]["refusal"]["reason"] == "catalog_unreadable"
+        and all(sorted(observed[name]["records"]) == [exe_a] for name in ("incompatible_server", "server_not_ready")),
+        "incompatible_registration_removed": observed["incompatible_server"]["mutating"][-1][:3]
+        == ["herdr", "machine", "remove"],
+        "unreadable_state_mutates_nothing": observed["unreadable_catalog"]["refusal"]["reason"] == "catalog_unreadable"
         and observed["unreadable_ownership"]["refusal"]["reason"] == "ownership_unreadable"
         and not observed["unreadable_catalog"]["mutating"]
         and not observed["unreadable_ownership"]["mutating"]
-        and observed["unreadable_ownership"]["store_unchanged"]
-        and observed["retired_record_beside_manual_label"]["report"]["retired"] == [exe_a]
-        and not observed["retired_record_beside_manual_label"]["mutating"]
-        and observed["direct"]["reason"] == "label_collision"
-        and not observed["direct"]["discloses_manual_target"]
+        and observed["unreadable_ownership"]["store_unchanged"],
+        "retired_record_spares_a_same_label_manual_machine": observed["retired_record_beside_manual_label"]["report"][
+            "retired"
+        ]
+        == [exe_a]
+        and not observed["retired_record_beside_manual_label"]["mutating"],
+        "direct_collision_writes_nothing": observed["direct"]["reason"] == "label_collision"
         and not observed["direct"]["mutating"]
-        and not observed["direct"]["store_written"]
-    )
-    return observed, passed
+        and not observed["direct"]["store_written"],
+        "no_disclosure_of_the_manual_machine": not observed["direct"]["discloses_manual_target"]
+        and not any(_discloses(entry) for entry in scenarios),
+        "a_corrected_input_needs_a_new_request": isolation["refused"]["refused"] == {exe_a: "label_collision"}
+        and exe_a in isolation["after_the_operator_renamed_the_manual_machine"]["registered"]
+        and isolation["manual_after"]["label"] == "devbox",
+    }
+    return {"checks": checks} | observed, all(checks.values())
 
 
 def _restart_restores(root: Path) -> dict:
@@ -327,6 +370,7 @@ def _restart_restores(root: Path) -> dict:
     bumped = Client(herdr, store).reconcile(endpoints(3))
     stale = Client(herdr, store).reconcile(endpoints(2))
     after_stale = Client(herdr, store)
+    generation_after_stale = after_stale.records()[desired[0].scope.execution_id]["generation"]
     retired = after_stale.reconcile(desired[1:])
     return {
         "accepted": _report(accepted),
@@ -335,6 +379,7 @@ def _restart_restores(root: Path) -> dict:
         "relabelled": _report(relabelled),
         "bumped": _report(bumped),
         "stale": _report(stale),
+        "generation_after_stale": generation_after_stale,
         "retired": _report(retired),
         "kept_profile_survived": restored.registered[desired[0].scope.execution_id] == kept,
         "adds": {endpoint.name: herdr.adds(endpoint.name) for endpoint in desired},
@@ -370,26 +415,27 @@ def _recovery() -> tuple[dict, bool]:
         restart, interrupted = _restart_restores(Path(tmp)), _interrupted_add(Path(tmp))
     desired = endpoints()
     exe_a, exe_b = (endpoint.scope.execution_id for endpoint in desired)
-    passed = (
-        restart["restored"]["drift"] == {"missing": 1}
-        and restart["kept_profile_survived"]
-        and restart["adds"] == {desired[0].name: 1, desired[1].name: 2}
-        and restart["replayed"]["herdr_registration_drift"] == 0
-        and restart["relabelled"]["drift"] == {"label": 1}
-        and len(restart["renames"]) == 1
-        and restart["bumped"]["registered"] == restart["replayed"]["registered"]
-        and restart["stale"]["refused"] == {exe_a: "stale_generation"}
-        and restart["retired"]["retired"] == [exe_a]
+    checks = {
+        "restart_restores_the_missing_registration": restart["restored"]["drift"] == {"missing": 1}
+        and restart["kept_profile_survived"],
+        "restart_duplicates_nothing": restart["adds"] == {desired[0].name: 1, desired[1].name: 2},
+        "replay_has_no_drift": restart["replayed"]["herdr_registration_drift"] == 0,
+        "label_drift_renamed_back": restart["relabelled"]["drift"] == {"label": 1} and len(restart["renames"]) == 1,
+        "new_generation_keeps_its_profile": restart["bumped"]["registered"] == restart["replayed"]["registered"],
+        "stale_generation_cannot_overwrite": restart["stale"]["refused"] == {exe_a: "stale_generation"}
+        and restart["generation_after_stale"] == 3,
+        "retired_registration_removed_only": restart["retired"]["retired"] == [exe_a]
         and sorted(restart["records"]) == [exe_b]
-        and restart["sidebar"] == ["Local", "devbox", desired[1].name]
-        and interrupted["first"]["refused"] == {exe_a: "catalog_unreachable"}
-        and interrupted["pending_profile_id"] is None
-        and interrupted["replayed"]["drift"] == {"interrupted": 1}
+        and restart["sidebar"] == ["Local", "devbox", desired[1].name],
+        "interrupted_add_left_pending": interrupted["first"]["refused"] == {exe_a: "catalog_unreachable"}
+        and interrupted["pending_profile_id"] is None,
+        "interrupted_add_adopted_not_duplicated": interrupted["replayed"]["drift"] == {"interrupted": 1}
         and interrupted["adds"] == 1
         and interrupted["replayed"]["registered"][exe_a] == interrupted["saved"][0]
-        and interrupted["records"][exe_a]["profile_id"] == interrupted["saved"][0]
-    )
-    return {"restart": restart, "interrupted_add": interrupted}, passed
+        and interrupted["records"][exe_a]["profile_id"] == interrupted["saved"][0],
+    }
+    observed = {"checks": checks, "restart": restart, "interrupted_add": interrupted}
+    return observed, all(checks.values())
 
 
 def run_case(case: str) -> dict:

@@ -1,4 +1,7 @@
+import dataclasses
+import fcntl
 import json
+import os
 import stat
 import subprocess
 from pathlib import Path
@@ -164,7 +167,7 @@ def test_rename_and_remove_address_one_profile_id():
     Catalog(run).rename("p1", "new")
     Catalog(run).remove("p1")
     assert run.commands == [
-        ["herdr", "machine", "rename", "--label", "new", "p1"],
+        ["herdr", "machine", "rename", "p1", "--label", "new"],
         ["herdr", "machine", "remove", "p1"],
     ]
 
@@ -253,6 +256,22 @@ def test_a_pending_record_adopts_only_an_exact_label_target_and_session_match(fo
     assert reconcile.owned(pending, [found, exact]) is exact
 
 
+def test_a_pending_record_never_adopts_a_profile_listed_before_its_add():
+    pending = Record(EXE_A, 2, NAME_A, TARGET_A, "default", None, ("m1",))
+    manual = Machine("m1", NAME_A, TARGET_A, "default", True)
+    added = Machine("p2", NAME_A, TARGET_A, "default", True)
+    assert reconcile.owned(pending, [manual]) is None
+    assert reconcile.owned(pending, [manual, added]) is added
+
+
+def test_an_add_records_every_profile_listed_before_it(tmp_path):
+    listed = [machine("m2", "devbox", "ssh://devbox"), machine("m1", "other", "ssh://other")]
+    registrations, herdr, desired = world(tmp_path, listed)
+    herdr.unanswered.add(TARGET_A)
+    refusal(lambda: registrations.register(desired[0]))
+    assert registrations.store.load()[EXE_A].before == ("m1", "m2")
+
+
 def test_a_pending_record_saved_twice_is_ambiguous():
     pending = Record(EXE_A, 2, NAME_A, TARGET_A, "default", None)
     twice = [Machine(f"p{n}", NAME_A, TARGET_A, "default", True) for n in (1, 2)]
@@ -304,7 +323,8 @@ def test_a_drifted_managed_label_is_renamed_back(tmp_path):
     herdr.machines[0]["label"] = "by-hand"
     herdr.machines.append(machine("m1", "devbox", TARGET_A))
     assert registrations.register(desired[0]) == profile
-    assert herdr.commands[-1] == ["herdr", "machine", "rename", "--label", NAME_A, profile]
+    assert herdr.commands[-1] == ["herdr", "machine", "rename", profile, "--label", NAME_A]
+    assert herdr.machines[0]["label"] == NAME_A
     assert registrations.drift == {"missing": 1, "label": 1}
 
 
@@ -315,7 +335,7 @@ def test_a_rename_onto_another_machines_label_is_refused(tmp_path):
     herdr.machines.append(machine("m1", NAME_A, "ssh://devbox"))
     assert refusal(lambda: registrations.register(desired[0])) == (
         "label_collision",
-        f"{NAME_A} is the label of a machine this controller does not own",
+        f"{NAME_A} is the label of a machine this controller does not own; audit it and remove it with herdr machine remove before this endpoint registers",
     )
     assert not any(command[:3] == ["herdr", "machine", "rename"] for command in herdr.commands)
     assert registrations.drift == {"missing": 1, "collision": 1}
@@ -325,7 +345,7 @@ def test_a_target_already_saved_unmanaged_is_refused(tmp_path):
     registrations, herdr, desired = world(tmp_path, [machine("m1", "devbox", TARGET_A)])
     assert refusal(lambda: registrations.register(desired[0])) == (
         "target_collision",
-        f"{NAME_A} is already saved by a machine this controller does not own",
+        f"{NAME_A} is already saved by a machine this controller does not own; audit it and remove it with herdr machine remove before this endpoint registers",
     )
     assert herdr.mutating() == []
     assert not registrations.store.path.exists()
@@ -391,8 +411,8 @@ def test_only_an_incompatible_server_is_unregistered(tmp_path, outcome, kept):
 def test_reconcile_retires_only_owned_profiles_and_counts_those_still_saved(tmp_path):
     registrations, herdr, desired = world(tmp_path, [machine("m1", "devbox", "ssh://devbox")])
     registrations.reconcile(desired, Verdicts())
-    gone = Record(EXE_B, 1, "x", "ssh://x", "default", "gone")
-    registrations.store.save(registrations.store.load() | {"exe-" + "c" * 32: gone})
+    gone = Record("exe-" + "c" * 32, 1, "x", "ssh://x", "default", "gone")
+    registrations.store.save(registrations.store.load() | {gone.execution_id: gone})
     report = registrations.reconcile([], Verdicts())
     assert report.retired == [EXE_A, EXE_B, "exe-" + "c" * 32]
     assert report.drift == {"retired": 2}
@@ -417,3 +437,91 @@ def test_package_cases_match_their_committed_evidence(case):
     path = EVIDENCE / f"{case}-result.json"
     committed = json.loads(path.read_text()) if path.exists() else None
     assert committed == first, json.dumps(first, indent=2, sort_keys=True)
+
+
+def test_an_add_reply_without_an_id_after_the_marker_is_ambiguous():
+    assert refusal(lambda: Catalog(Recorder(done(0, "Saved SSH machine .\n"))).add("w", "ssh://w", "s"))[0] == (
+        "catalog_ambiguous"
+    )
+
+
+def test_the_profile_id_on_standard_output_wins():
+    run = Recorder(done(0, "Saved SSH machine out1.\n", "Saved SSH machine err1.\n"))
+    assert Catalog(run).add("w", "ssh://w", "s") == "out1"
+
+
+def test_machines_and_records_are_immutable():
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        Machine("p", "l", "t", "s", True).label = "x"
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        Record(EXE_A, 1, "l", "t", "s", None).profile_id = "x"
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"generation": "2"},
+        {"generation": True},
+        {"label": ""},
+        {"target": 7},
+        {"session": None},
+        {"execution_id": ""},
+        {"profile_id": 3},
+        {"before": ["m1", ""]},
+        {"before": [1]},
+        {"before": 5},
+    ],
+)
+def test_an_ownership_record_with_a_mistyped_field_is_unreadable(tmp_path, entry):
+    good = {"execution_id": EXE_A, "generation": 2, "label": NAME_A, "target": TARGET_A, "session": "default"}
+    path = tmp_path / "registrations.json"
+    path.write_text(json.dumps({"version": 1, "registrations": [good | {"profile_id": "p1"} | entry]}))
+    assert refusal(lambda: Store(path).load())[0] == "ownership_unreadable"
+
+
+def test_an_ownership_record_keeps_its_snapshot_as_a_tuple(tmp_path):
+    store = Store(tmp_path / "registrations.json")
+    store.save({EXE_A: Record(EXE_A, 2, NAME_A, TARGET_A, "default", None, ("m1", "m2"))})
+    assert store.load()[EXE_A].before == ("m1", "m2")
+    assert json.loads(store.path.read_text())["registrations"][0]["before"] == ["m1", "m2"]
+
+
+def test_an_ownership_path_that_cannot_be_read_is_unreadable(tmp_path):
+    (tmp_path / "registrations.json").mkdir()
+    assert refusal(lambda: Store(tmp_path / "registrations.json").load())[0] == "ownership_unreadable"
+
+
+def test_the_store_lock_is_exclusive_and_private(tmp_path):
+    store = Store(tmp_path / "home" / "registrations.json")
+    lock = tmp_path / "home" / ".registrations.json.lock"
+    with store.locked():
+        assert stat.S_IMODE(lock.stat().st_mode) == 0o600
+        other = os.open(lock, os.O_RDWR)
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(other)
+    other = os.open(lock, os.O_RDWR)
+    try:
+        fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        os.close(other)
+
+
+def test_retirement_runs_in_execution_order(tmp_path):
+    registrations, herdr, _ = world(tmp_path)
+    ids = [f"exe-{letter * 32}" for letter in "fedcba9"]
+    registrations.store.save({exe: Record(exe, 1, exe, f"ssh://{exe}", "default", None) for exe in ids})
+    assert registrations.reconcile([], Verdicts()).retired == sorted(ids)
+
+
+def test_withdraw_removes_only_a_recorded_registration(tmp_path):
+    registrations, herdr, desired = world(tmp_path)
+    registrations.withdraw(desired[0])
+    assert herdr.commands == []
+    profile = registrations.register(desired[0])
+    registrations.withdraw(desired[0])
+    assert herdr.commands[-1] == ["herdr", "machine", "remove", profile]
+    assert registrations.store.load() == {}
+    assert registrations.drift == {"missing": 1, "retired": 1}
