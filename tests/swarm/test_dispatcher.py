@@ -166,6 +166,12 @@ def test_chains_count_the_longest_open_path_of_waiters_behind_each_task():
     tangled.append(task("e", depends_on=["c", "d"]))
     assert dispatcher.chains(doc(tangled)) == {"a": 3, "b": 2, "c": 2, "d": 1, "e": 0}
     assert dispatcher.ordered(doc(tangled), "", dispatcher.leverage(doc(tangled))) == ["a", "b", "c", "d", "e"]
+    knot = {"t0": ["t3"], "t1": ["t0", "t2", "t3", "t4"], "t2": ["t0", "t1", "t3", "t4"], "t3": ["t0", "t2"]}
+    knot["t4"] = ["t1", "t2", "t3"]
+    knotted = doc([task(t, depends_on=deps) for t, deps in knot.items()] + [task("t5", depends_on=["t4"])])
+    assert dispatcher.chains(knotted) == {**dict.fromkeys(knot, 5), "t5": 0}
+    long = [task("c0", phase="")] + [task(f"c{i}", phase="", depends_on=[f"c{i - 1}"]) for i in range(1, 1500)]
+    assert dispatcher.chains(doc(long, phases=[]))["c0"] == 1499
 
 
 def deep_and_wide():
@@ -201,6 +207,9 @@ def test_claimable_leaves_are_ordered_by_the_bottleneck_lane_then_the_focus_orde
     found = doc(tasks, phases=[], freezes=focus)
     assert dispatcher.ordered(found, "ci", dispatcher.leverage(found)) == ["l2", "l4", "l3", "l1"]
     assert dispatcher.ordered(found, "", dispatcher.leverage(found)) == ["l4", "l3", "l1", "l2"]
+    covered = doc([task("p", phase=""), task("q", phase="")], phases=[])
+    covered["freezes"] = [{"verb": "focus", "target": "tasks/q"}, {"verb": "focus", "target": "lane:eng"}]
+    assert dispatcher.ordered(covered, "", dispatcher.leverage(covered)) == ["q", "p"]
 
 
 def test_the_order_and_the_ranks_hold_across_ticks_with_no_input_change(store, home, shipped):
