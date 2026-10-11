@@ -148,13 +148,14 @@ class InboxStore:
             fyi=fyi,
             task=task,
         )
+        key = self.key("item", item.id)
         with self.redis.pipeline() as pipe:
             if item_id:
-                pipe.watch(self.key("item", item.id))
-                if pipe.exists(self.key("item", item.id)):
+                pipe.watch(key)
+                if pipe.exists(key):
                     raise DuplicateItem(f"message {item.id} was already sent")
                 pipe.multi()
-            pipe.hset(self.key("item", item.id), mapping=_fields(item))
+            pipe.hset(key, mapping=_fields(item))
             pipe.zadd(self.key("address", address), {item.id: at})
             pipe.zadd(self.key("pending", address), {item.id: at})
             pipe.zadd(self.key("open", address), {item.id: at})
@@ -252,7 +253,7 @@ class InboxStore:
                 except WatchError:
                     continue
         else:
-            raise Contended(f"aliases for {original} changed meanwhile")
+            raise InboxError(f"aliases for {original} changed meanwhile")
         if seat and not self.seats.left(me, seat):
             addresses.append(seat)
         items = [item for address in addresses for item in read(address)]
@@ -325,7 +326,7 @@ class InboxStore:
                 return self._try_redirect(item_id, by, address, reason, expected_address, expected_receiver)
             except WatchError:
                 continue
-        raise Contended(f"message {item_id} changed meanwhile; run the command again")
+        raise InboxError(f"message {item_id} changed meanwhile; run the command again")
 
     def _try_redirect(self, item_id, by, address, reason, expected_address, expected_receiver):
         key = self.key("item", item_id)
@@ -449,7 +450,7 @@ class InboxStore:
                 return self._try_requeue(item_id, by, reason, before)
             except WatchError:
                 continue
-        raise Contended(f"message {item_id} changed meanwhile; run the command again")
+        raise InboxError(f"message {item_id} changed meanwhile; run the command again")
 
     def _try_requeue(self, item_id, by, reason, before):
         key = self.key("item", item_id)
