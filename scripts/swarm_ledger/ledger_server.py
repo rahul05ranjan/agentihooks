@@ -209,6 +209,17 @@ def swarm_status(slug, state=None):
         return None
 
 
+def swarm_models():
+    from scripts.swarm import model_catalog
+    from scripts.swarm.store import SwarmError
+
+    try:
+        redis = swarm_store().redis
+    except SwarmError:
+        redis = None
+    return model_catalog.catalog(dict(os.environ), redis, time.time())
+
+
 def swarm_state(slug):
     from scripts.swarm.store import SwarmError
 
@@ -669,11 +680,13 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/layout":
             return self.send(200, json.dumps(ledger_layout.read()), "application/json")
         if route.startswith("/api/swarm/"):
-            slug = slug.removeprefix("swarm/")
-            if not self.exists(slug):
+            slug, _, view = slug.removeprefix("swarm/").partition("/")
+            if view not in ("", "models") or not self.exists(slug):
                 return self.send(404, "no such ledger", "text/plain")
             if self.refused(slug):
                 return None
+            if view:
+                return self.send(200, json.dumps(swarm_models()), "application/json")
             status = swarm_status(slug)
             if status is None:
                 return self.send(404, "no swarm for this ledger", "text/plain")
