@@ -22,7 +22,7 @@ class Supervision:
     exporter: tuple[str, ...] | None
     control_url: str
 
-    def record(self, registration: Registration, profile: str) -> str:
+    def record(self, registration: Registration, profile: str, restore: dict | None = None) -> str:
         record = {
             "schema_version": SCHEMA_VERSION,
             "execution_id": registration.execution_id,
@@ -35,6 +35,8 @@ class Supervision:
         }
         if self.exporter:
             record["exporter"] = list(self.exporter)
+        if restore is not None:
+            record["restore"] = restore
         return json.dumps(record, sort_keys=True)
 
 
@@ -73,9 +75,11 @@ class PodGrants:
         verify: Callable[[str], Registration],
         supervision: Supervision,
         terminal: Terminals | None = None,
+        restores: Callable[[str], dict | None] = lambda execution_id: None,
     ) -> None:
         self.api, self.owner = api, owner_for(slug)
         self.verify, self.supervision, self.terminal = verify, supervision, terminal
+        self.restores = restores
 
     def hand(self, agent: AgentRecord, grant: str) -> Hand:
         from redis.exceptions import RedisError
@@ -84,7 +88,7 @@ class PodGrants:
             registration = self.verify(grant)
         except (GrantRefused, RedisError):
             return Hand(False, "grant_unverified")
-        record = self.supervision.record(registration, agent.profile)
+        record = self.supervision.record(registration, agent.profile, self.restores(agent.execution_id))
         labels = {
             OWNER_LABEL: self.owner,
             EXECUTION_LABEL: agent.execution_id,

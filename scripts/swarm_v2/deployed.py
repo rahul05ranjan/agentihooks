@@ -17,7 +17,7 @@ from scripts.swarm_v2.kubernetes.approved import INDEX, AccountRoute, FleetAccou
 from scripts.swarm_v2.kubernetes.cleanup import Cleanup
 from scripts.swarm_v2.kubernetes.client import ApiRefused, KubeHttp, PodApi, PodClient
 from scripts.swarm_v2.kubernetes.completion import Completion
-from scripts.swarm_v2.kubernetes.failures import AccountSlot, Recovery
+from scripts.swarm_v2.kubernetes.failures import AccountSlot, Recovery, restore_directive
 from scripts.swarm_v2.kubernetes.grants import PodGrants, Supervision
 from scripts.swarm_v2.kubernetes.pool import WorkerPool
 from scripts.swarm_v2.kubernetes.prompts import TerminalPrompts
@@ -183,7 +183,7 @@ class Workers:
         supervision = Supervision(HARNESS, self.exporter, self.terms.api_url)
         api = pod_api(environ, self.policy["namespace"])
         terminal = None if self.terminal is None else TerminalObjects(api, self.terminal, HostKeys(store))
-        return PodGrants(api, slug, verify, supervision, terminal)
+        return PodGrants(api, slug, verify, supervision, terminal, partial(restore_directive, store, slug))
 
 
 def tick_runtime(service: "ControlService", workers: Workers, environ: Mapping[str, str]) -> RoutedRuntime:
