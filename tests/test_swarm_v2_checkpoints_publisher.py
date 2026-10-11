@@ -1,11 +1,13 @@
+import io
 import json
+import tarfile
 from pathlib import Path
 
 import pytest
 
 from scripts.swarm_v2 import contracts
 from scripts.swarm_v2.artifacts.base import ABSENT, VERIFIED, ArtifactRef
-from scripts.swarm_v2.checkpoints import model, publisher
+from scripts.swarm_v2.checkpoints import model, native, publisher
 from tests.sv2_ckp04_cases import LostAck, checkpoint, files, make, pointers, run_case
 
 pytestmark = pytest.mark.unit
@@ -447,3 +449,109 @@ def test_package_cases_match_their_committed_evidence(case):
     path = EVIDENCE / f"{case}-result.json"
     committed = json.loads(path.read_text()) if path.exists() else None
     assert committed == first, json.dumps(first, indent=2, sort_keys=True)
+
+
+TOKEN = "ghp_" + "Z9" * 18
+QUIET = '{"type": "user", "message": "plain"}\n'
+
+
+def _native(members: dict[str, str]) -> bytes:
+    files = tuple((name, text.encode()) for name, text in members.items())
+    return native.NativeCapture("claude", "2.1.3", "s-1", files, "stopped_process").material()
+
+
+def _published_members(pub: publisher.Publisher) -> dict[str, str]:
+    store = pub.validator.store
+    data = store.get_range(store.recorded(f"ckpt-g2-s1.{model.NATIVE_SESSION}"))
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:") as archive:
+        return {info.name: archive.extractfile(info).read().decode() for info in archive.getmembers()}
+
+
+def _committed(pub: publisher.Publisher) -> dict:
+    store = pub.validator.store
+    return json.loads(store.get_range(store.recorded("ckpt-g2-s1")))
+
+
+def test_a_planted_token_never_reaches_a_published_checkpoint(root):
+    pub = make(root)
+    doc, materials = checkpoint(1)
+    printed = json.dumps({"type": "tool_result", "content": f"ran it: {TOKEN} done"}, separators=(",", ":"))
+    materials[model.NATIVE_SESSION] = _native({"projects/s-1.jsonl": QUIET + printed + "\n"})
+    result = pub.publish(doc, materials)
+    assert (result.promoted, result.reason) == (True, "promoted")
+    assert all(TOKEN.encode() not in data for data in files(root).values())
+    lines = _published_members(pub)["projects/s-1.jsonl"].splitlines(keepends=True)
+    assert lines[0] == QUIET
+    assert json.loads(lines[1]) == {"type": "tool_result", "content": "ran it: [REDACTED:github_token] done"}
+    assert _committed(pub)["secret_redactions"] == 1
+
+
+def test_a_secret_named_by_its_record_key_is_redacted(root):
+    pub = make(root)
+    doc, materials = checkpoint(1)
+    key, value = "api" + "_key", "abcd" + "1234efgh"
+    materials[model.NATIVE_SESSION] = _native({"projects/s-1.jsonl": json.dumps({"type": "env", key: value}) + "\n"})
+    assert pub.publish(doc, materials).promoted
+    assert all(value.encode() not in data for data in files(root).values())
+    hidden = json.dumps({"type": "env", key: "[REDACTED:generic_secret]"}, separators=(",", ":"))
+    assert _published_members(pub)["projects/s-1.jsonl"] == hidden + "\n"
+    assert _committed(pub)["secret_redactions"] == 1
+
+
+def test_a_token_held_as_a_record_key_is_redacted_in_the_rewritten_line(root):
+    pub = make(root)
+    doc, materials = checkpoint(1)
+    materials[model.NATIVE_SESSION] = _native({"projects/s-1.jsonl": json.dumps({TOKEN: [1, "x"]}) + "\r\n"})
+    assert pub.publish(doc, materials).promoted
+    assert _published_members(pub)["projects/s-1.jsonl"] == '{"[REDACTED:github_token]":[1,"x"]}\r\n'
+    assert _committed(pub)["secret_redactions"] == 1
+
+
+def test_secrets_inside_nested_values_are_each_counted(root):
+    pub = make(root)
+    doc, materials = checkpoint(1)
+    record = {"type": "t", "items": [TOKEN, {"text": f"{TOKEN} and {TOKEN}"}], "n": 3}
+    materials[model.NATIVE_SESSION] = _native({"projects/s-1.jsonl": json.dumps(record) + "\n"})
+    assert pub.publish(doc, materials).promoted
+    hidden = "[REDACTED:github_token]"
+    assert json.loads(_published_members(pub)["projects/s-1.jsonl"]) == {
+        "type": "t",
+        "items": [hidden, {"text": f"{hidden} and {hidden}"}],
+        "n": 3,
+    }
+    assert _committed(pub)["secret_redactions"] == 3
+
+
+def test_native_material_that_is_not_an_archive_is_refused_before_any_upload(root):
+    pub = make(root)
+    doc, materials = checkpoint(1)
+    materials[model.NATIVE_SESSION] = b"not an archive"
+    result = pub.publish(doc, materials)
+    assert (result.promoted, result.reason, result.verdict) == (False, "native_format_changed", None)
+    assert files(root) == {}
+    assert pub.metrics() == {"checkpoint_publish_failures": {"native_format_changed": 1}}
+
+
+def test_a_line_that_is_not_a_record_is_redacted_as_text(root):
+    pub = make(root)
+    doc, materials = checkpoint(1)
+    materials[model.NATIVE_SESSION] = _native({"history.txt": f"token {TOKEN}\n{{broken\n"})
+    assert pub.publish(doc, materials).promoted
+    assert _published_members(pub)["history.txt"] == "token [REDACTED:github_token]\n{broken\n"
+    assert _committed(pub)["secret_redactions"] == 1
+
+
+def test_clean_native_material_publishes_byte_identical_with_a_zero_count(root):
+    pub = make(root)
+    doc, materials = checkpoint(1)
+    archive = _native({"projects/s-1.jsonl": QUIET, "history.txt": "no secret here\n"})
+    materials[model.NATIVE_SESSION] = archive
+    assert pub.publish(doc, materials).promoted
+    assert pub.validator.store.recorded(f"ckpt-g2-s1.{model.NATIVE_SESSION}") == ArtifactRef.of(archive)
+    assert _committed(pub)["secret_redactions"] == 0
+
+
+def test_a_checkpoint_without_native_material_records_no_redaction_count(root):
+    pub = make(root)
+    assert pub.publish(*checkpoint(1)).promoted
+    assert "secret_redactions" not in _committed(pub)
