@@ -119,6 +119,26 @@ def test_merged_keeps_the_manifest_materials_and_exclusions(tmp_path):
     assert git_capture.merged({}, source) == fields
 
 
+def test_merged_drops_source_materials_the_manifest_carried_from_an_earlier_capture(tmp_path):
+    source = git_capture.capture(_pushed(tmp_path), "origin/dev")
+    stale = {"sha256": "c" * 64, "size": 9}
+    roles = [*git_capture.SOURCE_ROLES, "source_bundle"]
+    manifest = {
+        "branch_state": "bundled",
+        "inventory": {"normalized_transcript": {"sha256": "b" * 64, "size": 3}, **dict.fromkeys(roles, stale)},
+        "artifact_hashes": {
+            "normalized_transcript": "sha256:" + "b" * 64,
+            **dict.fromkeys(roles, "sha256:" + "c" * 64),
+        },
+    }
+    doc = git_capture.merged(manifest, source)
+    fields = source.fields()
+    assert doc["branch_state"] == "pushed"
+    assert doc["inventory"] == {"normalized_transcript": {"sha256": "b" * 64, "size": 3}, **fields["inventory"]}
+    assert doc["artifact_hashes"] == {"normalized_transcript": "sha256:" + "b" * 64, **fields["artifact_hashes"]}
+    assert "source_bundle" not in doc["inventory"]
+
+
 def test_caches_credentials_links_and_secrets_are_counted_not_archived(tmp_path):
     work = _pushed(tmp_path)
     cases.write(work / "__pycache__" / "app.cpython-312.pyc", "compiled\n")
@@ -240,7 +260,7 @@ def test_restore_refuses_a_dirty_target(tmp_path):
     cases.write(target / "mine.md", "mine\n")
     with pytest.raises(git_capture.SourceError) as raised:
         git_capture.restore(reader, "ckpt-src-0001", target)
-    assert str(raised.value) == git_capture.DIRTY
+    assert str(raised.value) == "the restore target has changes of its own"
     assert cases.state(target)["untracked"] == ["mine.md"]
 
 

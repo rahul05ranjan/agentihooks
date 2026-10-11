@@ -37,6 +37,7 @@ ESCAPE = "the untracked archive holds a member that is not a regular file inside
 DIRTY = "the restore target has changes of its own"
 INCOMPLETE = "the checkpoint does not carry every source material"
 SOURCE_ROLES = frozenset({STAGED, UNSTAGED, UNTRACKED})
+CAPTURED = SOURCE_ROLES | {model.SOURCE_BUNDLE}
 
 
 class SourceError(ValueError):
@@ -168,11 +169,13 @@ def capture(worktree: Path, remote_ref: str, policy: Policy = Policy()) -> Sourc
 
 def merged(manifest: dict, source: SourceCapture) -> dict:
     fields = source.fields()
+    carried = {role: ref for role, ref in manifest.get("inventory", {}).items() if role not in CAPTURED}
+    hashes = {role: digest for role, digest in manifest.get("artifact_hashes", {}).items() if role not in CAPTURED}
     return {
         **manifest,
         **fields,
-        "inventory": {**manifest.get("inventory", {}), **fields["inventory"]},
-        "artifact_hashes": {**manifest.get("artifact_hashes", {}), **fields["artifact_hashes"]},
+        "inventory": {**carried, **fields["inventory"]},
+        "artifact_hashes": {**hashes, **fields["artifact_hashes"]},
         "exclusions": [*manifest.get("exclusions", []), *fields["exclusions"]],
     }
 
