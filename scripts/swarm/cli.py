@@ -65,7 +65,7 @@ from scripts.handoff import check as handoff_check
 from scripts.handoff import envelope as handoff_envelope
 from scripts.handoff import transfers
 from scripts.handoff.resolve import Resolver
-from scripts.inbox import exits, wake
+from scripts.inbox import exits, outbox, wake
 from scripts.inbox.seats import CANON, DEFAULT_MATURITY, MATURITIES, SeatError, is_seat, seat_address
 from scripts.inbox.seats import PREFIX as SEAT_PREFIX
 from scripts.inbox.store import InboxError, InboxStore
@@ -173,6 +173,7 @@ def run_tick(store, slug, ledger=None, runtime=None, messenger=None, scheduled=F
     from scripts.swarm import command_runner, commands, controller, incidents, lease
 
     ledger = ledger or LedgerClient()
+    outbox.flush(InboxStore(store.redis))
     held = lease.acquire(store, slug, commands.hive_id())
     if held is None:
         return ["the swarm belongs to another hive"]
