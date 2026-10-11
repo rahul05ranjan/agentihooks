@@ -13,6 +13,7 @@ from scripts.swarm.store import RedisStore
 from scripts.swarm.tick import SPAWN_HOLD
 
 IDENTITY = ("agent", "lane", "harness", "account", "model", "effort", "execution_id")
+VERDICTS = ("fail", "pass")
 EVENT_COLUMNS = (*((key, "String") for key in IDENTITY), ("kind", "String"), ("reason", "String"))
 AGENTS = metrics_outbox.Table("agent_events", (*EVENT_COLUMNS, ("finding_kind", "String")))
 DELIVERY = metrics_outbox.Table(
@@ -165,7 +166,12 @@ def _delivery(row: dict, task: dict, duration: float = -1.0) -> dict:
 
 def delivery_rows(slug: str, doc: dict, agents: list, pulls: dict) -> list[dict]:
     rows, claims = [], {}
-    kinds = {"task pr": "pull_request_opened", "review round": "review_round"}
+    kinds = {
+        "task pr": "pull_request_opened",
+        "review round": "review_round",
+        "intent fail": "intent_failed",
+        "intent pass": "intent_passed",
+    }
     for source in doc.get("_meta", {}).get("events", []):
         task_id = source["target"].removeprefix("tasks/")
         if source["kind"] == "task claimed":
@@ -189,6 +195,35 @@ def delivery_rows(slug: str, doc: dict, agents: list, pulls: dict) -> list[dict]
         agent = _owner(agents, task["id"], at)
         rows.append(_delivery(_event(slug, task, agent, at, "merge", task["pr_url"]), task, duration))
     return rows
+
+
+def queue_rows(slug: str, doc: dict, agents: list, pulls: dict, now_ms: int) -> list[dict]:
+    rows = []
+    for task in doc.get("tasks", []):
+        pull = pulls.get(task.get("pr_url"))
+        if pull is None or pull.state != "OPEN" or not pull.queued:
+            continue
+        agent = _owner(agents, task["id"], now_ms)
+        rows.append(_delivery(_event(slug, task, agent, now_ms, "merge_queued", [task["pr_url"], pull.head]), task))
+    return rows
+
+
+def launch_rows(slug: str, doc: dict, launches: list, agents: list) -> list[dict]:
+    return [
+        _with_finding_kind(
+            _event(
+                slug,
+                _task(doc, source["task"]),
+                _owner(agents, source["task"], source["at"], source["agent"]),
+                source["at"],
+                "launch_failed",
+                [source["agent"], source["at"]],
+                source["error"],
+            )
+        )
+        for source in launches
+        if source["state"] == "failed"
+    ]
 
 
 def gate_rows(slug: str, doc: dict, agents: list, gates: list) -> tuple[list, list]:
@@ -295,6 +330,15 @@ def read_review_events(slug: str, box: metrics_outbox.Outbox) -> LogBatch:
     batch = _log_batch(gate_log.gates_dir(slug) / "intent" / "history.jsonl", box)
     events = []
     for source in batch.rows:
+        if source.get("verdict") in VERDICTS:
+            events.append(
+                {
+                    "kind": f"intent {source['verdict']}",
+                    "target": f"tasks/{source['task']}",
+                    "at": source["at"],
+                    "review_id": source["_source_id"],
+                }
+            )
         state = json.loads(source["classifier_input"])["state"]
         for review in state.get("reviewer_findings", {}).get("reviews", []):
             if not review.get("submittedAt"):
@@ -343,8 +387,17 @@ def record_pass(
     reviews, classifiers = read_review_events(slug, box), read_classifier_calls(box)
     review_doc = {**doc, "_meta": {"events": [*doc.get("_meta", {}).get("events", []), *reviews.rows]}}
     batches = (
-        (AGENTS, agent_rows(slug, doc, agents) + gates + signal_rows(slug, doc, agents, handoffs, found)),
-        (DELIVERY, delivery_rows(slug, review_doc, agents, pulls) + reruns),
+        (
+            AGENTS,
+            agent_rows(slug, doc, agents)
+            + gates
+            + signal_rows(slug, doc, agents, handoffs, found)
+            + launch_rows(slug, doc, store.launches(slug), agents),
+        ),
+        (
+            DELIVERY,
+            delivery_rows(slug, review_doc, agents, pulls) + reruns + queue_rows(slug, doc, agents, pulls, now_ms),
+        ),
         (HOST, [host_row(slug, now_ms, host_budget.read_host(), quota)]),
         (QUOTA, quota_rows(slug, now_ms, quota)),
         (CLASSIFIERS, classifier_rows(classifiers.rows, socket.gethostname())),
