@@ -183,8 +183,9 @@ class Recovery:
         checkpoint = self._checkpoint(execution_id) if choice == RESUME else ""
         if choice == RESUME and not checkpoint:
             raise SwarmError("no complete compatible checkpoint to resume from")
-        replacement = self._replace(self.store.execution(self.slug, execution_id))
-        return self._record(replace(known, mode=choice, checkpoint=checkpoint, replacement=replacement))
+        agent = self.store.execution(self.slug, execution_id)
+        replacement = self._replace(agent)
+        return self._record(agent, replace(known, mode=choice, checkpoint=checkpoint, replacement=replacement))
 
     def pause(self, paused: bool) -> None:
         """The operator's pause outlives a controller restart; the constructor flag stays the deployment default."""
@@ -285,6 +286,18 @@ class Recovery:
         self.controller.require()
         if not self.store.redis.hsetnx(self._key(FENCES), agent.execution_id, json.dumps(fence)):
             return self.fence(agent.execution_id)
+        self.controller.telemetry.record(
+            "fence",
+            "accepted",
+            0.0,
+            task=agent.task,
+            seat=agent.seat,
+            execution_id=agent.execution_id,
+            expected_generation=agent.generation,
+            observed_generation=agent.generation,
+            controller_epoch=fence["controller_epoch"],
+            reason=reason,
+        )
         return fence
 
     def _decide(self, agent: AgentRecord, reason: str) -> Decision:
@@ -294,9 +307,10 @@ class Recovery:
             if occupant.execution_id == agent.execution_id:
                 self.controller.require()
                 self.store.put_agent(self.slug, replace(occupant, state=AWAITING))
-            return self._record(Decision(agent.execution_id, agent.generation, reason, PENDING))
+            return self._record(agent, Decision(agent.execution_id, agent.generation, reason, PENDING))
         replacement = self._replace(agent)
-        return self._record(Decision(agent.execution_id, agent.generation, reason, RESUME, checkpoint, replacement))
+        decision = Decision(agent.execution_id, agent.generation, reason, RESUME, checkpoint, replacement)
+        return self._record(agent, decision)
 
     def _checkpoint(self, execution_id: str) -> str:
         usable = [
@@ -318,8 +332,22 @@ class Recovery:
         record = replace(agent, runtime_target=target, **NEW_ATTEMPT)
         return self.controller.admit(record, agent.execution_id).execution_id
 
-    def _record(self, decision: Decision) -> Decision:
+    def _record(self, agent: AgentRecord, decision: Decision) -> Decision:
         self._write(RECOVERIES, decision.execution_id, asdict(decision))
+        self.controller.telemetry.record(
+            "recovery",
+            "accepted",
+            0.0,
+            task=agent.task,
+            seat=agent.seat,
+            execution_id=decision.execution_id,
+            expected_generation=decision.generation,
+            observed_generation=self.store.execution_occupants(self.slug)[agent.seat].generation,
+            controller_epoch=self.controller.held.epoch,
+            reason=decision.reason,
+            mode=decision.mode,
+            replacement=decision.replacement,
+        )
         return decision
 
     def _write(self, name: str, execution_id: str, value: dict) -> None:

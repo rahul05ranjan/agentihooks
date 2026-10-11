@@ -352,8 +352,8 @@ def test_the_status_report_carries_observability(store, monkeypatch):
 
 
 def test_the_controller_records_each_admission_and_command_with_both_generations(store):
-    recorder = telemetry.Telemetry(store, SLUG, clock=lambda: 0.0)
-    controller = Controller(store, SLUG, [Transport()], lambda: True, telemetry=recorder)
+    controller = Controller(store, SLUG, [Transport()], lambda: True)
+    controller.telemetry = telemetry.Telemetry(store, SLUG, clock=lambda: 0.0)
 
     with pytest.raises(SwarmError):
         controller.admit(_agent(store))
