@@ -213,6 +213,29 @@ def test_a_fixed_lane_model_keeps_its_model_and_takes_the_picked_effort(monkeypa
     assert (picked.model, picked.effort) == ("fable", "xhigh")
 
 
+def test_a_fixed_lane_model_never_takes_the_sonnet_step(monkeypatch):
+    monkeypatch.setattr(model_pick, "decide", lambda *a, **kw: pytest.fail("a one option band asked the classifier"))
+    picked = model_pick.pick("claude", {"model": "opus", "effort": "auto"}, {"difficulty": "S"}, {})
+    assert picked == ModelPick("opus", "medium", "band")
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_an_environment_model_replaces_the_frontier_model_in_the_band(monkeypatch, harness):
+    monkeypatch.setattr(model_pick, "decide", lambda *a, **kw: decision("higher"))
+    environ = {f"AGENTIHOOKS_{harness.upper()}_MODEL": "named"}
+    picked = model_pick.pick(harness, AUTO, {"difficulty": "L"}, environ)
+    assert (picked.model, picked.effort) == ("named", "xhigh")
+
+
+@pytest.mark.parametrize("bounds,asked", [(("medium", "high"), False), (("low", "max"), True)])
+def test_the_sonnet_step_is_offered_only_when_the_range_reaches_xhigh(monkeypatch, bounds, asked):
+    calls = []
+    monkeypatch.setattr(model_pick, "decide", lambda *a, **kw: calls.append(a) or decision("lower"))
+    picked = model_pick.pick("claude", AUTO, {"difficulty": "S"}, {}, bounds)
+    assert bool(calls) is asked
+    assert (picked.model, picked.effort) == (("sonnet", "xhigh") if asked else ("opus", "medium"))
+
+
 def test_a_configured_confidence_floor_keeps_the_band_floor_below_it(monkeypatch):
     monkeypatch.setattr(model_pick, "decide", lambda *a, **kw: decision("higher", 0.7))
     task = {"difficulty": "M"}
@@ -277,12 +300,17 @@ def test_masters_keep_opus_high_and_planners_take_the_medium_default(tmp_path, m
     assert _launched(tmp_path, monkeypatch, "plan", TASK) == ["--model", "opus", "--effort", "medium"]
 
 
-def test_a_range_below_xhigh_launches_the_frontier_model_instead_of_sonnet(tmp_path, monkeypatch):
+def test_a_range_below_xhigh_launches_the_band_floor_instead_of_sonnet(tmp_path, monkeypatch):
     from scripts.swarm import effort_range
 
-    monkeypatch.setattr(model_pick, "decide", lambda *a, **kw: decision("lower"))
+    monkeypatch.setattr(model_pick, "decide", lambda *a, **kw: pytest.fail("a one option band asked the classifier"))
     monkeypatch.setattr(effort_range, "DEFAULT", ("medium", "high"))
-    assert _launched(tmp_path, monkeypatch, "eng", TASK) == ["--model", "opus", "--effort", "high"]
+    assert _launched(tmp_path, monkeypatch, "eng", TASK) == ["--model", "opus", "--effort", "medium"]
+
+
+def test_an_explicit_sonnet_lane_keeps_sonnet_at_its_own_effort(tmp_path, monkeypatch):
+    lanes = {"eng": {"agent": "claude", "model": "sonnet", "effort": "high"}}
+    assert _launched(tmp_path, monkeypatch, "eng", TASK, lanes) == ["--model", "sonnet", "--effort", "high"]
 
 
 def test_spawn_records_and_stores_classifier_choice(tmp_path, monkeypatch):

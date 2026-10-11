@@ -195,8 +195,11 @@ The classifier answers one choice question, `lower` or `higher`, carrying the ta
 title, description, kind, territory size, size and rank, with a plain description of
 each band option. Code maps the answer to model and effort. The band floor is its
 first Opus or Sol option, so Sonnet launches only on a confident answer, and only at
-xhigh: a swarm effort range that clamps it below xhigh launches the frontier model
-instead. A lane with an explicit model keeps that model and takes the picked effort.
+xhigh: the Sonnet step is offered only when the swarm effort range reaches xhigh and the
+lane model is `auto`. A lane with an explicit model keeps that model, never takes the
+Sonnet step and takes the picked effort; otherwise the Opus or Sol steps use the
+harness default model, which `AGENTIHOOKS_CLAUDE_MODEL` or `AGENTIHOOKS_CODEX_MODEL`
+can name.
 Explicit lane efforts never consult the classifier, planners launch the medium
 default, and a master always launches on the frontier model at high effort for its
 harness, whatever its lane or the environment names, and records `frontier`.

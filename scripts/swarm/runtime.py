@@ -79,7 +79,7 @@ def _model_args(agent, chosen, environ, bounds, preserve=False):
     effort = effort_range.clamp(agent, saved, bounds)
     if preserve and effort_range.rank(effort) != effort_range.rank(saved):
         raise SpawnError("unsupported transfer: saved effort is outside the current swarm range", "unsupported")
-    return model_flags(agent, model_pick.held(_set(chosen.get("model")) or model, effort, model), effort)
+    return model_flags(agent, _set(chosen.get("model")) or model, effort)
 
 
 def preserves_effort(recorded: bool, lane: str) -> bool:
@@ -503,7 +503,9 @@ class HerdrRuntime:
                 confidence=saved.get("model_confidence"),
             )
         elif lane in PICKED_LANES:
-            picked = timing.call(model_pick.pick, agent, {} if quota_transfer else chosen, task, environ)
+            picked = timing.call(
+                model_pick.pick, agent, {} if quota_transfer else chosen, task, environ, effort_range.of(config)
+            )
         else:
             picked = _lane_default(lane, agent, {} if quota_transfer else chosen)
         picked = replace(picked, effort=saved["effort"]) if saved else picked

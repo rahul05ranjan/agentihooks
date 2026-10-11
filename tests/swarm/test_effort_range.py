@@ -81,8 +81,8 @@ def test_a_resumed_agent_relaunches_inside_the_range(tmp_path):
 
     runtime, config, agent, seen = _resuming(tmp_path, "c0ffee")
     config.lanes = {"eng": {"model": "fable", "effort": "max"}}
-    runtime.resume(config, replace(agent, model="fable", effort="medium"), "you were restored")
-    assert _passed(seen["runs"][0]) == ["--route", "a1", "--model", "fable", "--effort", "medium"]
+    runtime.resume(config, replace(agent, model="sonnet", effort="medium"), "you were restored")
+    assert _passed(seen["runs"][0]) == ["--route", "a1", "--model", "sonnet", "--effort", "medium"]
 
 
 def test_spawn_and_resume_take_the_swarm_range_not_the_default(tmp_path):
@@ -110,8 +110,8 @@ def test_spawn_and_resume_take_the_swarm_range_not_the_default(tmp_path):
     runtime.spawn(config, "eng", "engineer@a1b2c3-0001", TASK)
     assert _passed(seen[-1]) == ["--model", "fable", "--effort", "max"]
     resuming, _, agent, resumed = _resuming(tmp_path, "c0ffee")
-    resuming.resume(config, replace(agent, model="fable", effort="low"), "you were restored")
-    assert _passed(resumed["runs"][0]) == ["--route", "a1", "--model", "fable", "--effort", "low"]
+    resuming.resume(config, replace(agent, model="sonnet", effort="low"), "you were restored")
+    assert _passed(resumed["runs"][0]) == ["--route", "a1", "--model", "sonnet", "--effort", "low"]
 
 
 @pytest.mark.parametrize(

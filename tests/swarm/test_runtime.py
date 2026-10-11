@@ -355,7 +355,7 @@ def test_a_lane_pin_wins_over_an_opposite_saved_harness(tmp_path, monkeypatch, p
         seen["argv"] = argv
         return SimpleNamespace(returncode=0, stdout=validated(argv, "status=started\nroute_status=routed\n"), stderr="")
 
-    def pick(harness, lane, task, environ):
+    def pick(harness, lane, task, environ, bounds):
         seen["classifier_harness"] = harness
         return model_pick.ModelPick("", "high", "classifier", 0.9)
 
@@ -941,10 +941,10 @@ def test_a_swarm_config_model_launches_as_named_with_the_classifier_live(tmp_pat
     from scripts.swarm import model_pick
 
     monkeypatch.setattr(model_pick, "decide", _lowest_pick)
-    lanes = {"eng": {"agent": "claude", "model": "fable", "effort": "auto"}}
+    lanes = {"eng": {"agent": "claude", "model": "sonnet", "effort": "auto"}}
     assert _launched(tmp_path, monkeypatch, "eng", SEAT_TASKS["eng"], lanes) == [
         "--model",
-        "fable",
+        "sonnet",
         "--effort",
         "medium",
     ]

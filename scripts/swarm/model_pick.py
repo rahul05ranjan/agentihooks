@@ -1,7 +1,8 @@
 from dataclasses import dataclass, replace
 
 from hooks.classifier import ClassifierUnavailable, decide, definitions, runner
-from scripts.swarm.effort_range import EFFORTS
+from scripts.swarm.effort_range import DEFAULT as DEFAULT_RANGE
+from scripts.swarm.effort_range import EFFORTS, clamp
 
 PURPOSE = "model-pick"
 QUESTION = "option"
@@ -56,19 +57,23 @@ def described(option: ModelPick) -> str:
     return f"{LABELS.get(option.model, option.model)} at {EFFORT_WORDS[option.effort]}: {fit}"
 
 
-def held(model: str, effort: str, fallback: str) -> str:
-    """Sonnet launches only at its own effort; at any other effort the launch takes the fallback model."""
-    return fallback if model == SONNET and effort != SONNET_EFFORT else model
+def pick(harness: str, lane: dict, task: dict, environ: dict, bounds: tuple = DEFAULT_RANGE) -> ModelPick:
+    from scripts.init_agent import model_effort
 
-
-def pick(harness: str, lane: dict, task: dict, environ: dict) -> ModelPick:
     default = ModelPick(lane.get("model", ""), lane.get("effort", ""))
     if default.effort != AUTO or harness not in EFFORTS:
         return default
     difficulty = task.get("difficulty") if task.get("difficulty") in STARTS else "M"
     rank = task.get("rank") or "normal"
-    options = band(harness, difficulty, rank)
-    chosen = _kept(default, floor(options))
+    fixed = default.model not in ("", AUTO)
+    sonnet = not fixed and clamp(harness, SONNET_EFFORT, bounds) == SONNET_EFFORT
+    model = default.model if fixed else model_effort(harness, [], environ)[0]
+    options = tuple(
+        option if option.model == SONNET else replace(option, model=model)
+        for option in band(harness, difficulty, rank)
+        if sonnet or option.model != SONNET
+    )
+    chosen = floor(options)
     if len(options) == 1:
         return chosen
     try:
@@ -91,9 +96,5 @@ def pick(harness: str, lane: dict, task: dict, environ: dict) -> ModelPick:
         return chosen
     verdict = output.verdicts[QUESTION]
     if verdict in KEYS:
-        chosen = _kept(default, options[KEYS.index(verdict)])
+        chosen = options[KEYS.index(verdict)]
     return replace(chosen, source=output.raw.source, confidence=output.raw.answers[QUESTION].confidence)
-
-
-def _kept(default: ModelPick, option: ModelPick) -> ModelPick:
-    return option if default.model in ("", AUTO) else replace(option, model=default.model)
