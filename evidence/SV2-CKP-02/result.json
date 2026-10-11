@@ -19,7 +19,8 @@
     "SourceCapture.fields gives the manifest fields; merged adds them to a checkpoint manifest that already carries its transcript material and drops any source material the manifest carried from an earlier capture",
     "git_capture.checkpoint refuses an archive member that is absolute, climbs out, enters .git or is not a regular file, stores nothing unless the manifest authority equals the granted store scope, stores every material before Validator.commit stores the manifest, so an interruption leaves no manifest and the earlier checkpoint current",
     "git_capture.restore(validator, checkpoint_id, target) takes a Validator so authority comes from Validator.verify; it reads every material from the granted store, refuses a missing source material, a dirty target, a target without the base, a branch name git rejects, and an archive member on or under a link of the head tree or created by either patch, all before it checks anything out; then it fetches the bundle, checks out the head on the recorded branch, applies the staged patch to index and work tree and the unstaged patch to the work tree, places every member inside the target and only then writes them with their executable bits",
-    "SourceCapture.metrics exposes checkpoint_source_bytes keyed by material role"
+    "SourceCapture.metrics exposes checkpoint_source_bytes keyed by material role",
+    "Production entrypoint: scripts.swarm.snapshot.take (the swarm snapshot command, stop and the tick's automatic snapshots) records each agent worktree's capture fields under sources beside its saved worktree path and keeps every material once, by sha256, in the swarm's sources folder; automatic snapshots prune objects no kept snapshot names; a worktree git cannot read is recorded as a sanitized error and the snapshot continues"
   ],
   "supported_versions": {
     "checkpoint_contract": "2.2, the typed minor from SV2-CKP-01; source checkpoints use branch_state pushed or bundled",
@@ -65,7 +66,10 @@
     "The legacy swarm snapshot still records worktree paths only; no worker path calls capture yet",
     "Restore needs a clean clone that already holds the base commit",
     "Residual, accepted for this package: an attempt whose own authority matches its own store grant can commit a checkpoint while a newer generation of the task exists, and if it commits an id first the newer commit under that id is refused with identity_conflict. Fencing depends on the launch lease (INV-R08); the store checks no lease and restore takes an explicit checkpoint id. A ledger follow-up is filed for a store side generation fence",
-    "Link names that git quotes in apply summaries are not matched by the patch link check; contain() still refuses such a member before any file is written"
+    "Link names that git quotes in apply summaries are not matched by the patch link check; contain() still refuses such a member before any file is written",
+    "Snapshot capture runs while agents may still be writing, so it is diagnostic recovery material, not a quiesced checkpoint; quiesced capture and publication through the worker supervisor belong to SV2-CKP-04"
   ],
-  "rollback": "Rehearsed in case C: an interrupted capture writes no manifest, the previous complete source checkpoint stays authoritative, and the interrupted materials stay in the store for diagnostics. Disabling source capture means not calling git_capture; SV2-CKP-01 readers are unchanged."
+  "rollback": "Rehearsed in case C: an interrupted capture writes no manifest, the previous complete source checkpoint stays authoritative, and the interrupted materials stay in the store for diagnostics. Disabling source capture means not calling git_capture; SV2-CKP-01 readers are unchanged.",
+  "compatibility": "Compared with the preceding local path: snapshot documents keep version 1 and every existing key, restore and resume still reopen the saved worktree paths, older snapshots without sources load unchanged, and the SV2-CKP-01 validator still reads a snapshot document as path_only diagnostic material",
+  "rollout_safety": "AGENTIHOOKS_SWARM_SOURCE_CAPTURE=0 disables only the new capture and keeps the snapshot exactly as the last qualified local behaviour (worktree paths only); AGENTIHOOKS_SWARM_SOURCE_REF sets the remote ref the base is measured against, default origin/dev"
 }
