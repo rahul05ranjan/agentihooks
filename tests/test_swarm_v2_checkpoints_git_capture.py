@@ -301,6 +301,15 @@ def test_restore_refuses_a_member_under_a_link_a_patch_creates(tmp_path, staged)
     assert list(outside.iterdir()) == []
 
 
+def test_links_keep_a_tracked_link_name_that_holds_a_tab(tmp_path):
+    work = _pushed(tmp_path)
+    (work / "tab\tlink").symlink_to("app.py")
+    cases.git(work, "add", "tab\tlink")
+    cases.git(work, "commit", "-q", "-m", "link with a tab")
+    head = cases.git(work, "rev-parse", "HEAD").strip()
+    assert git_capture._links(work, head, ()) == {"tab\tlink"}
+
+
 def test_restore_refuses_a_member_named_as_a_tracked_link(tmp_path):
     work = _pushed(tmp_path)
     (work / "hooks").symlink_to(".git/hooks")
