@@ -351,8 +351,8 @@ def test_capacity_caps_and_apply_share_one_row_and_gates_start_below(open_page):
           };
         }"""
     )
-    assert len(boxes["row"]) == 8
-    caps, (affinity, apply) = boxes["row"][:6], boxes["row"][6:]
+    assert len(boxes["row"]) == 10
+    caps, (affinity, apply) = boxes["row"][:6], boxes["row"][8:]
     middle = (caps[0][0] + caps[0][1]) / 2
     assert all(top <= middle <= bottom for top, bottom in caps)
     last = (affinity[0] + affinity[1]) / 2
