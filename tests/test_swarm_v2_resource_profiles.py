@@ -196,7 +196,9 @@ def test_promote_decides_first_replay_stale_conflict_requalify_and_upgrade():
 
 
 def test_accept_writes_only_a_promoted_report(tmp_path):
-    path = tmp_path / "accepted.json"
+    folder = tmp_path / "reports"
+    folder.mkdir()
+    path = folder / "accepted.json"
     accepted = profiles.derive(measured(memory_runs()), NODES, POLICY)
     assert profiles.accept(path, accepted, POLICY)["decision"] == "promoted"
     before = path.read_bytes()
@@ -204,7 +206,7 @@ def test_accept_writes_only_a_promoted_report(tmp_path):
     assert profiles.accept(path, grown, POLICY)["decision"] == "requalify"
     assert profiles.accept(path, accepted, POLICY)["decision"] == "replayed"
     assert path.read_bytes() == before
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["accepted.json"]
+    assert sorted(p.name for p in folder.iterdir()) == ["accepted.json"]
 
 
 def test_markdown_names_every_profile_refusal_and_node():
