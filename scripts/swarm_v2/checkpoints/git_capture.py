@@ -2,6 +2,7 @@
 
 import io
 import json
+import re
 import subprocess
 import tarfile
 import tempfile
@@ -38,6 +39,7 @@ DIRTY = "the restore target has changes of its own"
 INCOMPLETE = "the checkpoint does not carry every source material"
 SOURCE_ROLES = frozenset({STAGED, UNSTAGED, UNTRACKED})
 CAPTURED = SOURCE_ROLES | {model.SOURCE_BUNDLE}
+CREATED_LINK = re.compile(r"^ create mode 120000 (.+)$", re.MULTILINE)
 
 
 class SourceError(ValueError):
@@ -214,9 +216,12 @@ def _materials(store: ArtifactStore, checkpoint_id: str) -> tuple[dict, dict[str
     return doc, materials
 
 
-def _links(target: Path, head: str) -> set[str]:
+def _links(target: Path, head: str, patches: tuple[bytes, ...]) -> set[str]:
     listed = _git(target, "ls-tree", "-r", "-z", head).decode()
-    return {entry.partition("\t")[2] for entry in listed.split("\0") if entry.startswith("120000 ")}
+    links = {entry.partition("\t")[2] for entry in listed.split("\0") if entry.startswith("120000 ")}
+    for patch in filter(None, patches):
+        links.update(CREATED_LINK.findall(_git(target, "apply", "--summary", data=patch).decode()))
+    return links
 
 
 def _extract(target: Path, members: list[tuple[str, int, bytes]]) -> None:
@@ -246,7 +251,7 @@ def restore(validator: model.Validator, checkpoint_id: str, target: Path) -> mod
             bundle = Path(folder) / doc["head_commit"]
             bundle.write_bytes(materials[model.SOURCE_BUNDLE])
             _git(target, "fetch", str(bundle))
-    links = _links(target, doc["head_commit"])
+    links = _links(target, doc["head_commit"], (materials[STAGED], materials[UNSTAGED]))
     if any(str(parent) in links for name, _, _ in members for parent in PurePosixPath(name).parents):
         raise SourceError(ESCAPE)
     _git(target, "checkout", "-B", doc["branch_name"], doc["head_commit"])

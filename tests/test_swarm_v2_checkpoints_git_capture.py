@@ -273,6 +273,34 @@ def test_restore_refuses_a_target_without_the_base(tmp_path):
     assert str(raised.value).startswith("git cat-file failed with exit ")
 
 
+@pytest.mark.parametrize("staged", [True, False])
+def test_restore_refuses_a_member_under_a_link_a_patch_creates(tmp_path, staged):
+    work = _pushed(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    cases.write(work / "lnk", "a regular file first\n")
+    cases.git(work, "add", "lnk")
+    cases.git(work, "commit", "-q", "-m", "regular file")
+    (work / "lnk").unlink()
+    (work / "lnk").symlink_to(outside)
+    if staged:
+        cases.git(work, "add", "lnk")
+    source = git_capture.capture(work, "origin/dev")
+    assert bool(source.materials[git_capture.STAGED]) is staged
+    forged = dataclasses.replace(
+        source, materials={**source.materials, git_capture.UNTRACKED: cases.forged("lnk/p.txt")}
+    )
+    validator = model.Validator(cases.store(tmp_path / "durable"))
+    assert cases.commit(validator, forged, "ckpt-src-0001").authoritative
+    target = cases.clone(tmp_path, "restored")
+    before = (cases.state(target), cases.git(target, "branch", "--list"))
+    with pytest.raises(git_capture.SourceError) as raised:
+        git_capture.restore(validator, "ckpt-src-0001", target)
+    assert str(raised.value) == git_capture.ESCAPE
+    assert (cases.state(target), cases.git(target, "branch", "--list")) == before
+    assert list(outside.iterdir()) == []
+
+
 def _archive(info: tarfile.TarInfo, data: bytes = b"") -> bytes:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w", format=tarfile.GNU_FORMAT) as archive:
