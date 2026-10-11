@@ -3,10 +3,11 @@
 Each tick it orders every claimable task in focus, leaves included, by the longest open dependency chain behind it,
 then the open work it unblocks, the bottleneck lane, focus order and ledger position. A rank the master or the swarm
 set is a default it reorders; only an operator rank, set by him or relayed with his quoted words, orders ahead of or
-behind that queue. At delegate and full the tick claims straight from this queue and the dispatcher writes no rank:
-it comments on a task only when the task enters the head of its lane's queue, as many tasks as the lane has seats,
-or leaves it while still open. Below delegate it proposes each raise to the master. Every action is a gate log row,
-a dispatch metrics row naming its rule and a comment on the task.
+behind that queue. At delegate and full the tick claims from this queue, resumed work first within a rank band and
+clear territory before overlapping, and the dispatcher writes no rank: it comments on a task only when the task
+enters the head of its lane's queue, as many tasks as the lane has seats, or leaves it while still open; a lane with
+no seats keeps its head until seats return. Below delegate it proposes each raise to the master. Every action is a
+gate log row, a dispatch metrics row naming its rule and a comment on the task.
 """
 
 import json
@@ -211,7 +212,7 @@ def _head(slug, ledger, lane, task, kind, why, landed):
     template, moved = kind
     text = f"{moved.format(task['id'])} the {lane} claim queue: {why}"
     action = Action(QUEUE, "apply", text + _comment(slug, ledger, task, template.format(lane=lane, why=why)), task)
-    if kind is ENTER:
+    if kind == ENTER:
         landed[lane].append(task["id"])
     else:
         landed[lane].remove(task["id"])
