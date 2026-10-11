@@ -43,12 +43,6 @@ def test_the_sample_reads_the_registry_admissions_quota_archive_and_feed(store):
     found = metrics_fleet.sample(store, SLUG, NOW, NOW - 30_000)
     attempts = {row["task"]: row for row in found["attempts"]}
     assert {key: row["phase"] for key, row in attempts.items()} == {"t1": "active", "t2": "active", "t3": "pending"}
-<<<<<<< HEAD
-    assert attempts["t1"]["terminal"] == "attached" and attempts["t2"]["terminal"] == "detached"
-    assert attempts["t1"]["authority"] == "working" and attempts["t3"]["authority"] == "pending"
-    assert attempts["t1"]["seat"] == f"eng-1@{SLUG}" and attempts["t1"]["execution_id"]
-    assert attempts["t3"]["requested"] == {"cpu_millis": 500, "memory_mib": 512}
-=======
     assert attempts["t1"]["execution_id"]
     assert attempts["t1"] == {
         "execution_id": attempts["t1"]["execution_id"],
@@ -69,7 +63,6 @@ def test_the_sample_reads_the_registry_admissions_quota_archive_and_feed(store):
         "authority": "pending",
     }
     assert {row["observed_at_ms"] for row in found["archive"]} == {NOW}
->>>>>>> origin/dev
     waiting = {row["account"]: row for row in found["quota"]}
     assert waiting["acct"] == {
         "account": "acct",
@@ -135,16 +128,11 @@ def test_a_missing_brain_feed_is_an_unavailable_source_not_a_fresh_one(tmp_path,
         assert sources["brain_feed"] == (0, 0)
         assert sources["executions"] == (1, 0)
         assert panels[("attempts", "active")] == 0.0
-<<<<<<< HEAD
-=======
         assert panels[("knowledge", "cross_scope_denials")] == 0.0
->>>>>>> origin/dev
     finally:
         box.close()
 
 
-<<<<<<< HEAD
-=======
 def test_an_occupant_without_a_heartbeat_is_local_and_an_ended_wait_is_allowed(store):
     record = AgentRecord(store.next_name(SLUG, "eng"), "eng", "t1", seat=f"eng-1@{SLUG}")
     store.execution_registry.start(SLUG, record, "")
@@ -167,7 +155,6 @@ def test_panel_rows_carry_no_plan_path():
     } == {("", "", "", "")}
 
 
->>>>>>> origin/dev
 def test_the_feed_time_is_the_cached_feed_file_time(tmp_path, monkeypatch):
     feed = tmp_path / "feed.json"
     monkeypatch.setattr(metrics_fleet, "feed_path", lambda: feed)

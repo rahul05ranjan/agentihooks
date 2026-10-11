@@ -271,8 +271,6 @@ def test_a_task_merged_before_the_window_adds_nothing():
     assert found["stages"] == [] and found["total"] == 0.0
 
 
-<<<<<<< HEAD
-=======
 def test_events_of_other_items_do_not_move_the_ready_time():
     found = stages.report(
         rows(
@@ -419,7 +417,6 @@ def test_overruns_that_outgrow_their_run_are_cut_at_the_run_start():
     assert seconds_of(found) == {("build", ""): 3600.0, ("ci_overrun", "unit"): 500.0, ("ci_overrun", "lint"): 100.0}
 
 
->>>>>>> origin/dev
 def test_a_life_whose_spawn_waited_for_room_is_claim_wait_not_launch():
     found = stages.report(
         rows(
@@ -469,10 +466,7 @@ def test_ci_after_the_agent_left_stays_ci_and_every_over_budget_job_gets_its_ove
                 stage(1, "unit", 1080.0, 300, 0.0, "anton-k3s"),
                 stage(1, "lint", 290.0, 240, 0.0, "anton-k3s"),
                 stage(1, "sonar", 100.0, 240, 0.0, "anton-k3s"),
-<<<<<<< HEAD
-=======
                 stage(1, "fresh", 50.0, 0, 0.0, "anton-k3s"),
->>>>>>> origin/dev
             ],
             delivery_events=[delivery("merge", "t1", at(9))],
         ),
@@ -551,10 +545,7 @@ def test_record_reads_the_outbox_writes_one_row_per_stage_and_keeps_the_feed(tmp
         assert {(row["stage"], row["label"]): row["seconds"] for row in exported} == seconds_of(recorded)
         assert {row["window_s"] for row in exported} == {4 * 3600.0}
         assert all(row["ts_ms"] == NOW and row["ledger"] == SLUG for row in exported)
-<<<<<<< HEAD
-=======
         assert {(row["plan"], row["phase"], row["slice"], row["task"]) for row in exported} == {("", "", "", "")}
->>>>>>> origin/dev
         assert len({row["event_id"] for row in exported}) == len(exported)
     finally:
         box.close()
@@ -580,20 +571,12 @@ def test_the_line_names_labels_of_labelled_stages():
         "stages": [
             {"stage": "ci_queue", "label": "anton-k3s", "seconds": 3600.0},
             {"stage": "launch_failure", "label": "codex", "seconds": 1800.0},
-<<<<<<< HEAD
-            {"stage": "ci_overrun", "label": "mutation-stats", "seconds": 1800.0},
-=======
             {"stage": "ci_overrun", "label": "mutation-stats", "seconds": 180.0},
->>>>>>> origin/dev
         ],
     }
     assert stages.line(found, NOW) == (
         "top stages in the last 4 hours: ci queue on anton-k3s 1.0 task hours, launch failure on codex 0.5 task"
-<<<<<<< HEAD
-        " hours, ci overrun in mutation-stats 0.5 task hours; 2.0 task hours in all, measured 0 minutes ago"
-=======
         " hours, ci overrun in mutation-stats 0.1 task hours; 2.0 task hours in all, measured 0 minutes ago"
->>>>>>> origin/dev
     )
 
 
