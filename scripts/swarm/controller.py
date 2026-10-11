@@ -49,7 +49,8 @@ class FencedRuntime:
 
         def call(*args, **kwargs):
             lease.renew(self.store, self.slug, self.held)
-            return value(*args, **kwargs)
+            with lease.kept(self.store, self.slug, self.held):
+                return value(*args, **kwargs)
 
         return call
 
@@ -82,7 +83,8 @@ class FencedRuntime:
         lease.renew(self.store, self.slug, self.held)
         if refused := self.placement_refusal(lane, task):
             raise SwarmError(refused)
-        return self.runtime.spawn(config, lane, name, {**task, "controller_epoch": self.held.epoch})
+        with lease.kept(self.store, self.slug, self.held):
+            return self.runtime.spawn(config, lane, name, {**task, "controller_epoch": self.held.epoch})
 
 
 def take_tick_lock(store: RedisStore, slug: str, held: lease.Lease, ttl_ms: int) -> str | None:
@@ -158,17 +160,27 @@ def tick_once(store: RedisStore, service: "ControlService | None") -> dict:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="agentihooks controller")
-    parser.add_argument("action", choices=("run",))
+    parser.add_argument("action", choices=("run", "live", "ready"))
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args(argv)
+    if args.action != "run":
+        from scripts.swarm import controller_probes
+
+        try:
+            store = connect()
+        except SwarmError as exc:
+            print(f"controller: {exc}")
+            return 1
+        return getattr(controller_probes, args.action)(os.environ, store)
     from scripts import operator_env
     from scripts.swarm import commands
-    from scripts.swarm_v2 import control_service
+    from scripts.swarm_v2 import control_service, proof_swarm
 
     operator_env.fill(os.environ)
     store = connect()
     service = None
     try:
+        proof_swarm.run(os.environ, store)
         service = control_service.host(os.environ, store, commands.hive_id())
         while True:
             for slug, actions in tick_once(store, service).items():
@@ -176,6 +188,7 @@ def main(argv: list[str]) -> int:
                     print(f"{slug}: {action}", flush=True)
             if service is not None:
                 service.tick()
+            proof_swarm.run(os.environ, store)
             if args.once:
                 return 0
             time.sleep(lease.tick_ms() / 1000)
