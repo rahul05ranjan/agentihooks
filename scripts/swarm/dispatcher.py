@@ -1,10 +1,10 @@
 """The dispatcher's tick step: rank by critical path and work unblocked, grouping and the priority sweep, by autonomy.
 
-Each tick it orders every open task, leaves included, by the longest open dependency chain behind it, then the open
-work it unblocks, the bottleneck lane, focus order and ledger position. Of the claimable tasks that unblock work, at
-delegate and full it raises the top ones to high and lowers a high or urgent rank once that task leaves the top. A
-rank the master or the swarm set is a default it reorders; only an operator rank, set by him or relayed with his
-quoted words, stays fixed. Below delegate it proposes each raise to the master. Every action is a gate log row, a
+Each tick it orders every open ungrouped task, leaves included, by the longest open dependency chain behind it, then
+the open work it unblocks, the bottleneck lane, focus order and ledger position. Of the claimable tasks that unblock
+work, at delegate and full it raises the top ones to high and lowers a high or urgent rank once that task leaves the
+top. A rank the master or the swarm set is a default it reorders; only an operator rank, set by him or relayed with
+his quoted words, stays fixed. Below delegate it proposes each raise to the master. Every action is a gate log row, a
 dispatch metrics row naming its rule and, for a rank, a comment on the task.
 """
 
@@ -59,10 +59,10 @@ def chains(doc: dict) -> dict[str, int]:
     waiters, found = _waiters(doc), {}
     reach = {task_id: _downstream(task_id, waiters) for task_id in waiters}
     for task_id in sorted(waiters, key=lambda t: len(reach[t])):
-        if task_id not in found:
-            loop = {task_id} | {w for w in reach[task_id] if task_id in reach[w]}
-            after = {w for member in loop for w in waiters[member]} - loop
-            found.update(dict.fromkeys(loop, len(loop) - 1 + max((found[w] + 1 for w in after), default=0)))
+        # A dependency loop counts as one block of its size: the longest simple path through it is NP-hard.
+        loop = {task_id} | {w for w in reach[task_id] if task_id in reach[w]}
+        after = {w for member in loop for w in waiters[member]} - loop
+        found.update(dict.fromkeys(loop, len(loop) - 1 + max((found[w] + 1 for w in after), default=0)))
     return {task_id: found[task_id] for task_id in waiters}
 
 
