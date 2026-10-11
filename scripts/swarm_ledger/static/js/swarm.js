@@ -18,6 +18,7 @@ let swarmReadError = false;
 export let pending = "";
 const LIFECYCLE_KEY = `lifecycle:${SLUG}`;
 const RECONCILING = "waiting to reconcile an earlier control by its operation id";
+const NOT_CURRENT = "the swarm view is not current; controls wait for a fresh read";
 
 export let capDraft = {};
 export let overlayDraft = {};
@@ -205,7 +206,7 @@ function lifecycleOffer(sw, name) {
 }
 
 function lifecycleButton(a, c) {
-  const reason = a.lifecycle.offer.disabled[c.action] || (unresolved()[a.name] ? RECONCILING : "");
+  const reason = (swarmReadError ? NOT_CURRENT : "") || a.lifecycle.offer.disabled[c.action] || (unresolved()[a.name] ? RECONCILING : "");
   return h("button", { class: `sw-btn${c.destructive ? " danger" : ""}`, type: "button", "data-lifecycle": c.action, "data-agent": a.name, "aria-label": `${c.label} ${a.name}`,
     title: reason || `${c.scope}: ${c.consequence}`, disabled: !!(reason || pending), text: c.label });
 }

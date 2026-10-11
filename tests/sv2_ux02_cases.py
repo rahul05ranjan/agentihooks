@@ -56,12 +56,17 @@ class World:
         with (
             patch.object(ledger_server, "swarm_store", return_value=self.store),
             patch.object(ledger_server, "swarm_status", return_value={}),
+            patch.object(ledger_server.repository, "read", return_value=self.stamps()),
         ):
             try:
                 ledger_server.lifecycle_control(self.slug, body, True)
             except lifecycle.Refused as refused:
                 return refused.status, str(refused)
         return 200, ""
+
+    def stamps(self) -> dict:
+        rows = {f"tasks/{task}/state": {"rev": rev} for task, rev in self.data["task_revisions"].items()}
+        return {"_meta": {"stamps": rows}}
 
     def tick(self) -> list[str]:
         with patch.object(command_runner, "run", lambda argv, env: self.ran.append(argv) or ""):
@@ -125,7 +130,7 @@ def _case_a(data: dict) -> tuple[dict, dict, int]:
         "drained_worker_reports_its_checkpoint": first["operation"]
         == {
             "control": "drain",
-            "state": "applied",
+            "state": "issued",
             "error": "",
             "worker": {"state": "completed", "outcome": drain["outcome"]},
         },
@@ -190,17 +195,23 @@ def _case_c(data: dict) -> tuple[dict, dict, int]:
     blocked = restarted.click(lost["seat"], "cancel", lost["next_op"], offers)
     queued_before_settling = len(restarted.rows())
     actions = restarted.tick()
+    held = restarted.click(lost["seat"], "cancel", lost["next_op"], restarted.offers())
+    _worker_completes(restarted, lost["seat"], lost["outcome"])
     after = restarted.click(lost["seat"], "cancel", lost["next_op"], restarted.offers())
     states = {op: row["state"] for op, row in restarted.operations().items()}
+    worker = restarted.operations()[lost["op"]]["worker"]
+    unresolved = (409, "an earlier control on this agent is still unresolved")
     checks = {
         "lost_acknowledgement_reconciled_by_operation_id": first == replay == (200, "") and record["state"] == "queued",
         "replay_created_no_second_command": queued_before_settling == 1,
-        "another_click_refused_until_reconciled": blocked
-        == (409, "an earlier control on this agent is still unresolved"),
-        "next_click_accepted_after_settling": after == (200, ""),
-        "earlier_operation_kept_its_outcome": states == {lost["op"]: "applied", lost["next_op"]: "queued"},
+        "another_click_refused_until_reconciled": blocked == unresolved,
+        "held_until_the_worker_reports": held == unresolved,
+        "next_click_accepted_after_the_checkpoint": after == (200, ""),
+        "earlier_operation_kept_its_outcome": states == {lost["op"]: "issued", lost["next_op"]: "queued"}
+        and worker == {"state": "completed", "outcome": lost["outcome"]},
     }
-    observed = {"answers": [list(first), list(replay), list(blocked), list(after)], "runner": actions, "states": states}
+    answers = [list(answer) for answer in (first, replay, blocked, held, after)]
+    observed = {"answers": answers, "runner": actions, "states": states, "worker": worker}
     return checks, observed, world_total(restarted)
 
 

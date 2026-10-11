@@ -27,6 +27,9 @@ SHOWN = 20
 WRITE_ATTEMPTS = 5
 WORKER_EXPIRY_MS = 300_000
 PENDING_MS = 600_000
+WORKER_HOLD_MS = 1_800_000
+ISSUED = "issued"
+UNSETTLED = frozenset({"issued", "accepted"})
 
 
 @dataclass(frozen=True)
@@ -128,7 +131,12 @@ def _pending(store: RedisStore, slug: str, reader, name: str, now: int) -> str:
     op = reader.hget(_key(store, slug, "pending"), name)
     raw = op and reader.hget(_key(store, slug, "ops"), op)
     record = json.loads(raw) if raw else {}
-    return op if record.get("state") == "queued" and now - record["at"] < PENDING_MS else ""
+    if record.get("state") == "queued":
+        return op if now - record["at"] < PENDING_MS else ""
+    if record.get("state") != ISSUED or now - record["at"] >= WORKER_HOLD_MS:
+        return ""
+    worker = CommandQueue(store, slug).outcome(record["execution_id"], record["result"]["worker_command"])
+    return op if worker and worker["state"] in UNSETTLED else ""
 
 
 def _key(store: RedisStore, slug: str, part: str) -> str:
@@ -170,7 +178,7 @@ def _parse(body: object) -> tuple[str, str, str, dict]:
     return action, name, op, shown
 
 
-def _admit(store: RedisStore, slug: str, pipe, body: tuple, destructive: bool):
+def _admit(store: RedisStore, slug: str, pipe, body: tuple, task_revisions: Mapping[str, int], destructive: bool):
     action, name, op, shown = body
     fingerprint = _digest({"control": action, "agent": name, **shown})
     raw = pipe.hget(_key(store, slug, "ops"), op)
@@ -180,7 +188,7 @@ def _admit(store: RedisStore, slug: str, pipe, body: tuple, destructive: bool):
             raise _conflict(store, slug, "reused", "the operation id was already sent with another control")
         return record, None
     agent = _agent(store, slug, name)
-    if agent is None or agent.state == "finished" or seen(agent, published(store, slug)) != shown:
+    if agent is None or agent.state == "finished" or seen(agent, task_revisions) != shown:
         raise _conflict(store, slug, "stale", "the page is stale: this agent was replaced, finished or moved task")
     now = lease.now_ms(store)
     if _pending(store, slug, pipe, name, now):
@@ -212,6 +220,7 @@ def request(
     *,
     operator: bool,
     environ: Mapping[str, str] = os.environ,
+    task_revisions: Mapping[str, int] | None = None,
 ) -> dict:
     parsed = _parse(body)
     control = BY_ACTION[parsed[0]]
@@ -222,7 +231,8 @@ def request(
         with store.redis.pipeline() as pipe:
             try:
                 pipe.watch(_key(store, slug, "ops"), _key(store, slug, "pending"))
-                record, row = _admit(store, slug, pipe, parsed, destructive_on(environ))
+                revisions = published(store, slug) if task_revisions is None else task_revisions
+                record, row = _admit(store, slug, pipe, parsed, revisions, destructive_on(environ))
                 if row is None:
                     return record
                 pipe.multi()
@@ -269,7 +279,8 @@ def _apply(store: RedisStore, slug: str, agent: AgentRecord, record: dict, run: 
 
 
 def _settle(store: RedisStore, slug: str, record: dict, error: str, result: dict) -> None:
-    settled = {**record, "state": "failed" if error else "applied", "error": error, "result": result}
+    state = "failed" if error else ISSUED if "worker_command" in result else "applied"
+    settled = {**record, "state": state, "error": error, "result": result}
     pending = _key(store, slug, "pending")
     for _ in range(WRITE_ATTEMPTS):
         with store.redis.pipeline() as pipe:
@@ -278,7 +289,7 @@ def _settle(store: RedisStore, slug: str, record: dict, error: str, result: dict
                 held = pipe.hget(pending, record["agent"])
                 pipe.multi()
                 pipe.hset(_key(store, slug, "ops"), record["op"], json.dumps(settled))
-                if held == record["op"]:
+                if held == record["op"] and state != ISSUED:
                     pipe.hdel(pending, record["agent"])
                 pipe.execute()
                 return

@@ -188,6 +188,8 @@ def test_a_new_click_waits_until_the_earlier_operation_settles(store, ran):
     )
     assert lifecycle.conflicts(store, SLUG) == {"pending": 1}
     command_runner.consume(store, SLUG)
+    assert refused(store, agent, "cancel", op="op-second")[0] == 409
+    finish(store, agent, CHECKPOINT)
     assert ask(store, agent, "cancel", op="op-second")["state"] == "queued"
 
 
@@ -268,7 +270,7 @@ def test_the_runner_drains_one_worker_and_reports_its_checkpoint(store, ran):
     queue.complete(agent.execution_id, issued["command_id"], CHECKPOINT)
     view = lifecycle.view(store, SLUG, {})
     [op] = view["operations"]
-    assert (op["state"], op["error"]) == ("applied", "")
+    assert (op["state"], op["error"]) == ("issued", "")
     assert op["result"] == {"worker_command": issued["command_id"]}
     assert op["worker"] == {"state": "completed", "outcome": CHECKPOINT}
     assert view["agents"][agent.name]["pending"] == ""
@@ -358,7 +360,9 @@ def test_the_status_report_publishes_each_task_state_revision(store, monkeypatch
 
 def test_the_ledger_server_queues_through_lifecycle_and_returns_fresh_status(store, monkeypatch):
     agent = kube(store)
-    publish(store, {"t1": 5})
+    publish(store, {"t1": 3})
+    stamps = {"_meta": {"stamps": {"tasks/t1/state": {"rev": 5}}}}
+    monkeypatch.setattr(ledger_server.repository, "read", lambda slug, *keys: stamps)
     monkeypatch.setattr(ledger_server, "swarm_store", lambda: store)
     monkeypatch.setattr(ledger_server, "swarm_status", lambda slug: {"swarm": slug})
     assert ledger_server.lifecycle_control(SLUG, body(agent, "drain", revisions={"t1": 5}), True) == (
@@ -461,3 +465,43 @@ def test_settling_reports_when_the_records_keep_changing(store, monkeypatch):
     monkeypatch.setattr(store.redis, "pipeline", lambda: Busy())
     with pytest.raises(SwarmError):
         lifecycle.execute(store, SLUG, {"argv": ["drain", agent.name, record["op"]]}, lambda argv: "")
+
+
+def finish(store, agent, outcome):
+    queue = CommandQueue(store, SLUG)
+    [issued] = queue.pending(agent.execution_id, 5)
+    queue.accept(agent.execution_id, issued["command_id"], issued["payload_digest"])
+    queue.complete(agent.execution_id, issued["command_id"], outcome)
+
+
+def test_a_worker_command_holds_the_agent_until_its_outcome(store, ran):
+    agent = kube(store)
+    ask(store, agent, "drain")
+    command_runner.consume(store, SLUG)
+    assert lifecycle.view(store, SLUG, {})["agents"][agent.name]["pending"] == "op-first-1"
+    finish(store, agent, {"status": "failed"})
+    assert lifecycle.view(store, SLUG, {})["agents"][agent.name]["pending"] == ""
+
+
+def test_an_expired_or_overlong_worker_command_releases_the_agent(store, ran):
+    agent = kube(store)
+    ask(store, agent, "drain")
+    command_runner.consume(store, SLUG)
+    key = CommandQueue(store, SLUG).key(agent.execution_id)
+    [(command, raw)] = store.redis.hgetall(key).items()
+    store.redis.hset(key, command, json.dumps({**json.loads(raw), "expires_at_ms": 0}))
+    assert lifecycle.view(store, SLUG, {})["agents"][agent.name]["pending"] == ""
+    store.redis.hset(key, command, raw)
+    assert lifecycle.view(store, SLUG, {})["agents"][agent.name]["pending"] == "op-first-1"
+    age(store, "op-first-1", lifecycle.WORKER_HOLD_MS)
+    assert lifecycle.view(store, SLUG, {})["agents"][agent.name]["pending"] == ""
+
+
+def test_admission_fences_on_the_revisions_it_is_given_over_the_published_ones(store):
+    agent = kube(store)
+    publish(store, {"t1": 3})
+    with pytest.raises(lifecycle.Refused):
+        lifecycle.request(
+            store, SLUG, body(agent, "drain", revisions={"t1": 3}), operator=True, environ={}, task_revisions={"t1": 4}
+        )
+    assert ask(store, agent, "drain", revisions={"t1": 3})["state"] == "queued"

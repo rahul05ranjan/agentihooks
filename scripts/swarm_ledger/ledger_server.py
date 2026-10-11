@@ -445,7 +445,8 @@ def lifecycle_control(slug, body, operator):
     from scripts.swarm.store import SwarmError
 
     try:
-        lifecycle.request(swarm_store(), slug, body, operator=operator)
+        stamps = repository.read(slug, "_meta.stamps").get("_meta", {}).get("stamps", {})
+        lifecycle.request(swarm_store(), slug, body, operator=operator, task_revisions=lifecycle.revisions(stamps))
     except SwarmError as exc:
         return None, str(exc)
     return swarm_status(slug), ""
