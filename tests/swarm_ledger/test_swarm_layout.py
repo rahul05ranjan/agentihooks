@@ -185,8 +185,12 @@ def test_rows_run_header_alert_capacity_work_accounts_health_handoffs():
     assert 'class="fold sw-command-log" id="command-log"' in box
     assert '<details class="fold sw-fold" id="overlays-fold" open>' in box
     assert '<details class="fold sw-fold" id="quota-fold" open>' in box
+    assert '<details class="fold sw-fold" id="recovery-fold" open>' in box
     box = re.sub(
-        r'<details[^>]*id="(command-log|overlays-fold|quota-fold|freeze-fold)".*?</details>', "", box, flags=re.S
+        r'<details[^>]*id="(command-log|overlays-fold|quota-fold|recovery-fold|freeze-fold)".*?</details>',
+        "",
+        box,
+        flags=re.S,
     )
     for gone in ("crew", "needs-you", "swarm-figs", "swarm-work", "restore-box", "<section", "<details"):
         assert gone not in box, gone

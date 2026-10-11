@@ -78,7 +78,7 @@ def pod_card(material: dict, now_ms: int) -> dict:
     decided = decision.get("mode", PENDING) != PENDING
     requested = "" if decided else material["requested"]
     held = ACCEPTED if decided else REQUESTED if requested else ""
-    end = decision["decided_at_ms"] if decided and decision.get("decided_at_ms") else now_ms
+    end = material.get("decided_at_ms") if decided and material.get("decided_at_ms") else now_ms
     return {
         "seat": material["seat"],
         "agent": material["agent"],

@@ -44,6 +44,7 @@ RESTORES = "attempt-restores"
 REQUESTS = "recovery-requests"
 MATERIAL = "attempt-recovery-material"
 REFUSED_REQUESTS = "recovery-request-refusals"
+DECIDED = "attempt-decided-at"
 NO_TAIL = "the image never started, so no transcript was written"
 TAIL = (
     "transcript written by native session {session} after archive offset {watermark} was not archived before the "
@@ -65,7 +66,6 @@ class Decision:
     mode: str
     checkpoint: str = ""
     replacement: str = ""
-    decided_at_ms: int = 0
 
 
 def classify(pod: dict, ready: frozenset[str] | None = None) -> str:
@@ -231,10 +231,8 @@ class Recovery:
         recovery = restoring.FRESH if choice == FRESH else restoring.NATIVE if native else restoring.RECONSTRUCTED
         successor = self._replace(agent)
         checkpoint = entry.get("checkpoint_id", "")
-        decided = lease.now_ms(self.store)
-        decision = replace(
-            known, mode=choice, checkpoint=checkpoint, replacement=successor.execution_id, decided_at_ms=decided
-        )
+        decision = replace(known, mode=choice, checkpoint=checkpoint, replacement=successor.execution_id)
+        self._decided(execution_id)
         self._direct(decision, recovery)
         return self._record(agent, decision, successor.generation)
 
@@ -270,6 +268,7 @@ class Recovery:
             "refused": [_refusal(entry, self.compatibility) for entry in self._passed_over(execution_id, latest)],
             "choices": {choice: self.unavailable(agent, choice) for choice in CHOICES},
             "decision": asdict(decision) if decision else None,
+            "decided_at_ms": int(self.store.redis.hget(self._key(DECIDED), execution_id) or 0),
             "requested": self.store.redis.hget(self._key(REQUESTS), execution_id) or "",
             "refused_request": json.loads(self.store.redis.hget(self._key(REFUSED_REQUESTS), execution_id) or "null"),
         }
@@ -284,6 +283,11 @@ class Recovery:
         if shown is not None:
             self.controller.require()
             self.store.redis.hset(self._key(MATERIAL), execution_id, json.dumps(shown, sort_keys=True))
+
+    def _decided(self, execution_id: str) -> None:
+        """Kept beside the decision so the decision record keeps the shape earlier attempts were stored in."""
+        self.controller.require()
+        self.store.redis.hsetnx(self._key(DECIDED), execution_id, lease.now_ms(self.store))
 
     def request(self, execution_id: str, choice: str) -> Decision:
         """A repeated request for the choice already accepted returns that decision and admits nothing."""
@@ -444,10 +448,8 @@ class Recovery:
             return self._record(agent, decision, occupant.generation)
         successor = self._replace(agent)
         checkpoint = entry["checkpoint_id"]
-        decided = lease.now_ms(self.store)
-        decision = Decision(
-            agent.execution_id, agent.generation, reason, RESUME, checkpoint, successor.execution_id, decided
-        )
+        decision = Decision(agent.execution_id, agent.generation, reason, RESUME, checkpoint, successor.execution_id)
+        self._decided(agent.execution_id)
         self._direct(decision, restoring.NATIVE)
         return self._record(agent, decision, successor.generation)
 

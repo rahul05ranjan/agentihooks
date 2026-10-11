@@ -42,6 +42,7 @@ def test_choice_names_and_refusals_are_fixed():
     assert (failures.NATIVE, failures.CONTEXT) == ("native", "context")
     assert failures.MATERIAL == "attempt-recovery-material"
     assert failures.REFUSED_REQUESTS == "recovery-request-refusals"
+    assert failures.DECIDED == "attempt-decided-at"
     assert failures.NO_SESSION == "the lost attempt held no native session"
     assert failures.NO_NATIVE == "no complete compatible native checkpoint to resume from"
     assert failures.NO_CHECKPOINT == "no complete compatible checkpoint to resume from"
@@ -78,7 +79,8 @@ def test_context_reconstructs_even_from_a_native_checkpoint(world):
     recovery = _pending(world, [_entry(world, "ckpt-native", 4)])
     world.clock[0] += 7000
     decision = recovery.decide(world.old.execution_id, "context")
-    assert (decision.mode, decision.checkpoint, decision.decided_at_ms) == ("context", "ckpt-native", world.clock[0])
+    assert (decision.mode, decision.checkpoint) == ("context", "ckpt-native")
+    assert recovery.material(world.old.execution_id)["decided_at_ms"] == world.clock[0]
     assert recovery.restore(decision.replacement)["recovery"] == "reconstructed"
 
 
@@ -144,8 +146,8 @@ def test_material_names_the_latest_checkpoint_the_passed_over_ones_and_each_choi
             "mode": failures.PENDING,
             "checkpoint": "",
             "replacement": "",
-            "decided_at_ms": 0,
         },
+        "decided_at_ms": 0,
         "requested": "",
         "refused_request": None,
     }
@@ -201,5 +203,10 @@ def test_an_automatic_replacement_records_when_it_was_decided(world):
     world.checkpoints.by_execution[world.old.execution_id] = [_entry(world, "ckpt-native", 1)]
     recovery = world.recovery(world.live)
     decision = recovery.handle(world.old.execution_id, "node_lost")
-    assert (decision.mode, decision.decided_at_ms) == ("resume", world.clock[0])
-    assert _published(world)["decision"]["decided_at_ms"] == world.clock[0]
+    assert decision == failures.Decision(
+        world.old.execution_id, world.old.generation, "node_lost", "resume", "ckpt-native", decision.replacement
+    )
+    assert _published(world)["decided_at_ms"] == world.clock[0]
+    world.clock[0] += 5000
+    recovery._decided(world.old.execution_id)
+    assert recovery.material(world.old.execution_id)["decided_at_ms"] == world.clock[0] - 5000

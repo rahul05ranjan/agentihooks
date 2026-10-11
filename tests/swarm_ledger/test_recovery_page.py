@@ -22,7 +22,8 @@ def card(**changes):
         "checkpoint": {"checkpoint_id": "ckpt-context-1", "sequence": 1, "continuation": "context"},
         "refused": [{"checkpoint_id": "ckpt-native-2", "sequence": 2, "diagnosis": "corrupt_object"}],
         "choices": {"native": "no complete compatible native checkpoint to resume from", "context": "", "fresh": ""},
-        "decision": {"mode": rv.PENDING, "replacement": "", "decided_at_ms": 0},
+        "decision": {"mode": rv.PENDING, "replacement": ""},
+        "decided_at_ms": 0,
         "requested": "",
         "refused_request": None,
     }
@@ -65,8 +66,8 @@ def test_a_choice_is_sent_as_a_restore_decision_and_the_handoff_row_points_to_re
 
 
 def test_an_accepted_or_requested_decision_replaces_the_choices(open_page):
-    decision = {"mode": "context", "replacement": "exe-4", "decided_at_ms": layout.NOW_MS}
-    page = open_page(payload(card(decision=decision)))
+    decision = {"mode": "context", "replacement": "exe-4"}
+    page = open_page(payload(card(decision=decision, decided_at_ms=layout.NOW_MS)))
     assert buttons(page).count() == 0
     assert "ACCEPTED: CONTEXT CONTINUATION" in page.text("#swarm-recovery")
     assert "exe-4" in page.text("#swarm-recovery")

@@ -28,7 +28,8 @@ def material(**changes):
         "checkpoint": {"checkpoint_id": "ck-2", "sequence": 2, "continuation": "native"},
         "refused": [],
         "choices": {"native": "", "context": "", "fresh": ""},
-        "decision": {"mode": rv.PENDING, "replacement": "", "decided_at_ms": 0},
+        "decision": {"mode": rv.PENDING, "replacement": ""},
+        "decided_at_ms": 0,
         "requested": "",
         "refused_request": None,
     }
@@ -112,15 +113,15 @@ def test_a_waiting_request_holds_every_choice_and_names_itself():
 
 
 def test_an_accepted_decision_hides_the_request_and_stops_the_clock():
-    decision = {"mode": "context", "replacement": "exe-2", "decided_at_ms": NOW - 1_000}
-    card = rv.pod_card(material(decision=decision, requested="context"), NOW + 500_000)
+    decision = {"mode": "context", "replacement": "exe-2"}
+    card = rv.pod_card(material(decision=decision, requested="context", decided_at_ms=NOW - 1_000), NOW + 500_000)
     assert card["accepted"] == {"choice": "context", "replacement": "exe-2", "text": "accepted: context continuation"}
     assert (card["requested"], card["wait_seconds"]) == ("", 60)
     assert {c["unavailable"] for c in card["choices"]} == {rv.ACCEPTED}
 
 
 def test_a_decision_without_a_recorded_time_waits_until_now():
-    decision = {"mode": "resume", "replacement": "exe-2", "decided_at_ms": 0}
+    decision = {"mode": "resume", "replacement": "exe-2"}
     card = rv.pod_card(material(decision=decision), NOW)
     assert (card["wait_seconds"], card["accepted"]["text"]) == (61, "accepted: resume")
     assert rv.pod_card(material(fenced_at_ms=NOW + 5), NOW)["wait_seconds"] == 0
@@ -166,7 +167,7 @@ def test_the_view_shows_only_the_current_attempt_of_each_seat_with_the_live_requ
 def test_the_replacement_keeps_its_fenced_attempt_card(store):
     old = _pod(store)
     newer = store.start_execution(SLUG, _successor(old), old.execution_id)
-    decision = {"mode": "native", "replacement": newer.execution_id, "decided_at_ms": NOW}
+    decision = {"mode": "native", "replacement": newer.execution_id}
     _publish(store, material(execution_id=old.execution_id, seat=old.seat, decision=decision))
     [card] = rv.view(store, SLUG, NOW)["cards"]
     assert card["accepted"]["replacement"] == newer.execution_id
@@ -225,10 +226,12 @@ def test_undecided_or_unknown_local_rows_and_pod_agents_are_not_shown(store):
     _local(store, state="working")
     _restored(store, outcome=resume.RESUMED)
     assert rv.view(store, SLUG, NOW)["cards"] == []
-    _local(
-        store, runtime_backend="kubernetes", runtime_target={"pod_namespace": "w", "pod_name": "p9", "pod_uid": "u9"}
+    target = {"pod_namespace": "w", "pod_name": "p9", "pod_uid": "u9"}
+    pod = AgentRecord(
+        "eng-pod", "eng", "t9", state=resume.AWAITING, runtime_backend="kubernetes", runtime_target=target
     )
-    _restored(store)
+    store.put_agent(SLUG, pod)
+    store.put_restored(SLUG, [asdict(resume.Outcome("eng-pod", "eng", "t9", resume.AWAITING, "x"))])
     assert rv.view(store, SLUG, NOW)["cards"] == []
     store.put_restored(SLUG, [asdict(resume.Outcome("nobody", "eng", "t", resume.AWAITING, "x"))])
     assert rv.view(store, SLUG, NOW) == {"cards": [], rv.METRIC: {}}
