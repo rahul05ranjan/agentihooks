@@ -5,7 +5,7 @@ import pytest
 from scripts.gates import log as gate_log
 from scripts.inbox.seats import seat_address
 from scripts.inbox.store import InboxStore
-from scripts.swarm import dispatcher, grouping, metrics, priority_sweep
+from scripts.swarm import capacity, dispatcher, grouping, metrics, priority_sweep
 from scripts.swarm.ledger_client import LedgerRefused
 from scripts.swarm.store import MASTER, RedisStore, SwarmConfig, SwarmError
 
@@ -215,6 +215,11 @@ def leads(chain, work):
     return dispatcher.LEADS.format(chain=chain, work=work)
 
 
+OUTRANKED_BY_TWO = (
+    "it was outranked by 2 claimable tasks in focus with longer chains, more unblocked work or an operator rank"
+)
+
+
 def test_the_order_and_the_queue_head_hold_across_ticks_with_no_input_change(store, home, shipped):
     store.update(SLUG, autonomy="delegate", max_eng=2)
     found = doc(deep_and_wide(), phases=[])
@@ -277,6 +282,10 @@ def test_at_delegate_a_task_entering_the_queue_head_gets_one_comment_and_a_log_r
     assert ledger.ranks == []
     why = leads("1 open task", "3 open tasks")
     assert actions[0] == f"put task a at the head of the eng claim queue: {why}"
+    assert ledger.comments[0][1] == (
+        "The dispatcher put this task at the head of the eng claim queue: "
+        "it leads a chain of 1 open task and unblocks 3 open tasks."
+    )
     assert ledger.comments == [
         entered("a", why),
         entered("b", leads("1 open task", "2 open tasks")),
@@ -319,14 +328,19 @@ def test_the_queue_head_follows_claims_operator_ranks_and_freezes_with_one_comme
     ledger = Ledger()
     actions = dispatcher.rank_pass(SLUG, store.config(SLUG), store, ledger, found, NOW + 120_000)
     assert ledger.comments == [
-        left("l1", dispatcher.OUTRANKED.format(seats=2)),
+        left("l1", OUTRANKED_BY_TWO),
         entered("l2", "the operator ranked it high"),
     ]
-    assert actions[0] == f"moved task l1 out of the head of the eng claim queue: {dispatcher.OUTRANKED.format(seats=2)}"
+    assert actions[0] == f"moved task l1 out of the head of the eng claim queue: {OUTRANKED_BY_TWO}"
+    assert (
+        ledger.comments[0][1]
+        == f"The dispatcher moved this task out of the head of the eng claim queue: {OUTRANKED_BY_TWO}."
+    )
     found["freezes"] = [{"verb": "freeze", "target": "tasks/s"}]
     ledger = Ledger()
     dispatcher.rank_pass(SLUG, store.config(SLUG), store, ledger, found, NOW + 180_000)
-    assert ledger.comments == [left("s", dispatcher.UNREADY), entered("l1", leads("0 open tasks", "0 open tasks"))]
+    unready = "it is no longer a claimable task in focus"
+    assert ledger.comments == [left("s", unready), entered("l1", leads("0 open tasks", "0 open tasks"))]
     assert ledger.ranks == []
 
 
@@ -340,15 +354,39 @@ def test_the_queue_head_takes_the_seats_quota_leaves_each_lane(store, home, ship
         entered("a", leads("1 open task", "3 open tasks")),
         entered("k", leads("0 open tasks", "0 open tasks"), "ci"),
     ]
-    assert json.loads(store.redis.get(store.key(SLUG, dispatcher.HEAD))) == {"eng": ["a"], "ci": ["k"], "plan": []}
+    assert json.loads(store.redis.get(store.key(SLUG, "dispatch-head"))) == {"eng": ["a"], "ci": ["k"], "plan": []}
 
 
 def test_a_task_gone_from_the_ledger_leaves_the_head_without_a_comment(store, home, shipped):
     store.update(SLUG, autonomy="delegate", max_eng=1)
-    store.redis.set(store.key(SLUG, dispatcher.HEAD), json.dumps({"eng": ["gone"]}))
+    store.redis.set(store.key(SLUG, "dispatch-head"), json.dumps({"eng": ["gone"]}))
     ledger = Ledger()
     dispatcher.rank_pass(SLUG, store.config(SLUG), store, ledger, doc([task("a")]), NOW)
     assert ledger.comments == [entered("a", leads("0 open tasks", "0 open tasks"))]
+
+
+def test_one_seat_names_the_single_task_that_outranked_the_one_leaving(store, home, shipped):
+    store.update(SLUG, autonomy="delegate", max_eng=1)
+    tasks = [task("a"), task("b")]
+    found = doc(tasks)
+    dispatcher.rank_pass(SLUG, store.config(SLUG), store, Ledger(), found, NOW)
+    tasks[1]["rank"] = "urgent"
+    found["_meta"] = {"stamps": {"tasks/b/rank": {"by": "operator"}}}
+    ledger = Ledger()
+    dispatcher.rank_pass(SLUG, store.config(SLUG), store, ledger, found, NOW + 60_000)
+    assert ledger.comments == [
+        left(
+            "a",
+            "it was outranked by 1 claimable task in focus with longer chains, more unblocked work or an operator rank",
+        ),
+        entered("b", "the operator ranked it urgent"),
+    ]
+
+
+def test_the_default_caps_are_the_lane_maximums_without_a_quota_decision():
+    config = SwarmConfig(SLUG, "/repo", max_eng=5, max_ci=3, max_plan=2)
+    assert capacity.caps({}, config) == {"eng": 5, "ci": 3, "plan": 2}
+    assert capacity.caps({"effective": {"eng": 1}}, config) == {"eng": 1}
 
 
 def test_a_refused_head_comment_still_logs_the_change(store, home, shipped):
@@ -357,7 +395,7 @@ def test_a_refused_head_comment_still_logs_the_change(store, home, shipped):
     actions = dispatcher.rank_pass(SLUG, store.config(SLUG), store, ledger, doc(ladder()), NOW)
     assert [a.endswith(dispatcher.UNCOMMENTED) for a in actions] == [True, True]
     assert [r["reason"] for r in gate_log.recent(SLUG, None, home)] == actions
-    assert json.loads(store.redis.get(store.key(SLUG, dispatcher.HEAD)))["eng"] == ["a", "b"]
+    assert json.loads(store.redis.get(store.key(SLUG, "dispatch-head")))["eng"] == ["a", "b"]
 
 
 def test_an_operator_ranked_task_is_never_proposed(store, home, shipped):
@@ -448,6 +486,18 @@ def test_a_tick_with_four_free_seats_claims_the_top_four_of_the_dispatcher_queue
     config, ledger, found = queue_ledger(store, autonomy)
     assert dispatcher.queue(found, None)[:6] == ["l4", "h1", "h2", "h3", "s", "h4"]
     assert spawned(store, config, ledger, found) == [("eng", t) for t in ("l4", "h1", "s", "l1")]
+
+
+def test_a_busy_seat_leaves_three_claims_from_the_top_of_the_queue(store):
+    from scripts.swarm import tick
+    from scripts.swarm.store import AgentRecord
+    from tests.swarm.test_tick import FakeRuntime
+
+    config, ledger, found = queue_ledger(store, "delegate")
+    ledger.rows["x"] = {"id": "x", "state": "claimed", "lane": "eng", "depends_on": []}
+    busy = [AgentRecord("engineer@abcdef-0001", "eng", "x", state="working")]
+    claims = tick._spawn_order(SLUG, config, store, busy, ledger.rows, found, FakeRuntime())
+    assert [(lane, t["id"]) for lane, t in claims] == [("eng", t) for t in ("l4", "h1", "s")]
 
 
 def test_a_task_whose_launch_failed_falls_behind_its_band_in_the_dispatcher_queue(store, monkeypatch):

@@ -218,7 +218,7 @@ def test_one_seat_goes_to_the_empty_lane_before_another_engineer():
 
 def test_reduced_caps_do_not_retire_running_agents_and_comment_once(monkeypatch):
     store = _store()
-    config = SwarmConfig("sw", "/repo", max_eng=2, max_ci=1, max_plan=0, state="running")
+    config = SwarmConfig("sw", "/repo", max_eng=2, max_ci=1, max_plan=0, state="running", autonomy="assist")
     store.create(config)
     ledger = FakeLedger([{"id": "e"}, {"id": "e2"}, {"id": "c", "lane": "ci"}])
     ledger.comments = []

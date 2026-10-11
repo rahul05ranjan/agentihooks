@@ -35,7 +35,9 @@ ENTERED = "The dispatcher put this task at the head of the {lane} claim queue: {
 LEFT = "The dispatcher moved this task out of the head of the {lane} claim queue: {why}."
 LEADS = "it leads a chain of {chain} and unblocks {work}"
 OPERATOR_RANK = "the operator ranked it {rank}"
-OUTRANKED = "{seats} claimable tasks in focus lead longer chains, unblock more or carry an operator rank"
+OUTRANKED = "it was outranked by {ahead} in focus with longer chains, more unblocked work or an operator rank"
+ENTER = (ENTERED, "put task {} at the head of")
+LEAVE = (LEFT, "moved task {} out of the head of")
 UNREADY = "it is no longer a claimable task in focus"
 PROPOSED = "The dispatcher proposed high rank for this task to the master because it unblocks {work}."
 PROPOSE = (
@@ -152,8 +154,8 @@ def rank_pass(slug, config, store, ledger, doc, now_ms):
                 done.append(action)
     finally:
         errors = log(slug, done, now_ms)
-    if heads is not None:
-        store.redis.set(store.key(slug, HEAD), json.dumps(heads))
+        if heads is not None:
+            store.redis.set(store.key(slug, HEAD), json.dumps(heads))
     return [action.text for action in done] + errors
 
 
@@ -174,12 +176,12 @@ def _head_steps(slug, ledger, doc, before, heads, claimable):
         earlier = before.get(lane, [])
         why = partial(_left_why, claimable, len(head))
         steps += [
-            partial(_head, slug, ledger, lane, known[t], LEFT, why(t))
+            partial(_head, slug, ledger, lane, known[t], LEAVE, why(t))
             for t in earlier
             if t not in head and known.get(t, {}).get("state") == "open"
         ]
         steps += [
-            partial(_head, slug, ledger, lane, known[t], ENTERED, _entered_why(known[t], fixed, depth, scores))
+            partial(_head, slug, ledger, lane, known[t], ENTER, _entered_why(known[t], fixed, depth, scores))
             for t in head
             if t not in earlier
         ]
@@ -193,11 +195,12 @@ def _entered_why(task, fixed, depth, scores):
 
 
 def _left_why(claimable, seats, task_id):
-    return OUTRANKED.format(seats=seats) if task_id in claimable else UNREADY
+    ahead = "1 claimable task" if seats == 1 else f"{seats} claimable tasks"
+    return OUTRANKED.format(ahead=ahead) if task_id in claimable else UNREADY
 
 
-def _head(slug, ledger, lane, task, template, why):
-    moved = "put task {} at the head of" if template == ENTERED else "moved task {} out of the head of"
+def _head(slug, ledger, lane, task, kind, why):
+    template, moved = kind
     text = f"{moved.format(task['id'])} the {lane} claim queue: {why}"
     return Action(QUEUE, "apply", text + _comment(slug, ledger, task, template.format(lane=lane, why=why)), task)
 
