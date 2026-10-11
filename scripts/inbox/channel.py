@@ -10,6 +10,8 @@ import json
 import sys
 from pathlib import Path
 
+from redis.exceptions import RedisError
+
 from scripts.inbox.cli import check_for_operator, identity
 from scripts.inbox.seen import claim
 from scripts.inbox.store import NOTIFY, InboxError, connect
@@ -69,11 +71,16 @@ def _tool():
 async def _recheck(store, me, pubsub):
     import anyio
 
-    finished = anyio.Event()
+    finished, error = anyio.Event(), None
 
     async def wait():
-        await anyio.to_thread.run_sync(lambda: pubsub.get_message(timeout=RECHECK_S))
-        finished.set()
+        nonlocal error
+        try:
+            await anyio.to_thread.run_sync(lambda: pubsub.get_message(timeout=RECHECK_S))
+        except RedisError as exc:
+            error = exc
+        finally:
+            finished.set()
 
     async with anyio.create_task_group() as group:
         group.start_soon(wait)
@@ -81,30 +88,53 @@ async def _recheck(store, me, pubsub):
             await finished.wait()
         finally:
             if not finished.is_set():
-                store.redis.publish(NOTIFY, me)
+                try:
+                    store.redis.publish(NOTIFY, me)
+                except RedisError:
+                    pass
+    if error is not None:
+        raise error
 
 
-async def _push(store, me, write, ready, pubsub):
-    import anyio
+async def _deliver(store, me, write):
     import mcp.types as types
     from mcp.shared.message import SessionMessage
 
+    items = claim(store, me)
+    for index, item in enumerate(items):
+        note = types.JSONRPCNotification(jsonrpc="2.0", **event(item))
+        try:
+            await write.send(SessionMessage(types.JSONRPCMessage(note)))
+        except BaseException:
+            for unsent in items[index:]:
+                store.requeue(unsent.id, me, UNSHOWN)
+            raise
+
+
+async def _push(store, me, write, ready):
+    import anyio
+
+    pubsub, delay = None, 1.0
     try:
         await ready.wait()
         await anyio.sleep(SETTLE_S)
         while True:
-            items = claim(store, me)
-            for index, item in enumerate(items):
-                note = types.JSONRPCNotification(jsonrpc="2.0", **event(item))
-                try:
-                    await write.send(SessionMessage(types.JSONRPCMessage(note)))
-                except BaseException:
-                    for unsent in items[index:]:
-                        store.requeue(unsent.id, me, UNSHOWN)
-                    raise
-            await _recheck(store, me, pubsub)
+            try:
+                if pubsub is None:
+                    pubsub = store.redis.pubsub()
+                    pubsub.subscribe(NOTIFY)
+                await _deliver(store, me, write)
+                await _recheck(store, me, pubsub)
+                delay = 1.0
+            except RedisError:
+                if pubsub is not None:
+                    pubsub.close()
+                    pubsub = None
+                await anyio.sleep(delay)
+                delay = min(delay * 2, 30.0)
     finally:
-        pubsub.close()
+        if pubsub is not None:
+            pubsub.close()
 
 
 async def run(store, me, read, write):
@@ -123,11 +153,9 @@ async def run(store, me, read, write):
     async def call_tool(name, arguments):
         return [types.TextContent(type="text", text=answer(store, me, arguments["item_id"], arguments["text"]))]
 
-    pubsub = store.redis.pubsub()
-    pubsub.subscribe(NOTIFY)
     options = server.create_initialization_options(experimental_capabilities={"claude/channel": {}})
     async with anyio.create_task_group() as group:
-        group.start_soon(_push, store, me, write, ready, pubsub)
+        group.start_soon(_push, store, me, write, ready)
         await server.run(read, write, options)
         group.cancel_scope.cancel()
 
