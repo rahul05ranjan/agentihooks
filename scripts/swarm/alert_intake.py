@@ -74,7 +74,7 @@ def _apply(redis, alert, now_ms: int) -> str:
     if not isinstance(alert, dict):
         return "skipped an alert: not an alert"
     labels = alert.get("labels") or {}
-    stage, slug, status = labels.get("stage", ""), labels.get("ledger", ""), alert.get("status")
+    stage, slug, status = str(labels.get("stage")), str(labels.get("ledger")), alert.get("status")
     if labels.get("swarm") != "bottleneck":
         return "skipped an alert: not a swarm bottleneck alert"
     if stage not in STAGES:

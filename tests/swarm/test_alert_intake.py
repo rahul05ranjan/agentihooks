@@ -97,6 +97,12 @@ def test_free_text_from_the_alert_never_reaches_the_finding(redis):
     assert "merge" not in " ".join((found.summary, *found.evidence, found.threshold))
 
 
+def test_an_alert_without_a_start_counts_as_one_unnamed_episode(redis):
+    unstarted = {k: v for k, v in alert().items() if k != "startsAt"}
+    alert_intake.receive(redis, payload(unstarted, unstarted), NOW)
+    assert standing.read(redis, "sw")["ci_overrun"]["episodes"] == [""]
+
+
 def test_one_payload_updates_every_ledger_and_stage_it_carries(redis):
     actions = alert_intake.receive(
         redis,
@@ -117,6 +123,8 @@ def test_one_payload_updates_every_ledger_and_stage_it_carries(redis):
             "not a swarm bottleneck alert",
         ),
         (alert(stage="made_up"), "unknown stage made_up"),
+        ({**alert(), "labels": {k: v for k, v in alert()["labels"].items() if k != "stage"}}, "unknown stage None"),
+        ({**alert(), "labels": {k: v for k, v in alert()["labels"].items() if k != "ledger"}}, "bad ledger"),
         (alert(ledger="Bad Slug!"), "bad ledger"),
         (alert(ledger=""), "bad ledger"),
         (alert(hours=None), "no hours value"),
@@ -180,15 +188,15 @@ class Sent:
         self.code, self.headers, self.ended = None, [], False
 
 
-def handler(redis, body, address="192.168.4.20", path="/alerts", networks=None, length=None):
+def handler(redis, body, address="192.168.4.20", path="/alerts", networks=None, length=None, tail=b""):
     raw = body if isinstance(body, bytes) else json.dumps(body).encode()
     sent = Sent()
     found = alert_intake.Handler.__new__(alert_intake.Handler)
     found.server = SimpleNamespace(redis=redis, networks=networks, clock=lambda: NOW)
     found.client_address = (address, 40000)
     found.path = path
-    found.headers = {"Content-Length": str(len(raw) if length is None else length)}
-    found.rfile = io.BytesIO(raw)
+    found.headers = {} if length == "" else {"Content-Length": str(len(raw) if length is None else length)}
+    found.rfile = io.BytesIO(raw + tail)
     found.wfile = io.BytesIO()
     found.send_response = lambda code: setattr(sent, "code", code)
     found.send_header = lambda name, value: sent.headers.append((name, value))
@@ -200,8 +208,26 @@ def handler(redis, body, address="192.168.4.20", path="/alerts", networks=None, 
 def test_a_post_from_an_allowed_source_applies_the_alerts(redis):
     sent, body = handler(redis, payload(alert()))
     assert (sent.code, body, sent.ended) == (200, {"actions": ["fired ci_overrun on sw"]}, True)
-    assert ("Content-Type", "application/json") in sent.headers
-    assert list(standing.read(redis, "sw")) == ["ci_overrun"]
+    raw = json.dumps(body).encode()
+    assert sent.headers == [("Content-Type", "application/json"), ("Content-Length", str(len(raw)))]
+    assert standing.read(redis, "sw")["ci_overrun"]["updated_at"] == NOW
+
+
+def test_a_post_reads_only_its_declared_length(redis):
+    sent, body = handler(redis, payload(alert()), tail=b"trailing bytes")
+    assert (sent.code, body) == (200, {"actions": ["fired ci_overrun on sw"]})
+
+
+def test_a_post_without_a_length_reads_nothing(redis):
+    sent, body = handler(redis, b"1", length="")
+    assert (sent.code, body) == (400, {"error": "bad alert body: Expecting value: line 1 column 1 (char 0)"})
+
+
+def test_configured_networks_replace_the_private_default(redis):
+    sent, body = handler(redis, payload(alert()), networks=(ipaddress.ip_network("10.1.2.0/24"),))
+    assert (sent.code, body) == (403, {"error": "source not allowed"})
+    sent, _ = handler(redis, payload(alert()), address="10.1.2.9", networks=(ipaddress.ip_network("10.1.2.0/24"),))
+    assert sent.code == 200
 
 
 def test_a_post_from_another_source_is_refused_and_changes_nothing(redis):
@@ -229,8 +255,10 @@ def test_a_body_over_the_size_cap_is_refused_unread(redis):
     assert standing.read(redis, "sw") == {}
 
 
-def test_a_body_at_the_size_cap_is_read():
+def test_a_body_declared_at_the_size_cap_is_read(redis):
     assert alert_intake.MAX_BODY == 1_000_000
+    sent, _ = handler(redis, payload(alert()), length=alert_intake.MAX_BODY)
+    assert sent.code == 200
 
 
 def test_serve_listens_on_the_configured_address_with_the_store_and_clock(redis, monkeypatch):
