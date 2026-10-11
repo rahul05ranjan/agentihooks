@@ -142,13 +142,18 @@ def _pod(store, seat="eng-1", **changes):
     return store.start_execution(SLUG, agent)
 
 
+def _successor(old):
+    target = {"pod_namespace": "w", "pod_name": "p2", "pod_uid": "u2"}
+    return replace(old, execution_id="", generation=0, runtime_target=target)
+
+
 def _publish(store, shown):
     store.redis.hset(store.key(SLUG, rv.MATERIAL), shown["execution_id"], json.dumps(shown))
 
 
 def test_the_view_shows_only_the_current_attempt_of_each_seat_with_the_live_request(store):
     old = _pod(store)
-    newer = store.start_execution(SLUG, replace(old, execution_id="", generation=0), old.execution_id)
+    newer = store.start_execution(SLUG, _successor(old), old.execution_id)
     _publish(store, material(execution_id=old.execution_id, seat=old.seat, generation=1))
     _publish(store, material(execution_id=newer.execution_id, seat=old.seat, generation=2, agent="eng-8"))
     _publish(store, material(execution_id="exe-gone", seat="eng-9@rv", generation=1))
@@ -160,7 +165,7 @@ def test_the_view_shows_only_the_current_attempt_of_each_seat_with_the_live_requ
 
 def test_the_replacement_keeps_its_fenced_attempt_card(store):
     old = _pod(store)
-    newer = store.start_execution(SLUG, replace(old, execution_id="", generation=0), old.execution_id)
+    newer = store.start_execution(SLUG, _successor(old), old.execution_id)
     decision = {"mode": "native", "replacement": newer.execution_id, "decided_at_ms": NOW}
     _publish(store, material(execution_id=old.execution_id, seat=old.seat, decision=decision))
     [card] = rv.view(store, SLUG, NOW)["cards"]
@@ -220,7 +225,9 @@ def test_undecided_or_unknown_local_rows_and_pod_agents_are_not_shown(store):
     _local(store, state="working")
     _restored(store, outcome=resume.RESUMED)
     assert rv.view(store, SLUG, NOW)["cards"] == []
-    _local(store, runtime_backend="kubernetes")
+    _local(
+        store, runtime_backend="kubernetes", runtime_target={"pod_namespace": "w", "pod_name": "p9", "pod_uid": "u9"}
+    )
     _restored(store)
     assert rv.view(store, SLUG, NOW)["cards"] == []
     store.put_restored(SLUG, [asdict(resume.Outcome("nobody", "eng", "t", resume.AWAITING, "x"))])
