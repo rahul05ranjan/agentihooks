@@ -479,6 +479,8 @@ def test_settling_reports_when_the_records_keep_changing(store, monkeypatch):
     saved = json.loads(store.redis.hget(store.key(SLUG, "lifecycle-ops"), record["op"]))
     assert saved["state"] == "failed"
     assert saved["error"] == "commands kept changing; nothing was recorded"
+    monkeypatch.undo()
+    assert lifecycle.view(store, SLUG, {})["agents"][agent.name]["pending"] == ""
 
 
 def finish(store, agent, outcome):

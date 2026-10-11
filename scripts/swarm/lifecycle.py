@@ -302,7 +302,7 @@ def _settle(store: RedisStore, slug: str, record: dict, error: str, result: dict
             except WatchError:
                 continue
     store.redis.hset(_key(store, slug, "ops"), record["op"], json.dumps(settled))
-    raise SwarmError("lifecycle controls kept changing; the outcome was recorded but the agent was not released")
+    raise SwarmError("lifecycle controls kept changing; the outcome was recorded without its watch")
 
 
 def execute(
