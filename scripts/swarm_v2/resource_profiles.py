@@ -236,14 +236,18 @@ def accept(path: Path, candidate: dict, policy: Policy, requalified_by: str) -> 
 
 
 def rollback(path: Path) -> int | None:
-    """Restore the accepted report that the last promotion replaced, keeping the one it displaces; None when there is none."""
+    """Swap in the accepted report that the last promotion replaced; None when there is none.
+
+    Each step is a rename, so an interruption leaves both reports on disk.
+    """
     previous = _previous(path)
     if not previous.exists():
         return None
     restored = json.loads(previous.read_text())
-    displaced = json.loads(path.read_text())
-    _install(path, restored)
-    _install(previous, displaced)
+    held = path.with_name(f".{path.name}.rollback")
+    path.replace(held)
+    previous.replace(path)
+    held.replace(previous)
     return restored["generation"]
 
 

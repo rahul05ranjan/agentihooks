@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -279,6 +280,28 @@ def test_accept_writes_only_a_promoted_report_and_rollback_restores_the_one_it_r
     assert sorted(p.name for p in folder.iterdir()) == ["accepted.json", "accepted.json.previous"]
     assert profiles.rollback(path) == 2
     assert path.read_bytes() == installed
+
+
+def test_an_interrupted_rollback_keeps_both_reports_on_disk(tmp_path):
+    path = tmp_path / "accepted.json"
+    accepted = profiles.derive(measured(memory_runs()), NODES, POLICY)
+    grown = profiles.derive(measured(memory_runs(1.5), 2), NODES, POLICY)
+    profiles.accept(path, accepted, POLICY, "")
+    profiles.accept(path, grown, POLICY, "operator")
+    reports = {p.read_bytes() for p in tmp_path.iterdir()}
+    real = Path.replace
+    calls = []
+
+    def stop_after_first(self, target):
+        calls.append(self.name)
+        if len(calls) > 1:
+            raise OSError("interrupted")
+        return real(self, target)
+
+    with mock.patch.object(Path, "replace", stop_after_first), pytest.raises(OSError):
+        profiles.rollback(path)
+    assert calls == ["accepted.json", "accepted.json.previous"]
+    assert {p.read_bytes() for p in tmp_path.iterdir()} == reports
 
 
 def test_markdown_names_every_profile_refusal_and_node():
