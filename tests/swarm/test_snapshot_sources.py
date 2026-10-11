@@ -27,7 +27,7 @@ def _objects(slug: str) -> dict[str, bytes]:
 def test_each_worktree_is_captured_and_its_materials_kept_by_hash(tmp_path):
     work = cases.worktree(tmp_path)
     expected = git_capture.capture(work, "origin/dev")
-    found = snapshot.sources("sw", {AGENT: str(work), "master@a1b2c3-0001": ""}, {})
+    found = snapshot.sources("sw", {"master@a1b2c3-0001": "", AGENT: str(work)}, {})
     assert found == {AGENT: json.loads(json.dumps(expected.fields()))}
     objects = _objects("sw")
     for role, ref in found[AGENT]["inventory"].items():
@@ -71,9 +71,23 @@ def test_pruning_keeps_only_objects_a_kept_snapshot_names():
     names = sorted(file.name for file in folder.iterdir())
     _document(snapshot.path("sw"), names[:1])
     _document(snapshot.auto_dir("sw") / "auto-5.json", names[1:2])
+    (snapshot.auto_dir("sw") / "auto-6.json").write_text(json.dumps({"taken_at": 1, "worktrees": {}}))
     assert snapshot.referenced("sw") == set(names[:2])
     snapshot.prune_sources("sw")
     assert sorted(file.name for file in folder.iterdir()) == names[:2]
+
+
+def test_sources_live_in_the_swarm_folder_beside_its_snapshot():
+    assert snapshot.sources_dir("sw") == snapshot.path("sw").parent / "sources"
+
+
+def test_a_torn_object_is_written_again():
+    folder = snapshot.sources_dir("sw")
+    snapshot._keep(folder, b"whole")
+    (stored,) = folder.iterdir()
+    stored.write_bytes(b"who")
+    snapshot._keep(folder, b"whole")
+    assert stored.read_bytes() == b"whole"
 
 
 def test_keeping_the_same_bytes_twice_writes_once():
@@ -89,6 +103,7 @@ def _listing(work):
     listing = f"worktree {work}\nbranch refs/heads/engineer-a1b2c3-0001\n"
 
     def git(argv, **kw):
+        assert argv[:3] == ["git", "-C", "/repo"]
         return subprocess.CompletedProcess(argv, 0, listing, "")
 
     return git

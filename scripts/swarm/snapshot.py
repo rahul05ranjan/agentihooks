@@ -119,13 +119,13 @@ def sources_dir(slug):
 
 
 def _keep(folder, data):
+    """Objects are named by their sha256, so a torn write is found by its name and written again."""
     target = folder / hashlib.sha256(data).hexdigest()
-    if not target.exists():
-        folder.mkdir(parents=True, exist_ok=True)
-        partial = target.with_suffix(".partial")
-        partial.write_bytes(data)
-        partial.chmod(0o600)
-        partial.replace(target)
+    if target.exists() and hashlib.sha256(target.read_bytes()).hexdigest() == target.name:
+        return
+    folder.mkdir(parents=True, exist_ok=True)
+    target.touch(mode=0o600)
+    target.write_bytes(data)
 
 
 def sources(slug, found, environ):
@@ -154,7 +154,7 @@ def referenced(slug):
     held = set()
     for file in (path(slug), *automatic(slug)):
         if file.exists():
-            for fields in json.loads(file.read_text(encoding="utf-8")).get("sources", {}).values():
+            for fields in json.loads(file.read_bytes()).get("sources", {}).values():
                 held.update(ref["sha256"] for ref in fields.get("inventory", {}).values())
     return held
 
@@ -163,7 +163,7 @@ def prune_sources(slug):
     held = referenced(slug)
     for file in sources_dir(slug).glob("*"):
         if file.name not in held:
-            file.unlink(missing_ok=True)
+            file.unlink()
 
 
 def take(store, slug, now_ms, run=subprocess.run, target=None, environ=None):
