@@ -201,7 +201,7 @@ function terminalCell(t, e) {
 
 function lifecycleOffer(sw, name) {
   const life = sw.lifecycle, offer = life && life.agents && life.agents[name];
-  return offer ? { offer, controls: life.controls.filter((c) => c.action in offer.disabled), legacy: life.destructive === false } : null;
+  return offer ? { offer, controls: life.controls.filter((c) => c.action in offer.disabled), terminate: !!offer.terminate } : null;
 }
 
 function lifecycleButton(a, c) {
@@ -217,7 +217,7 @@ function agentActions(a) {
       : h("button", { class: "sw-btn", type: "button", "data-lift": g.gate, "data-agent": a.name, "aria-label": `Lift the ${g.gate} gate for ${a.name}`, disabled: !!pending, text: `lift ${g.gate}` })),
     h("button", { class: "sw-btn", type: "button", "data-message": a.master ? "" : a.name, "aria-label": `Message ${a.name}`, text: "message" }),
     ...(life ? life.controls.map((c) => lifecycleButton(a, c)) : []),
-    (!life || life.legacy) && h("button", { class: "sw-btn danger", type: "button", "data-terminate": a.name, "aria-label": `Terminate ${a.name}`, disabled: !!pending, text: "terminate" }));
+    (!life || life.terminate) && h("button", { class: "sw-btn danger", type: "button", "data-terminate": a.name, "aria-label": `Terminate ${a.name}`, disabled: !!pending, text: "terminate" }));
 }
 
 export function wornOverlays(sw, role) {

@@ -1,6 +1,7 @@
 """Per agent lifecycle controls for the ledger page: what each one changes, whether the page may offer it, and the
 fenced, deduplicated path from a click to the controller. The page only displays offers; every request is checked
-again against the swarm store and the ledger task revision, and once more when the controller runs it."""
+against the swarm store and the published task revision, and the controller fences the agent's incarnation and
+generation again before any effect."""
 
 import hashlib
 import json
@@ -12,7 +13,9 @@ from dataclasses import asdict, dataclass
 from redis.exceptions import WatchError
 
 from scripts.swarm import commands, lease
-from scripts.swarm.store import AgentRecord, RedisStore
+from scripts.swarm.store import AgentRecord, RedisStore, SwarmError
+from scripts.swarm_v2.api.commands import CommandQueue
+from scripts.swarm_v2.auth_context import GrantRefused
 
 VIEW, AGENT, SWARM = "terminal view", "one agent", "one swarm"
 SWITCH = "AGENTIHOOKS_LIFECYCLE_DESTRUCTIVE"
@@ -23,6 +26,7 @@ SEEN = ("incarnation", "generation", "task_revision")
 SHOWN = 20
 WRITE_ATTEMPTS = 5
 WORKER_EXPIRY_MS = 300_000
+PENDING_MS = 600_000
 
 
 @dataclass(frozen=True)
@@ -116,7 +120,15 @@ def offer(agent: AgentRecord, task_revisions: Mapping[str, int], pending: str, d
         **seen(agent, task_revisions),
         "pending": pending,
         "disabled": {action: disabled(agent, action, pending, destructive) for action in AGENT_ACTIONS},
+        "terminate": not destructive or "force_stop" not in SUPPORTED.get(agent.runtime_backend, frozenset()),
     }
+
+
+def _pending(store: RedisStore, slug: str, reader, name: str, now: int) -> str:
+    op = reader.hget(_key(store, slug, "pending"), name)
+    raw = op and reader.hget(_key(store, slug, "ops"), op)
+    record = json.loads(raw) if raw else {}
+    return op if record.get("state") == "queued" and now - record["at"] < PENDING_MS else ""
 
 
 def _key(store: RedisStore, slug: str, part: str) -> str:
@@ -170,7 +182,8 @@ def _admit(store: RedisStore, slug: str, pipe, body: tuple, destructive: bool):
     agent = _agent(store, slug, name)
     if agent is None or agent.state == "finished" or seen(agent, published(store, slug)) != shown:
         raise _conflict(store, slug, "stale", "the page is stale: this agent was replaced, finished or moved task")
-    if pipe.hget(_key(store, slug, "pending"), name):
+    now = lease.now_ms(store)
+    if _pending(store, slug, pipe, name, now):
         raise _conflict(store, slug, "pending", "an earlier control on this agent is still unresolved")
     reason = disabled(agent, action, "", destructive)
     if reason:
@@ -187,7 +200,7 @@ def _admit(store: RedisStore, slug: str, pipe, body: tuple, destructive: bool):
         "state": "queued",
         "error": "",
         "result": {},
-        "at": lease.now_ms(store),
+        "at": now,
     }
     return record, row
 
@@ -224,7 +237,12 @@ def request(
     raise Refused(503, "lifecycle controls kept changing; nothing was queued")
 
 
-def _fenced(agent: AgentRecord | None, record: dict) -> str:
+def _fenced(agent: AgentRecord | None, record: dict, destructive: bool, now: int) -> str:
+    control = BY_ACTION[record["control"]]
+    if now - record["at"] >= PENDING_MS:
+        return "the control expired before the controller ran it"
+    if control.destructive and not destructive:
+        return f"{control.label} was turned off before the control ran"
     if agent is None:
         return "the agent is no longer in this swarm"
     if agent.state == "finished":
@@ -235,9 +253,6 @@ def _fenced(agent: AgentRecord | None, record: dict) -> str:
 
 
 def _apply(store: RedisStore, slug: str, agent: AgentRecord, record: dict, run: Callable[[list[str]], str]):
-    from scripts.swarm_v2.api.commands import CommandQueue
-    from scripts.swarm_v2.auth_context import GrantRefused
-
     action = record["control"]
     if action == "attach":
         return run(["swarm", slug, "terminal", agent.execution_id]), {}
@@ -269,9 +284,12 @@ def _settle(store: RedisStore, slug: str, record: dict, error: str, result: dict
                 return
             except WatchError:
                 continue
+    raise SwarmError("lifecycle controls kept changing; the operation outcome was not recorded")
 
 
-def execute(store: RedisStore, slug: str, row: dict, run: Callable[[list[str]], str]) -> str:
+def execute(
+    store: RedisStore, slug: str, row: dict, run: Callable[[list[str]], str], environ: Mapping[str, str] = os.environ
+) -> str:
     action, name, op = row["argv"]
     raw = store.redis.hget(_key(store, slug, "ops"), op)
     if not raw:
@@ -280,17 +298,19 @@ def execute(store: RedisStore, slug: str, row: dict, run: Callable[[list[str]], 
     if record["state"] != "queued" or (record["control"], record["agent"]) != (action, name):
         return "the lifecycle operation does not match its command"
     agent = _agent(store, slug, name)
-    error = _fenced(agent, record)
+    error = _fenced(agent, record, destructive_on(environ), lease.now_ms(store))
     result = {}
-    if not error:
-        error, result = _apply(store, slug, agent, record, run)
+    try:
+        if not error:
+            error, result = _apply(store, slug, agent, record, run)
+    except Exception as exc:
+        _settle(store, slug, record, f"{type(exc).__name__}: {exc}", {})
+        raise
     _settle(store, slug, record, error, result)
     return error
 
 
 def operations(store: RedisStore, slug: str, limit: int = SHOWN) -> list[dict]:
-    from scripts.swarm_v2.api.commands import CommandQueue
-
     order = store.redis.lrange(_key(store, slug, "order"), -limit, -1)
     found = store.redis.hmget(_key(store, slug, "ops"), order) if order else []
     shown = []
@@ -306,15 +326,14 @@ def operations(store: RedisStore, slug: str, limit: int = SHOWN) -> list[dict]:
 
 
 def view(store: RedisStore, slug: str, environ: Mapping[str, str] = os.environ) -> dict:
-    task_revisions = published(store, slug)
-    pending = store.redis.hgetall(_key(store, slug, "pending"))
+    task_revisions, now = published(store, slug), lease.now_ms(store)
     destructive = destructive_on(environ)
     counts = conflicts(store, slug)
     return {
         "controls": [asdict(control) for control in CONTROLS],
         "destructive": destructive,
         "agents": {
-            agent.name: offer(agent, task_revisions, pending.get(agent.name, ""), destructive)
+            agent.name: offer(agent, task_revisions, _pending(store, slug, store.redis, agent.name, now), destructive)
             for agent in store.agents(slug)
         },
         "operations": operations(store, slug),

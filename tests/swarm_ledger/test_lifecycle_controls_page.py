@@ -28,13 +28,13 @@ def controls():
     ]
 
 
-def with_lifecycle(destructive=True, operations=(), force_stop="a kubernetes agent has no force stop"):
+def with_lifecycle(destructive=True, operations=(), force_stop="", terminate=False):
     payload = status()
     disabled = {"attach": "", "drain": "", "cancel": "", "force_stop": force_stop}
     payload["lifecycle"] = {
         "controls": controls(),
         "destructive": destructive,
-        "agents": {AGENT: {**SEEN, "pending": "", "disabled": disabled}},
+        "agents": {AGENT: {**SEEN, "pending": "", "disabled": disabled, "terminate": terminate}},
         "operations": list(operations),
         "conflicts": {},
         "ledger_control_conflicts_total": 0,
@@ -61,8 +61,9 @@ def wait_settled(page):
 
 
 def test_an_agent_row_offers_attach_drain_cancel_and_force_stop_with_their_consequences(open_page):
-    page = open_page(with_lifecycle())
-    assert acts(page).inner_text().split("\n") == ["message", "attach", "drain", "cancel", "force stop"]
+    page = open_page(with_lifecycle(force_stop="a kubernetes agent has no force stop", terminate=True))
+    expected = ["message", "attach", "drain", "cancel", "force stop", "terminate"]
+    assert acts(page).inner_text().split("\n") == expected
     by_label = {c.label: c for c in lifecycle.CONTROLS}
     for label in ("attach", "drain", "cancel"):
         control = by_label[label]
@@ -85,8 +86,16 @@ def test_a_page_without_lifecycle_offers_keeps_the_terminate_button(open_page):
 
 
 def test_the_rollback_switch_brings_terminate_back_beside_the_offers(open_page):
-    page = open_page(with_lifecycle(destructive=False, force_stop="force stop is turned off; terminate still works"))
+    page = open_page(
+        with_lifecycle(destructive=False, force_stop="force stop is turned off; terminate still works", terminate=True)
+    )
     assert acts(page).inner_text().split("\n") == ["message", "attach", "drain", "cancel", "force stop", "terminate"]
+
+
+def test_a_supported_force_stop_replaces_terminate(open_page):
+    page = open_page(with_lifecycle())
+    assert acts(page).inner_text().split("\n") == ["message", "attach", "drain", "cancel", "force stop"]
+    assert button(page, "force stop").is_enabled()
 
 
 def test_drain_sends_the_generation_and_task_revision_the_page_showed(open_page):

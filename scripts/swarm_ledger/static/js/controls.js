@@ -221,7 +221,7 @@ export function wireSwarm() {
     const life = event.target.closest("button[data-lifecycle]");
     if (life && !life.disabled) {
       const agent = life.dataset.agent, control = swarm.lifecycle.controls.find((c) => c.action === life.dataset.lifecycle);
-      if (pending || unresolved()[agent]) return;
+      if (pending || unresolved()[agent] || !swarm.lifecycle.agents[agent]) return;
       if (control.destructive && !confirm(`${control.label} ${agent}? ${control.consequence}`)) return;
       return sendLifecycle(lifecycleBody(swarm, agent, control.action));
     }

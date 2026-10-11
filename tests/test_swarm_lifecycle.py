@@ -111,6 +111,7 @@ def test_offers_disable_unsupported_controls_per_backend(store):
         "task_revision": 4,
         "pending": "",
         "disabled": {"attach": "", "drain": "", "cancel": "", "force_stop": "a kubernetes agent has no force stop"},
+        "terminate": True,
     }
     assert view["agents"][near.name]["disabled"] == {
         "attach": "a local agent has no attach",
@@ -378,3 +379,85 @@ def test_submit_still_queues_one_pending_row(store):
     assert json.loads(store.redis.hget(store.key(SLUG, "commands"), row["id"]))["argv"] == ["pause"]
     assert store.redis.lrange(store.key(SLUG, "command-pending"), 0, -1) == [row["id"]]
     assert store.redis.lrange(store.key(SLUG, "command-order"), 0, -1) == [row["id"]]
+
+
+def test_terminate_stays_offered_where_force_stop_is_missing_or_turned_off(store):
+    remote, near = kube(store), local(store)
+    assert lifecycle.view(store, SLUG, {})["agents"][remote.name]["terminate"] is True
+    assert lifecycle.view(store, SLUG, {})["agents"][near.name]["terminate"] is False
+    assert lifecycle.view(store, SLUG, {lifecycle.SWITCH: "off"})["agents"][near.name]["terminate"] is True
+
+
+def age(store, op, by_ms):
+    key = store.key(SLUG, "lifecycle-ops")
+    record = json.loads(store.redis.hget(key, op))
+    store.redis.hset(key, op, json.dumps({**record, "at": record["at"] - by_ms}))
+
+
+def test_an_expired_control_stops_blocking_and_never_runs(store, ran):
+    agent = local(store)
+    ask(store, agent, "force_stop")
+    age(store, "op-first-1", lifecycle.PENDING_MS)
+    assert lifecycle.view(store, SLUG, {})["agents"][agent.name]["pending"] == ""
+    assert ask(store, agent, "force_stop", op="op-second")["state"] == "queued"
+    command_runner.consume(store, SLUG)
+    states = {op["op"]: (op["state"], op["error"]) for op in lifecycle.operations(store, SLUG)}
+    assert states == {
+        "op-first-1": ("failed", "the control expired before the controller ran it"),
+        "op-second": ("applied", ""),
+    }
+    assert len(ran) == 2
+
+
+def test_a_control_still_fresh_just_before_expiry_keeps_blocking(store):
+    agent = kube(store)
+    ask(store, agent, "drain")
+    age(store, "op-first-1", lifecycle.PENDING_MS - 60_000)
+    assert lifecycle.view(store, SLUG, {})["agents"][agent.name]["pending"] == "op-first-1"
+
+
+def test_a_destructive_control_turned_off_after_queueing_does_not_run(store, ran):
+    agent = local(store)
+    record = ask(store, agent, "force_stop")
+    row = {"argv": ["force_stop", agent.name, record["op"]]}
+    assert lifecycle.execute(store, SLUG, row, ran.append, {lifecycle.SWITCH: "off"}) == (
+        "force stop was turned off before the control ran"
+    )
+    assert ran == []
+    assert lifecycle.view(store, SLUG, {})["agents"][agent.name]["pending"] == ""
+
+
+def test_an_unexpected_error_settles_the_operation_and_releases_the_agent(store, monkeypatch):
+    def broken(*args):
+        raise RuntimeError("queue offline")
+
+    agent = kube(store)
+    record = ask(store, agent, "drain")
+    monkeypatch.setattr(CommandQueue, "issue", broken)
+    with pytest.raises(RuntimeError):
+        lifecycle.execute(store, SLUG, {"argv": ["drain", agent.name, record["op"]]}, lambda argv: "")
+    op = lifecycle.operations(store, SLUG)[0]
+    assert (op["state"], op["error"]) == ("failed", "RuntimeError: queue offline")
+    assert lifecycle.view(store, SLUG, {})["agents"][agent.name]["pending"] == ""
+
+
+def test_settling_reports_when_the_records_keep_changing(store, monkeypatch):
+    from redis.exceptions import WatchError
+
+    from scripts.swarm.store import SwarmError
+
+    class Busy:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def watch(self, *keys):
+            raise WatchError("busy")
+
+    agent = kube(store)
+    record = ask(store, agent, "drain")
+    monkeypatch.setattr(store.redis, "pipeline", lambda: Busy())
+    with pytest.raises(SwarmError):
+        lifecycle.execute(store, SLUG, {"argv": ["drain", agent.name, record["op"]]}, lambda argv: "")
