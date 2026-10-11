@@ -31,15 +31,15 @@ class Record:
 def _entry(entry: dict) -> Record:
     record = Record(**entry)
     if not isinstance(record.before, list | tuple):
-        raise ValueError(record.execution_id)
+        raise ValueError
     before = tuple(record.before)
     texts = (record.execution_id, record.label, record.target, record.session, *before)
     if not all(isinstance(text, str) and text for text in texts):
-        raise ValueError(record.execution_id)
+        raise ValueError
     if type(record.generation) is not int or record.generation < 1:
-        raise ValueError(record.execution_id)
+        raise ValueError
     if record.profile_id is not None and not (isinstance(record.profile_id, str) and record.profile_id):
-        raise ValueError(record.execution_id)
+        raise ValueError
     return replace(record, before=before)
 
 
@@ -77,7 +77,7 @@ class Store:
         try:
             document = json.loads(self.path.read_text())
             if document["version"] != VERSION:
-                raise ValueError(document["version"])
+                raise ValueError
             records = [_entry(entry) for entry in document["registrations"]]
         except (OSError, ValueError, TypeError, KeyError):
             raise EndpointRefused("ownership_unreadable", "the registration ownership record is unreadable") from None
