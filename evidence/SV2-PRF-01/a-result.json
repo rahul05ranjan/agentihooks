@@ -1,0 +1,106 @@
+{
+  "case": "T-SV2-PRF-01-A",
+  "state": "passed",
+  "evidence_class": "measured: the workloads ran on a GitHub hosted Ubuntu runner in the Worker resources workflow named in measurements.json and update.json, and node capacity was read from the Anton cluster with kubectl as named in nodes.json; derivation, coexistence and promotion are pure functions over those committed records; no worker Pod ran the workloads and no profile was applied to a deployed Pod policy",
+  "input_sha256": {
+    "measurements.json": "70c4d31a3bfc4365abb5047663ec606fbd5785efa3e644ca0e25596d4cd799ab",
+    "update.json": "49d000237be74dc0c610a9c8ca8f5b61f13ef5677646a47587f7983fa206f27d",
+    "nodes.json": "09216bf5c06d80e03ab661b93e7b020cc8fd5f2f6b833cc25c5a0ac409e237ff",
+    "disclosure.json": "5619b504a31319971f751190ca09241f1e9ac8bef2c9454d660f46662d65041c"
+  },
+  "observed": {
+    "generation": 30,
+    "profiles": {
+      "browser": {
+        "memory_mib": 3072,
+        "cpu_millis": 2000,
+        "ephemeral_mib": 3072
+      },
+      "compiler": {
+        "memory_mib": 1792,
+        "cpu_millis": 4500,
+        "ephemeral_mib": 3072
+      },
+      "general": {
+        "memory_mib": 1792,
+        "cpu_millis": 4750,
+        "ephemeral_mib": 3072
+      },
+      "memory": {
+        "memory_mib": 2816,
+        "cpu_millis": 500,
+        "ephemeral_mib": 3072
+      }
+    },
+    "samples": {
+      "browser": 9,
+      "compiler": 9,
+      "general": 9,
+      "memory": 9
+    },
+    "refused": {
+      "idle": "an idle sample cannot size a worker"
+    },
+    "fits": {
+      "anton-ec2-0396dfd54e94477e5": {
+        "browser": 2,
+        "compiler": 3,
+        "general": 1,
+        "memory": 5
+      },
+      "anton-ec2-0447e2769b1a3084a": {
+        "browser": 0,
+        "compiler": 1,
+        "general": 0,
+        "memory": 1
+      },
+      "anton-ec2-0af3a8fe7769581ef": {
+        "browser": 0,
+        "compiler": 1,
+        "general": 0,
+        "memory": 1
+      },
+      "anton-ec2-0c9b3493a0ef846f4": {
+        "browser": 0,
+        "compiler": 1,
+        "general": 0,
+        "memory": 1
+      },
+      "k8s-master": {
+        "browser": 2,
+        "compiler": 3,
+        "general": 1,
+        "memory": 2
+      },
+      "k8s-worker-1": {
+        "browser": 0,
+        "compiler": 1,
+        "general": 0,
+        "memory": 2
+      },
+      "k8s-worker-2": {
+        "browser": 0,
+        "compiler": 1,
+        "general": 0,
+        "memory": 3
+      },
+      "worker-001": {
+        "browser": 1,
+        "compiler": 1,
+        "general": 1,
+        "memory": 1
+      }
+    },
+    "worker_process_tree_peak_memory": {
+      "browser": 1244.89,
+      "compiler": 225.61,
+      "general": 258.67,
+      "idle": 12.64,
+      "memory": 1091.21
+    },
+    "independent_rerun_matches": true,
+    "accepted": [
+      "promoted"
+    ]
+  }
+}

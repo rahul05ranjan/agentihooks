@@ -1,0 +1,59 @@
+{
+  "case": "T-SV2-PRF-01-C",
+  "state": "passed",
+  "evidence_class": "measured: the workloads ran on a GitHub hosted Ubuntu runner in the Worker resources workflow named in measurements.json and update.json, and node capacity was read from the Anton cluster with kubectl as named in nodes.json; derivation, coexistence and promotion are pure functions over those committed records; no worker Pod ran the workloads and no profile was applied to a deployed Pod policy",
+  "input_sha256": {
+    "measurements.json": "70c4d31a3bfc4365abb5047663ec606fbd5785efa3e644ca0e25596d4cd799ab",
+    "update.json": "49d000237be74dc0c610a9c8ca8f5b61f13ef5677646a47587f7983fa206f27d",
+    "nodes.json": "09216bf5c06d80e03ab661b93e7b020cc8fd5f2f6b833cc25c5a0ac409e237ff",
+    "disclosure.json": "5619b504a31319971f751190ca09241f1e9ac8bef2c9454d660f46662d65041c"
+  },
+  "observed": {
+    "accepted_generation": 30,
+    "candidate_generation": 31,
+    "decisions": {
+      "first": "promoted",
+      "toolchain_update": "requalify",
+      "stale": "stale",
+      "missing_class": "requalify",
+      "replay": "replayed"
+    },
+    "changes": {
+      "material": [
+        [
+          "memory",
+          "peak_rss_mib",
+          1091.21,
+          1603.2
+        ],
+        [
+          "memory",
+          "peak_cores",
+          0.321,
+          0.467
+        ]
+      ],
+      "missing": [],
+      "tools_changed": {
+        "workload:memory": [
+          "1",
+          "2"
+        ]
+      }
+    },
+    "missing": [
+      "browser"
+    ],
+    "accepted_unchanged": true,
+    "candidate_memory_limit": {
+      "memory_mib": 3328,
+      "cpu_millis": 750,
+      "ephemeral_mib": 3072
+    },
+    "accepted_memory_limit": {
+      "memory_mib": 2816,
+      "cpu_millis": 500,
+      "ephemeral_mib": 3072
+    }
+  }
+}
