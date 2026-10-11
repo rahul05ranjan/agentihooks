@@ -98,6 +98,9 @@ Suite `worker-resources`, generation 70. Source: Worker resources run 3814775857
 - The agent CLI's own resident memory is a declared reserve, not a measurement; it needs a live agent run.
 - The idle class is a sleeping Python process standing in for an idle agent CLI.
 - With nine runs per class the p95 column equals the maximum.
-- Descendants that leave the workload's session and process tree are not counted.
+- Descendants that leave the workload's session and process tree are neither counted nor killed.
+- A child that starts and exits between two samples never enters a peak window; CPU seconds still count it.
+- Memory is split between the parent and its children; CPU and process count are reported for the whole tree.
+- A workload change is detected through its declared version, not a fingerprint of its command.
 - The sampler walks the workload folder on every sample; that cost runs outside the measured tree.
 - Coexistence counts whole workers in each node's allocatable capacity minus the requests already scheduled there.

@@ -14,7 +14,7 @@
     "candidate_generation": 72,
     "decisions": {
       "first": "promoted",
-      "toolchain_update": "requalify",
+      "workload_update": "requalify",
       "stale": "stale",
       "missing_class": "requalify",
       "replay": "replayed",
@@ -52,6 +52,7 @@
     "installed_after_requalification": 72,
     "rollback_restored_generation": 70,
     "rollback_matches_prior_file": true,
+    "rollback_kept_displaced_report": true,
     "candidate_memory_limit": {
       "memory_mib": 3328,
       "cpu_millis": 750,

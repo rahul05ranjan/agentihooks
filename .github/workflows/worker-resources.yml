@@ -68,7 +68,9 @@ jobs:
       - name: Refuse to publish a record holding the fake credential
         run: |
           test -s "$EVIDENCE/measurements.json"
-          if grep -rlq "$SV2_FAKE_CREDENTIAL" "$EVIDENCE"; then exit 1; fi
+          found=0
+          grep -rlq "$SV2_FAKE_CREDENTIAL" "$EVIDENCE" || found=$?
+          test "$found" -eq 1
 
       - uses: actions/upload-artifact@v4
         if: always()

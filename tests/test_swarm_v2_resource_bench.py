@@ -402,6 +402,9 @@ def test_cli_requalifies_a_held_report_for_a_named_reviewer_and_rolls_it_back(tm
     assert bench.main(["rollback", "--accepted", str(accepted)]) == 0
     assert capsys.readouterr().out == '{"restored": 1}\n'
     assert json.loads(accepted.read_text())["generation"] == 1
+    assert bench.main(["rollback", "--accepted", str(accepted)]) == 0
+    assert capsys.readouterr().out == '{"restored": 2}\n'
+    accepted.with_name("accepted.json.previous").unlink()
     assert bench.main(["rollback", "--accepted", str(accepted)]) == 1
     assert capsys.readouterr().out == '{"restored": null}\n'
 

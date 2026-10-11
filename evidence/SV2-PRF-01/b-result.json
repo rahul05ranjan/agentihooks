@@ -14,12 +14,34 @@
     "idle_peak_rss_mib": 12.64,
     "exit_code": 2,
     "refusal": "refused: no class was admitted: idle: an idle sample cannot size a worker",
+    "forged_idle_profile": {
+      "decision": "refused",
+      "changes": {
+        "unsized": [
+          "idle"
+        ]
+      }
+    },
+    "forged_exit_code": 1,
     "files_after_refusal": [
       "accepted.json",
+      "forged.json",
       "idle.json",
       "nodes.json"
     ],
     "accepted_unchanged": true,
+    "scanned_for_secret": [
+      "accepted.json",
+      "fixture measurements.json",
+      "fixture nodes.json",
+      "fixture repeat.json",
+      "fixture update.json",
+      "forged.json",
+      "forged_decision",
+      "idle.json",
+      "nodes.json",
+      "refusal"
+    ],
     "fake_secret_in": [],
     "fake_secret_set_in_run": "SV2_FAKE_CREDENTIAL"
   }

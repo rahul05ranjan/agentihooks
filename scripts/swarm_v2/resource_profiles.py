@@ -24,6 +24,7 @@ METRICS = (
 )
 INSTALLS = ("promoted", "requalified")
 COMPARED = ("peak_rss_mib", "peak_cores", "peak_storage_mib", "peak_processes")
+REVIEWER = "requalified_by"
 
 
 @dataclass(frozen=True)
@@ -182,7 +183,7 @@ def compare(accepted: dict, candidate: dict, policy: Policy) -> dict:
 
 
 def _canonical(report: dict) -> str:
-    return json.dumps(report, sort_keys=True)
+    return json.dumps({k: v for k, v in report.items() if k != REVIEWER}, sort_keys=True)
 
 
 def promote(accepted: dict | None, candidate: dict, policy: Policy, requalified_by: str) -> dict:
@@ -190,6 +191,9 @@ def promote(accepted: dict | None, candidate: dict, policy: Policy, requalified_
 
     A material change, a missing class or a tool change holds it until a named reviewer requalifies it.
     """
+    unsized = sorted(set(candidate["profiles"]) - set(CLASSES))
+    if unsized:
+        return {"decision": "refused", "accepted": accepted, "changes": {"unsized": unsized}}
     if accepted is None:
         return {"decision": "promoted", "accepted": candidate, "changes": None}
     if candidate["generation"] < accepted["generation"]:
@@ -200,11 +204,12 @@ def promote(accepted: dict | None, candidate: dict, policy: Policy, requalified_
     changes = compare(accepted, candidate, policy)
     if not (changes["material"] or changes["missing"] or changes["tools_changed"]):
         return {"decision": "promoted", "accepted": candidate, "changes": changes}
-    if requalified_by:
+    reviewer = requalified_by.strip()
+    if reviewer:
         return {
             "decision": "requalified",
-            "accepted": candidate,
-            "changes": {**changes, "requalified_by": requalified_by},
+            "accepted": {**candidate, REVIEWER: reviewer},
+            "changes": {**changes, REVIEWER: reviewer},
         }
     return {"decision": "requalify", "accepted": accepted, "changes": changes}
 
@@ -231,12 +236,14 @@ def accept(path: Path, candidate: dict, policy: Policy, requalified_by: str) -> 
 
 
 def rollback(path: Path) -> int | None:
-    """Restore the accepted report that the last promotion replaced; None when there is none."""
+    """Restore the accepted report that the last promotion replaced, keeping the one it displaces; None when there is none."""
     previous = _previous(path)
     if not previous.exists():
         return None
     restored = json.loads(previous.read_text())
-    previous.replace(path)
+    displaced = json.loads(path.read_text())
+    _install(path, restored)
+    _install(previous, displaced)
     return restored["generation"]
 
 
