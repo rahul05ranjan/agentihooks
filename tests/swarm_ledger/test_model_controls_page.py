@@ -39,6 +39,16 @@ def test_empty_catalog_shows_only_current_value(open_page):
         expect(page.tab.locator(f"#cap-{harness}_model")).to_have_value(current)
 
 
+def test_populated_catalog_does_not_add_an_absent_current_model(open_page):
+    page = model_page(open_page)
+    page.context.route(
+        "**/api/swarm/*/models", lambda route: route.fulfill(json={"claude": CATALOG["claude"][1:], "codex": []})
+    )
+    page.tab.reload()
+    expect(page.tab.locator("#cap-claude_model option")).to_have_count(1)
+    expect(page.tab.locator("#cap-claude_model option")).to_have_attribute("value", "future-claude")
+
+
 def test_apply_sends_changed_models_and_xhigh_in_one_body(open_page):
     page = model_page(open_page)
     page.tab.locator("#cap-claude_model").select_option("future-claude")

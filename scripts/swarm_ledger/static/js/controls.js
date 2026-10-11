@@ -29,7 +29,7 @@ function renderModels(values) {
   for (const harness of ["claude", "codex"]) {
     const key = `${harness}_model`, current = values[key] || "";
     const options = [...(models[harness] || [])];
-    if (current && !options.some((entry) => entry.model === current)) options.unshift({ model: current, label: current });
+    if (current && !options.length) options.unshift({ model: current, label: current });
     const select = $(`cap-${key}`), stamp = JSON.stringify(options);
     if (select.dataset.options !== stamp) {
       select.replaceChildren(...options.map((entry) => h("option", { value: entry.model, text: entry.label || entry.model })));

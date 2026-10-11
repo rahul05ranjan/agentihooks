@@ -355,7 +355,7 @@ def test_a_lane_pin_wins_over_an_opposite_saved_harness(tmp_path, monkeypatch, p
         seen["argv"] = argv
         return SimpleNamespace(returncode=0, stdout=validated(argv, "status=started\nroute_status=routed\n"), stderr="")
 
-    def pick(harness, lane, task, environ, bounds):
+    def pick(harness, lane, task, environ, bounds, default_model):
         seen["classifier_harness"] = harness
         return model_pick.ModelPick("", "high", "classifier", 0.9)
 
