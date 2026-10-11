@@ -6,7 +6,6 @@ from hooks import config
 from hooks.classifier import definitions, runner
 from hooks.classifier.questions import Choice, Score, YesNo
 from hooks.context import profile_chain
-from scripts.swarm.effort_range import EFFORTS
 
 from .test_definitions import definition_home as definition_home
 from .test_definitions import sample, write_definition
@@ -127,12 +126,12 @@ def test_tick_definitions_reproduce_the_call_site_prompts(packaged, name, params
     assert runner.questions_for(definition, params) == questions
 
 
-@pytest.mark.parametrize("harness", sorted(EFFORTS))
-def test_model_pick_asks_between_the_floor_and_the_top_harness_effort(packaged, harness):
-    levels = list(EFFORTS[harness])
-    for floor in levels[:-1]:
-        questions = runner.questions_for(definitions.load("model-pick", environ={}), {"levels": levels, "floor": floor})
-        assert [text.split(":")[0] for text in questions["effort"].levels] == [floor, levels[-1]]
+def test_model_pick_asks_one_choice_between_the_two_band_options(packaged):
+    params = {"difficulty": "L", "rank": "urgent", "lower": "first option", "higher": "second option"}
+    questions = runner.questions_for(definitions.load("model-pick", environ={}), params)
+    assert list(questions) == ["option"]
+    assert questions["option"].options == {"lower": "first option", "higher": "second option"}
+    assert "size is L" in questions["option"].instructions and "rank is urgent" in questions["option"].instructions
 
 
 @pytest.mark.parametrize(

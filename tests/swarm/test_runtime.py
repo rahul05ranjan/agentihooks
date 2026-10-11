@@ -921,36 +921,32 @@ def test_a_master_launches_on_the_frontier_model_at_high_effort_whatever_the_lan
 def _lowest_pick(*args, **kwargs):
     from hooks.classifier import Answer, DecisionResult
 
-    return DecisionResult({"effort": Answer("score", score=0, confidence=0.95)}, "luna")
+    return DecisionResult({"option": Answer("choice", choice="lower", confidence=0.95)}, "luna")
 
 
-@pytest.mark.parametrize("lane", sorted(SEAT_TASKS))
-@pytest.mark.parametrize(
-    "harness,launch",
-    [
-        ("claude", ["--model", "opus", "--effort", "high"]),
-        ("codex", ["-m", "gpt-6.1-sol", "-c", 'model_reasoning_effort="high"']),
-    ],
-)
-def test_a_live_classifier_never_launches_a_seat_below_the_default_model_and_high_effort(
-    tmp_path, monkeypatch, lane, harness, launch
+@pytest.mark.parametrize("lane,effort", [("eng", "medium"), ("ci", "medium"), ("plan", "medium"), ("master", "high")])
+@pytest.mark.parametrize("harness,model", [("claude", "opus"), ("codex", "gpt-6.1-sol")])
+def test_a_live_classifier_never_launches_a_seat_below_the_default_model_and_its_lane_floor(
+    tmp_path, monkeypatch, lane, effort, harness, model
 ):
+    from scripts.init_agent import model_flags
     from scripts.swarm import model_pick
 
     monkeypatch.setattr(model_pick, "decide", _lowest_pick)
-    assert _launched(tmp_path, monkeypatch, lane, SEAT_TASKS[lane], harness=harness) == launch
+    launched = _launched(tmp_path, monkeypatch, lane, SEAT_TASKS[lane], harness=harness)
+    assert launched == model_flags(harness, model, effort)
 
 
 def test_a_swarm_config_model_launches_as_named_with_the_classifier_live(tmp_path, monkeypatch):
     from scripts.swarm import model_pick
 
     monkeypatch.setattr(model_pick, "decide", _lowest_pick)
-    lanes = {"eng": {"agent": "claude", "model": "sonnet", "effort": "auto"}}
+    lanes = {"eng": {"agent": "claude", "model": "fable", "effort": "auto"}}
     assert _launched(tmp_path, monkeypatch, "eng", SEAT_TASKS["eng"], lanes) == [
         "--model",
-        "sonnet",
+        "fable",
         "--effort",
-        "high",
+        "medium",
     ]
 
 
