@@ -123,7 +123,7 @@ def test_every_task_second_of_a_recorded_task_lands_in_exactly_one_named_stage()
         ("ci_run", ""): 3080.0,
         ("intent_fix", ""): 600.0,
         ("merge_queue", ""): 900.0,
-        ("review", ""): 1200.0,
+        ("review", "round 1"): 1200.0,
     }
     assert found["total"] == 13500.0 == sum(seconds_of(found).values())
     assert [row["seconds"] for row in found["stages"]] == sorted(
@@ -210,7 +210,7 @@ def test_time_before_the_window_is_not_counted():
     assert seconds_of(found) == {
         ("intent_fix", ""): 600.0,
         ("merge_queue", ""): 900.0,
-        ("review", ""): 1200.0,
+        ("review", "round 1"): 1200.0,
     }
 
 
@@ -229,7 +229,7 @@ def test_a_run_with_no_stage_rows_queues_for_its_own_queue_time():
         ("build", ""): 3600.0,
         ("ci_queue", ""): 120.0,
         ("ci_run", ""): 1080.0,
-        ("review", ""): 600.0,
+        ("review", "round 1"): 600.0,
     }
 
 
@@ -260,6 +260,85 @@ def test_an_intent_failure_without_a_later_verdict_holds_until_the_merge():
         NOW,
     )
     assert seconds_of(found)[("intent_fix", "")] == 1200.0
+
+
+def test_a_task_merged_before_the_window_adds_nothing():
+    found = stages.report(
+        rows(agent_events=[agent("claim", "t1", at(2))], delivery_events=[delivery("merge", "t1", at(5))]),
+        [TASK],
+        NOW,
+    )
+    assert found["stages"] == [] and found["total"] == 0.0
+
+
+def test_the_merge_queue_starts_at_the_first_tick_that_saw_the_pull_request_queued():
+    found = stages.report(
+        rows(
+            agent_events=[agent("claim", "t1", at(6)), agent("spawn", "t1", at(6), "e1", "claude")],
+            ledger_events=[ledger("joined", at(6), by="e1")],
+            ci_runs=[run(1, "b1", at(6, 30), at(7), "success")],
+            delivery_events=[
+                delivery("merge_queued", "t1", at(7)),
+                delivery("merge_queued", "t1", at(8)),
+                delivery("merge_queued", "t1", at(9)),
+                delivery("merge", "t1", at(9, 30)),
+            ],
+        ),
+        [TASK],
+        NOW,
+    )
+    assert seconds_of(found)[("merge_queue", "")] == 9000.0
+
+
+def test_ci_after_the_agent_left_stays_ci_and_every_over_budget_job_gets_its_overrun():
+    found = stages.report(
+        rows(
+            agent_events=[
+                agent("claim", "t1", at(6)),
+                agent("spawn", "t1", at(6), "e1", "claude"),
+                agent("retire", "t1", at(7), "e1", "claude"),
+            ],
+            ledger_events=[ledger("joined", at(6), by="e1")],
+            ci_runs=[run(1, "b1", at(7, 30), at(8, 30), "success", queue_s=600.0)],
+            ci_stages=[
+                stage(1, "unit", 1080.0, 300, 0.0, "anton-k3s"),
+                stage(1, "lint", 290.0, 240, 0.0, "anton-k3s"),
+                stage(1, "sonar", 100.0, 240, 0.0, "anton-k3s"),
+            ],
+            delivery_events=[delivery("merge", "t1", at(9))],
+        ),
+        [TASK],
+        NOW,
+    )
+    assert seconds_of(found) == {
+        ("build", ""): 3600.0,
+        ("claim_wait", ""): 1800.0,
+        ("ci_queue", ""): 600.0,
+        ("ci_overrun", "unit"): 780.0,
+        ("ci_overrun", "lint"): 50.0,
+        ("ci_run", ""): 2170.0,
+        ("review", "round 1"): 1800.0,
+    }
+    assert found["total"] == 3 * 3600.0
+
+
+def test_each_submitted_review_starts_the_next_review_round():
+    found = stages.report(
+        rows(
+            agent_events=[agent("claim", "t1", at(8)), agent("spawn", "t1", at(8), "e1", "claude")],
+            ledger_events=[ledger("joined", at(8), by="e1")],
+            ci_runs=[run(1, "b1", at(8, 30), at(9), "success")],
+            delivery_events=[delivery("review_round", "t1", at(9, 20)), delivery("merge", "t1", at(9, 45))],
+        ),
+        [TASK],
+        NOW,
+    )
+    assert seconds_of(found)[("review", "round 1")] == 1200.0
+    assert seconds_of(found)[("review", "round 2")] == 1500.0
+    assert stages.line(found, NOW) == (
+        "top stages in the last 4 hours: build 0.5 task hours, ci run 0.5 task hours, review in round 2 0.4 task"
+        " hours; 1.8 task hours in all, measured 0 minutes ago"
+    )
 
 
 def test_record_on_an_empty_outbox_measures_nothing(tmp_path, store):

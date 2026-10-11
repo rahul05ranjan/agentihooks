@@ -496,6 +496,12 @@ def test_failed_launches_become_launch_failed_events_with_their_harness():
     assert_node(row)
 
 
+def test_a_failed_launch_keeps_its_agent_name_when_no_life_was_recorded():
+    launch = {"agent": "gone", "task": "t", "at": NOW, "state": "failed", "error": "init-agent exited 1"}
+    (row,) = metrics_swarm.launch_rows(SLUG, doc(), [launch], [])
+    assert (row["agent"], row["harness"]) == ("gone", "")
+
+
 def test_record_pass_exports_queue_and_launch_rows(tmp_path, monkeypatch):
     import fakeredis
 

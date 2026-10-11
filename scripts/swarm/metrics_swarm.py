@@ -214,7 +214,7 @@ def launch_rows(slug: str, doc: dict, launches: list, agents: list) -> list[dict
             _event(
                 slug,
                 _task(doc, source["task"]),
-                _owner(agents, source["task"], source["at"], source["agent"]),
+                {**_owner(agents, source["task"], source["at"], source["agent"]), "name": source["agent"]},
                 source["at"],
                 "launch_failed",
                 [source["agent"], source["at"]],

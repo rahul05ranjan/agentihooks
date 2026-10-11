@@ -18,7 +18,7 @@ DONE = "task done"
 JOINED = "joined"
 OVERLAYS = ("merge_queue", "intent_fix", "launch_failure", "launch", "claim_wait", "ci_overrun", "ci_queue")
 INTENT = ("intent_failed", "intent_passed")
-SPOKEN = {"ci_overrun": "in"}
+SPOKEN = {"ci_overrun": "in", "review": "in"}
 TABLE = metrics_outbox.Table(
     "bottleneck_stages",
     (("stage", "String"), ("label", "String"), ("seconds", "Float64"), ("window_s", "Float64")),
@@ -99,9 +99,12 @@ def _ci(runs: list, stage_rows: list, pushed: float, green: float) -> list[Span]
         slowest = max(mine, key=lambda row: (row["pickup_s"], row["stage"]), default={})
         queued = (run["queue_s"] + slowest.get("pickup_s", 0.0)) * 1000
         spans.append(Span("ci_queue", created, min(ended, created + queued), slowest.get("runner", "")))
-        worst = max(mine, key=lambda row: (_over(row), row["stage"]), default={})
-        if worst and _over(worst) > 0:
-            spans.append(Span("ci_overrun", max(created, ended - _over(worst) * 1000), ended, worst["stage"]))
+        cursor = ended
+        for row in sorted(mine, key=lambda row: (-_over(row), row["stage"])):
+            if _over(row) <= 0 or cursor <= created:
+                break
+            spans.append(Span("ci_overrun", max(created, cursor - _over(row) * 1000), cursor, row["stage"]))
+            cursor -= _over(row) * 1000
     return [Span(span.stage, max(span.start, pushed), min(span.end, green), span.label) for span in spans]
 
 
@@ -121,7 +124,19 @@ def _reviews(task_id: str, rows: dict, end: float) -> list[Span]:
         if event["kind"] == "intent_failed"
     ]
     queued = [event["ts_ms"] for event in mine if event["kind"] == "merge_queued"]
-    return spans + ([Span("merge_queue", queued[-1], end)] if queued else [])
+    return spans + ([Span("merge_queue", queued[0], end)] if queued else [])
+
+
+def _rounds(task_id: str, rows: dict, green: float, end: float) -> list[Span]:
+    marks = sorted(
+        event["ts_ms"]
+        for event in rows["delivery_events"]
+        if event["task"] == task_id and event["kind"] == "review_round" and green < event["ts_ms"] < end
+    )
+    edges = [green, *marks, end]
+    return [
+        Span("review", start, stop, f"round {index}") for index, (start, stop) in enumerate(zip(edges, edges[1:]), 1)
+    ]
 
 
 def _claimed(task: dict, rows: dict, now_ms: int, live: bool) -> Timeline:
@@ -148,12 +163,12 @@ def _claimed(task: dict, rows: dict, now_ms: int, live: bool) -> Timeline:
         Span("claim_wait", start, claimed),
         Span("build", claimed, pushed),
         Span("ci_run", pushed, green),
-        Span("review", green, end),
+        *_rounds(task_id, rows, green, end),
     )
     overlays = (
         *_reviews(task_id, rows, end),
         *(launch for _, launch in lives),
-        *_gaps([life for life, _ in lives], claimed, end),
+        *_gaps([life for life, _ in lives], claimed, pushed),
         *_ci(runs, rows["ci_stages"], pushed, green),
     )
     return Timeline(start, end, base, overlays)
@@ -209,6 +224,8 @@ def _stage_at(timeline: Timeline, held: list[Span], at: float) -> tuple[str, str
 
 def attribute(timeline: Timeline, held: list[Span], window: bottleneck.Window) -> dict:
     low, high = max(timeline.start, window.start), min(timeline.end, window.end)
+    if high <= low:
+        return {}
     spans = [*timeline.base, *timeline.overlays, *held]
     points = sorted({low, high, *(edge for span in spans for edge in (span.start, span.end) if low < edge < high)})
     seconds = {}
