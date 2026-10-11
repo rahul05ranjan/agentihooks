@@ -1,6 +1,7 @@
 import gc
 import os
 import sys
+import time
 import warnings
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,19 @@ pytestmark = pytest.mark.unit
 WORKLOADS = Path(__file__).parent / "performance" / "swarm_v2" / "workloads"
 COMM = "w (x) y"
 PGRP = 999
+
+
+def killed(pid: int) -> bool:
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+        except (FileNotFoundError, ProcessLookupError):
+            return True
+        if state == "Z":
+            return True
+        time.sleep(0.05)
+    return False
 
 
 def proc_entry(proc: Path, pid: int, ppid: int, session: int, ticks=(0, 0), pages=0, pss_kb=None):
@@ -213,9 +227,7 @@ def test_measure_kills_the_whole_group_on_timeout(tmp_path):
     result = sampling.measure([sys.executable, "-c", script], tmp_path, env, 0.05, 1.0)
     assert result["timed_out"] and result["exit_code"] == -9
     assert 1.0 <= result["wall_seconds"] < 10
-    child = int(marker.read_text())
-    with pytest.raises(ProcessLookupError):
-        os.kill(child, 0)
+    assert killed(int(marker.read_text()))
 
 
 def test_measure_kills_stragglers_left_by_a_finished_command(tmp_path):
@@ -223,5 +235,4 @@ def test_measure_kills_stragglers_left_by_a_finished_command(tmp_path):
     script = f"import subprocess; p = subprocess.Popen(['sleep', '60']); open({str(marker)!r}, 'w').write(str(p.pid))"
     result = sampling.measure([sys.executable, "-c", script], tmp_path, {"PATH": os.environ["PATH"]}, 0.05, 30)
     assert result["exit_code"] == 0 and not result["timed_out"]
-    with pytest.raises(ProcessLookupError):
-        os.kill(int(marker.read_text()), 0)
+    assert killed(int(marker.read_text()))
