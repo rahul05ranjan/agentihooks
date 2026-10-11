@@ -29,7 +29,7 @@ class FakeLedger:
             "overview": "Project intent",
             "tasks": self.tasks(slug),
             "phases": getattr(self, "phases", []),
-            "_meta": {"rev": len(log), "events": log},
+            "_meta": {"rev": len(log), "events": log, "stamps": getattr(self, "stamps", {})},
             "followups": [],
         }
 
@@ -1650,6 +1650,7 @@ def test_an_urgent_overlapping_task_is_claimed_ahead_of_lower_ranked_clear_work(
     tick("sw", store, ledger, runtime, now_ms=1_000)
     ledger.rows["t2"] = {**ledger.rows["t1"], "id": "t2", "state": "open", "claimed_by": "", "rank": "urgent"}
     ledger.rows["t3"] = {**ledger.rows["t2"], "id": "t3", "rank": "low", "territory": ["docs"]}
+    ledger.stamps = {f"tasks/{t}/rank": {"by": "operator"} for t in ("t2", "t3")}
     store.update("sw", max_eng=2)
     tick("sw", store, ledger, runtime, now_ms=2_000)
     assert spawned_ids(runtime) == ["t1", "t2"]
@@ -1679,7 +1680,7 @@ def test_claims_follow_rank_then_the_small_fast_clear_task_then_critical_path_de
     ledger = FakeLedger(
         [
             {"id": "shallow", "phase": "p1"},
-            {"id": "deep", "rank": "normal", "phase": "p2"},
+            {"id": "deep", "title": "deep", "rank": "normal", "phase": "p2"},
             {"id": "w1", "depends_on": ["deep"], "rank": "low", "phase": "p2"},
             {"id": "w2", "depends_on": ["w1"], "rank": "low", "phase": "p2"},
             {"id": "small", "difficulty": "S", "phase": "p3"},

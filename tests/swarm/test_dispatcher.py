@@ -50,6 +50,8 @@ class Ledger:
         assert slug == SLUG
         if f"comment:{task_id}" in self.broken:
             raise SwarmError(f"ledger {slug}: server not answering")
+        if f"crash:{task_id}" in self.broken:
+            raise RuntimeError("boom")
         if f"comment:{task_id}" in self.refused:
             raise LedgerRefused(f"ledger {slug} refused")
         self.comments.append((task_id, text, by))
@@ -357,12 +359,34 @@ def test_the_queue_head_takes_the_seats_quota_leaves_each_lane(store, home, ship
     assert json.loads(store.redis.get(store.key(SLUG, "dispatch-head"))) == {"eng": ["a"], "ci": ["k"], "plan": []}
 
 
+def test_a_lane_with_no_seats_keeps_its_head_and_writes_nothing(store, home, shipped):
+    store.update(SLUG, autonomy="delegate", max_eng=2)
+    found = doc(ladder())
+    dispatcher.rank_pass(SLUG, store.config(SLUG), store, Ledger(), found, NOW)
+    store.redis.set(store.key(SLUG, "quota-capacity"), json.dumps({"effective": {"eng": 0, "ci": 0, "plan": 0}}))
+    ledger = Ledger()
+    assert dispatcher.rank_pass(SLUG, store.config(SLUG), store, ledger, found, NOW + 60_000) == []
+    assert ledger.comments == []
+    assert json.loads(store.redis.get(store.key(SLUG, "dispatch-head")))["eng"] == ["a", "b"]
+
+
 def test_a_task_gone_from_the_ledger_leaves_the_head_without_a_comment(store, home, shipped):
     store.update(SLUG, autonomy="delegate", max_eng=1)
     store.redis.set(store.key(SLUG, "dispatch-head"), json.dumps({"eng": ["gone"]}))
     ledger = Ledger()
     dispatcher.rank_pass(SLUG, store.config(SLUG), store, ledger, doc([task("a")]), NOW)
     assert ledger.comments == [entered("a", leads("0 open tasks", "0 open tasks"))]
+
+
+def test_a_step_that_raises_saves_only_the_head_changes_that_ran(store, home, shipped):
+    store.update(SLUG, autonomy="delegate", max_eng=2)
+    ledger, found = Ledger(broken={"crash:b"}), doc(ladder())
+    with pytest.raises(RuntimeError):
+        dispatcher.rank_pass(SLUG, store.config(SLUG), store, ledger, found, NOW)
+    assert json.loads(store.redis.get(store.key(SLUG, "dispatch-head")))["eng"] == ["a"]
+    again = Ledger()
+    dispatcher.rank_pass(SLUG, store.config(SLUG), store, again, found, NOW + 60_000)
+    assert again.comments == [entered("b", leads("1 open task", "2 open tasks"))]
 
 
 def test_one_seat_names_the_single_task_that_outranked_the_one_leaving(store, home, shipped):

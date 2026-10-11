@@ -136,8 +136,13 @@ def rank_pass(slug, config, store, ledger, doc, now_ms):
     graph, fix = hierarchy.project(doc)[0], freeze.fix_phase(config)
     claimable = {task_id for task_id, t in known.items() if tick.ready(t, known, doc, graph, fix)}
     if config.autonomy in APPLIES:
-        heads = _heads(store, slug, config, [t for t in queue(doc, named) if t in claimable], known)
-        steps = _head_steps(slug, ledger, doc, _saved_heads(store, slug), heads, claimable)
+        before = _saved_heads(store, slug)
+        heads = _heads(store, slug, config, [t for t in queue(doc, named) if t in claimable], known, before)
+        landed = {
+            lane: [t for t in before.get(lane, []) if t in head or known.get(t, {}).get("state") == "open"]
+            for lane, head in heads.items()
+        }
+        steps = _head_steps(slug, ledger, doc, before, heads, claimable, landed)
     else:
         scores, fixed = leverage(doc), _fixed(doc)
         lined = [t for t in ordered(doc, named, scores) if t in claimable and scores[t]]
@@ -146,7 +151,7 @@ def rank_pass(slug, config, store, ledger, doc, now_ms):
             (known[t], _work(scores[t])) for t in top if known[t].get("rank") not in WINDOW[1:] and t not in fixed
         ]
         mail = Mail(InboxStore(store.redis), store, slug)
-        steps, heads = [partial(_propose, slug, ledger, mail, *row) for row in raises], None
+        steps, landed = [partial(_propose, slug, ledger, mail, *row) for row in raises], None
     done = []
     try:
         for step in steps:
@@ -154,14 +159,17 @@ def rank_pass(slug, config, store, ledger, doc, now_ms):
                 done.append(action)
     finally:
         errors = log(slug, done, now_ms)
-        if heads is not None:
-            store.redis.set(store.key(slug, HEAD), json.dumps(heads))
+        if landed is not None:
+            store.redis.set(store.key(slug, HEAD), json.dumps(landed))
     return [action.text for action in done] + errors
 
 
-def _heads(store, slug, config, lined, known):
+def _heads(store, slug, config, lined, known, before):
     seats = capacity.caps(capacity.read(store, slug), config)
-    return {lane: [t for t in lined if known[t].get("lane") == lane][:cap] for lane, cap in seats.items()}
+    return {
+        lane: [t for t in lined if known[t].get("lane") == lane][:cap] if cap else before.get(lane, [])
+        for lane, cap in seats.items()
+    }
 
 
 def _saved_heads(store, slug):
@@ -169,19 +177,19 @@ def _saved_heads(store, slug):
     return json.loads(saved) if saved else {}
 
 
-def _head_steps(slug, ledger, doc, before, heads, claimable):
+def _head_steps(slug, ledger, doc, before, heads, claimable, landed):
     known, depth, scores, fixed = {t["id"]: t for t in doc["tasks"]}, chains(doc), leverage(doc), _fixed(doc)
     steps = []
     for lane, head in heads.items():
         earlier = before.get(lane, [])
         why = partial(_left_why, claimable, len(head))
         steps += [
-            partial(_head, slug, ledger, lane, known[t], LEAVE, why(t))
+            partial(_head, slug, ledger, lane, known[t], LEAVE, why(t), landed)
             for t in earlier
             if t not in head and known.get(t, {}).get("state") == "open"
         ]
         steps += [
-            partial(_head, slug, ledger, lane, known[t], ENTER, _entered_why(known[t], fixed, depth, scores))
+            partial(_head, slug, ledger, lane, known[t], ENTER, _entered_why(known[t], fixed, depth, scores), landed)
             for t in head
             if t not in earlier
         ]
@@ -199,10 +207,15 @@ def _left_why(claimable, seats, task_id):
     return OUTRANKED.format(ahead=ahead) if task_id in claimable else UNREADY
 
 
-def _head(slug, ledger, lane, task, kind, why):
+def _head(slug, ledger, lane, task, kind, why, landed):
     template, moved = kind
     text = f"{moved.format(task['id'])} the {lane} claim queue: {why}"
-    return Action(QUEUE, "apply", text + _comment(slug, ledger, task, template.format(lane=lane, why=why)), task)
+    action = Action(QUEUE, "apply", text + _comment(slug, ledger, task, template.format(lane=lane, why=why)), task)
+    if kind is ENTER:
+        landed[lane].append(task["id"])
+    else:
+        landed[lane].remove(task["id"])
+    return action
 
 
 def _comment(slug, ledger, task, text):
