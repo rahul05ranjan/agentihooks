@@ -189,6 +189,7 @@ def test_rows_run_header_alert_capacity_quota_overlays_agents_health_handoffs():
     assert 'id="command-log"' not in box
     assert '<details class="fold sw-fold" id="overlays-fold" open>' in box
     assert '<details class="fold sw-fold" id="quota-fold" open>' in box
+    assert '<details class="fold sw-fold" id="recovery-fold" open>' in box
     for gone in (
         "crew",
         "needs-you",
