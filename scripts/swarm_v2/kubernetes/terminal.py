@@ -1,11 +1,11 @@
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import serialization
 
-from scripts.swarm.store import RedisStore
+from scripts.swarm.store import AgentRecord, RedisStore
 from scripts.swarm_v2.auth_context import Registration
 from scripts.swarm_v2.herdr import endpoints
 from scripts.swarm_v2.herdr.attach import Terminal
@@ -19,8 +19,10 @@ from scripts.swarm_v2.herdr.endpoints import (
     grant_scope,
     operator_scope,
 )
+from scripts.swarm_v2.herdr.upkeep import Attempt
 from scripts.swarm_v2.kubernetes.client import AlreadyExists, ApiRefused, PodApi
 from scripts.swarm_v2.kubernetes.spec import AdmittedLaunch, PodTemplate, Rendered, canonical_digest
+from scripts.swarm_v2.kubernetes.watch import BACKEND
 from scripts.swarm_v2.runtime.commands import Principal
 
 HOST_KEYS = "terminal-host-keys"
@@ -72,6 +74,16 @@ class HostKeys:
             raise EndpointRefused("host_key_unrecorded", f"no host key was recorded at launch for {execution_id}")
         entry = json.loads(raw)
         return Launched(execution_id, entry["generation"], entry["host_public"])
+
+    def attempts(self, swarm: str, occupants: Iterable[AgentRecord]) -> list[Attempt]:
+        recorded = self.store.redis.hgetall(self.store.key(swarm, HOST_KEYS))
+        found = []
+        for agent in occupants:
+            entry = json.loads(recorded.get(agent.execution_id) or "{}")
+            if agent.runtime_backend == BACKEND and entry.get("generation") == agent.generation:
+                scope = Scope("controller", swarm, agent.execution_id, agent.generation)
+                found.append(Attempt(scope, entry["host_public"]))
+        return found
 
 
 class TerminalObjects:
