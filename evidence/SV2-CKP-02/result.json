@@ -1,0 +1,68 @@
+{
+  "package": "SV2-CKP-02",
+  "dependency": [
+    "SV2-CKP-01"
+  ],
+  "dependents": [
+    "SV2-CKP-03"
+  ],
+  "integration_gate": "G8",
+  "issue": "https://github.com/the-cloud-clockwork/agentihooks/issues/2590",
+  "tested_commit": "b37a21d5596ba840bc93b5774c6e8eb36939cbcd",
+  "status": "mocked-acceptance-qualified",
+  "package_complete": false,
+  "evidence_class": "mocked: local git repositories, a local durable directory backend behind a granted artifact store and fixture launch registrations; no object store, worker Pod or harness was used. Live G8 qualification belongs to the integration package.",
+  "interfaces": [
+    "git_capture.capture(worktree, remote_ref, policy) records the merge base with a ref the remote holds, the head, the branch, and the materials staged_patch (index against HEAD), unstaged_patch (work tree against index), untracked_archive and, when commits exist past the base, source_bundle (base..HEAD as a git bundle)",
+    "Policy names the untracked exclusion rules (ignored files, cache folders, compiled files, credential files by name, secret content, links and other non regular files, a per file and a total size limit); the manifest exclusions carry the rules and per kind counts, never a file name or value",
+    "SourceCapture.fields gives the manifest fields (base_commit, head_commit, branch_name, branch_state, inventory, artifact_hashes, exclusions); merged adds them to a checkpoint manifest that already carries its transcript material",
+    "git_capture.checkpoint stores every material in the granted ArtifactStore before Validator.commit stores the manifest, so an interruption leaves no manifest and the earlier checkpoint current",
+    "git_capture.restore verifies the checkpoint through the reader's Validator, reads every material from the granted store, and refuses a dirty target, a target without the base, and an archive member that is absolute, climbs out, enters .git or is not a regular file before it changes the target; then it fetches the bundle, checks out the head on the recorded branch, applies the staged patch to index and work tree and the unstaged patch to the work tree, and writes the archive with its executable bits",
+    "SourceCapture.metrics exposes checkpoint_source_bytes keyed by material role"
+  ],
+  "supported_versions": {
+    "checkpoint_contract": "2.2, the typed minor from SV2-CKP-01; source checkpoints use branch_state pushed or bundled",
+    "git": "CI ubuntu-latest git; the capture forces its diff format so repository diff settings do not change the patches"
+  },
+  "authority": "Capture writes only through the ArtifactStore granted to the attempt; restore reads only through the reader's granted store, and only a checkpoint Validator.verify calls authoritative is restored.",
+  "states": {
+    "observed": "Materials are the bytes git produced in the worktree at capture time",
+    "accepted": "Each material is stored and read back verified before the manifest is written",
+    "committed": "Validator.commit stores the manifest only after every inventoried object reads back verified",
+    "externally_verified": "restore re-verifies the manifest and every material by content hash before it changes the target"
+  },
+  "measurements": {
+    "checkpoint_source_bytes": {
+      "a": {
+        "source_bundle": 437,
+        "staged_patch": 401,
+        "unstaged_patch": 400,
+        "untracked_archive": 10240
+      },
+      "b": {
+        "source_bundle": 437,
+        "staged_patch": 401,
+        "unstaged_patch": 400,
+        "untracked_archive": 10240
+      },
+      "c": {
+        "source_bundle": 437,
+        "staged_patch": 416,
+        "unstaged_patch": 400,
+        "untracked_archive": 10240
+      }
+    }
+  },
+  "validation": {
+    "red": "Proofs run 38142838894 on the tests only commit 85650947 failed collecting the git capture tests with ImportError for git_capture",
+    "green": "Proofs run 38142870861 on b37a21d5 passed 24 unit tests; the three cases reported passed and their records were lifted from that run"
+  },
+  "limitations": [
+    "A detached HEAD is refused; a worker must capture on a branch",
+    "Tracked changes are captured as they are; only untracked files are screened for credentials and secret content",
+    "Submodule contents and git configuration are not captured",
+    "The legacy swarm snapshot still records worktree paths only; no worker path calls capture yet",
+    "Restore needs a clean clone that already holds the base commit"
+  ],
+  "rollback": "Retain the previous complete source checkpoint: an interrupted capture writes no manifest (case C) and its stored materials stay in the store for diagnostics. Disabling source capture means not calling git_capture; SV2-CKP-01 readers are unchanged."
+}
