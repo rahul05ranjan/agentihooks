@@ -18,9 +18,14 @@ METRICS = (
     "peak_parent_rss_mib",
     "peak_children_rss_mib",
     "peak_cores",
+    "peak_parent_cores",
+    "peak_children_cores",
     "cpu_seconds",
+    "parent_cpu_seconds",
+    "children_cpu_seconds",
     "peak_storage_mib",
     "peak_processes",
+    "peak_children_processes",
 )
 INSTALLS = ("promoted", "requalified")
 COMPARED = ("peak_rss_mib", "peak_cores", "peak_storage_mib", "peak_processes")

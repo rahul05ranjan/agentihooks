@@ -115,26 +115,43 @@ def test_snapshot_sums_the_tree_and_keeps_the_root_apart(proc):
     proc_entry(proc, 11, 10, 10, ticks=(1, 2), pages=3)
     snap = sampling.snapshot(proc, 10, at=2.5)
     pages = sampling.PAGE
-    assert snap == sampling.Snapshot(2.5, 2, 5 * pages, 4 * 1024 + 3 * pages, 2 * pages, {10: 10, 11: 3})
-    assert sampling.snapshot(proc, 99, at=1.0) == sampling.Snapshot(1.0, 0, 0, 0, 0, {})
+    assert snap == sampling.Snapshot(2.5, 2, 5 * pages, 4 * 1024 + 3 * pages, 2 * pages, {10: 10, 11: 3}, 10)
+    assert sampling.snapshot(proc, 99, at=1.0) == sampling.Snapshot(1.0, 0, 0, 0, 0, {}, 99)
 
 
 def test_peaks_keep_maxima_and_count_cores_of_children_that_exited_inside_a_window():
     t = sampling.TICKS
     peaks = sampling.Peaks()
-    peaks.add(sampling.Snapshot(0.0, 2, 100, 80, 60, {1: 10, 2: 10}), 5)
-    peaks.add(sampling.Snapshot(0.5, 3, 300, 90, 50, {1: 10 + t, 2: 10, 3: t // 2}), 9)
-    assert peaks.cores == 0.0
-    peaks.add(sampling.Snapshot(1.0, 2, 200, 85, 70, {1: 10 + 2 * t, 2: 10 + t}), 7)
+    peaks.add(sampling.Snapshot(0.0, 2, 100, 80, 60, {1: 10, 2: 10}, 1), 5)
+    peaks.add(sampling.Snapshot(0.5, 3, 300, 90, 50, {1: 10 + t, 2: 10, 3: t // 2}, 1), 9)
+    assert (peaks.cores, peaks.parent_cores, peaks.children_cores) == (0.0, 0.0, 0.0)
+    peaks.add(sampling.Snapshot(1.0, 2, 200, 85, 70, {1: 10 + 2 * t, 2: 10 + t}, 1), 7)
     assert peaks.cores == pytest.approx(3.5)
-    peaks.add(sampling.Snapshot(2.5, 1, 50, 40, 50, {1: 10 + 3 * t}), 1)
+    assert peaks.parent_cores == pytest.approx(2.0)
+    assert peaks.children_cores == pytest.approx(1.5)
+    peaks.add(sampling.Snapshot(2.5, 1, 50, 40, 50, {1: 10 + 3 * t}, 1), 1)
     assert (peaks.processes, peaks.rss_bytes, peaks.pss_bytes, peaks.storage_bytes) == (3, 300, 90, 9)
+    assert peaks.children_processes == 2
     assert (peaks.parent_rss_bytes, peaks.children_rss_bytes) == (70, 250)
     assert peaks.cores == pytest.approx(3.5)
+    assert peaks.parent_cores == pytest.approx(2.0)
+    assert peaks.children_cores == pytest.approx(1.5)
     assert peaks.samples == 4
+    assert peaks.root == 1
     assert peaks.ticks == {1: 10 + 3 * t, 2: 10 + t, 3: t // 2}
     peaks.store(12)
     assert (peaks.storage_bytes, peaks.samples) == (12, 4)
+
+
+def test_peaks_split_window_cores_between_the_root_and_its_children():
+    t = sampling.TICKS
+    peaks = sampling.Peaks()
+    peaks.add(sampling.Snapshot(0.0, 2, 1, 1, 1, {7: t, 8: 0}, 7), 0)
+    peaks.add(sampling.Snapshot(2.0, 2, 1, 1, 1, {7: 2 * t, 8: 6 * t}, 7), 0)
+    assert peaks.cores == pytest.approx(3.5)
+    assert peaks.parent_cores == pytest.approx(0.5)
+    assert peaks.children_cores == pytest.approx(3.0)
+    assert peaks.anchor == (2.0, 8 * t, 2 * t)
 
 
 def test_peaks_ignore_a_snapshot_inside_the_window():
@@ -148,13 +165,17 @@ def test_summary_rounds_every_figure_and_takes_the_larger_cpu_count():
     mib = sampling.MIB
     peaks = sampling.Peaks(
         processes=3,
+        children_processes=2,
         rss_bytes=5 * mib + 12345,
         pss_bytes=3 * mib + 6789,
         parent_rss_bytes=mib + 7000,
         children_rss_bytes=4 * mib + 9000,
         storage_bytes=2 * mib + 600000,
         cores=1.23456,
+        parent_cores=0.43216,
+        children_cores=0.98765,
         samples=7,
+        root=1,
         ticks={1: sampling.TICKS, 2: sampling.TICKS},
     )
     usage = SimpleNamespace(ru_utime=2.25, ru_stime=0.50049)
@@ -164,8 +185,13 @@ def test_summary_rounds_every_figure_and_takes_the_larger_cpu_count():
         "peak_parent_rss_mib": 1.01,
         "peak_children_rss_mib": 4.01,
         "peak_processes": 3,
+        "peak_children_processes": 2,
         "peak_cores": 1.235,
+        "peak_parent_cores": 0.432,
+        "peak_children_cores": 0.988,
         "cpu_seconds": 2.75,
+        "parent_cpu_seconds": 1.0,
+        "children_cpu_seconds": 1.75,
         "wall_seconds": 3.142,
         "peak_storage_mib": 2.57,
         "samples": 7,
@@ -175,6 +201,8 @@ def test_summary_rounds_every_figure_and_takes_the_larger_cpu_count():
     lean = SimpleNamespace(ru_utime=0.25, ru_stime=0.5)
     floored = sampling.summary(peaks, lean, 0.8, 0, True)
     assert (floored["cpu_seconds"], floored["peak_cores"]) == (2.0, 2.5)
+    assert (floored["parent_cpu_seconds"], floored["children_cpu_seconds"]) == (1.0, 1.0)
+    assert (floored["peak_parent_cores"], floored["peak_children_cores"]) == (1.25, 1.25)
 
 
 def test_directory_bytes_counts_regular_files_and_not_link_targets(tmp_path):
@@ -205,7 +233,13 @@ def test_measure_reports_the_whole_tree_of_a_live_workload(tmp_path, capfd):
     assert 96 <= result["peak_children_rss_mib"] < result["peak_rss_mib"]
     assert 0 < result["peak_parent_rss_mib"] < 96
     assert 0 < result["cpu_seconds"] < 30
+    assert result["parent_cpu_seconds"] + result["children_cpu_seconds"] == pytest.approx(
+        result["cpu_seconds"], abs=0.002
+    )
+    assert 0 < result["children_cpu_seconds"]
+    assert result["peak_children_processes"] == result["peak_processes"] - 1
     assert 0 < result["peak_cores"] <= os.cpu_count() * 2
+    assert 0 < result["peak_children_cores"] <= result["peak_cores"]
     assert result["samples"] >= 5
     assert 1.0 <= result["wall_seconds"] < 30
 

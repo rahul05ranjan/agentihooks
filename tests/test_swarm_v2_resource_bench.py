@@ -373,7 +373,7 @@ def test_cli_promote_prints_the_decision_and_keeps_the_accepted_file(tmp_path, c
 
 def report_with(generation, peak):
     measured = {metric: {"max": peak} for metric in bench.profiles.COMPARED}
-    return {"generation": generation, "tools": {}, "profiles": {"m": {"measured": measured}}}
+    return {"generation": generation, "tools": {}, "profiles": {"memory": {"measured": measured}}}
 
 
 def test_cli_promote_holds_a_material_change_with_the_default_tolerance(tmp_path, capsys):
