@@ -31,3 +31,12 @@ def observe(slug: str, kind: str, evidence: list[str], now_ms: int) -> None:
 
 def open_records(slug: str) -> list[dict]:
     return [record for record in read(slug).values() if record["ended_at"] is None]
+
+
+def providers(store, slug: str, runtime, now_ms: int) -> None:
+    observed = [(agent, runtime.observe(agent)) for agent in store.agents(slug) if agent.state != "finished"]
+    evidence = [
+        f"{agent.name} ({agent.harness}): {pane.provider_error}" for agent, pane in observed if pane.provider_error
+    ]
+    if evidence or (observed and all(pane.provider_checked for _, pane in observed)):
+        observe(slug, "provider", evidence, now_ms)

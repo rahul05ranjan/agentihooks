@@ -28,7 +28,7 @@ def test_provider_errors_are_matched_only_for_their_harness(harness, text, match
 def test_runtime_carries_provider_evidence_and_closes_after_a_successful_pane_read(tmp_path, monkeypatch):
     monkeypatch.setattr(outage, "HOME", tmp_path)
     store = RedisStore(fakeredis.FakeRedis(decode_responses=True))
-    store.create(SwarmConfig("sw", "/repo"))
+    store.create(SwarmConfig("sw", "/repo", 1, 1))
     agent = AgentRecord("worker", "eng", "t1", pane_id="p1", harness="claude")
     store.put_agent("sw", agent)
     text = "API Error: 503 Service Unavailable"
@@ -52,7 +52,7 @@ def test_runtime_carries_provider_evidence_and_closes_after_a_successful_pane_re
 def test_an_unreadable_or_remote_pane_cannot_clear_a_provider_outage(tmp_path, monkeypatch):
     monkeypatch.setattr(outage, "HOME", tmp_path)
     store = RedisStore(fakeredis.FakeRedis(decode_responses=True))
-    store.create(SwarmConfig("sw", "/repo"))
+    store.create(SwarmConfig("sw", "/repo", 1, 1))
     agent = AgentRecord("worker", "eng", "t1", pane_id="p1")
     store.put_agent("sw", agent)
     outage.observe("sw", "provider", ["worker: connection error"], 1000)
