@@ -139,17 +139,6 @@ def _registered_conversations(found):
     return ids
 
 
-def _transfer(task):
-    saved = (task.get("handoff_envelope") or {}).get("launch")
-    if not task.get("handoff") and not saved:
-        return {}
-    if not saved or not all(saved.get(key) for key in ("profile", "harness", "model", "effort")):
-        raise SpawnError("unsupported handoff: original profile and run options are missing", "unsupported")
-    if saved["harness"] not in ("claude", "codex"):
-        raise SpawnError(f"unsupported handoff harness: {saved['harness']}", "unsupported")
-    return saved
-
-
 def _recorded_revision(saved):
     return saved.get("bundle_revision") or saved.get("profile_decision", {}).get("bundle_revision")
 
@@ -413,18 +402,11 @@ class HerdrRuntime:
         return self.choose(saved["harness"], environ)
 
     def _profile_decision(self, config, lane, chosen, task, saved, relaunch, environ):
-        decision = (
-            profile_choice.ProfileDecision(
-                saved["profile"],
-                "handoff",
-                "original seat profile",
-                overlays=tuple(saved.get("overlays", ())),
-            )
-            if saved and (relaunch or not task.get("profile"))
-            else timing.call(
+        decision = profile_choice.kept(task, saved, relaunch)
+        if decision is None:
+            decision = timing.call(
                 profile_choice.choose, config.slug, lane, chosen, task, environ, getattr(config, "overlays", {})
             )
-        )
         if not decision.bundle_revision:
             kept = _recorded_revision(saved) if saved.get("profile") == decision.profile else ""
             decision = replace(decision, bundle_revision=kept or overlays.revision())
@@ -462,7 +444,7 @@ class HerdrRuntime:
     def spawn(self, config, lane, name, task):
         chosen, environ = config.lanes.get(lane, {}), dict(os.environ)
         relaunch = live_binding.complete(task.get("launch_assignment"))
-        saved = relaunch or _transfer(task)
+        saved = relaunch or profile_choice.transfer(task)
         decision = self._profile_decision(config, lane, chosen, task, saved, relaunch, environ)
         profile = decision.profile
         requested = "claude" if plugins.claude_only(profile) else _set(chosen.get("agent"))
