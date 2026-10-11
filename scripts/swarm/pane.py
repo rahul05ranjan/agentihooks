@@ -1,5 +1,6 @@
+import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -8,7 +9,8 @@ class PaneObservation:
     prompt_title: str = ""
     typed: str = ""
     provider_error: str = ""
-    provider_checked: bool = False
+    provider_checked: bool = field(default=False, compare=False)
+    provider_error_id: str = ""
 
 
 PROVIDER_ERRORS = {
@@ -35,6 +37,11 @@ def provider_error(harness: str, text: str) -> str:
         if match := re.search(pattern, plain, re.I):
             return match.group()
     return ""
+
+
+def provider_error_id(harness: str, text: str) -> str:
+    lines = [line.strip() for line in ESCAPE.sub("", text).splitlines() if provider_error(harness, line)]
+    return hashlib.sha256("\n".join(lines).encode()).hexdigest() if lines else ""
 
 
 def selection_prompt(text: str) -> str:

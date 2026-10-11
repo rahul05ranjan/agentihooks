@@ -82,6 +82,7 @@ from scripts.swarm import (
     done_gate,
     idle,
     launch_check,
+    ledger_client,
     ledger_events,
     ledger_probe,
     ledger_watchdog,
@@ -175,7 +176,7 @@ def run_tick(store, slug, ledger=None, runtime=None, messenger=None, scheduled=F
     ledger = ledger or LedgerClient()
     runtime = runtime or routed(herdr=HerdrRuntime())
     outage.providers(store, slug, runtime, now_ms())
-    if isinstance(ledger, LedgerClient) and not outage.ledger_health(slug, now_ms()):
+    if isinstance(ledger, ledger_client.LedgerClient) and not outage.ledger_health(slug, now_ms()):
         return ["Ledger health probe failed"]
     held = lease.acquire(store, slug, commands.hive_id())
     if held is None:
@@ -328,6 +329,7 @@ def _tick_while_others_run(store, slug, firsts, until):
         _tick_one(store, slug)
 
 
+@outage.guard_command
 def cmd_tick(store, args):
     from scripts import operator_env
 
