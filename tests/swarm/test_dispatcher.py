@@ -359,17 +359,19 @@ def test_a_task_the_dispatcher_lowered_is_raised_again_when_it_regains_the_top(s
 
 def test_the_dispatcher_reorders_ranks_a_master_set_by_hand_and_keeps_the_operator_rank(store, home, shipped):
     store.update(SLUG, autonomy="full")
-    tasks = [*merging(), task("e", state="claimed"), task("f")]
+    tasks = [*merging(), task("e", state="claimed"), task("f"), task("g")]
     tasks[0]["state"] = "done"
-    hands = {t: MASTER_NAME for t in ("b", "q", "c0", "e", "f")} | {"c": "operator"}
+    hands = {t: MASTER_NAME for t in ("b", "q", "c0", "e", "f", "g")} | {"c": "operator"}
     found = stamped(tasks, hands)
     found["freezes"] = [{"verb": "focus", "target": "lane:eng"}]
     rows = {t["id"]: t for t in tasks}
-    rows["b"]["rank"], rows["q"]["rank"], rows["p"]["rank"] = "urgent", "normal", "normal"
+    rows["b"]["rank"], rows["q"]["rank"], rows["p"]["rank"], rows["g"]["rank"] = "urgent", "normal", "normal", "urgent"
     ledger = Ledger()
     actions = dispatcher.rank_pass(SLUG, store.config(SLUG), store, ledger, found, NOW)
-    assert ledger.ranks == [("f", "normal", "dispatcher"), ("p", "high", "dispatcher"), ("q", "high", "dispatcher")]
-    assert actions[0] == f"lowered task f to normal: {dispatcher.UNREADY}"
+    lowered = [(t, "normal", "dispatcher") for t in "fg"]
+    assert ledger.ranks == [*lowered, ("p", "high", "dispatcher"), ("q", "high", "dispatcher")]
+    assert actions[:2] == [f"lowered task {t} to normal: it unblocks no open work" for t in "fg"]
+    assert ledger.comments[0] == ("f", dispatcher.LOWERED.format(why=dispatcher.IDLE), "dispatcher")
     assert [rows[t]["rank"] for t in ("b", "c", "c0", "e")] == ["urgent", "high", "high", "high"]
 
 

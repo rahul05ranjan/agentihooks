@@ -668,7 +668,13 @@ def cmd_hierarchy(args) -> None:
     hierarchy_backfill.run(args)
 
 
+def refuse_unset_quote(args):
+    if args.quote and args.action != "set":
+        sys.exit(f"task {args.action} takes no --quote: run task set <id> rank=<rank> --quote <his words> after it")
+
+
 def cmd_task(args):
+    refuse_unset_quote(args)
     if args.action == "add":
         if args.id == "-":
             args.id = ledger_tasks.next_id(resource(args.slug, "tasks", collection=True))
@@ -881,7 +887,6 @@ def build_parser():
     task.add_argument("--profile")
     task.add_argument("--overlays", help="comma separated overlays this task's agent wears, at most three")
     task.add_argument("--rank", help="queue rank: urgent, high, normal (default) or low; next means urgent")
-    task.add_argument("--quote", default="", help="task set rank=...: the operator's words, so the rank stays his")
     task.add_argument("--plan-slice", default="", help="task slice anchor; computes its plan lines")
     task.add_argument(
         "--follow-up", action="store_true", help="a follow up task: no slice in a sliced phase, judged by its text"
@@ -891,6 +896,7 @@ def build_parser():
     task.add_argument(
         "--not-duplicate", default="", help="why the task differs from the one it resembles; skips the duplicate check"
     )
+    task.add_argument("--quote", default="", help="task set rank=...: the operator's words, so the rank stays his")
     publish = sub.add_parser("publish-plan")
     publish.add_argument("path")
     publish.add_argument("--phase", required=True, help="comma separated ids of the phases the plan fills")

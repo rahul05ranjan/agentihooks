@@ -1,9 +1,10 @@
 """The dispatcher's tick step: rank by the open work each task unblocks, grouping and the priority sweep, by autonomy.
 
 Each tick it orders the claimable tasks in focus by leverage. At delegate and full it raises the top ones to high and
-lowers a high rank once that task leaves the top. A master or planner rank is a default it reorders; only an operator
-rank, set by him or relayed with his quoted words, stays fixed. Below delegate it proposes each raise to the master. Every action is a gate log row, a dispatch metrics row naming its rule and, for
-a rank, a comment on the task.
+lowers a high or urgent rank once that task leaves the top. A rank the master or the swarm set is a default it
+reorders; only an operator rank, set by him or relayed with his quoted words, stays fixed. Below delegate it proposes
+each raise to the master. Every action is a gate log row, a dispatch metrics row naming its rule and, for a rank, a
+comment on the task.
 """
 
 from dataclasses import dataclass
@@ -32,6 +33,7 @@ RAISED = "The dispatcher raised this task to high rank because it unblocks {work
 LOWERED = "The dispatcher lowered this task to normal rank because {why}."
 OUTRANKED = "it unblocks {work} and {top} claimable tasks in focus unblock more"
 UNREADY = "it is no longer a claimable task in focus that unblocks open work"
+IDLE = "it unblocks no open work"
 PROPOSED = "The dispatcher proposed high rank for this task to the master because it unblocks {work}."
 PROPOSE = (
     "The dispatcher proposes rank high for task {task} titled {title}: it unblocks {work}. If the operator agrees, "
@@ -97,8 +99,8 @@ def rank_pass(slug, config, store, ledger, doc, now_ms):
     ]
     if config.autonomy in APPLIES:
         mine = owned | (claimable - fixed)
-        stale = [t for t in doc["tasks"] if t["id"] in mine and t.get("rank") == RANK and _open(t)]
-        lowers = [(t, _why(t["id"], queue, scores)) for t in stale if t["id"] not in top]
+        stale = [t for t in doc["tasks"] if t["id"] in mine and t.get("rank") in WINDOW[1:] and _open(t)]
+        lowers = [(t, _why(t["id"], queue, scores, claimable)) for t in stale if t["id"] not in top]
         steps = [partial(_lower, slug, ledger, *row) for row in lowers]
         steps += [partial(_raise, slug, ledger, *row) for row in raises]
     else:
@@ -133,8 +135,10 @@ def _rank(slug, ledger, task, rank, text, comment):
     return Action(LEVERAGE, "apply", text + _comment(slug, ledger, task, comment), task)
 
 
-def _why(task_id, queue, scores):
-    return OUTRANKED.format(work=_work(scores[task_id]), top=TOP) if task_id in queue else UNREADY
+def _why(task_id, queue, scores, claimable):
+    if task_id in queue:
+        return OUTRANKED.format(work=_work(scores[task_id]), top=TOP)
+    return IDLE if task_id in claimable else UNREADY
 
 
 def _comment(slug, ledger, task, text):

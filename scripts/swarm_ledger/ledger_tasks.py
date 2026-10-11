@@ -148,13 +148,6 @@ def check_quote(op: dict) -> None:
         raise ValueError(QUOTED)
 
 
-def relayed_words(op: dict, ctx) -> str:
-    from scripts.swarm_ledger import ledger_relay
-
-    master = ctx.meta["members"].get(op["by"], {}).get("role") == "orchestrator"
-    return ledger_relay.verified(op["by"], op["quote"]) if master else ""
-
-
 def check_stack(fields):
     if "branch" in fields and not (isinstance(fields["branch"], str) and BRANCH_RE.match(fields["branch"])):
         raise ValueError("branch must be a git branch name, or empty to clear it")
@@ -378,6 +371,8 @@ def update_refusal(doc: dict, op: dict, meta: dict | None = None) -> str:
     for field in ("rank", "difficulty", "phase"):
         if field in op["fields"] and (refusal := rank_refusal(op["by"], field)):
             return refusal
+    if refusal := pinned_refusal(op, meta):
+        return refusal
     phase = op["fields"].get("phase")
     if phase is not None and phase not in {p["id"] for p in doc["phases"]}:
         return f"phase {phase} is not on this ledger: name one of its phase ids"
@@ -385,6 +380,13 @@ def update_refusal(doc: dict, op: dict, meta: dict | None = None) -> str:
     if phase is not None and phase != task.get("phase"):
         return unsliced_refusal(doc, {**task, "plan_slice": "", **op["fields"]}, op["by"])
     return ""
+
+
+def pinned_refusal(op: dict, meta: dict | None) -> str:
+    stamps = (meta or {}).get("stamps", {})
+    if "rank" not in op["fields"] or "quote" in op:
+        return ""
+    return ledger_rank.pinned(op["item"].split("/")[1], stamps.get(f"{op['item']}/rank", {}).get("by"), op["by"])
 
 
 def _known(tasks, ids):
@@ -480,12 +482,12 @@ def _update(doc, op, ctx):
 
 
 def _relay_rank(doc, op, ctx):
-    from scripts.swarm_ledger.ledger_relay import RELAYED_FROM
+    from scripts.swarm_ledger.ledger_relay import RELAYED_FROM, relayed
 
     task = next((t for t in doc.get("tasks", []) if t["id"] == op["item"].split("/")[1]), None)
     if task is None:
         return False
-    words = relayed_words(op, ctx)
+    words = relayed(op, ctx.meta)
     if refusal := update_refusal(doc, op, ctx.meta) or ("" if words else UNRELAYED):
         ctx.refused.append(refusal)
         return False
