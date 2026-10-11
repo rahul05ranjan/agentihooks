@@ -112,12 +112,13 @@ def test_peaks_ignore_a_snapshot_at_the_same_instant():
 
 
 def test_directory_bytes_counts_regular_files_and_not_link_targets(tmp_path):
-    (tmp_path / "a").mkdir()
-    (tmp_path / "a" / "one").write_bytes(b"x" * 1000)
-    (tmp_path / "two").write_bytes(b"y" * 24)
-    (tmp_path / "link").symlink_to(tmp_path / "a" / "one")
-    assert sampling.directory_bytes(tmp_path) == 1024
-    assert sampling.directory_bytes(tmp_path / "missing") == 0
+    tree = tmp_path / "tree"
+    (tree / "a").mkdir(parents=True)
+    (tree / "a" / "one").write_bytes(b"x" * 1000)
+    (tree / "two").write_bytes(b"y" * 24)
+    (tree / "link").symlink_to(tree / "a" / "one")
+    assert sampling.directory_bytes(tree) == 1024
+    assert sampling.directory_bytes(tree / "missing") == 0
 
 
 def test_measure_reports_the_whole_tree_of_a_live_workload(tmp_path):
