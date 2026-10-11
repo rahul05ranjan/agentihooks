@@ -106,7 +106,7 @@ def test_a_superseded_generation_stops_periodic_promotion(tmp_path):
     assert sched.tick() is None
     assert sched.drain() is None
     assert capture.sequences == [1, 2]
-    assert sched.publisher.latest() == "ckpt-g3-s1"
+    assert make(tmp_path, "e3", 4).latest() == "ckpt-g3-s1"
 
 
 def test_drain_publishes_off_schedule_within_its_own_budget(tmp_path):

@@ -118,7 +118,8 @@ def test_an_older_generation_is_refused_once_a_newer_generation_has_written(tmp_
     assert (refused.promoted, refused.reason, refused.verdict) == (False, "superseded_generation", None)
     assert files(tmp_path) == before
     assert stale.metrics() == {"checkpoint_publish_failures": {"superseded_generation": 1}}
-    assert stale.latest() == newer.latest() == "ckpt-g3-s1"
+    assert newer.latest() == make(tmp_path, "e3", 4).latest() == "ckpt-g3-s1"
+    assert stale.latest() == ""
 
 
 def test_a_generation_superseded_during_upload_never_writes_its_pointer(tmp_path):
@@ -135,14 +136,15 @@ def test_a_generation_superseded_during_upload_never_writes_its_pointer(tmp_path
     assert (refused.promoted, refused.reason) == (False, "superseded_generation")
     assert refused.verdict.authoritative
     assert pointers(tmp_path) == ["s1/t1/pointers/0000000003/0000000001.json"]
-    assert stale.latest() == "ckpt-g3-s1"
+    assert make(tmp_path, "e3", 4).latest() == "ckpt-g3-s1"
+    assert stale.metrics() == {"checkpoint_publish_failures": {"superseded_generation": 1}}
 
 
 def test_latest_picks_the_newest_generation_over_a_higher_sequence(tmp_path):
     assert make(tmp_path, "e1", 2).publish(*checkpoint(9)).promoted
     newer = make(tmp_path, "e2", 3)
     assert newer.publish(*checkpoint(1, 3, "e2")).promoted
-    assert make(tmp_path, "e1", 2).latest() == "ckpt-g3-s1"
+    assert make(tmp_path, "e3", 4).latest() == "ckpt-g3-s1"
     assert newer.sequence() == 1
 
 
