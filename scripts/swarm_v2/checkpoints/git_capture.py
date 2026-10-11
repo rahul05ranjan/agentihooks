@@ -236,8 +236,8 @@ def _extract(target: Path, members: list[tuple[str, int, bytes]]) -> None:
 
 
 def restore(validator: model.Validator, checkpoint_id: str, target: Path) -> model.Verdict:
-    """The target is a clean clone holding the base commit; its work tree and branches change only after every
-    material is read and every archive member is placed inside it."""
+    """The target is a clean clone holding the base commit. Its work tree and branches change only after every
+    material is read and no archive member lands on or under a link of the head tree or of the patches."""
     verdict = validator.verify(checkpoint_id)
     if not verdict.authoritative:
         raise SourceError(f"checkpoint is not authoritative: {verdict.reason}")
@@ -246,13 +246,14 @@ def restore(validator: model.Validator, checkpoint_id: str, target: Path) -> mod
     if _git(target, "status", "--porcelain"):
         raise SourceError(DIRTY)
     _git(target, "cat-file", "-e", doc["base_commit"] + "^{commit}")
+    _git(target, "check-ref-format", "--branch", doc["branch_name"])
     if model.SOURCE_BUNDLE in materials:
         with tempfile.TemporaryDirectory() as folder:
             bundle = Path(folder) / doc["head_commit"]
             bundle.write_bytes(materials[model.SOURCE_BUNDLE])
             _git(target, "fetch", str(bundle))
     links = _links(target, doc["head_commit"], (materials[STAGED], materials[UNSTAGED]))
-    if any(str(parent) in links for name, _, _ in members for parent in PurePosixPath(name).parents):
+    if any(links.intersection([name, *map(str, PurePosixPath(name).parents)]) for name, _, _ in members):
         raise SourceError(ESCAPE)
     _git(target, "checkout", "-B", doc["branch_name"], doc["head_commit"])
     if materials[STAGED]:

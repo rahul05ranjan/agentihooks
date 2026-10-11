@@ -301,6 +301,40 @@ def test_restore_refuses_a_member_under_a_link_a_patch_creates(tmp_path, staged)
     assert list(outside.iterdir()) == []
 
 
+def test_restore_refuses_a_member_named_as_a_tracked_link(tmp_path):
+    work = _pushed(tmp_path)
+    (work / "hooks").symlink_to(".git/hooks")
+    cases.git(work, "add", "hooks")
+    cases.git(work, "commit", "-q", "-m", "link into the git folder")
+    source = git_capture.capture(work, "origin/dev")
+    forged = dataclasses.replace(source, materials={**source.materials, git_capture.UNTRACKED: cases.forged("hooks")})
+    validator = model.Validator(cases.store(tmp_path / "durable"))
+    assert cases.commit(validator, forged, "ckpt-src-0001").authoritative
+    target = cases.clone(tmp_path, "restored")
+    hooks = sorted(path.name for path in (target / ".git" / "hooks").iterdir())
+    with pytest.raises(git_capture.SourceError) as raised:
+        git_capture.restore(validator, "ckpt-src-0001", target)
+    assert str(raised.value) == git_capture.ESCAPE
+    assert sorted(path.name for path in (target / ".git" / "hooks").iterdir()) == hooks
+
+
+def test_restore_refuses_a_branch_name_git_rejects(tmp_path):
+    source = git_capture.capture(_pushed(tmp_path), "origin/dev")
+    validator = model.Validator(cases.store(tmp_path / "durable"))
+    transcript = json.loads(cases.TRANSCRIPT.read_text())["materials"]["normalized_transcript"]
+    validator.store.put("t.normalized_transcript", transcript.encode())
+    for role, data in source.materials.items():
+        validator.store.put(f"t.{role}", data)
+    doc = {**git_capture.merged(_manifest("ckpt-src-0001"), source), "branch_name": "-bad..name"}
+    assert validator.commit(doc).authoritative
+    target = cases.clone(tmp_path, "restored")
+    before = (cases.state(target), cases.git(target, "branch", "--list"))
+    with pytest.raises(git_capture.SourceError) as raised:
+        git_capture.restore(validator, "ckpt-src-0001", target)
+    assert str(raised.value).startswith("git check-ref-format failed with exit ")
+    assert (cases.state(target), cases.git(target, "branch", "--list")) == before
+
+
 def _archive(info: tarfile.TarInfo, data: bytes = b"") -> bytes:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w", format=tarfile.GNU_FORMAT) as archive:
