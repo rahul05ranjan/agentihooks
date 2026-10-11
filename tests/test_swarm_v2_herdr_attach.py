@@ -69,6 +69,9 @@ class Runner:
         if command[:3] == ["herdr", "machine", "list"]:
             return self.listed
         if command[:3] == ["herdr", "machine", "add"]:
+            if self.added.returncode == 0:
+                listing = json.dumps([saved(PROFILE, NAME, f"ssh://{HOST}")])
+                self.listed = subprocess.CompletedProcess([], 0, listing, "")
             return self.added
         forwarded = [*command[:2], sv2_hdr01_cases.TARGET, *command[3:]] if "--machine" in command else command
         return self.herdr(forwarded)
@@ -403,12 +406,26 @@ def test_an_invalid_namespace_is_counted(tmp_path):
 def test_an_incompatible_server_is_a_verdict_not_an_auth_failure(tmp_path):
     found, runner = terminal(tmp_path)
     runner.herdr = sv2_hdr01_cases.Runner(sv2_hdr01_cases.fixture()["missing_forwarding_server"])
-    runner.listed = subprocess.CompletedProcess([], 0, json.dumps([saved(PROFILE, NAME, f"ssh://{HOST}")]), "")
     verdict = found.attach(scope(), HOST_KEY)
     assert "herdr server lacks surface_interest=true" in verdict.refusals
     assert runner.commands[-1] == ["herdr", "machine", "remove", PROFILE]
     assert found.registrations.store.load() == {}
     assert found.terminal_endpoint_auth_failures() == {}
+
+
+@pytest.mark.parametrize("server", [None, "replaced"])
+def test_a_server_that_cannot_be_qualified_loses_its_registration(tmp_path, server):
+    found, runner = terminal(tmp_path)
+    if server is None:
+        runner.herdr = lambda command: subprocess.CompletedProcess(command, 2, "", "")
+        raised = capabilities.Unreachable
+    else:
+        found.qualifier.retired[NAME] = {f"{EXE_A}/2"}
+        raised = capabilities.Incompatible
+    with pytest.raises(raised):
+        found.attach(scope(), HOST_KEY)
+    assert runner.commands[-1] == ["herdr", "machine", "remove", PROFILE]
+    assert found.registrations.store.load() == {}
 
 
 def test_a_compatible_attach_keeps_its_registration(tmp_path):

@@ -10,7 +10,7 @@ from typing import NoReturn
 
 from cryptography.hazmat.primitives import serialization
 
-from scripts.swarm_v2.herdr.capabilities import Qualifier, Verdict, machine_probe
+from scripts.swarm_v2.herdr.capabilities import Incompatible, Qualifier, Unreachable, Verdict, machine_probe
 from scripts.swarm_v2.herdr.catalog import Catalog
 from scripts.swarm_v2.herdr.endpoints import (
     PORT,
@@ -192,9 +192,17 @@ class Terminal:
             endpoint = self.register(scope, host_public)
             self._connect(endpoint)
             self.registrations.register(endpoint)
+            verdict = self._qualified(endpoint)
         except EndpointRefused as refused:
             self._refuse(refused)
-        verdict = self.qualifier.verdict(endpoint.name, endpoint.incarnation)
+        return verdict
+
+    def _qualified(self, endpoint: Endpoint) -> Verdict:
+        try:
+            verdict = self.qualifier.verdict(endpoint.name, endpoint.incarnation)
+        except (Incompatible, Unreachable):
+            self.registrations.withdraw(endpoint)
+            raise
         if not verdict.compatible:
             self.registrations.withdraw(endpoint)
         return verdict

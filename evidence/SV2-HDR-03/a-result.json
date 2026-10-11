@@ -9,6 +9,7 @@
   "observed": {
     "checks": {
       "each_registration_maps_to_its_own_execution": true,
+      "boundary_bound_to_verified_incarnation": true,
       "two_workers_beside_local": true,
       "store_matches_catalog": true,
       "nothing_refused": true,
@@ -72,6 +73,10 @@
           "profile_id": "eefed520946b717557bfbc5ef89d91ee",
           "before": []
         }
+      },
+      "verified_incarnations": {
+        "swarm-exe-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-terminal": "exe-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/2",
+        "swarm-exe-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-terminal": "exe-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/1"
       },
       "sidebar": [
         "Local",

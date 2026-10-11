@@ -154,6 +154,9 @@ def _positive_once() -> dict:
                 for execution_id, profile_id in first.registered.items()
             },
             "records": client.records(),
+            "verified_incarnations": {
+                label: verdict.incarnation for label, verdict in sorted(client.qualifier.verdicts.items())
+            },
             "sidebar": _sidebar(herdr),
             "manual_untouched": manual in herdr.machines,
             "commands_naming_manual": [command for command in herdr.commands if manual["id"] in command],
@@ -177,6 +180,8 @@ def _positive() -> tuple[dict, bool]:
             for endpoint in desired
         )
         and len({entry["id"] for entry in registrations.values()}) == 2,
+        "boundary_bound_to_verified_incarnation": first["verified_incarnations"]
+        == {endpoint.name: endpoint.incarnation for endpoint in desired},
         "two_workers_beside_local": first["sidebar"] == ["Local", "devbox", desired[0].name, desired[1].name],
         "store_matches_catalog": {key: record["profile_id"] for key, record in first["records"].items()}
         == first["first"]["registered"],
@@ -364,6 +369,13 @@ def _restart_restores(root: Path) -> dict:
     kept = accepted.registered[desired[0].scope.execution_id]
     herdr.machines = [machine for machine in herdr.machines if machine["label"] != desired[1].name]
     restored = Client(herdr, store).reconcile(desired)
+    lost = accepted.registered[desired[1].scope.execution_id]
+    durability = {
+        "survived": kept,
+        "lost": lost,
+        "restored_as": restored.registered[desired[1].scope.execution_id],
+        "lost_still_saved": any(machine["id"] == lost for machine in herdr.machines),
+    }
     replayed = Client(herdr, store).reconcile(desired)
     herdr.machines[1]["label"] = "renamed-by-hand"
     relabelled = Client(herdr, store).reconcile(desired)
@@ -382,6 +394,7 @@ def _restart_restores(root: Path) -> dict:
         "generation_after_stale": generation_after_stale,
         "retired": _report(retired),
         "kept_profile_survived": restored.registered[desired[0].scope.execution_id] == kept,
+        "durability": durability,
         "adds": {endpoint.name: herdr.adds(endpoint.name) for endpoint in desired},
         "renames": [command for command in herdr.commands if command[:3] == ["herdr", "machine", "rename"]],
         "records": after_stale.records(),
@@ -419,6 +432,10 @@ def _recovery() -> tuple[dict, bool]:
         "restart_restores_the_missing_registration": restart["restored"]["drift"] == {"missing": 1}
         and restart["kept_profile_survived"],
         "restart_duplicates_nothing": restart["adds"] == {desired[0].name: 1, desired[1].name: 2},
+        "durability_survivors_and_losses_recorded": restart["durability"]["survived"]
+        == restart["restored"]["registered"][exe_a]
+        and restart["durability"]["lost"] != restart["durability"]["restored_as"]
+        and not restart["durability"]["lost_still_saved"],
         "replay_has_no_drift": restart["replayed"]["herdr_registration_drift"] == 0,
         "label_drift_renamed_back": restart["relabelled"]["drift"] == {"label": 1} and len(restart["renames"]) == 1,
         "new_generation_keeps_its_profile": restart["bumped"]["registered"] == restart["replayed"]["registered"],
