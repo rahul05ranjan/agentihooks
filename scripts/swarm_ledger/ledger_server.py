@@ -446,11 +446,12 @@ def lifecycle_control(slug, body, operator):
 
     try:
         stamps = repository.read(slug, "_meta.stamps").get("_meta", {}).get("stamps", {})
+    except KeyError:
+        return None, "no such ledger"
+    try:
         lifecycle.request(swarm_store(), slug, body, operator=operator, task_revisions=lifecycle.revisions(stamps))
     except SwarmError as exc:
         return None, str(exc)
-    except KeyError:
-        return None, "no such ledger"
     return swarm_status(slug), ""
 
 

@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import traceback
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 
@@ -321,6 +322,7 @@ def execute(
         if not error:
             error, result = _apply(store, slug, agent, record, run)
     except Exception as exc:
+        traceback.print_exc()
         error, result = f"{type(exc).__name__}: {exc}", {}
     _settle(store, slug, record, error, result)
     return error
