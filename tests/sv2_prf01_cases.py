@@ -1,33 +1,46 @@
+import contextlib
 import copy
 import hashlib
+import io
 import json
 import tempfile
 from pathlib import Path
+from unittest import mock
 
+from scripts.swarm_v2 import resource_bench as bench
 from scripts.swarm_v2 import resource_profiles as profiles
 
 FIXTURES = Path(__file__).parent / "fixtures" / "swarm_v2" / "worker-resources"
-INPUTS = ("measurements.json", "update.json", "nodes.json", "disclosure.json")
+INPUTS = ("measurements.json", "repeat.json", "update.json", "nodes.json", "disclosure.json")
 POLICY = profiles.Policy()
+REVIEWER = "fixture-operator"
 EVIDENCE_CLASS = (
     "measured: the workloads ran on a GitHub hosted Ubuntu runner in the Worker resources workflow named in "
-    "measurements.json and update.json, and node capacity was read from the Anton cluster with kubectl as named in "
-    "nodes.json; derivation, coexistence and promotion are pure functions over those committed records; no worker Pod "
-    "ran the workloads and no profile was applied to a deployed Pod policy"
+    "measurements.json, repeat.json and update.json, and node capacity was read from the Anton cluster with kubectl "
+    "as named in nodes.json; derivation, coexistence, promotion and rollback are functions over those committed "
+    "records run on a temporary accepted file; no worker Pod ran the workloads and no profile was applied to a "
+    "deployed Pod policy"
 )
 NOTES = (
     "Measured on a GitHub hosted runner, not inside a worker Pod: CPU peaks are bounded by the runner's cores.",
     "The agent CLI's own resident memory is a declared reserve, not a measurement; it needs a live agent run.",
+    "The idle class is a sleeping Python process standing in for an idle agent CLI.",
+    "With nine runs per class the p95 column equals the maximum.",
+    "Descendants that leave the workload's session and process tree are not counted.",
     "Coexistence counts whole workers in each node's allocatable capacity minus the requests already scheduled there.",
 )
 
 
-def load(name: str) -> dict | list:
+def load(name: str) -> dict:
     return json.loads((FIXTURES / name).read_text())
 
 
+def nodes() -> list[dict]:
+    return load("nodes.json")["nodes"]
+
+
 def derive(measured: dict) -> dict:
-    return profiles.derive(copy.deepcopy(measured), load("nodes.json")["nodes"], POLICY)
+    return profiles.derive(copy.deepcopy(measured), nodes(), POLICY)
 
 
 def results_page() -> str:
@@ -45,34 +58,34 @@ def _summary(report: dict) -> dict:
     }
 
 
-def _accept(report: dict, *candidates: dict) -> tuple[list[str], bool]:
-    with tempfile.TemporaryDirectory() as folder:
-        path = Path(folder) / "accepted.json"
-        decisions = [profiles.accept(path, report, POLICY)["decision"]]
-        before = path.read_bytes()
-        decisions += [profiles.accept(path, candidate, POLICY)["decision"] for candidate in candidates]
-        return decisions, path.read_bytes() == before
+def _floor(measured: dict, name: str) -> int:
+    return POLICY.min_repeats * len({r["children"] for r in measured["runs"] if r["class"] == name})
 
 
 def _positive() -> tuple[dict, bool]:
-    measured = load("measurements.json")
-    first, second = derive(measured), derive(measured)
-    decisions, _ = _accept(first)
+    measured, repeat = load("measurements.json"), load("repeat.json")
+    first, again, second = derive(measured), derive(measured), derive(repeat)
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "accepted.json"
+        decision = profiles.accept(path, first, POLICY, "")["decision"]
+        stored = json.loads(path.read_text())
     admitted = set(first["profiles"])
-    floor = {
-        name: POLICY.min_repeats * len({r["children"] for r in measured["runs"] if r["class"] == name})
-        for name in admitted
+    observed = {
+        **_summary(first),
+        "deterministic_rederivation": first == again,
+        "independent_repeat": _summary(second),
+        "repeat_changes": profiles.compare(first, second, POLICY),
+        "accepted": decision,
+        "accepted_file_matches": stored == first,
     }
-    observed = {**_summary(first), "independent_rerun_matches": first == second, "accepted": decisions}
     checks = [
-        admitted == set(profiles.CLASSES),
-        all(first["profiles"][n]["measured"]["peak_rss_mib"]["n"] >= floor[n] for n in admitted),
-        all(first["profiles"][n]["uncertainty"]["samples"] >= floor[n] for n in admitted),
-        first["refused"] == {"idle": profiles.IDLE_REFUSAL},
-        isinstance(first["coexistence"], list) and len(first["coexistence"]) == len(load("nodes.json")["nodes"]),
+        admitted == set(profiles.CLASSES) == set(second["profiles"]),
+        all(first["profiles"][n]["measured"]["peak_rss_mib"]["n"] >= _floor(measured, n) for n in admitted),
+        first["refused"] == second["refused"] == {"idle": profiles.IDLE_REFUSAL},
+        len(first["coexistence"]) == len(second["coexistence"]) == len(nodes()),
         all(set(row["fits"]) == admitted for row in first["coexistence"]),
-        first == second,
-        decisions == ["promoted"],
+        first == again,
+        decision == "promoted" and stored == first,
     ]
     return observed, all(checks)
 
@@ -80,33 +93,39 @@ def _positive() -> tuple[dict, bool]:
 def _rejection() -> tuple[dict, bool]:
     measured = load("measurements.json")
     idle = {**measured, "runs": [r for r in measured["runs"] if r["class"] == profiles.IDLE]}
-    accepted = derive(measured)
     with tempfile.TemporaryDirectory() as folder:
-        path = Path(folder) / "accepted.json"
-        profiles.accept(path, accepted, POLICY)
-        before = path.read_bytes()
-        try:
-            derive(idle)
-            refusal = None
-        except profiles.ClaimRefused as refused:
-            refusal = {"message": str(refused), "refused": refused.refused}
-        unchanged = path.read_bytes() == before
+        root = Path(folder)
+        accepted, report = root / "accepted.json", root / "report.json"
+        profiles.accept(accepted, derive(measured), POLICY, "")
+        before = accepted.read_bytes()
+        (root / "idle.json").write_text(json.dumps(idle))
+        (root / "nodes.json").write_text(json.dumps(load("nodes.json")))
+        args = ["derive", "--measurements", str(root / "idle.json"), "--nodes", str(root / "nodes.json")]
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code = bench.main([*args, "--output", str(report)])
+        written = sorted(p.name for p in root.iterdir())
+        unchanged = accepted.read_bytes() == before
     secret = "-".join(load("disclosure.json")["fake_secret_parts"])
-    texts = [(FIXTURES / name).read_text() for name in ("measurements.json", "update.json")]
-    leaked = [name for name, text in zip(("measurements", "update"), texts) if secret in text]
+    texts = {name: (FIXTURES / f"{name}.json").read_text() for name in ("measurements", "repeat", "update")}
+    texts["refusal"] = stderr.getvalue()
     observed = {
         "idle_runs": len(idle["runs"]),
         "idle_peak_rss_mib": max(r["peak_rss_mib"] for r in idle["runs"]),
-        "refusal": refusal,
+        "exit_code": code,
+        "refusal": stderr.getvalue().strip(),
+        "files_after_refusal": written,
         "accepted_unchanged": unchanged,
-        "fake_secret_in_records": leaked,
+        "fake_secret_in": sorted(name for name, text in texts.items() if secret in text),
         "fake_secret_set_in_run": load("disclosure.json")["variable"],
     }
     checks = [
         len(idle["runs"]) >= POLICY.min_repeats,
-        refusal is not None and refusal["refused"] == {"idle": profiles.IDLE_REFUSAL},
+        code == 2,
+        observed["refusal"] == f"refused: no class was admitted: idle: {profiles.IDLE_REFUSAL}",
+        written == ["accepted.json", "idle.json", "nodes.json"],
         unchanged,
-        leaked == [],
+        observed["fake_secret_in"] == [],
     ]
     return observed, all(checks)
 
@@ -122,36 +141,62 @@ def _updated(measured: dict, update: dict) -> dict:
     }
 
 
+def _interrupted(path: Path, candidate: dict) -> tuple[str, bool]:
+    before = path.read_bytes()
+    with mock.patch.object(Path, "replace", side_effect=OSError("interrupted before install")):
+        try:
+            profiles.accept(path, candidate, POLICY, REVIEWER)
+            outcome = "installed"
+        except OSError as error:
+            outcome = str(error)
+    return outcome, path.read_bytes() == before
+
+
 def _recovery() -> tuple[dict, bool]:
     measured, update = load("measurements.json"), load("update.json")
     accepted = derive(measured)
     candidate = derive(_updated(measured, update))
     stale = derive({**measured, "generation": measured["generation"] - 1})
-    partial = derive(
-        {
-            **measured,
-            "generation": update["generation"] + 1,
-            "runs": [r for r in measured["runs"] if r["class"] != "browser"],
-        }
-    )
-    decisions, unchanged = _accept(accepted, candidate, stale, partial, json.loads(json.dumps(accepted)))
+    without_browser = [r for r in measured["runs"] if r["class"] != "browser"]
+    partial = derive({**measured, "generation": update["generation"] + 1, "runs": without_browser})
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "accepted.json"
+        decisions = [profiles.accept(path, accepted, POLICY, "")["decision"]]
+        before = path.read_bytes()
+        decisions += [profiles.accept(path, c, POLICY, "")["decision"] for c in (candidate, stale, partial)]
+        decisions.append(profiles.accept(path, json.loads(json.dumps(accepted)), POLICY, "")["decision"])
+        held_unchanged = path.read_bytes() == before
+        interruption, survived = _interrupted(path, candidate)
+        decisions.append(profiles.accept(path, candidate, POLICY, REVIEWER)["decision"])
+        installed = json.loads(path.read_text())["generation"]
+        restored = profiles.rollback(path)
+        rolled_back = path.read_bytes() == before
     changes = profiles.compare(accepted, candidate, POLICY)
     observed = {
         "accepted_generation": accepted["generation"],
         "candidate_generation": candidate["generation"],
-        "decisions": dict(zip(("first", "toolchain_update", "stale", "missing_class", "replay"), decisions)),
+        "decisions": dict(
+            zip(("first", "toolchain_update", "stale", "missing_class", "replay", "requalified"), decisions)
+        ),
         "changes": changes,
         "missing": profiles.compare(accepted, partial, POLICY)["missing"],
-        "accepted_unchanged": unchanged,
+        "held_file_unchanged": held_unchanged,
+        "interrupted_install": interruption,
+        "accepted_survived_interruption": survived,
+        "installed_after_requalification": installed,
+        "rollback_restored_generation": restored,
+        "rollback_matches_prior_file": rolled_back,
         "candidate_memory_limit": candidate["profiles"]["memory"]["limits"],
         "accepted_memory_limit": accepted["profiles"]["memory"]["limits"],
     }
     checks = [
-        decisions == ["promoted", "requalify", "stale", "requalify", "replayed"],
+        decisions == ["promoted", "requalify", "stale", "requalify", "replayed", "requalified"],
         any(row[0] == "memory" for row in changes["material"]),
         set(changes["tools_changed"]) >= {"workload:memory"},
         observed["missing"] == ["browser"],
-        unchanged,
+        held_unchanged and survived and interruption == "interrupted before install",
+        installed == candidate["generation"],
+        restored == accepted["generation"] and rolled_back,
     ]
     return observed, all(checks)
 

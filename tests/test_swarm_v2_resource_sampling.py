@@ -173,7 +173,8 @@ def test_summary_rounds_every_figure_and_takes_the_larger_cpu_count():
         "timed_out": False,
     }
     lean = SimpleNamespace(ru_utime=0.25, ru_stime=0.5)
-    assert sampling.summary(peaks, lean, 1.0, 0, True)["cpu_seconds"] == 2.0
+    floored = sampling.summary(peaks, lean, 0.8, 0, True)
+    assert (floored["cpu_seconds"], floored["peak_cores"]) == (2.0, 2.5)
 
 
 def test_directory_bytes_counts_regular_files_and_not_link_targets(tmp_path):
