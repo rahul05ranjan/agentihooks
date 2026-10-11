@@ -6,10 +6,10 @@ set is a default it reorders; only an operator rank, set by him or relayed with 
 behind that queue. At delegate and full the tick claims from this queue, resumed work first within a rank band and
 clear territory before overlapping, and the dispatcher writes no rank: it comments on a task only when the task
 enters the head of its lane's queue, as many tasks as the lane has seats, or leaves it while still open; a lane with
-no seats keeps its head until seats return. When a task on the critical chain merges, its claimable successor takes
-the next free seat in its lane ahead of every band, and the dispatcher reports the seconds from that merge to the
-claim on the task. Below delegate it proposes each raise to the master. Every action is a
-gate log row, a dispatch metrics row naming its rule and a comment on the task.
+no seats keeps its head until seats return. When a task on the critical chain merges, its claimable successor heads
+the queue ahead of every band and takes the next free seat in its lane, and the dispatcher reports the seconds from
+that merge to the claim on the task. Below delegate it proposes each raise to the master. Every action is a gate log
+row, a dispatch metrics row naming its rule and a comment on the task.
 """
 
 import json
@@ -119,8 +119,8 @@ def ordered(doc: dict, named: str, scores: dict) -> list[str]:
 
 
 def queue(doc: dict, named: str | None) -> list[str]:
-    fixed, known = _fixed(doc), {t["id"]: t for t in doc["tasks"]}
-    return sorted(ordered(doc, named, leverage(doc)), key=lambda task_id: _band(known[task_id], fixed))
+    fixed, guard, known = _fixed(doc), guarded(doc), {t["id"]: t for t in doc["tasks"]}
+    return sorted(ordered(doc, named, leverage(doc)), key=lambda task_id: _band(known[task_id], fixed, guard))
 
 
 def claim_key(slug, config, store, doc):
@@ -129,10 +129,7 @@ def claim_key(slug, config, store, doc):
     fixed, guard = _fixed(doc), guarded(doc)
     lined = queue(doc, bottleneck.read(store, slug).get("bottleneck"))
     position = {task_id: index for index, task_id in enumerate(lined)}
-    return lambda task: (
-        GUARD if task["id"] in guard else _band(task, fixed),
-        position.get(task["id"], len(lined)),
-    )
+    return lambda task: (_band(task, fixed, guard), position.get(task["id"], len(lined)))
 
 
 def guarded(doc: dict) -> set[str]:
@@ -162,7 +159,9 @@ def chain_claimed(slug, config, ledger, doc, task, lane, now_ms):
     return [action.text] + log(slug, [action], now_ms)
 
 
-def _band(task, fixed):
+def _band(task, fixed, guard):
+    if task["id"] in guard:
+        return GUARD
     return ledger_rank.order(task) if task["id"] in fixed else ledger_rank.RANKS.index(ledger_rank.DEFAULT)
 
 
