@@ -176,7 +176,7 @@ def _positive() -> tuple[dict, bool]:
         history = run["history"]
         fence = next(event for event in history if event["transition"] == "fence")
         decision = next(event for event in history if event["transition"] == "recovery")
-        restored = history[-2]
+        restored = next(event for event in history if "previous_execution_id" in event)
         checks += [
             run["delayed"] == "the controller lease is absent",
             _steps(history)
@@ -251,7 +251,7 @@ def _rejection() -> tuple[dict, bool]:
         observed["failed_errors"]
         == [
             f"RuntimeError: {telemetry.WITHHELD}",
-            "RuntimeError: upstream refused Authorization: [redacted] [redacted] for the fixture",
+            "RuntimeError: upstream refused Authorization: Bearer [redacted] for the fixture",
         ],
         observed["refused_errors"] == ["SwarmError: a scoped controller grant is required"],
         observed["corrected"] == [f"eng-4@{SLUG}", 1],

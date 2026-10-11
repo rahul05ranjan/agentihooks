@@ -30,6 +30,7 @@ FIELDS = (
 AUDIT_LIMIT = 2000
 TIMELINE_LIMIT = 50
 TEXT_LIMIT = 240
+INPUT_LIMIT = 8 * TEXT_LIMIT
 ENVIRONMENT_PAIRS = 3
 REDACTED = "[redacted]"
 WITHHELD = "[environment withheld]"
@@ -46,7 +47,7 @@ SECRET = re.compile(
     r"(?i)\bbearer\s+[^\s'\",}]+"
     r"|\b(?:sk|ghp|gho|ghs|ghu|github_pat|xox[abprs])[-_][-\w]{8,}"
     r"|\bAKIA[0-9A-Z]{16}\b"
-    rf"|({_NAMED}['\"]?\s*[=:]\s*['\"]?)[^\s'\",}}]+"
+    rf"|({_NAMED}['\"]?\s*[=:]\s*['\"]?(?:bearer\s+)?)[^\s'\",}}]+"
 )
 ENVIRONMENT = re.compile(r"\b[A-Z][A-Z0-9_]+['\"]?\s*[=:]\s*\S")
 USERINFO = re.compile(r"://[^/\s:@]+:[^/\s@]+@")
@@ -60,6 +61,7 @@ def _redact(match: re.Match) -> str:
 
 
 def sanitize_text(text: str) -> str:
+    text = text[:INPUT_LIMIT]
     if "environ(" in text or len(ENVIRONMENT.findall(text)) >= ENVIRONMENT_PAIRS:
         return WITHHELD
     clean = SECRET.sub(_redact, USERINFO.sub(f"://{REDACTED}@", " ".join(text.split())))

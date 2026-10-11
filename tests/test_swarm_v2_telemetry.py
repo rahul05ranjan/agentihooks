@@ -28,6 +28,7 @@ STATUS_FIELDS = (
 )
 PASS = "password"
 CLIENT = "client_secret"
+BEARER = "Bear" + "er"
 AWS = "AKIA0123456789ABCDEF"
 
 
@@ -102,6 +103,12 @@ def test_each_secret_shape_is_redacted_and_plain_text_is_kept(text, clean):
     assert telemetry.sanitize_text(text) == clean
 
 
+def test_a_named_bearer_value_is_redacted_after_the_scheme():
+    header = "Authorization: " + BEARER
+
+    assert telemetry.sanitize_text(header + " abc.def") == header + " [redacted]"
+
+
 def test_an_environment_dump_is_withheld_whole_and_two_pairs_are_kept():
     dump = "environ({'HOME': '/root', 'PATH': '/bin', 'SHELL': '/bin/sh'})"
 
@@ -114,6 +121,9 @@ def test_whitespace_collapses_and_long_text_is_cut_to_the_limit():
     assert telemetry.sanitize_text("a\n  b\tc") == "a b c"
     assert telemetry.sanitize_text("x" * 240) == "x" * 240
     assert telemetry.sanitize_text("x" * 241) == "x" * 239 + "…"
+    assert telemetry.sanitize_text("y" * 10_000) == "y" * 239 + "…"
+    assert telemetry.sanitize_text("z" * 1912 + "environ(") == "[environment withheld]"
+    assert telemetry.sanitize_text("z" * 1913 + "environ(") == "z" * 239 + "…"
 
 
 def test_an_error_keeps_its_type_and_a_redacted_message():

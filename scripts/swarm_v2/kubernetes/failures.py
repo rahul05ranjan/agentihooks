@@ -184,8 +184,9 @@ class Recovery:
         if choice == RESUME and not checkpoint:
             raise SwarmError("no complete compatible checkpoint to resume from")
         agent = self.store.execution(self.slug, execution_id)
-        replacement = self._replace(agent)
-        return self._record(agent, replace(known, mode=choice, checkpoint=checkpoint, replacement=replacement))
+        successor = self._replace(agent)
+        decision = replace(known, mode=choice, checkpoint=checkpoint, replacement=successor.execution_id)
+        return self._record(agent, decision, successor.generation)
 
     def pause(self, paused: bool) -> None:
         """The operator's pause outlives a controller restart; the constructor flag stays the deployment default."""
@@ -308,10 +309,11 @@ class Recovery:
             if occupant.execution_id == agent.execution_id:
                 self.controller.require()
                 self.store.put_agent(self.slug, replace(occupant, state=AWAITING))
-            return self._record(agent, Decision(agent.execution_id, agent.generation, reason, PENDING))
-        replacement = self._replace(agent)
-        decision = Decision(agent.execution_id, agent.generation, reason, RESUME, checkpoint, replacement)
-        return self._record(agent, decision)
+            decision = Decision(agent.execution_id, agent.generation, reason, PENDING)
+            return self._record(agent, decision, occupant.generation)
+        successor = self._replace(agent)
+        decision = Decision(agent.execution_id, agent.generation, reason, RESUME, checkpoint, successor.execution_id)
+        return self._record(agent, decision, successor.generation)
 
     def _checkpoint(self, execution_id: str) -> str:
         usable = [
@@ -321,19 +323,19 @@ class Recovery:
         ]
         return max(usable, key=lambda entry: entry["sequence"])["checkpoint_id"] if usable else ""
 
-    def _replace(self, agent: AgentRecord) -> str:
+    def _replace(self, agent: AgentRecord) -> AgentRecord:
         occupant = self.store.execution_occupants(self.slug)[agent.seat]
         if occupant.execution_id != agent.execution_id:
             if occupant.generation != agent.generation + 1:
                 raise SwarmError("the seat moved past the fenced attempt")
-            return occupant.execution_id
+            return occupant
         self.controller.require()
         self.store.put_agent(self.slug, replace(occupant, state=FENCED))
         target = {"pod_namespace": agent.runtime_target["pod_namespace"], "pod_name": PENDING_POD}
         record = replace(agent, runtime_target=target, **NEW_ATTEMPT)
-        return self.controller.admit(record, agent.execution_id).execution_id
+        return self.controller.admit(record, agent.execution_id)
 
-    def _record(self, agent: AgentRecord, decision: Decision) -> Decision:
+    def _record(self, agent: AgentRecord, decision: Decision, observed_generation: int) -> Decision:
         self._write(RECOVERIES, decision.execution_id, asdict(decision))
         self.controller.telemetry.record(
             "recovery",
@@ -343,7 +345,7 @@ class Recovery:
             seat=agent.seat,
             execution_id=decision.execution_id,
             expected_generation=decision.generation,
-            observed_generation=getattr(self.store.execution_occupants(self.slug).get(agent.seat), "generation", None),
+            observed_generation=observed_generation,
             controller_epoch=self.controller.held.epoch,
             reason=decision.reason,
             mode=decision.mode,
