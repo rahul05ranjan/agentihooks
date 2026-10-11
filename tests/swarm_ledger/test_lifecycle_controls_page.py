@@ -61,9 +61,8 @@ def wait_settled(page):
 
 
 def test_an_agent_row_offers_attach_drain_cancel_and_force_stop_with_their_consequences(open_page):
-    page = open_page(with_lifecycle(force_stop="a kubernetes agent has no force stop", terminate=True))
-    expected = ["message", "attach", "drain", "cancel", "force stop", "terminate"]
-    assert acts(page).inner_text().split("\n") == expected
+    page = open_page(with_lifecycle(force_stop="a kubernetes agent has no force stop"))
+    assert acts(page).inner_text().split("\n") == ["message", "attach", "drain", "cancel", "force stop"]
     by_label = {c.label: c for c in lifecycle.CONTROLS}
     for label in ("attach", "drain", "cancel"):
         control = by_label[label]

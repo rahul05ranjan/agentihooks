@@ -123,7 +123,7 @@ def offer(agent: AgentRecord, task_revisions: Mapping[str, int], pending: str, d
         **seen(agent, task_revisions),
         "pending": pending,
         "disabled": {action: disabled(agent, action, pending, destructive) for action in AGENT_ACTIONS},
-        "terminate": not destructive or "force_stop" not in SUPPORTED.get(agent.runtime_backend, frozenset()),
+        "terminate": not destructive,
     }
 
 
@@ -189,7 +189,12 @@ def _admit(store: RedisStore, slug: str, pipe, body: tuple, task_revisions: Mapp
         return record, None
     agent = _agent(store, slug, name)
     if agent is None or agent.state == "finished" or seen(agent, task_revisions) != shown:
-        raise _conflict(store, slug, "stale", "the page is stale: this agent was replaced, finished or moved task")
+        raise _conflict(
+            store,
+            slug,
+            "stale",
+            "the page is stale: this agent was replaced, finished or moved task; wait for the next swarm view",
+        )
     now = lease.now_ms(store)
     if _pending(store, slug, pipe, name, now):
         raise _conflict(store, slug, "pending", "an earlier control on this agent is still unresolved")
@@ -295,7 +300,8 @@ def _settle(store: RedisStore, slug: str, record: dict, error: str, result: dict
                 return
             except WatchError:
                 continue
-    raise SwarmError("lifecycle controls kept changing; the operation outcome was not recorded")
+    store.redis.hset(_key(store, slug, "ops"), record["op"], json.dumps(settled))
+    raise SwarmError("lifecycle controls kept changing; the outcome was recorded but the agent was not released")
 
 
 def execute(
@@ -315,8 +321,7 @@ def execute(
         if not error:
             error, result = _apply(store, slug, agent, record, run)
     except Exception as exc:
-        _settle(store, slug, record, f"{type(exc).__name__}: {exc}", {})
-        raise
+        error, result = f"{type(exc).__name__}: {exc}", {}
     _settle(store, slug, record, error, result)
     return error
 

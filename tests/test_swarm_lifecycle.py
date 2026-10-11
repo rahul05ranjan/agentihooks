@@ -111,7 +111,7 @@ def test_offers_disable_unsupported_controls_per_backend(store):
         "task_revision": 4,
         "pending": "",
         "disabled": {"attach": "", "drain": "", "cancel": "", "force_stop": "a kubernetes agent has no force stop"},
-        "terminate": True,
+        "terminate": False,
     }
     assert view["agents"][near.name]["disabled"] == {
         "attach": "a local agent has no attach",
@@ -201,7 +201,9 @@ def test_an_old_force_stop_after_replacement_is_stale_and_leaves_the_successor(s
     with pytest.raises(lifecycle.Refused) as caught:
         lifecycle.request(store, SLUG, stale, operator=True, environ={})
     assert caught.value.status == 409
-    assert str(caught.value) == "the page is stale: this agent was replaced, finished or moved task"
+    assert str(caught.value) == (
+        "the page is stale: this agent was replaced, finished or moved task; wait for the next swarm view"
+    )
     after = {key: store.redis.dump(key) for key in store.redis.keys("*") if not key.endswith("lifecycle-conflicts")}
     assert after == before
     assert lifecycle.conflicts(store, SLUG) == {"stale": 1}
@@ -377,6 +379,12 @@ def test_the_ledger_server_queues_through_lifecycle_and_returns_fresh_status(sto
     assert caught.value.status == 403
     assert ledger_server.lifecycle_control("nowhere", body(agent, "drain"), True)[0] is None
 
+    def missing(slug, *keys):
+        raise KeyError(slug)
+
+    monkeypatch.setattr(ledger_server.repository, "read", missing)
+    assert ledger_server.lifecycle_control(SLUG, body(agent, "drain"), True) == (None, "no such ledger")
+
 
 def test_submit_still_queues_one_pending_row(store):
     row = commands.submit(store, SLUG, "swarm", ["pause"])
@@ -385,11 +393,14 @@ def test_submit_still_queues_one_pending_row(store):
     assert store.redis.lrange(store.key(SLUG, "command-order"), 0, -1) == [row["id"]]
 
 
-def test_terminate_stays_offered_where_force_stop_is_missing_or_turned_off(store):
+def test_terminate_is_offered_only_under_the_rollback_switch(store):
     remote, near = kube(store), local(store)
-    assert lifecycle.view(store, SLUG, {})["agents"][remote.name]["terminate"] is True
-    assert lifecycle.view(store, SLUG, {})["agents"][near.name]["terminate"] is False
-    assert lifecycle.view(store, SLUG, {lifecycle.SWITCH: "off"})["agents"][near.name]["terminate"] is True
+    on, off = (
+        lifecycle.view(store, SLUG, {})["agents"],
+        lifecycle.view(store, SLUG, {lifecycle.SWITCH: "off"})["agents"],
+    )
+    assert (on[remote.name]["terminate"], on[near.name]["terminate"]) == (False, False)
+    assert (off[remote.name]["terminate"], off[near.name]["terminate"]) == (True, True)
 
 
 def age(store, op, by_ms):
@@ -438,8 +449,8 @@ def test_an_unexpected_error_settles_the_operation_and_releases_the_agent(store,
     agent = kube(store)
     record = ask(store, agent, "drain")
     monkeypatch.setattr(CommandQueue, "issue", broken)
-    with pytest.raises(RuntimeError):
-        lifecycle.execute(store, SLUG, {"argv": ["drain", agent.name, record["op"]]}, lambda argv: "")
+    row = {"argv": ["drain", agent.name, record["op"]]}
+    assert lifecycle.execute(store, SLUG, row, lambda argv: "") == "RuntimeError: queue offline"
     op = lifecycle.operations(store, SLUG)[0]
     assert (op["state"], op["error"]) == ("failed", "RuntimeError: queue offline")
     assert lifecycle.view(store, SLUG, {})["agents"][agent.name]["pending"] == ""
@@ -465,6 +476,9 @@ def test_settling_reports_when_the_records_keep_changing(store, monkeypatch):
     monkeypatch.setattr(store.redis, "pipeline", lambda: Busy())
     with pytest.raises(SwarmError):
         lifecycle.execute(store, SLUG, {"argv": ["drain", agent.name, record["op"]]}, lambda argv: "")
+    saved = json.loads(store.redis.hget(store.key(SLUG, "lifecycle-ops"), record["op"]))
+    assert saved["state"] == "failed"
+    assert saved["error"] == "commands kept changing; nothing was recorded"
 
 
 def finish(store, agent, outcome):
