@@ -19,6 +19,7 @@ from scripts.profiles import binding, plugins
 from scripts.swarm import (
     affinity,
     capacity,
+    default_models,
     effort_range,
     host_budget,
     live_binding,
@@ -86,10 +87,11 @@ def preserves_effort(recorded: bool, lane: str) -> bool:
     return recorded and lane != MASTER
 
 
-def _lane_default(lane, agent, chosen):
+def _lane_default(lane, agent, chosen, config=None):
+    model = default_models.model(config, agent)
     if lane == MASTER:
-        return model_pick.frontier(agent)
-    return model_pick.ModelPick(chosen.get("model"), chosen.get("effort"))
+        return model_pick.frontier(agent, model)
+    return model_pick.ModelPick(_set(chosen.get("model")) or model, chosen.get("effort"))
 
 
 def herdr_call(args):
@@ -517,10 +519,17 @@ class HerdrRuntime:
             )
         elif lane in PICKED_LANES:
             picked = timing.call(
-                model_pick.pick, agent, {} if quota_transfer else chosen, task, environ, effort_range.of(config)
+                model_pick.pick,
+                agent,
+                {} if quota_transfer else chosen,
+                task,
+                environ,
+                effort_range.of(config),
+                default_models.model(config, agent),
             )
         else:
-            picked = _lane_default(lane, agent, {} if quota_transfer else chosen)
+            picked = _lane_default(lane, agent, {} if quota_transfer else chosen, config)
+        picked = replace(picked, model=_set(picked.model) or default_models.model(config, agent))
         picked = replace(picked, effort=saved["effort"]) if saved else picked
         mode = [] if lane != "plan" else PLAN_MODE if agent == "claude" else codex_plan_mode(environ)
         route = ["--route", saved["account"]] if saved.get("account") else []
@@ -576,7 +585,7 @@ class HerdrRuntime:
             agent.overlays,
         )
         argv += _pinned(agent.overlays, agent.profile_decision.get("bundle_revision"))
-        defaults = _lane_default(agent.lane, agent.harness, config.lanes.get(agent.lane, {}))
+        defaults = _lane_default(agent.lane, agent.harness, config.lanes.get(agent.lane, {}), config)
         picked = model_pick.ModelPick(
             agent.model or defaults.model,
             agent.effort or defaults.effort,
@@ -610,7 +619,12 @@ class HerdrRuntime:
     def operator(self, config, name, profile, text):
         """Open a claude session for the operator in the swarm's space, bound to the swarm with no task or lane slot."""
         argv = self._argv(config, name, "claude", text, f"{name}.md", profile)
-        model = _model_args("claude", model_pick.frontier("claude").__dict__, dict(os.environ), effort_range.of(config))
+        model = _model_args(
+            "claude",
+            model_pick.frontier("claude", default_models.model(config, "claude")).__dict__,
+            dict(os.environ),
+            effort_range.of(config),
+        )
         return self._launch(config, naming.OPERATOR, "", name, [*argv, "--", *model])
 
     def _holds(self, pane_id, conversation_id):

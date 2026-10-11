@@ -33,10 +33,10 @@ class ModelPick:
     confidence: float | None = None
 
 
-def frontier(harness: str) -> ModelPick:
+def frontier(harness: str, default_model: str = "") -> ModelPick:
     from scripts.init_agent import MODEL_DEFAULTS
 
-    return ModelPick(MODEL_DEFAULTS[harness], FRONTIER_EFFORT, "frontier")
+    return ModelPick(default_model or MODEL_DEFAULTS[harness], FRONTIER_EFFORT, "frontier")
 
 
 def band(harness: str, difficulty: str | None, rank: str | None) -> tuple[ModelPick, ...]:
@@ -57,7 +57,9 @@ def described(option: ModelPick) -> str:
     return f"{LABELS.get(option.model, option.model)} at {EFFORT_WORDS[option.effort]}: {fit}"
 
 
-def pick(harness: str, lane: dict, task: dict, environ: dict, bounds: tuple = DEFAULT_RANGE) -> ModelPick:
+def pick(
+    harness: str, lane: dict, task: dict, environ: dict, bounds: tuple = DEFAULT_RANGE, default_model: str = ""
+) -> ModelPick:
     from scripts.init_agent import model_effort
 
     default = ModelPick(lane.get("model", ""), lane.get("effort", ""))
@@ -69,10 +71,20 @@ def pick(harness: str, lane: dict, task: dict, environ: dict, bounds: tuple = DE
     if default.model == SONNET:
         return ModelPick(SONNET, SONNET_EFFORT, BAND)
     sonnet = not fixed and clamp(harness, SONNET_EFFORT, bounds) == SONNET_EFFORT
+<<<<<<< HEAD
     model = default.model if fixed else model_effort(harness, [], environ)[0]
     offered = [option for option in band(harness, difficulty, rank) if sonnet or option.model != SONNET]
     options = tuple(option if option.model == SONNET else replace(option, model=model) for option in offered)
     chosen = options[offered.index(floor(offered))]
+=======
+    model = default.model if fixed else default_model or model_effort(harness, [], environ)[0]
+    options = tuple(
+        option if option.model == SONNET else replace(option, model=model)
+        for option in band(harness, difficulty, rank)
+        if sonnet or option.model != SONNET
+    )
+    chosen = floor(options)
+>>>>>>> 946bdbcbf (Configure catalog backed swarm model defaults (Refs #2672))
     if len(options) == 1:
         return chosen
     try:
