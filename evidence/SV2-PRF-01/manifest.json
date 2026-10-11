@@ -15,7 +15,7 @@
     "tests/performance/swarm_v2/workloads/browser.py": "1d72b514691125d9f71f73b8128fa2a12a8cae6a7ccc8b5732389129732f1531",
     "tests/performance/swarm_v2/workloads/memory.py": "d45dd766ca8fc33fc2da17d41d8c9392369486334d6dfc587bc2fcc5c62e58e3",
     "tests/performance/swarm_v2/workloads/idle.py": "fa5992c463e78783ea4484c6b0ad0aa907525f3c767e737c025ff4135dce4a03",
-    "scripts/swarm_v2/resource_sampling.py": "27e21ea62fa4706908a4c615e8deb9330d1d75038bb83fa32a2d282a83df874c",
+    "scripts/swarm_v2/resource_sampling.py": "0d823daea8a3765a646da3ec212adb9bb6217548444432d6b751621fa133cd93",
     "scripts/swarm_v2/resource_bench.py": "eca89be179a50a6cb4d3337e055a02d496ba3a4e3b2901595758d83858f9ec27",
     "scripts/swarm_v2/resource_profiles.py": "41a519ab6269ab93a35cd4ef8bda460ff4ef5a44879bb18649ee16124cb8cd9c"
   }

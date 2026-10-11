@@ -199,7 +199,7 @@ def measure(
     started = time.monotonic()
     child = subprocess.Popen(list(command), cwd=workdir, env=dict(env), **QUIET)
     peaks = Peaks()
-    while not _exited(child.pid) and time.monotonic() - started <= timeout:
+    while all((not _exited(child.pid), time.monotonic() - started <= timeout)):
         peaks.add(snapshot(proc, child.pid, time.monotonic()), directory_bytes(workdir))
         time.sleep(interval)
     timed_out = not _exited(child.pid)
