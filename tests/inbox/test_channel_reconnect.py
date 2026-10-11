@@ -57,3 +57,52 @@ def test_running_channel_rechecks_pending_items_after_redis_returns(backend, mon
         session(inbox, scenario)
     finally:
         server.connected = True
+
+def test_channel_opens_while_redis_is_down_and_delivers_after_restore(backend, monkeypatch):
+    import anyio
+    from redis.exceptions import RedisError
+
+    from scripts.inbox.store import InboxError
+    from tests.inbox.test_channel_server import session
+
+    server, inbox = backend
+    server.connected = False
+    monkeypatch.setattr(channel, "SETTLE_S", 0)
+    monkeypatch.setattr(channel, "RECHECK_S", 0.02)
+
+    def connect():
+        try:
+            inbox.redis.ping()
+        except RedisError as exc:
+            raise InboxError("Redis is unreachable") from exc
+        return inbox
+
+    monkeypatch.setattr(channel, "connect", connect)
+
+    async def scenario(send, receive):
+        server.connected = True
+        pending = inbox.send("alice", "bob", "queued before reconnect")
+        with anyio.fail_after(3):
+            shown = await receive()
+        assert shown["params"]["meta"]["item_id"] == pending.id
+
+    try:
+        session(None, scenario)
+    finally:
+        server.connected = True
+
+
+def test_main_keeps_serving_when_redis_is_unavailable(monkeypatch):
+    import anyio
+
+    from scripts.inbox.store import InboxError
+
+    def down():
+        raise InboxError("Redis is unreachable")
+
+    calls = []
+    monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", "bob")
+    monkeypatch.setattr(channel, "connect", down)
+    monkeypatch.setattr(anyio, "run", lambda *args: calls.append(args))
+    channel.main()
+    assert calls == [(channel.serve, None, "bob")]
