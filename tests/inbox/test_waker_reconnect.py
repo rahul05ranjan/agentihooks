@@ -117,3 +117,33 @@ def test_running_waker_wakes_pending_items_after_redis_returns(backend, monkeypa
     assert not driver.is_alive(), "outage driver did not stop"
     assert backend.errors.empty(), list(backend.errors.queue)
     assert all(subscription.closed for subscription in backend.subscriptions)
+
+
+def test_waker_reconnect_backoff_caps_and_rechecks_without_a_notification(backend, monkeypatch):
+    store, inbox = RedisStore(backend.client), InboxStore(backend.client)
+    store.create(SwarmConfig("sw", "/repo", 1, 1, state="running"))
+    store.put_agent("sw", AgentRecord("bob", "eng", "t1", pane_id="p1", harness="codex"))
+    backend.server.connected = False
+    delays = []
+
+    def sleep(delay):
+        delays.append(delay)
+        if len(delays) == 7:
+            backend.server.connected = True
+            inbox.send("alice", "bob", "pending at restore")
+
+    def prompt(self, agent, text):
+        backend.prompts.put((agent.pane_id, text))
+        backend.stopped.set()
+
+    monkeypatch.setattr(backend.client, "pubsub", subscription_factory(backend))
+    monkeypatch.setattr(time, "sleep", sleep)
+    monkeypatch.setattr(Herdr, "prompt", prompt)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            waker.run(store, Herdr(backend.prompts), now_ms, {})
+    finally:
+        backend.server.connected = True
+    assert delays == [1, 2, 4, 8, 16, 30, 30]
+    assert backend.prompts.get_nowait() == ("p1", wake.WAKE_TEXT)
+    assert all(subscription.closed for subscription in backend.subscriptions)

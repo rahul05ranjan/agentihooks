@@ -142,3 +142,79 @@ def test_main_keeps_serving_when_redis_is_unavailable(monkeypatch):
     monkeypatch.setattr(anyio, "run", lambda *args: calls.append(args))
     channel.main()
     assert calls == [(channel.serve, None, "bob")]
+
+
+@pytest.mark.parametrize("startup", [False, True])
+def test_channel_reconnect_backoff_caps_at_thirty_seconds(backend, monkeypatch, startup):
+    import anyio
+    from redis.exceptions import RedisError
+
+    from scripts.inbox.store import InboxError
+    from tests.inbox.test_channel_server import session
+
+    server, inbox = backend
+    server.connected = False
+    delays, pending = [], []
+    real_sleep = anyio.sleep
+    monkeypatch.setattr(channel, "SETTLE_S", 0)
+    monkeypatch.setattr(channel, "RECHECK_S", 0.02)
+
+    def connect():
+        try:
+            inbox.redis.ping()
+        except RedisError as exc:
+            raise InboxError("Redis is unreachable") from exc
+        return inbox
+
+    async def sleep(delay):
+        if delay >= 1:
+            delays.append(delay)
+            if len(delays) == 7:
+                server.connected = True
+                pending.append(inbox.send("alice", "bob", "after capped retry"))
+        await real_sleep(0)
+
+    async def scenario(send, receive):
+        with anyio.fail_after(3):
+            shown = await receive()
+        assert shown["params"]["meta"]["item_id"] == pending[0].id
+
+    monkeypatch.setattr(channel, "connect", connect)
+    monkeypatch.setattr(anyio, "sleep", sleep)
+    try:
+        session(None if startup else inbox, scenario)
+    finally:
+        server.connected = True
+    assert delays == [1, 2, 4, 8, 16, 30, 30]
+
+
+def test_channel_closes_while_startup_reconnect_is_waiting(backend, monkeypatch):
+    import anyio
+
+    from scripts.inbox.store import InboxError
+    from tests.inbox.test_channel_server import session
+
+    server, inbox = backend
+    server.connected = False
+    monkeypatch.setattr(channel, "SETTLE_S", 0)
+
+    def connect():
+        raise InboxError("Redis is unreachable")
+
+    async def scenario(send, receive):
+        entered = anyio.Event()
+
+        async def sleep(delay):
+            entered.set()
+            await anyio.sleep_forever()
+
+        monkeypatch.setattr(anyio, "sleep", sleep)
+        with anyio.fail_after(3):
+            await entered.wait()
+
+    monkeypatch.setattr(channel, "connect", connect)
+    try:
+        session(None, scenario)
+        assert server.connected is False
+    finally:
+        server.connected = True
