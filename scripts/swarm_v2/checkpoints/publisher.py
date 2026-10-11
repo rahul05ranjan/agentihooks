@@ -1,11 +1,13 @@
 """Checkpoint publication: materials, then a verified manifest, then a write-once pointer under the task generation."""
 
 import json
+import re
 from collections import Counter
 from dataclasses import asdict, dataclass
 
+from hooks import secrets
 from scripts.swarm_v2.artifacts.base import ArtifactRef, ArtifactStore
-from scripts.swarm_v2.checkpoints import model
+from scripts.swarm_v2.checkpoints import model, native
 
 METRIC = "checkpoint_publish_failures"
 PROMOTED = "promoted"
@@ -16,6 +18,11 @@ SCOPE = "scope_mismatch"
 CONFLICT = "identity_conflict"
 INVALID = "invalid_sequence"
 WIDTH = 10
+REDACTIONS = "secret_redactions"
+MODE = "strict"
+MARK = b"[REDACTED:"
+ESCAPE = "surrogateescape"
+LINE = re.compile(r"[^\n]*\n|[^\n]+")
 
 
 @dataclass(frozen=True)
@@ -52,6 +59,55 @@ def _read(store: ArtifactStore, key: str) -> dict:
     return json.loads(store.backend.read(key, 0, store.backend.size(key)))
 
 
+def _redacted(value: object, key: str = "") -> object:
+    """A pattern spanning a record key and its value hides the whole value; a redaction marker never rescans."""
+    if isinstance(value, dict):
+        safe = {name: secrets.redact(name, mode=MODE) for name in value}
+        return {safe[name]: _redacted(item, safe[name]) for name, item in value.items()}
+    if isinstance(value, list):
+        return [_redacted(item, key) for item in value]
+    if not isinstance(value, str):
+        return value
+    redacted = secrets.redact(value, mode=MODE)
+    if redacted != value:
+        return redacted
+    hits = secrets.scan(json.dumps({key: value}), mode=MODE)
+    return f"[REDACTED:{hits[0]}]" if hits else value
+
+
+def _rewritten(line: str, record: object) -> str:
+    cleaned = _redacted(record)
+    if cleaned == record:
+        return line
+    body = line.rstrip("\r\n")
+    return json.dumps(cleaned, separators=(",", ":"), ensure_ascii=False) + line[len(body) :]
+
+
+def _scrubbed_text(text: str) -> str:
+    lines = LINE.findall(text)
+    try:
+        records = [json.loads(line) for line in lines]
+    except ValueError:
+        return secrets.redact(text, mode=MODE)
+    return "".join(_rewritten(line, record) for line, record in zip(lines, records, strict=True))
+
+
+def _scrubbed(material: bytes) -> tuple[bytes, int]:
+    found = native.members(material)
+    cleaned = {name: _scrubbed_text(data.decode(errors=ESCAPE)).encode(errors=ESCAPE) for name, data in found.items()}
+    count = sum(cleaned[name].count(MARK) - data.count(MARK) for name, data in found.items())
+    return native.archive(tuple(cleaned.items())), count
+
+
+def _withheld(doc: dict, materials: dict[str, bytes]) -> tuple[dict, dict[str, bytes]]:
+    """Native conversation files are copied verbatim, so every secret match is redacted before anything is kept and
+    only the count is recorded."""
+    if model.NATIVE_SESSION not in materials:
+        return doc, materials
+    scrubbed, count = _scrubbed(materials[model.NATIVE_SESSION])
+    return {**doc, REDACTIONS: count}, {**materials, model.NATIVE_SESSION: scrubbed}
+
+
 class Publisher:
     """Only a pointer makes a checkpoint current. The generation's single owner writes it once its manifest verifies;
     a newer generation's pointer fences an older attempt before its manifest commit, before and after its pointer
@@ -83,6 +139,10 @@ class Publisher:
         blocked = self._blocked(checkpoint_id, sequence)
         if blocked and blocked != REPLAYED:
             return self.refuse(blocked)
+        try:
+            doc, materials = _withheld(doc, materials)
+        except native.NativeError as error:
+            return self.refuse(str(error))
         listed = _listed(doc, materials)
         recorded = self.store.recorded(checkpoint_id)
         if recorded not in (None, ArtifactRef.of(_encoded(listed))):
