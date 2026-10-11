@@ -236,7 +236,7 @@ def accept(path: Path, candidate: dict, policy: Policy, requalified_by: str) -> 
     if outcome["decision"] in INSTALLS:
         if current is not None:
             _install(_previous(path), current)
-        _install(path, candidate)
+        _install(path, outcome["accepted"])
     return outcome
 
 
