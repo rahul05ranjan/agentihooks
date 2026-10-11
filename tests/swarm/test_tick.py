@@ -24,12 +24,13 @@ class FakeLedger:
         return []
 
     def state(self, slug):
-        log = getattr(self, "log", [])
+        log, tasks = getattr(self, "log", []), self.tasks(slug)
+        stamps = {f"tasks/{t['id']}/rank": {"by": "operator"} for t in tasks if "rank" in t}
         return {
             "overview": "Project intent",
-            "tasks": self.tasks(slug),
+            "tasks": tasks,
             "phases": getattr(self, "phases", []),
-            "_meta": {"rev": len(log), "events": log},
+            "_meta": {"rev": len(log), "events": log, "stamps": stamps},
             "followups": [],
         }
 
@@ -170,6 +171,15 @@ class FakeRuntime:
     def close_space(self, config):
         self.closed_spaces.append(config.slug)
         return True
+
+    def pane_tail(self, pane_id, lines):
+        return ""
+
+    def launched_pane(self, pane_id, name):
+        return True
+
+    def close_pane(self, pane_id):
+        self.closed.append(pane_id)
 
 
 @pytest.fixture

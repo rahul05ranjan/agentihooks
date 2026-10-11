@@ -36,9 +36,14 @@ def _attempts(store: RedisStore, slug: str) -> tuple[list, list]:
             "seat": seat,
             "task": agent.task,
             "phase": fleet_dashboard.ACTIVE,
+<<<<<<< HEAD
             "pool": agent.runtime_target.get("pool", agent.runtime_backend),
             "terminal": "attached" if agent.pane_id else "detached",
             "authority": beats.get(agent.execution_id, {}).get("state", "local"),
+=======
+            "terminal": "attached" if agent.pane_id else "detached",
+            "authority": beats[agent.execution_id]["state"] if agent.execution_id in beats else "local",
+>>>>>>> origin/dev
         }
         for seat, agent in sorted(store.execution_occupants(slug).items())
     ]
@@ -48,8 +53,12 @@ def _attempts(store: RedisStore, slug: str) -> tuple[list, list]:
             "seat": "",
             "task": task,
             "phase": fleet_dashboard.PENDING,
+<<<<<<< HEAD
             "pool": "",
             "requested": json.loads(raw).get("resources"),
+=======
+            "requested": json.loads(raw)["resources"],
+>>>>>>> origin/dev
             "terminal": "detached",
             "authority": "pending",
         }
@@ -62,14 +71,22 @@ def _quota(store: RedisStore, now_ms: int) -> list[dict]:
     found = []
     for harness in sorted(quota.HARNESSES):
         for account in sorted(quota.latest_all(store.redis, harness)):
+<<<<<<< HEAD
             until = int(store.redis.get(quota.wait_key(account, harness)) or 0)
+=======
+            until = int(store.redis.get(quota.wait_key(account, harness)) or now_ms)
+>>>>>>> origin/dev
             waiting = until > now_ms
             found.append(
                 {
                     "account": account,
                     "state": "waiting" if waiting else "allowed",
                     "since_ms": until - quota.WAIT_MS if waiting else now_ms,
+<<<<<<< HEAD
                     "resets_at_ms": until if waiting else now_ms,
+=======
+                    "resets_at_ms": until,
+>>>>>>> origin/dev
                 }
             )
     return found
@@ -77,7 +94,11 @@ def _quota(store: RedisStore, now_ms: int) -> list[dict]:
 
 def sample(store: RedisStore, slug: str, now_ms: int, feed_at: int) -> dict:
     active, pending = _attempts(store, slug)
+<<<<<<< HEAD
     archive = Health(store, slug, clock=lambda: now_ms / 1000).diagnose()["pipeline"].get("archive", [])
+=======
+    archive = Health(store, slug, clock=lambda: now_ms / 1000).diagnose()["pipeline"]["archive"]
+>>>>>>> origin/dev
     return {
         "seq": now_ms,
         "at_ms": now_ms,
@@ -93,6 +114,7 @@ def sample(store: RedisStore, slug: str, now_ms: int, feed_at: int) -> dict:
 def _values(panels: dict) -> list[tuple[str, str, str, float]]:
     found = []
     for panel, series in panels.items():
+<<<<<<< HEAD
         if panel == "capacity":
             found += [
                 (panel, key, row["pool"], float(item["value"])) for row in series for key, item in row["series"].items()
@@ -100,6 +122,12 @@ def _values(panels: dict) -> list[tuple[str, str, str, float]]:
             continue
         for key, item in series.items():
             value = item["value"] if isinstance(item, dict) and "value" in item else item
+=======
+        if not isinstance(series, dict):
+            continue
+        for key, item in series.items():
+            value = item["value"] if isinstance(item, dict) else item
+>>>>>>> origin/dev
             if isinstance(value, dict):
                 found += [(panel, key, subject, float(count)) for subject, count in value.items()]
             elif isinstance(value, bool | int | float):

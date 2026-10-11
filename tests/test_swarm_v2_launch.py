@@ -150,6 +150,7 @@ def test_the_runtime_request_carries_the_grant_the_execution_and_its_generation(
         "execution_id": launch.agent.execution_id,
         "generation": 1,
         "account": ACCOUNT,
+        "profile": launch.agent.profile,
         "endpoints": {"AGENTIHOOKS_SWARM_API_URL": API},
     }
     assert (request.lane, request.name) == ("eng", launch.agent.name)
@@ -903,6 +904,26 @@ def test_a_tick_spawn_for_a_profile_the_worker_image_lacks_is_refused_before_adm
     assert world.rows() == {}
 
 
+def test_a_tick_records_the_refusal_of_an_unshipped_agent_profile(world):
+    runtime = routed(
+        {},
+        Herdr(),
+        kubernetes=world.runtime,
+        launch=partial(world.launcher.from_tick, terms=world.terms, target=pod_target),
+    )
+    config = SwarmConfig(SLUG, "agentihooks", 2, 0, api_url=OTHER_API)
+    name = world.store.next_name(SLUG, "eng")
+
+    with pytest.raises(SpawnError) as failed:
+        runtime.spawn(config, "eng", name, {"id": "task", "seat": FIRST, "profile": "designer"})
+
+    tick_module._record_spawn_failure(SLUG, world.store, AgentRecord(name, "eng", "task"), failed.value, 0)
+    assert world.store.launch_failure(SLUG, "task") == "profile designer is not shipped in the worker image"
+    assert failed.value.status == Status.REFUSED
+    assert world.runtime.requests == []
+    assert world.rows() == {}
+
+
 def test_a_launch_whose_model_answer_turned_front_end_is_refused_before_admission(world, monkeypatch):
     from scripts.swarm import profile_choice
 
@@ -1038,7 +1059,7 @@ def test_a_tick_spawn_on_a_full_account_waits_and_records_no_launch_failure(worl
         runtime.spawn(config, "eng", name, {"id": "task-2", "seat": SECOND})
 
     assert full.value.status == Status.UNAVAILABLE
-    tick_module._record_spawn_failure(SLUG, world.store, AgentRecord(name, "eng", "task-2"), full.value)
+    tick_module._record_spawn_failure(SLUG, world.store, AgentRecord(name, "eng", "task-2"), full.value, 0)
     assert world.store.launch_failure(SLUG, "task-2") == ""
     assert [row["state"] for row in world.store.launches(SLUG)] == ["waiting"]
 

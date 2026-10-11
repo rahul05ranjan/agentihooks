@@ -14,7 +14,9 @@ from scripts.swarm_v2.herdr.target import DELIVERIES, Router
 from scripts.swarm_v2.herdr.viewer import Viewer
 from scripts.swarm_v2.kubernetes.adapter import KubernetesRuntime
 from scripts.swarm_v2.kubernetes.approved import INDEX, AccountRoute, FleetAccounts, SecretKeys
+from scripts.swarm_v2.kubernetes.cleanup import Cleanup
 from scripts.swarm_v2.kubernetes.client import ApiRefused, KubeHttp, PodApi, PodClient
+from scripts.swarm_v2.kubernetes.completion import Completion
 from scripts.swarm_v2.kubernetes.failures import AccountSlot, Recovery
 from scripts.swarm_v2.kubernetes.grants import PodGrants, Supervision
 from scripts.swarm_v2.kubernetes.pool import WorkerPool
@@ -29,7 +31,7 @@ from scripts.swarm_v2.launch import DistributedLaunch, LaunchTerms
 from scripts.swarm_v2.operator_auth import OPERATOR
 from scripts.swarm_v2.quota import QuotaObservations
 from scripts.swarm_v2.registry import FleetRegistry
-from scripts.swarm_v2.runtime.base import LOCAL_PROFILES, SpawnRequest
+from scripts.swarm_v2.runtime.base import SpawnRequest
 from scripts.swarm_v2.runtime.routed import RoutedRuntime, routed
 
 if TYPE_CHECKING:
@@ -45,6 +47,7 @@ CAP_ENV = "AGENTIHOOKS_LAUNCH_CAP"
 PROJECTS_ENV = "AGENTIHOOKS_LAUNCH_PROJECTS"
 BRAIN_ENV = "AGENTIHOOKS_LAUNCH_BRAIN"
 EXPORTER_ENV = "AGENTIHOOKS_WORKER_EXPORTER"
+DEFAULT_EXPORTER = ("python", "-m", "scripts.swarm_v2.session_export")
 TERMINAL_ENV = "AGENTIHOOKS_WORKER_TERMINAL"
 AGGREGATION_ENV = "AGENTIHOOKS_TERMINAL_AGGREGATION"
 REQUIRED = (POLICY_ENV, IMAGE_TAG_ENV, PROFILE_ENV, CAP_ENV, PROJECTS_ENV, BRAIN_ENV)
@@ -78,9 +81,9 @@ def pod_policy(path: str) -> dict:
     return policy
 
 
-def _exporter(value: str | None) -> tuple[str, ...] | None:
+def _exporter(value: str | None) -> tuple[str, ...]:
     if not value:
-        return None
+        return DEFAULT_EXPORTER
     refused = WorkerSettingsRefused(f"{EXPORTER_ENV} must be a JSON list of command words")
     try:
         words = json.loads(value)
@@ -109,7 +112,7 @@ class Workers:
     policy: dict
     image_tag: str
     profile: str
-    exporter: tuple[str, ...] | None
+    exporter: tuple[str, ...]
     terminal: Exposure | None
 
     @classmethod
@@ -125,8 +128,6 @@ class Workers:
         if not image_tag.is_tag(environ[IMAGE_TAG_ENV]):
             raise WorkerSettingsRefused(f"{IMAGE_TAG_ENV} must be an image tag, never a digest")
         policy, profile = pod_policy(environ[POLICY_ENV]), environ[PROFILE_ENV]
-        if profile in LOCAL_PROFILES:
-            raise WorkerSettingsRefused(f"{PROFILE_ENV} {profile} runs only on the workstation")
         if profile not in policy["profiles"]:
             raise WorkerSettingsRefused(f"the Pod policy has no {profile} profile")
         projects = tuple(project.strip() for project in environ[PROJECTS_ENV].split(",") if project.strip())
@@ -161,6 +162,7 @@ class Workers:
                 "task_id": task["id"],
                 "lane": request.lane,
                 "name": request.name,
+                "profile": task["profile"],
                 "endpoints": task["endpoints"],
                 **({"checkpoint": task["checkpoint"]} if task.get("checkpoint") else {}),
             },
@@ -234,6 +236,16 @@ class GrantRelease:
         self.grants.revoke(self.slug, execution_id)
 
 
+class AttachRelease:
+    """Herdr upkeep attaches only to attempts with a recorded host key, so forgetting the key releases the attach."""
+
+    def __init__(self, keys: HostKeys, slug: str) -> None:
+        self.keys, self.slug = keys, slug
+
+    def release(self, execution_id: str) -> None:
+        self.keys.forget(self.slug, execution_id)
+
+
 class NoCheckpoints:
     """No checkpoint store is deployed yet, so every failure waits for an explicit fresh or resume decision."""
 
@@ -249,6 +261,7 @@ class RecoveryPass:
         self.recovery, self.api, self.selector = recovery, api, selector
         self.version, self.listed = "", {}
         self.replacements: Replacements | None = None
+        self.completion: Completion | None = None
 
     def __call__(self) -> dict[str, str]:
         pods, version = self.api.snapshot(self.selector)
@@ -262,6 +275,8 @@ class RecoveryPass:
         seen = self.recovery.reconcile(pods, self.api.ready_nodes(), list(gone.values()))
         if self.replacements is not None:
             self.replacements()
+        if self.completion is not None:
+            self.completion(pods)
         return seen
 
     def _deleted(self) -> dict[str, dict]:
@@ -292,6 +307,9 @@ def recovery_pass(
     releases = {"grant": GrantRelease(grants, slug), "account": AccountSlot(controller.store, slug, capacity)}
     recovery = Recovery(controller.store, slug, controller, NoCheckpoints(), releases, workers.image_tag)
     recovering = RecoveryPass(recovery, api, f"{OWNER_LABEL}={owner_for(slug)}")
+    attach = AttachRelease(HostKeys(controller.store), slug)
+    cleanup = Cleanup(controller.store, slug, api, controller.require, attach, releases["grant"])
+    recovering.completion = Completion(controller.store, slug, cleanup)
     if ledger is not None:
         recovering.replacements = Replacements(recovery, service.runtime.relaunch, ledger)
     return recovering

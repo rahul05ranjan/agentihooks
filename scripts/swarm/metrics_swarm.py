@@ -199,7 +199,11 @@ def delivery_rows(slug: str, doc: dict, agents: list, pulls: dict) -> list[dict]
 
 def queue_rows(slug: str, doc: dict, agents: list, pulls: dict, now_ms: int) -> list[dict]:
     rows = []
+<<<<<<< HEAD
     for task in doc.get("tasks", []):
+=======
+    for task in doc["tasks"]:
+>>>>>>> origin/dev
         pull = pulls.get(task.get("pr_url"))
         if pull is None or pull.state != "OPEN" or not pull.queued:
             continue
@@ -210,6 +214,7 @@ def queue_rows(slug: str, doc: dict, agents: list, pulls: dict, now_ms: int) -> 
 
 def launch_rows(slug: str, doc: dict, launches: list, agents: list) -> list[dict]:
     kinds = {"failed": "launch_failed", "waiting": "launch_waiting"}
+<<<<<<< HEAD
     return [
         _with_finding_kind(
             _event(
@@ -225,6 +230,19 @@ def launch_rows(slug: str, doc: dict, launches: list, agents: list) -> list[dict
         for source in launches
         if source["state"] in kinds
     ]
+=======
+    rows = []
+    for source in launches:
+        if source["state"] not in kinds:
+            continue
+        agent = {**next((agent for agent in agents if agent["name"] == source["agent"]), {}), "name": source["agent"]}
+        identity = [source["agent"], source["at"]]
+        event = _event(
+            slug, _task(doc, source["task"]), agent, source["at"], kinds[source["state"]], identity, source["error"]
+        )
+        rows.append(_with_finding_kind(event))
+    return rows
+>>>>>>> origin/dev
 
 
 def gate_rows(slug: str, doc: dict, agents: list, gates: list) -> tuple[list, list]:
@@ -337,7 +355,10 @@ def read_review_events(slug: str, box: metrics_outbox.Outbox) -> LogBatch:
                     "kind": f"intent {source['verdict']}",
                     "target": f"tasks/{source['task']}",
                     "at": source["at"],
+<<<<<<< HEAD
                     "review_id": source["_source_id"],
+=======
+>>>>>>> origin/dev
                 }
             )
         state = json.loads(source["classifier_input"])["state"]

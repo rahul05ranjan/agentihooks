@@ -3,8 +3,11 @@ import sqlite3
 from collections.abc import Mapping
 from functools import partial
 
+<<<<<<< HEAD
 from redis.exceptions import RedisError
 
+=======
+>>>>>>> origin/dev
 from scripts.swarm import bottleneck, freeze, metrics_fleet, metrics_ledger, metrics_outbox, metrics_swarm, stages
 from scripts.swarm.ledger_client import LedgerClient
 from scripts.swarm.store import SwarmError
@@ -23,6 +26,11 @@ def _collect(slug, now_ms, swarm, box, errors):
     metrics_swarm.record_pass(box, slug, now_ms, swarm.store, watched, swarm.findings, pulls)
     bottleneck.record(box, swarm.store, slug, now_ms, swarm.doc.get("tasks", []))
     stages.record(box, swarm.store, slug, now_ms, swarm.doc.get("tasks", []))
+<<<<<<< HEAD
+=======
+    from redis.exceptions import RedisError
+
+>>>>>>> origin/dev
     try:
         metrics_fleet.record(box, swarm.store, slug, now_ms)
     except (OSError, SwarmError, ValueError, KeyError, RedisError) as exc:
