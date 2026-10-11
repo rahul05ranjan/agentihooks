@@ -33,6 +33,7 @@ SUFFIXES = {
 }
 DONE_PHASES = ("Succeeded", "Failed")
 PASSED_ENV = ("PATH", "LANG", "PLAYWRIGHT_BROWSERS_PATH")
+VERSION_RUN = {"capture_output": True, "text": True, "timeout": 60}
 TOOLS = {
     "python": [sys.executable, "--version"],
     "pytest": [sys.executable, "-m", "pytest", "--version"],
@@ -40,12 +41,21 @@ TOOLS = {
     "cc": ["cc", "--version"],
     "kernel": ["uname", "-r"],
 }
+REQUIRED = {
+    "run": (("--suite", Path), ("--root", Path), ("--generation", int), ("--source", str), ("--output", Path)),
+    "nodes": (("--nodes", Path), ("--pods", Path), ("--output", Path)),
+    "derive": (("--measurements", Path), ("--nodes", Path), ("--output", Path)),
+    "promote": (("--accepted", Path), ("--candidate", Path)),
+}
+OPTIONAL = {"derive": (("--markdown", Path, None), ("--min-repeats", int, profiles.Policy.min_repeats))}
+KEEPS = ("promoted", "replayed")
+TIMEOUT = 600
 
 
 def _amount(text: str) -> Decimal:
-    for suffix in sorted(SUFFIXES, key=len, reverse=True):
+    for suffix, scale in SUFFIXES.items():
         if text.endswith(suffix):
-            return Decimal(text[: -len(suffix)]) * SUFFIXES[suffix]
+            return Decimal(text[: -len(suffix)]) * scale
     return Decimal(text)
 
 
@@ -64,9 +74,9 @@ def _requests(container: Mapping) -> tuple[Decimal, int]:
 
 def _pod_requests(pod: Mapping) -> tuple[Decimal, int]:
     spec = pod["spec"]
-    main = [_requests(c) for c in spec.get("containers", [])]
+    main = [_requests(c) for c in spec["containers"]]
     init = [_requests(c) for c in spec.get("initContainers", [])]
-    memory = max([sum((m for m, _ in main), Decimal(0)), *(m for m, _ in init)])
+    memory = max([sum(m for m, _ in main), *(m for m, _ in init)])
     cpu = max([sum(c for _, c in main), *(c for _, c in init)])
     return memory, cpu
 
@@ -76,10 +86,10 @@ def nodes(listing: Mapping, pods: Mapping) -> list[dict]:
     used: dict[str, list] = {}
     for pod in pods["items"]:
         node = pod["spec"].get("nodeName")
-        if not node or pod.get("status", {}).get("phase") in DONE_PHASES:
+        if not node or pod["status"]["phase"] in DONE_PHASES:
             continue
         memory, cpu = _pod_requests(pod)
-        total = used.setdefault(node, [Decimal(0), 0, 0])
+        total = used.setdefault(node, [0, 0, 0])
         total[0] += memory
         total[1] += cpu
         total[2] += 1
@@ -87,7 +97,7 @@ def nodes(listing: Mapping, pods: Mapping) -> list[dict]:
     for item in listing["items"]:
         name, labels = item["metadata"]["name"], item["metadata"].get("labels", {})
         allocatable = item["status"]["allocatable"]
-        memory, cpu, count = used.get(name, [Decimal(0), 0, 0])
+        memory, cpu, count = used.get(name, (0, 0, 0))
         rows.append(
             {
                 "name": name,
@@ -108,7 +118,7 @@ def versions(tools: Mapping[str, Sequence[str]]) -> dict[str, str]:
     found = {}
     for name, command in tools.items():
         try:
-            done = subprocess.run(list(command), capture_output=True, text=True, timeout=60)
+            done = subprocess.run(list(command), **VERSION_RUN)
         except (FileNotFoundError, subprocess.TimeoutExpired):
             found[name] = "absent"
             continue
@@ -117,13 +127,12 @@ def versions(tools: Mapping[str, Sequence[str]]) -> dict[str, str]:
     return found
 
 
-def _meminfo() -> dict[str, int]:
-    rows = Path("/proc/meminfo").read_text().splitlines()
-    return {line.split(":")[0]: int(line.split()[1]) // 1024 for line in rows}
+def meminfo(text: str) -> dict[str, int]:
+    return {line.split(":")[0]: int(line.split()[1]) // 1024 for line in text.splitlines()}
 
 
 def host() -> dict:
-    memory = _meminfo()
+    memory = meminfo(Path("/proc/meminfo").read_text())
     return {
         "cpus": os.cpu_count(),
         "memory_total_mib": memory["MemTotal"],
@@ -133,12 +142,12 @@ def host() -> dict:
     }
 
 
-def _environment(workdir: Path, children: int) -> dict[str, str]:
+def environment(workdir: Path, children: int) -> dict[str, str]:
     passed = {name: os.environ[name] for name in PASSED_ENV if name in os.environ}
     return {**passed, "HOME": str(workdir), "TMPDIR": str(workdir), "CHILDREN": str(children)}
 
 
-def run(suite: Path, root: Path, generation: int, tools: Mapping[str, Sequence[str]] = TOOLS, source: str = "") -> dict:
+def run(suite: Path, root: Path, generation: int, tools: Mapping[str, Sequence[str]], source: str) -> dict:
     """Measure every workload at every child count and repeat, each in a fresh workdir removed afterwards."""
     plan = json.loads(suite.read_text())
     root = root.resolve()
@@ -158,8 +167,8 @@ def run(suite: Path, root: Path, generation: int, tools: Mapping[str, Sequence[s
                     "workdir": workdir,
                 }
                 command = [part.format(**values) for part in workload["command"]]
-                env = _environment(workdir, children)
-                measured = sampling.measure(command, workdir, env, plan["interval"], workload.get("timeout", 600))
+                env = environment(workdir, children)
+                measured = sampling.measure(command, workdir, env, plan["interval"], workload.get("timeout", TIMEOUT))
                 shutil.rmtree(workdir)
                 runs.append(
                     {
@@ -186,38 +195,25 @@ def _write(path: Path, value) -> None:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
-    measure = commands.add_parser("run")
-    measure.add_argument("--suite", type=Path, required=True)
-    measure.add_argument("--root", type=Path, required=True)
-    measure.add_argument("--generation", type=int, required=True)
-    measure.add_argument("--source", default="")
-    measure.add_argument("--output", type=Path, required=True)
-    capacity = commands.add_parser("nodes")
-    capacity.add_argument("--nodes", type=Path, required=True)
-    capacity.add_argument("--pods", type=Path, required=True)
-    capacity.add_argument("--output", type=Path, required=True)
-    build = commands.add_parser("derive")
-    build.add_argument("--measurements", type=Path, required=True)
-    build.add_argument("--nodes", type=Path, required=True)
-    build.add_argument("--output", type=Path, required=True)
-    build.add_argument("--markdown", type=Path)
-    build.add_argument("--min-repeats", type=int, default=profiles.Policy.min_repeats)
-    gate = commands.add_parser("promote")
-    gate.add_argument("--accepted", type=Path, required=True)
-    gate.add_argument("--candidate", type=Path, required=True)
+    for name, flags in REQUIRED.items():
+        command = commands.add_parser(name)
+        for flag, kind in flags:
+            command.add_argument(flag, type=kind, required=True)
+        for flag, kind, default in OPTIONAL.get(name, ()):
+            command.add_argument(flag, type=kind, default=default)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "run":
-        _write(args.output, run(args.suite, args.root, args.generation, source=args.source))
+        _write(args.output, run(args.suite, args.root, args.generation, TOOLS, args.source))
         return 0
     if args.command == "nodes":
         rows = nodes(json.loads(args.nodes.read_text()), json.loads(args.pods.read_text()))
-        _write(args.output, {"read_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "nodes": rows})
+        _write(args.output, {"read_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "nodes": rows})
         return 0
     if args.command == "derive":
         policy = profiles.Policy(min_repeats=args.min_repeats)
@@ -233,7 +229,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     outcome = profiles.accept(args.accepted, json.loads(args.candidate.read_text()), profiles.Policy())
     print(json.dumps({"decision": outcome["decision"], "changes": outcome["changes"]}))
-    return 0 if outcome["decision"] in ("promoted", "replayed") else 1
+    return 0 if outcome["decision"] in KEEPS else 1
 
 
 if __name__ == "__main__":

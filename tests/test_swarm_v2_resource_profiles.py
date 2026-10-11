@@ -38,7 +38,14 @@ def memory_runs(scale=1.0):
 
 
 def measured(runs, generation=1, tools=None):
-    return {"suite": "fixture", "generation": generation, "tools": tools or TOOLS, "host": {"cpus": 4}, "runs": runs}
+    return {
+        "suite": "fixture",
+        "generation": generation,
+        "source": "fixture run",
+        "tools": tools or TOOLS,
+        "host": {"cpus": 4},
+        "runs": runs,
+    }
 
 
 NODES = [
@@ -180,19 +187,21 @@ def test_compare_ignores_changes_within_tolerance():
 
 def test_promote_decides_first_replay_stale_conflict_requalify_and_upgrade():
     accepted = profiles.derive(measured(memory_runs()), NODES, POLICY)
-    assert profiles.promote(None, accepted, POLICY)["decision"] == "promoted"
-    assert profiles.promote(accepted, json.loads(json.dumps(accepted)), POLICY)["decision"] == "replayed"
+    assert profiles.promote(None, accepted, POLICY) == {"decision": "promoted", "accepted": accepted, "changes": None}
+    replay = json.loads(json.dumps(accepted))
+    assert profiles.promote(accepted, replay, POLICY) == {"decision": "replayed", "accepted": accepted, "changes": None}
     stale = profiles.derive(measured(memory_runs(), 0), NODES, POLICY)
-    assert profiles.promote(accepted, stale, POLICY)["decision"] == "stale"
+    assert profiles.promote(accepted, stale, POLICY) == {"decision": "stale", "accepted": accepted, "changes": None}
     clash = profiles.derive(measured(memory_runs(2.0), 1), NODES, POLICY)
-    assert profiles.promote(accepted, clash, POLICY)["decision"] == "conflict"
+    assert profiles.promote(accepted, clash, POLICY) == {"decision": "conflict", "accepted": accepted, "changes": None}
     grown = profiles.derive(measured(memory_runs(1.5), 2, {**TOOLS, "workload:memory": "2"}), NODES, POLICY)
     held = profiles.promote(accepted, grown, POLICY)
-    assert held["decision"] == "requalify" and held["accepted"] is accepted
+    assert held == {"decision": "requalify", "accepted": accepted, "changes": profiles.compare(accepted, grown, POLICY)}
+    assert held["accepted"] is accepted
     upgraded = profiles.derive(measured(memory_runs(), 3, {**TOOLS, "python": "3.12.2"}), NODES, POLICY)
     moved = profiles.promote(accepted, upgraded, POLICY)
     assert moved["decision"] == "promoted" and moved["accepted"] is upgraded
-    assert moved["changes"]["tools_changed"] == {"python": ["3.12.1", "3.12.2"]}
+    assert moved["changes"] == {"material": [], "missing": [], "tools_changed": {"python": ["3.12.1", "3.12.2"]}}
 
 
 def test_accept_writes_only_a_promoted_report(tmp_path):
@@ -201,6 +210,7 @@ def test_accept_writes_only_a_promoted_report(tmp_path):
     path = folder / "accepted.json"
     accepted = profiles.derive(measured(memory_runs()), NODES, POLICY)
     assert profiles.accept(path, accepted, POLICY)["decision"] == "promoted"
+    assert path.read_text() == json.dumps(accepted, indent=2, sort_keys=True) + "\n"
     before = path.read_bytes()
     grown = profiles.derive(measured(memory_runs(1.5), 2), NODES, POLICY)
     assert profiles.accept(path, grown, POLICY)["decision"] == "requalify"
@@ -215,6 +225,66 @@ def test_markdown_names_every_profile_refusal_and_node():
     assert "| memory | 1536 | 1250 | 2048 |" in text
     assert "idle: an idle sample cannot size a worker" in text
     assert "| node-a | 14000 | 3500 | memory 7 | yes |" in text
+
+
+@pytest.mark.parametrize(
+    ("children", "processes", "reason"),
+    [(1, 2, None), (2, 3, None), (0, 2, profiles.CHILDLESS_REFUSAL), (1, 1, profiles.CHILDLESS_REFUSAL)],
+)
+def test_child_activity_needs_children_and_more_than_one_process(children, processes, reason):
+    runs = [run("memory", children, r, 100, processes=processes) for r in (1, 2)]
+    assert profiles._refusal("memory", runs, POLICY) == reason
+
+
+def test_coexistence_holds_profiles_that_exactly_fill_a_node():
+    half = {
+        "limits": {"memory_mib": 7000, "cpu_millis": 4000, "ephemeral_mib": 1024},
+        "requests": {"memory_mib": 7000, "cpu_millis": 1750},
+    }
+    (row,) = profiles.coexistence({"a": half, "b": half}, NODES)
+    assert row["fits"] == {"a": 2, "b": 2} and row["all_profiles_together"] is True
+
+
+def test_refusal_names_every_refused_class():
+    runs = [run("idle", 0, 1, 40, processes=1), run("general", 0, 1, 90, processes=1)]
+    with pytest.raises(profiles.ClaimRefused) as refused:
+        profiles.derive(measured(runs), NODES, POLICY)
+    assert (
+        str(refused.value)
+        == "no class was admitted: general: no child activity; idle: an idle sample cannot size a worker"
+    )
+
+
+def test_compare_keeps_reading_classes_after_a_missing_one():
+    compiler = [run("compiler", c, r, 200) for c in (1, 2) for r in (1, 2)]
+    accepted = profiles.derive(measured([*compiler, *memory_runs()]), NODES, POLICY)
+    candidate = profiles.derive(measured(memory_runs(1.5), 2), NODES, POLICY)
+    changes = profiles.compare(accepted, candidate, POLICY)
+    assert changes["missing"] == ["compiler"]
+    assert changes["material"] == [["memory", "peak_rss_mib", 520, 780]]
+
+
+def test_compare_treats_a_change_of_exactly_the_tolerance_as_immaterial():
+    loose = profiles.Policy(margin=0.25, min_repeats=2, agent_reserve_mib=512, base_storage_mib=1024, tolerance=0.25)
+    accepted = profiles.derive(measured(memory_runs()), NODES, loose)
+    edge = profiles.derive(measured(memory_runs(1.25), 2), NODES, loose)
+    assert profiles.compare(accepted, edge, loose)["material"] == []
+
+
+def test_compare_reports_a_tool_only_the_candidate_has():
+    accepted = profiles.derive(measured(memory_runs()), NODES, POLICY)
+    candidate = profiles.derive(measured(memory_runs(), 2, {**TOOLS, "cc": "13"}), NODES, POLICY)
+    assert profiles.compare(accepted, candidate, POLICY)["tools_changed"] == {"cc": [None, "13"]}
+
+
+def test_markdown_marks_an_unrecorded_source_no_refusals_and_unmeasured_coexistence():
+    report = profiles.derive({**measured(memory_runs()), "source": ""}, [], POLICY)
+    text = profiles.markdown(report)
+    assert "Source: not recorded." in text
+    assert "## Refused\n\n- none\n" in text
+    assert "## Coexistence\n\nunmeasured: no node capacity was recorded\n" in text
+    assert "## Limits of this measurement" not in text
+    assert text.endswith("\n") and "- tool python: 3.12.1" in text
 
 
 @pytest.mark.parametrize("case", ["a", "b", "c"])

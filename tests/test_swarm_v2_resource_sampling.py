@@ -1,6 +1,9 @@
+import gc
 import os
 import sys
+import warnings
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,12 +13,13 @@ pytestmark = pytest.mark.unit
 
 WORKLOADS = Path(__file__).parent / "performance" / "swarm_v2" / "workloads"
 COMM = "w (x) y"
+PGRP = 999
 
 
 def proc_entry(proc: Path, pid: int, ppid: int, session: int, ticks=(0, 0), pages=0, pss_kb=None):
     entry = proc / str(pid)
     entry.mkdir(parents=True)
-    rest = ["S", ppid, ppid, session, 0, -1, 4194304, 0, 0, 0, 0, ticks[0], ticks[1], 0, 0, 20, 0, 1, 0, 100]
+    rest = ["S", ppid, PGRP, session, 0, -1, 4194304, 0, 0, 0, 0, ticks[0], ticks[1], 0, 0, 20, 0, 1, 0, 100]
     (entry / "stat").write_text(f"{pid} ({COMM}) " + " ".join(str(v) for v in rest) + "\n")
     (entry / "statm").write_text(f"1000 {pages} 10 1 0 50 0\n")
     if pss_kb is not None:
@@ -38,9 +42,12 @@ def test_read_parses_a_process_whose_name_holds_parentheses(proc):
     assert sampling.read(proc, 40) == sampling.Process(40, 7, 40, 42, 5 * sampling.PAGE, 8 * 1024)
 
 
-def test_read_falls_back_to_rss_when_pss_is_unreadable(proc):
+def test_read_falls_back_to_rss_when_pss_is_unreadable_or_absent(proc):
     proc_entry(proc, 41, 7, 40, pages=3)
     assert sampling.read(proc, 41).pss_bytes == 3 * sampling.PAGE
+    proc_entry(proc, 45, 7, 40, pages=2)
+    (proc / "45" / "smaps_rollup").write_text("Rss: 8 kB\n")
+    assert sampling.read(proc, 45).pss_bytes == 2 * sampling.PAGE
 
 
 def test_read_treats_a_vanished_process_as_gone(proc):
@@ -72,11 +79,12 @@ def test_members_follow_children_and_the_root_session_only(proc):
     proc_entry(proc, 10, 1, 10)
     proc_entry(proc, 11, 10, 10)
     proc_entry(proc, 12, 11, 12)
+    proc_entry(proc, 16, 12, 12)
     proc_entry(proc, 13, 1, 10)
     proc_entry(proc, 14, 1, 14)
     proc_entry(proc, 15, 14, 14)
     members = sampling.members(sampling.table(proc), 10)
-    assert sorted(p.pid for p in members) == [10, 11, 12, 13]
+    assert [p.pid for p in members] == [10, 11, 12, 13, 16]
 
 
 def test_members_of_a_gone_root_are_empty(proc):
@@ -94,21 +102,44 @@ def test_snapshot_sums_the_tree(proc):
 def test_peaks_keep_maxima_and_count_cores_over_whole_windows():
     t = sampling.TICKS
     peaks = sampling.Peaks()
-    peaks.add(sampling.Snapshot(0.0, 2, 100, 80, {1: 10, 2: 10}))
-    peaks.add(sampling.Snapshot(0.5, 3, 300, 90, {1: 10 + t, 2: 10, 3: t // 2}))
+    peaks.add(sampling.Snapshot(0.0, 2, 100, 80, {1: 10, 2: 10}), 5)
+    peaks.add(sampling.Snapshot(0.5, 3, 300, 90, {1: 10 + t, 2: 10, 3: t // 2}), 9)
     assert peaks.cores == 0.0
-    peaks.add(sampling.Snapshot(1.0, 3, 200, 85, {1: 10 + 2 * t, 2: 10 + t, 3: t}))
-    peaks.add(sampling.Snapshot(2.5, 1, 50, 40, {1: 10 + 3 * t}))
-    assert (peaks.processes, peaks.rss_bytes, peaks.pss_bytes) == (3, 300, 90)
+    peaks.add(sampling.Snapshot(1.0, 3, 200, 85, {1: 10 + 2 * t, 2: 10 + t, 3: t}), 7)
+    peaks.add(sampling.Snapshot(2.5, 1, 50, 40, {1: 10 + 3 * t}), 1)
+    assert (peaks.processes, peaks.rss_bytes, peaks.pss_bytes, peaks.storage_bytes) == (3, 300, 90, 9)
     assert peaks.cores == pytest.approx(4.0)
+    assert peaks.samples == 4
     assert peaks.ticks == {1: 10 + 3 * t, 2: 10 + t, 3: t}
+    peaks.store(12)
+    assert (peaks.storage_bytes, peaks.samples) == (12, 4)
 
 
-def test_peaks_ignore_a_snapshot_at_the_same_instant():
+def test_peaks_ignore_a_snapshot_inside_the_window():
     peaks = sampling.Peaks()
-    peaks.add(sampling.Snapshot(1.0, 1, 1, 1, {1: 0}))
-    peaks.add(sampling.Snapshot(1.0, 1, 1, 1, {1: 500}))
+    peaks.add(sampling.Snapshot(1.0, 1, 1, 1, {1: 0}), 0)
+    peaks.add(sampling.Snapshot(1.0 + sampling.CORE_WINDOW / 2, 1, 1, 1, {1: 500}), 0)
     assert peaks.cores == 0.0
+
+
+def test_summary_rounds_every_figure_and_takes_the_larger_cpu_count():
+    peaks = sampling.Peaks(3, 5 * sampling.MIB + 12345, 3 * sampling.MIB + 6789, 2 * sampling.MIB + 4321, 1.23456, 7)
+    peaks.ticks = {1: sampling.TICKS, 2: sampling.TICKS}
+    usage = SimpleNamespace(ru_utime=2.25, ru_stime=0.5)
+    assert sampling.summary(peaks, usage, 3.14159, 256, False) == {
+        "peak_rss_mib": 5.01,
+        "peak_pss_mib": 3.01,
+        "peak_processes": 3,
+        "peak_cores": 1.235,
+        "cpu_seconds": 2.75,
+        "wall_seconds": 3.142,
+        "peak_storage_mib": 2.0,
+        "samples": 7,
+        "exit_code": 1,
+        "timed_out": False,
+    }
+    lean = SimpleNamespace(ru_utime=0.25, ru_stime=0.5)
+    assert sampling.summary(peaks, lean, 1.0, 0, True)["cpu_seconds"] == 2.0
 
 
 def test_directory_bytes_counts_regular_files_and_not_link_targets(tmp_path):
@@ -121,31 +152,76 @@ def test_directory_bytes_counts_regular_files_and_not_link_targets(tmp_path):
     assert sampling.directory_bytes(tree / "missing") == 0
 
 
-def test_measure_reports_the_whole_tree_of_a_live_workload(tmp_path):
-    command = [sys.executable, str(WORKLOADS / "memory.py"), "--children", "2", "--mib", "48", "--hold", "1.0"]
-    result = sampling.measure(command, tmp_path, {"PATH": os.environ["PATH"]}, interval=0.05, timeout=60)
+def test_size_of_a_vanished_entry_is_zero(tmp_path):
+    assert sampling._size(tmp_path / "gone") == 0
+
+
+def test_measure_reports_the_whole_tree_of_a_live_workload(tmp_path, capfd):
+    command = [sys.executable, str(WORKLOADS / "memory.py"), "--children", "2", "--mib", "48", "--hold", "1.5"]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = sampling.measure(command, tmp_path, {"PATH": os.environ["PATH"]}, 0.05, 60)
+        gc.collect()
+    assert [w for w in caught if issubclass(w.category, ResourceWarning)] == []
     assert result["exit_code"] == 0 and not result["timed_out"]
-    assert result["peak_processes"] >= 3
-    assert result["peak_rss_mib"] >= 96
-    assert result["peak_pss_mib"] >= 96
-    assert result["cpu_seconds"] > 0
+    assert 3 <= result["peak_processes"] < 10
+    assert 96 <= result["peak_rss_mib"] < 2048
+    assert 96 <= result["peak_pss_mib"] < 2048
+    assert 0 < result["cpu_seconds"] < 30
+    assert 0 < result["peak_cores"] <= os.cpu_count() * 2
     assert result["samples"] >= 5
-    assert result["wall_seconds"] >= 1.0
+    assert 1.0 <= result["wall_seconds"] < 30
 
 
-def test_measure_counts_peak_storage_in_the_workdir(tmp_path):
-    script = "import time, pathlib; pathlib.Path('blob').write_bytes(bytes(3 << 20)); time.sleep(0.5)"
-    result = sampling.measure([sys.executable, "-c", script], tmp_path, {}, interval=0.05, timeout=30)
+def test_measure_counts_peak_storage_written_then_removed(tmp_path):
+    script = (
+        "import os, time, pathlib; p = pathlib.Path('blob'); p.write_bytes(bytes(3 << 20)); "
+        "time.sleep(0.5); p.unlink(); time.sleep(0.3)"
+    )
+    result = sampling.measure([sys.executable, "-c", script], tmp_path, {}, 0.05, 30)
     assert result["peak_storage_mib"] == pytest.approx(3.0, abs=0.01)
 
 
-def test_measure_kills_the_group_on_timeout(tmp_path):
+def test_measure_counts_storage_left_at_exit(tmp_path):
+    script = "import pathlib; pathlib.Path('blob').write_bytes(bytes(2 << 20))"
+    result = sampling.measure([sys.executable, "-c", script], tmp_path, {}, 1.0, 30)
+    assert result["peak_storage_mib"] == pytest.approx(2.0, abs=0.01)
+
+
+def test_measure_passes_only_the_given_environment_and_silences_output(tmp_path, capfd, monkeypatch):
+    monkeypatch.setenv("SV2_PROBE_LEAK", "leaked")
+    script = "import os, sys; print('probe-output'); print('probe-error', file=sys.stderr); sys.exit(4 if 'SV2_PROBE_LEAK' in os.environ else 0)"
+    result = sampling.measure([sys.executable, "-c", script], tmp_path, {"SV2_GIVEN": "1"}, 0.05, 30)
+    captured = capfd.readouterr()
+    assert result["exit_code"] == 0
+    assert "probe-output" not in captured.out and "probe-error" not in captured.err
+
+
+def test_measure_runs_the_command_in_the_workdir(tmp_path):
+    script = "import os, pathlib; pathlib.Path('cwd').write_text(os.getcwd())"
+    sampling.measure([sys.executable, "-c", script], tmp_path, {}, 0.05, 30)
+    assert (tmp_path / "cwd").read_text() == str(tmp_path)
+
+
+def test_measure_kills_the_whole_group_on_timeout(tmp_path):
     marker = tmp_path / "pid"
-    script = f"import os, subprocess, time; p = subprocess.Popen(['sleep', '60']); open({str(marker)!r}, 'w').write(str(p.pid)); time.sleep(60)"
-    result = sampling.measure(
-        [sys.executable, "-c", script], tmp_path, {"PATH": os.environ["PATH"]}, interval=0.05, timeout=1.0
+    script = (
+        f"import os, subprocess, time; p = subprocess.Popen(['sleep', '60']); "
+        f"open({str(marker)!r}, 'w').write(str(p.pid)); time.sleep(60)"
     )
-    assert result["timed_out"] and result["exit_code"] != 0
+    env = {"PATH": os.environ["PATH"]}
+    result = sampling.measure([sys.executable, "-c", script], tmp_path, env, 0.05, 1.0)
+    assert result["timed_out"] and result["exit_code"] == -9
+    assert 1.0 <= result["wall_seconds"] < 10
     child = int(marker.read_text())
     with pytest.raises(ProcessLookupError):
         os.kill(child, 0)
+
+
+def test_measure_kills_stragglers_left_by_a_finished_command(tmp_path):
+    marker = tmp_path / "pid"
+    script = f"import subprocess; p = subprocess.Popen(['sleep', '60']); open({str(marker)!r}, 'w').write(str(p.pid))"
+    result = sampling.measure([sys.executable, "-c", script], tmp_path, {"PATH": os.environ["PATH"]}, 0.05, 30)
+    assert result["exit_code"] == 0 and not result["timed_out"]
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(marker.read_text()), 0)
