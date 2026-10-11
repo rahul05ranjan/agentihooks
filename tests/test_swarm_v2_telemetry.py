@@ -16,7 +16,16 @@ pytestmark = [pytest.mark.unit, pytest.mark.xdist_group("fakeredis")]
 EVIDENCE = Path(__file__).parents[1] / "evidence" / "SV2-OBS-01"
 SLUG = "fixture"
 NOW = 5000
-STATUS_FIELDS = ("state", "events", "unexported", "export_failures", "last_error", "failed_at_ms", "exported_at_ms")
+STATUS_FIELDS = (
+    "state",
+    "events",
+    "unexported",
+    "export_failures",
+    "export_dropped",
+    "last_error",
+    "failed_at_ms",
+    "exported_at_ms",
+)
 PASS = "password"
 CLIENT = "client_secret"
 AWS = "AKIA0123456789ABCDEF"
@@ -85,6 +94,8 @@ def _status(**values):
         ("TOKEN=abc", "TOKEN=[redacted]"),
         ("aws credentials=AbC/12", "aws credentials=[redacted]"),
         ("sk-short and a plain sentence", "sk-short and a plain sentence"),
+        ("PRIVATE_KEY=abc", "PRIVATE_KEY=[redacted]"),
+        ("dial postgres://app:pw1@db:5432/x failed", "dial postgres://[redacted]@db:5432/x failed"),
     ),
 )
 def test_each_secret_shape_is_redacted_and_plain_text_is_kept(text, clean):
@@ -95,6 +106,7 @@ def test_an_environment_dump_is_withheld_whole_and_two_pairs_are_kept():
     dump = "environ({'HOME': '/root', 'PATH': '/bin', 'SHELL': '/bin/sh'})"
 
     assert telemetry.sanitize_text(dump) == "[environment withheld]"
+    assert telemetry.sanitize_text("os.environ({'HOME': '/root'})") == "[environment withheld]"
     assert telemetry.sanitize_text("HOME=/root PATH=/bin") == "HOME=/root PATH=/bin"
 
 
@@ -248,7 +260,35 @@ def test_a_trimmed_audit_exports_what_it_still_holds_without_repeats(store, monk
 
     assert [event["seq"] for event in recorder.events()] == [5, 6, 7]
     assert [event["seq"] for event in exporter.received] == [1, 2, 4, 5, 6, 7]
-    assert telemetry.observability(store, SLUG)["unexported"] == 0
+    found = telemetry.observability(store, SLUG)
+    assert (found["unexported"], found["export_dropped"]) == (0, 1)
+
+
+def test_an_audit_write_lost_after_its_sequence_is_counted_and_later_events_still_export(store, monkeypatch):
+    exporter = cases.Exporter()
+    recorder = telemetry.Telemetry(store, SLUG, exporter)
+    recorder.record("fence", "accepted", 0.0)
+    pipeline = store.redis.pipeline
+
+    class Lost:
+        def __init__(self, pipe):
+            self.pipe = pipe
+
+        def __getattr__(self, name):
+            return getattr(self.pipe, name)
+
+        def execute(self):
+            raise ConnectionError("write lost")
+
+    monkeypatch.setattr(store.redis, "pipeline", lambda **options: Lost(pipeline(**options)))
+    assert recorder.record("fence", "accepted", 0.0) is None
+    monkeypatch.setattr(store.redis, "pipeline", pipeline)
+    recorder.record("fence", "accepted", 0.0)
+    recorder.record("fence", "accepted", 0.0)
+
+    assert [event["seq"] for event in exporter.received] == [1, 3, 4]
+    found = telemetry.observability(store, SLUG)
+    assert (found["events"], found["unexported"], found["export_dropped"]) == (4, 0, 1)
 
 
 def test_a_failed_audit_write_is_kept_as_the_last_error_and_never_raised(store, monkeypatch):
@@ -342,13 +382,30 @@ def test_observability_of_an_untouched_swarm_reads_disabled(store):
     assert telemetry.observability(store, SLUG) == _status()
 
 
-def test_the_status_report_carries_observability(store, monkeypatch):
+def test_the_status_report_carries_observability_latency_and_each_agents_timeline(store, monkeypatch):
     from scripts.swarm import status
 
     monkeypatch.setattr(status, "page_quota", lambda: {})
-    telemetry.Telemetry(store, SLUG).record("admission", "accepted", 0.0)
+    controller = Controller(store, SLUG, [Transport()], lambda: True)
+    assert controller.acquire()
+    attempt = controller.admit(_agent(store))
 
-    assert status.status_report(store, SLUG, {"tasks": []})["observability"] == _status(events=1)
+    report = status.status_report(store, SLUG, {"tasks": []})
+
+    assert report["observability"] == _status(events=1)
+    assert report["execution_transition_latency_seconds"]["admission"]["accepted"]["count"] == 1
+    assert report["transitions"] == {attempt.seat: controller.telemetry.events()}
+
+
+def test_a_timeline_keeps_the_latest_events_of_each_named_seat(store, monkeypatch):
+    monkeypatch.setattr(telemetry, "TIMELINE_LIMIT", 2)
+    recorder = telemetry.Telemetry(store, SLUG)
+    for seat in ("eng-1", "eng-1", "eng-2", "eng-1"):
+        recorder.record("admission", "refused", 0.0, seat=seat)
+
+    assert {
+        seat: [e["seq"] for e in rows] for seat, rows in telemetry.timelines(store, SLUG, ["eng-1", ""]).items()
+    } == {"eng-1": [2, 4]}
 
 
 def test_the_controller_records_each_admission_and_command_with_both_generations(store):

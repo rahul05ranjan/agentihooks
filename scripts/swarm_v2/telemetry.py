@@ -3,7 +3,7 @@
 import json
 import re
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 
 from scripts.swarm import lease
@@ -28,6 +28,7 @@ FIELDS = (
     "error",
 )
 AUDIT_LIMIT = 2000
+TIMELINE_LIMIT = 50
 TEXT_LIMIT = 240
 ENVIRONMENT_PAIRS = 3
 REDACTED = "[redacted]"
@@ -40,7 +41,7 @@ AUDIT, SEQUENCE, EXPORTED, LATENCY, OBSERVABILITY = (
     "transition-latency",
     "observability",
 )
-_NAMED = r"[\w.-]*(?:token|secret|passw(?:or)?d|api[_-]?key|credential|authorization)[\w.-]*"
+_NAMED = r"[\w.-]*(?:token|secret|passw(?:or)?d|key|credential|authorization)[\w.-]*"
 SECRET = re.compile(
     r"(?i)\bbearer\s+[^\s'\",}]+"
     r"|\b(?:sk|ghp|gho|ghs|ghu|github_pat|xox[abprs])[-_][-\w]{8,}"
@@ -48,6 +49,7 @@ SECRET = re.compile(
     rf"|({_NAMED}['\"]?\s*[=:]\s*['\"]?)[^\s'\",}}]+"
 )
 ENVIRONMENT = re.compile(r"\b[A-Z][A-Z0-9_]+['\"]?\s*[=:]\s*\S")
+USERINFO = re.compile(r"://[^/\s:@]+:[^/\s@]+@")
 EXPORT_ENV = "AGENTIHOOKS_TRANSITION_EXPORT"
 
 Exporter = Callable[[dict], None]
@@ -58,9 +60,9 @@ def _redact(match: re.Match) -> str:
 
 
 def sanitize_text(text: str) -> str:
-    if len(ENVIRONMENT.findall(text)) >= ENVIRONMENT_PAIRS:
+    if "environ(" in text or len(ENVIRONMENT.findall(text)) >= ENVIRONMENT_PAIRS:
         return WITHHELD
-    clean = SECRET.sub(_redact, " ".join(text.split()))
+    clean = SECRET.sub(_redact, USERINFO.sub(f"://{REDACTED}@", " ".join(text.split())))
     return clean if len(clean) <= TEXT_LIMIT else clean[: TEXT_LIMIT - 1] + "…"
 
 
@@ -176,9 +178,11 @@ class Telemetry:
         return event
 
     def _pending(self, done: int) -> list[dict]:
-        first = self.store.redis.lindex(self._key(AUDIT), 0)
-        start = 0 if first is None else max(0, done - json.loads(first)["seq"] + 1)
-        return [json.loads(raw) for raw in self.store.redis.lrange(self._key(AUDIT), start, -1)]
+        missing = int(self.store.redis.get(self._key(SEQUENCE)) or 0) - done
+        if missing <= 0:
+            return []
+        rows = [json.loads(raw) for raw in self.store.redis.lrange(self._key(AUDIT), -missing, -1)]
+        return [row for row in rows if row["seq"] > done]
 
     def _export(self) -> None:
         if self.exporter is None:
@@ -187,10 +191,11 @@ class Telemetry:
         try:
             done = int(redis.get(self._key(EXPORTED)) or 0)
             for event in self._pending(done):
-                if event["seq"] > done:
-                    self.exporter(event)
-                    done = event["seq"]
-                    redis.set(self._key(EXPORTED), done)
+                self.exporter(event)
+                if event["seq"] > done + 1:
+                    redis.hincrby(self._key(OBSERVABILITY), "export_dropped", event["seq"] - done - 1)
+                done = event["seq"]
+                redis.set(self._key(EXPORTED), done)
             redis.hset(self._key(OBSERVABILITY), mapping={"state": OK, "exported_at_ms": lease.now_ms(self.store)})
         except Exception as error:
             self._degrade(error)
@@ -221,7 +226,13 @@ def observability(store: RedisStore, slug: str) -> dict:
         "events": events,
         "unexported": 0 if state == DISABLED else events - exported,
         "export_failures": int(row.get("export_failures", 0)),
+        "export_dropped": int(row.get("export_dropped", 0)),
         "last_error": row.get("last_error", ""),
         "failed_at_ms": int(row.get("failed_at_ms", 0)),
         "exported_at_ms": int(row.get("exported_at_ms", 0)),
     }
+
+
+def timelines(store: RedisStore, slug: str, seats: Iterable[str]) -> dict[str, list[dict]]:
+    events = Telemetry(store, slug).events()
+    return {seat: history(events, seat)[-TIMELINE_LIMIT:] for seat in seats if seat}

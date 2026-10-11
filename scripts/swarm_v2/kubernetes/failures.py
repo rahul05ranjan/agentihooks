@@ -268,7 +268,8 @@ class Recovery:
         current = self.fence(agent.execution_id)
         if current:
             return current
-        if self.store.execution_occupants(self.slug)[agent.seat].execution_id != agent.execution_id:
+        occupant = self.store.execution_occupants(self.slug)[agent.seat]
+        if occupant.execution_id != agent.execution_id:
             raise SwarmError("only the current attempt of a seat can be fenced")
         watermark = retention.archive_watermark(self.store, self.slug, agent.execution_id)
         fence = {
@@ -294,7 +295,7 @@ class Recovery:
             seat=agent.seat,
             execution_id=agent.execution_id,
             expected_generation=agent.generation,
-            observed_generation=agent.generation,
+            observed_generation=occupant.generation,
             controller_epoch=fence["controller_epoch"],
             reason=reason,
         )
@@ -342,7 +343,7 @@ class Recovery:
             seat=agent.seat,
             execution_id=decision.execution_id,
             expected_generation=decision.generation,
-            observed_generation=self.store.execution_occupants(self.slug)[agent.seat].generation,
+            observed_generation=getattr(self.store.execution_occupants(self.slug).get(agent.seat), "generation", None),
             controller_epoch=self.controller.held.epoch,
             reason=decision.reason,
             mode=decision.mode,
