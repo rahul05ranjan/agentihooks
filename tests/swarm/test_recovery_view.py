@@ -228,7 +228,13 @@ def test_undecided_or_unknown_local_rows_and_pod_agents_are_not_shown(store):
     assert rv.view(store, SLUG, NOW)["cards"] == []
     target = {"pod_namespace": "w", "pod_name": "p9", "pod_uid": "u9"}
     pod = AgentRecord(
-        "eng-pod", "eng", "t9", state=resume.AWAITING, runtime_backend="kubernetes", runtime_target=target
+        "eng-pod",
+        "eng",
+        "t9",
+        seat=f"eng-6@{SLUG}",
+        state=resume.AWAITING,
+        runtime_backend="kubernetes",
+        runtime_target=target,
     )
     store.put_agent(SLUG, pod)
     store.put_restored(SLUG, [asdict(resume.Outcome("eng-pod", "eng", "t9", resume.AWAITING, "x"))])

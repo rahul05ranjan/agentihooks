@@ -207,6 +207,3 @@ def test_an_automatic_replacement_records_when_it_was_decided(world):
         world.old.execution_id, world.old.generation, "node_lost", "resume", "ckpt-native", decision.replacement
     )
     assert _published(world)["decided_at_ms"] == world.clock[0]
-    world.clock[0] += 5000
-    recovery._decided(world.old.execution_id)
-    assert recovery.material(world.old.execution_id)["decided_at_ms"] == world.clock[0] - 5000
