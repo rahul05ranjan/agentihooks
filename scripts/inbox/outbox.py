@@ -23,7 +23,7 @@ WARN_ENV = "AGENTIHOOKS_INBOX_OUTBOX_WARN_BYTES"
 DEFAULT_MAX_BYTES = 1_048_576
 DEFAULT_WARN_BYTES = 786_432
 QUEUED = (
-    "agentihooks msg: Redis is unreachable; the message is queued locally and replays when Redis returns, "
+    "agentihooks msg: Redis is unreachable or busy; the message is queued locally and replays when Redis returns, "
     "where its address is checked; a refused replay is reported and kept in the skipped outbox"
 )
 
@@ -113,6 +113,8 @@ def append(entry: dict) -> None:
         with path().open("a") as handle:
             handle.write(line)
             _sync(handle)
+        if not size:
+            _sync_home()
     if grown >= warn:
         print(
             f"agentihooks msg: warning: the local inbox outbox holds {grown} bytes of its {limit} byte limit",
@@ -192,6 +194,10 @@ def _rewrite(lines: list[str]) -> None:
         handle.write("".join(lines))
         _sync(handle)
     os.replace(staged, path())
+    _sync_home()
+
+
+def _sync_home() -> None:
     directory = os.open(home(), os.O_RDONLY)
     try:
         os.fsync(directory)
