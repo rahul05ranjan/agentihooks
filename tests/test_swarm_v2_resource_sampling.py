@@ -123,9 +123,9 @@ def test_peaks_ignore_a_snapshot_inside_the_window():
 
 
 def test_summary_rounds_every_figure_and_takes_the_larger_cpu_count():
-    peaks = sampling.Peaks(3, 5 * sampling.MIB + 12345, 3 * sampling.MIB + 6789, 2 * sampling.MIB + 4321, 1.23456, 7)
+    peaks = sampling.Peaks(3, 5 * sampling.MIB + 12345, 3 * sampling.MIB + 6789, 2 * sampling.MIB + 600000, 1.23456, 7)
     peaks.ticks = {1: sampling.TICKS, 2: sampling.TICKS}
-    usage = SimpleNamespace(ru_utime=2.25, ru_stime=0.5)
+    usage = SimpleNamespace(ru_utime=2.25, ru_stime=0.50049)
     assert sampling.summary(peaks, usage, 3.14159, 256, False) == {
         "peak_rss_mib": 5.01,
         "peak_pss_mib": 3.01,
@@ -133,7 +133,7 @@ def test_summary_rounds_every_figure_and_takes_the_larger_cpu_count():
         "peak_cores": 1.235,
         "cpu_seconds": 2.75,
         "wall_seconds": 3.142,
-        "peak_storage_mib": 2.0,
+        "peak_storage_mib": 2.57,
         "samples": 7,
         "exit_code": 1,
         "timed_out": False,

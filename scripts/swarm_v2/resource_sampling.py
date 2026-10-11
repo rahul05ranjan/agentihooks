@@ -164,13 +164,12 @@ def measure(
     child = subprocess.Popen(list(command), cwd=workdir, env=dict(env), **QUIET)
     peaks = Peaks()
     pid, status, usage = os.wait4(child.pid, os.WNOHANG)
-    timed_out = False
-    while not pid and not timed_out:
+    while not pid and time.monotonic() - started <= timeout:
         peaks.add(snapshot(proc, child.pid, time.monotonic()), directory_bytes(workdir))
         time.sleep(interval)
         pid, status, usage = os.wait4(child.pid, os.WNOHANG)
-        timed_out = time.monotonic() - started > timeout
-    if not pid:
+    timed_out = not pid
+    if timed_out:
         _stop(child.pid)
         pid, status, usage = os.wait4(child.pid, 0)
     child.returncode = os.waitstatus_to_exitcode(status)

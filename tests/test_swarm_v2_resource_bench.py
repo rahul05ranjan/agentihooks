@@ -297,7 +297,7 @@ NODE_LISTING = {"items": [{"metadata": {"name": "n"}, "status": {"allocatable": 
 def test_cli_runs_reads_nodes_derives_and_renders(tmp_path):
     files = tmp_path / "cli"
     files.mkdir()
-    measurements = files / "out" / "measurements.json"
+    measurements = files / "out" / "deep" / "measurements.json"
     run_args = ["run", "--suite", str(memory_suite(files)), "--root", str(files / "w"), "--generation", "3"]
     assert bench.main([*run_args, "--source", "s3", "--output", str(measurements)]) == 0
     measured = json.loads(measurements.read_text())
@@ -360,6 +360,25 @@ def test_cli_promote_prints_the_decision_and_keeps_the_accepted_file(tmp_path, c
     stale.write_text(json.dumps({"generation": 0, "profiles": {}, "tools": {}}))
     assert bench.main([*promote, str(stale)]) == 1
     assert json.loads(capsys.readouterr().out)["decision"] == "stale"
+
+
+def report_with(generation, peak):
+    measured = {metric: {"max": peak} for metric in bench.profiles.COMPARED}
+    return {"generation": generation, "tools": {}, "profiles": {"m": {"measured": measured}}}
+
+
+def test_cli_promote_holds_a_material_change_with_the_default_tolerance(tmp_path, capsys):
+    accepted, candidate = tmp_path / "accepted.json", tmp_path / "candidate.json"
+    accepted.write_text(json.dumps(report_with(1, 100)))
+    candidate.write_text(json.dumps(report_with(2, 114)))
+    promote = ["promote", "--accepted", str(accepted), "--candidate", str(candidate)]
+    assert bench.main(promote) == 0
+    capsys.readouterr()
+    candidate.write_text(json.dumps(report_with(3, 200)))
+    assert bench.main(promote) == 1
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["decision"] == "requalify" and len(printed["changes"]["material"]) == 4
+    assert json.loads(accepted.read_text())["generation"] == 2
 
 
 @pytest.mark.parametrize(
