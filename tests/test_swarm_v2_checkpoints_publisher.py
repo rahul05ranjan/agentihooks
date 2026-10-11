@@ -219,6 +219,15 @@ def test_a_committed_unpromoted_identity_with_other_bytes_is_refused(root):
     assert pub.publish(doc, materials).reason == "promoted"
 
 
+def test_a_stale_attempt_meeting_a_newer_identity_is_refused_as_superseded(root):
+    assert make(root, "e2", 3).publish(*checkpoint(1, 3, "e2")).promoted
+    stale = make(root, "e1", 2)
+    doc, materials = checkpoint(1, payload=b"other")
+    doc["checkpoint_id"] = doc["operation_id"] = "ckpt-g3-s1"
+    refused = stale.publish(doc, materials)
+    assert (refused.promoted, refused.reason) == (False, "superseded_generation")
+
+
 def test_a_document_outside_the_granted_scope_uploads_nothing(root):
     pub = make(root)
     refused = pub.publish(*checkpoint(1, execution="e9"))

@@ -20,6 +20,8 @@ WIDTH = 10
 
 @dataclass(frozen=True)
 class Publication:
+    """A superseded_generation refusal may follow this attempt's own pointer write; latest never reads that pointer."""
+
     promoted: bool
     reason: str
     verdict: model.Verdict | None = None
@@ -78,15 +80,15 @@ class Publisher:
         checkpoint_id, sequence = doc["checkpoint_id"], doc["checkpoint_sequence"]
         if type(sequence) is not int or sequence < 0:
             return self.refuse(INVALID)
+        blocked = self._blocked(checkpoint_id, sequence)
+        if blocked and blocked != REPLAYED:
+            return self.refuse(blocked)
         listed = _listed(doc, materials)
         recorded = self.store.recorded(checkpoint_id)
         if recorded not in (None, ArtifactRef.of(_encoded(listed))):
             return self.refuse(CONFLICT)
-        blocked = self._blocked(checkpoint_id, sequence)
-        if blocked == REPLAYED:
-            return self._replayed(checkpoint_id)
         if blocked:
-            return self.refuse(blocked)
+            return self._replayed(checkpoint_id)
         if recorded is None:
             self.reclaim(checkpoint_id)
         return self._promote(listed, materials)
