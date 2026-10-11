@@ -78,7 +78,7 @@ def _model_args(agent, chosen, environ, bounds, preserve=False):
     model, effort = model_effort(agent, [], environ)
     saved = _set(chosen.get("effort")) or effort
     effort = effort_range.clamp(agent, saved, bounds)
-    if preserve and effort_range.rank(effort) != effort_range.rank(saved):
+    if preserve and effort_range.rank(effort) != effort_range.rank(effort_range.named(agent, saved)):
         raise SpawnError("unsupported transfer: saved effort is outside the current swarm range", "unsupported")
     return model_flags(agent, _set(chosen.get("model")) or model, effort)
 
