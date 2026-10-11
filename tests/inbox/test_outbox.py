@@ -121,14 +121,14 @@ def test_a_corrupt_record_is_reported_and_skipped_never_replayed_twice(outage, c
     outage.down = False
     report = outbox.flush(InboxStore(outage.redis))
     assert (report.corrupt, len(report.applied)) == (2, 2)
-    assert capsys.readouterr().err.count("corrupt") == 2
+    assert capsys.readouterr().err.count("a corrupt outbox record was skipped") == 2
     assert outage.texts("bob") == ["before", "after"]
     assert records() == []
     assert len(outbox.skipped_path().read_text().splitlines()) == 2
 
     again = outbox.flush(InboxStore(outage.redis))
     assert (again.corrupt, again.applied) == (0, [])
-    assert "corrupt" not in capsys.readouterr().err
+    assert capsys.readouterr().err == ""
     assert outage.texts("bob") == ["before", "after"]
 
 
@@ -161,7 +161,7 @@ def test_replies_and_closes_made_while_redis_is_down_replay_once(outage, monkeyp
     assert run("inbox") == 0
     answer = queued[0]["id"]
     assert [(item.id, item.text, item.sender) for item in store.inbox("alice")] == [(answer, "on it", "bob")]
-    assert (store.get(asked.id).state, store.get(asked.id).reason) == ("done", f"replied with message {answer}")
+    assert (store.get(asked.id).state, store.get(asked.id).reason) == ("done", f"done: replied with message {answer}")
     assert store.get(told.id).state == "done"
     assert outbox.flush(store).applied == []
     assert len(store.inbox("alice")) == 1
@@ -181,7 +181,7 @@ def test_a_reply_whose_close_failed_mid_call_replays_only_the_close(outage, monk
     report = outbox.flush(store)
     assert (report.applied, report.rejected) == ([answer], [])
     assert [item.id for item in store.inbox("alice")] == [answer]
-    assert store.get(asked.id).reason == f"replied with message {answer}"
+    assert store.get(asked.id).reason == f"done: replied with message {answer}"
 
 
 def test_a_fully_replayed_record_left_in_the_file_is_not_applied_again(outage, monkeypatch, capsys):
@@ -295,6 +295,6 @@ def test_the_tick_flushes_the_outbox_first(outage, monkeypatch):
     assert run("send", "bob", "for the tick") == 0
     outage.down = False
     seen = []
-    monkeypatch.setattr(swarm_cli.lease, "acquire", lambda *args: seen.append(outage.texts("bob")))
+    monkeypatch.setattr("scripts.swarm.lease.acquire", lambda *args: seen.append(outage.texts("bob")))
     assert swarm_cli.run_tick(RedisStore(outage.redis), "sw", ledger=object()) == ["the swarm belongs to another hive"]
     assert seen == [["for the tick"]]

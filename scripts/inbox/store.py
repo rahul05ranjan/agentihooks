@@ -32,6 +32,18 @@ class InboxError(RuntimeError):
     pass
 
 
+class DuplicateItem(InboxError):
+    pass
+
+
+class Unreachable(InboxError):
+    pass
+
+
+def new_item_id():
+    return uuid.uuid4().hex[:12]
+
+
 @dataclass(frozen=True)
 class Item:
     id: str
@@ -64,6 +76,10 @@ def owner_ttl_s(environ=None):
 def redelivery_ms(environ=None):
     env = os.environ if environ is None else environ
     return int(env.get(REDELIVER_ENV) or DEFAULT_REDELIVER_S) * 1000
+
+
+def replied(answer_id):
+    return f"replied with message {answer_id}"
 
 
 def close_reason(kind, detail=""):
@@ -108,15 +124,15 @@ class InboxStore:
             "",
         )
 
-    def send(self, sender, address, text, ref="", fyi=False, task=""):
+    def send(self, sender, address, text, ref="", fyi=False, task="", item_id=""):
         """ref names the ledger write an operator item carries, for the seen marks; fyi marks an item that needs no
-        work, so a bare close names no outcome."""
+        work, so a bare close names no outcome; a given item_id refuses a second write of that item."""
         if not (sender and address and text.strip()):
             raise InboxError("a message needs a sender, an address and text")
         sender, address = self.names.resolve(sender), self.names.resolve(address)
         at = now_ms()
         item = Item(
-            uuid.uuid4().hex[:12],
+            item_id or new_item_id(),
             sender,
             address,
             text,
@@ -129,6 +145,11 @@ class InboxStore:
             task=task,
         )
         with self.redis.pipeline() as pipe:
+            if item_id:
+                pipe.watch(self.key("item", item.id))
+                if pipe.exists(self.key("item", item.id)):
+                    raise DuplicateItem(f"message {item.id} was already sent")
+                pipe.multi()
             pipe.hset(self.key("item", item.id), mapping=_fields(item))
             pipe.zadd(self.key("address", address), {item.id: at})
             pipe.zadd(self.key("pending", address), {item.id: at})
@@ -350,14 +371,20 @@ class InboxStore:
             pipe.execute()
             return moved
 
-    def reply(self, item_id, replier, text, fyi=False):
+    def reply(self, item_id, replier, text, fyi=False, answer_id=""):
+        """A given answer_id makes the reply replayable: an answer already sent is kept and only the close runs."""
         item = self.get(item_id)
         if not self.acts_for(replier, item.address):
             raise InboxError(f"message {item_id} belongs to {item.address}, not {replier}")
+        if answer_id and (item.state, item.reason) == close_reason("done", replied(answer_id)):
+            raise DuplicateItem(f"message {item_id} was already answered with message {answer_id}")
         if item.state in CLOSED:
             raise InboxError(f"message {item_id} is closed: {item.reason}")
-        answer = self.send(replier, item.sender, text, fyi=fyi)
-        self.close(item_id, replier, "done", f"replied with message {answer.id}")
+        try:
+            answer = self.send(replier, item.sender, text, fyi=fyi, item_id=answer_id)
+        except DuplicateItem:
+            answer = self.get(answer_id)
+        self.close(item_id, replier, "done", replied(answer.id))
         return answer
 
     def deliver(self, item_id, receiver):
@@ -629,9 +656,12 @@ def _entry(state, by, reason, at):
 def connect(environ=None):
     import redis
 
+    from scripts.inbox import outbox
     from scripts.swarm.store import redis_client
 
     try:
-        return InboxStore(redis_client(environ))
+        store = InboxStore(redis_client(environ))
     except redis.RedisError as exc:
-        raise InboxError(f"Redis is unreachable ({exc}); the inbox refuses to run without it") from exc
+        raise Unreachable(f"Redis is unreachable ({exc}); the inbox refuses to run without it") from exc
+    outbox.flush(store)
+    return store
