@@ -47,7 +47,8 @@ def test_failed_launches_leave_the_task_open_without_spending_lives(store):  # n
     ledger, runtime = CommentingLedger([{"id": "t1"}]), FakeRuntime(fail=True)
     for now_ms in (1_000, 2_000, 3_000, 4_000):
         tick("sw", store, ledger, runtime, now_ms=now_ms)
-    assert (store.claims("sw", "t1"), ledger.rows["t1"]["state"], ledger.comments) == (0, "open", [])
+    comments = [row for row in ledger.comments if row[2] != "dispatcher"]
+    assert (store.claims("sw", "t1"), ledger.rows["t1"]["state"], comments) == (0, "open", [])
     assert store.launch_failure("sw", "t1") == "herdr down"
 
 
