@@ -13,6 +13,12 @@ AWAITING = "awaiting-decision"
 RESUMED, FRESH = "resumed", "fresh"
 KUBERNETES = "kubernetes"
 RECOVERY_REQUESTS = "recovery-requests"
+NATIVE, CONTEXT = "native", "context"
+CHOICES = ("resume", NATIVE, CONTEXT, FRESH)
+UNCHOSEN = "Choose native, context, fresh or resume"
+LOCAL_CONTEXT = (
+    "a local swarm keeps no checkpoint to continue from; a fresh start primes the successor with the seat handoff"
+)
 REOPENED = "own conversation reopened"
 RESTORED = (
     "The swarm {slug} was restored from a snapshot and reopened this conversation of yours as {name}, on task {task}. "
@@ -31,6 +37,8 @@ class Outcome:
     conversation_id: str = ""
     at: int = 0
     transfer: str = ""
+    decided: bool = False
+    awaited_at: int = 0
 
 
 def account_quota(harness, account):
@@ -132,6 +140,8 @@ def decide(store, slug: str, name: str, choice: str, runtime, now_ms: int, ledge
         raise SwarmError("This agent is not awaiting a restore decision")
     if agent.execution_id and agent.runtime_backend == KUBERNETES:
         return requested(store, slug, agent, choice, now_ms)
+    if choice == CONTEXT:
+        raise SwarmError(LOCAL_CONTEXT)
     previous = next(r for r in store.restored(slug) if r["name"] == name)
     if choice == "fresh":
         transfers.fresh(store, slug, previous["transfer"], now_ms)
@@ -147,7 +157,7 @@ def decide(store, slug: str, name: str, choice: str, runtime, now_ms: int, ledge
             at=now_ms,
             transfer=previous["transfer"],
         )
-    elif choice == "resume":
+    elif choice in ("resume", NATIVE):
         from scripts.swarm.snapshot import ledger_source
 
         worktrees = json.loads(store.redis.get(store.key(slug, "restore-worktrees")) or "{}")
@@ -161,7 +171,10 @@ def decide(store, slug: str, name: str, choice: str, runtime, now_ms: int, ledge
             transfers.get(store, slug, previous["transfer"]),
         )
     else:
-        raise SwarmError("Choose resume or fresh")
+        raise SwarmError(UNCHOSEN)
+    outcome = replace(
+        outcome, decided=outcome.outcome != AWAITING, awaited_at=previous.get("awaited_at") or previous["at"]
+    )
     store.put_restored(slug, [asdict(outcome) if r["name"] == name else r for r in store.restored(slug)])
     return outcome
 
@@ -169,8 +182,8 @@ def decide(store, slug: str, name: str, choice: str, runtime, now_ms: int, ledge
 def requested(store, slug: str, agent, choice: str, now_ms: int) -> Outcome:
     """A Pod attempt's choice is only requested here; the controller applies it under its lease on its next pass,
     and a repeated request for the same attempt replaces the pending one instead of queueing a second."""
-    if choice not in ("resume", "fresh"):
-        raise SwarmError("Choose resume or fresh")
+    if choice not in CHOICES:
+        raise SwarmError(UNCHOSEN)
     store.redis.hset(store.key(slug, RECOVERY_REQUESTS), agent.execution_id, choice)
     reason = f"Recovery requested: {choice}"
     return Outcome(agent.name, agent.lane, agent.task, AWAITING, reason, agent.conversation_id, now_ms)

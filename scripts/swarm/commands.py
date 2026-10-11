@@ -98,12 +98,13 @@ def publish(store: RedisStore, slug: str, status: dict, tails: dict) -> None:
 
 
 def view(store: RedisStore, slug: str) -> dict:
-    from scripts.swarm import lifecycle
+    from scripts.swarm import lifecycle, recovery_view
 
     config = store.config(slug)
     data = json.loads(store.redis.get(store.key(slug, "published")) or "{}")
     status = data.get("status", {"agents": [], "tasks": {}})
-    terminals = visibility.read(store, slug, time.time_ns() // 1_000_000)
+    now = time.time_ns() // 1_000_000
+    terminals = visibility.read(store, slug, now)
     executions, errors = execution_card.cards(status.get("agents", []), terminals)
     return {
         **status,
@@ -113,6 +114,7 @@ def view(store: RedisStore, slug: str) -> dict:
         "executions": executions,
         "ledger_state_projection_errors": errors,
         "lifecycle": lifecycle.view(store, slug),
+        "recovery": recovery_view.view(store, slug, now),
     }
 
 

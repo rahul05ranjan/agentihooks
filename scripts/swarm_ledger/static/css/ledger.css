@@ -584,6 +584,12 @@ body.resizing-x { cursor: col-resize; user-select: none; }
 .lbl.live, .lbl.confirmed { color: var(--positive); }
 .lbl.idle, .lbl.waiting, .lbl.pending, .lbl.awaiting-decision, .lbl.unknown { color: var(--warn); }
 .lbl.stalled, .lbl.absent { color: var(--destructive); }
+.lbl.recoverable { color: var(--positive); }
+.lbl.context-only { color: var(--warn); }
+.lbl.fresh-only, .lbl.path-only { color: var(--destructive); }
+.sw-lines { display: flex; flex-direction: column; gap: 2px; }
+#recovery-table td { vertical-align: top; }
+#recovery-table td:nth-child(4), #recovery-table td:nth-child(5) { min-width: 28ch; white-space: normal; color: var(--text-2); }
 .lbl.promoted { color: var(--warn); }
 #quota-table .lbl.open { color: var(--positive); }
 #quota-table .lbl.closed { color: var(--destructive); }
