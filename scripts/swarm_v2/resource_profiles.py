@@ -111,11 +111,11 @@ def coexistence(profiles: dict[str, dict], nodes: Sequence[dict]) -> list[dict]:
         memory = node["allocatable_memory_mib"] - node["colocated_memory_mib"]
         cpu = node["allocatable_cpu_millis"] - node["colocated_cpu_millis"]
         fits = {
-            name: max(min(memory // built["limits"]["memory_mib"], cpu // built["limits"]["cpu_millis"]), 0)
+            name: max(min(memory // built["limits"]["memory_mib"], cpu // built["requests"]["cpu_millis"]), 0)
             for name, built in sorted(profiles.items())
         }
         together = sum(b["limits"]["memory_mib"] for b in profiles.values()) <= memory and (
-            sum(b["limits"]["cpu_millis"] for b in profiles.values()) <= cpu
+            sum(b["requests"]["cpu_millis"] for b in profiles.values()) <= cpu
         )
         rows.append(
             {

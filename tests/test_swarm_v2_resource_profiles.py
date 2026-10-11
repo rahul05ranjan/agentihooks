@@ -111,7 +111,7 @@ def test_coexistence_counts_whole_workers_in_free_node_capacity():
             "node": "node-a",
             "free_memory_mib": 14000,
             "free_cpu_millis": 3500,
-            "fits": {"memory": 2},
+            "fits": {"memory": 7},
             "all_profiles_together": True,
         }
     ]
@@ -120,10 +120,13 @@ def test_coexistence_counts_whole_workers_in_free_node_capacity():
 def test_coexistence_reports_a_node_that_cannot_hold_every_profile_at_once():
     built = {
         "memory": profiles.profile(memory_runs(), POLICY),
-        "big": {"limits": {"memory_mib": 14000, "cpu_millis": 1000, "ephemeral_mib": 1024}},
+        "big": {
+            "limits": {"memory_mib": 14000, "cpu_millis": 2000, "ephemeral_mib": 1024},
+            "requests": {"memory_mib": 14000, "cpu_millis": 1000},
+        },
     }
     (row,) = profiles.coexistence(built, NODES)
-    assert row["fits"] == {"big": 1, "memory": 2}
+    assert row["fits"] == {"big": 1, "memory": 7}
     assert row["all_profiles_together"] is False
 
 
@@ -139,7 +142,7 @@ def test_derive_reports_profiles_refusals_coexistence_and_the_peak_measurement()
     assert report["generation"] == 1
     assert sorted(report["profiles"]) == ["memory"]
     assert report["refused"] == {"idle": "an idle sample cannot size a worker"}
-    assert report["coexistence"][0]["fits"] == {"memory": 2}
+    assert report["coexistence"][0]["fits"] == {"memory": 7}
     assert report["worker_process_tree_peak_memory"] == {"idle": 40, "memory": 520}
     assert report["tools"] == TOOLS
     assert report["policy"]["margin"] == 0.25
@@ -209,7 +212,7 @@ def test_markdown_names_every_profile_refusal_and_node():
     text = profiles.markdown(report)
     assert "| memory | 1536 | 1250 | 2048 |" in text
     assert "idle: an idle sample cannot size a worker" in text
-    assert "| node-a | 14000 | 3500 | memory 2 | yes |" in text
+    assert "| node-a | 14000 | 3500 | memory 7 | yes |" in text
 
 
 @pytest.mark.parametrize("case", ["a", "b", "c"])

@@ -13,6 +13,7 @@ MIB = 1024 * 1024
 PAGE = os.sysconf("SC_PAGE_SIZE")
 TICKS = os.sysconf("SC_CLK_TCK")
 STORAGE_EVERY = 5
+CORE_WINDOW = 1.0
 GONE = (FileNotFoundError, ProcessLookupError, PermissionError)
 
 
@@ -98,18 +99,20 @@ class Peaks:
     pss_bytes: int = 0
     cores: float = 0.0
     ticks: dict[int, int] = field(default_factory=dict)
-    last: Snapshot | None = None
+    anchor: Snapshot | None = None
 
     def add(self, snap: Snapshot) -> None:
         self.processes = max(self.processes, snap.processes)
         self.rss_bytes = max(self.rss_bytes, snap.rss_bytes)
         self.pss_bytes = max(self.pss_bytes, snap.pss_bytes)
-        if self.last and snap.at > self.last.at:
-            used = sum(ticks - self.last.ticks.get(pid, 0) for pid, ticks in snap.ticks.items())
-            self.cores = max(self.cores, used / TICKS / (snap.at - self.last.at))
         for pid, ticks in snap.ticks.items():
             self.ticks[pid] = max(ticks, self.ticks.get(pid, 0))
-        self.last = snap
+        if self.anchor is None:
+            self.anchor = snap
+        elif snap.at - self.anchor.at >= CORE_WINDOW:
+            used = sum(ticks - self.anchor.ticks.get(pid, 0) for pid, ticks in snap.ticks.items())
+            self.cores = max(self.cores, used / TICKS / (snap.at - self.anchor.at))
+            self.anchor = snap
 
 
 def directory_bytes(path: Path) -> int:
