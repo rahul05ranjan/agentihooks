@@ -1,5 +1,7 @@
+import io
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
@@ -18,6 +20,8 @@ def queue_class():
 
 SLUG = "life"
 CHECKPOINT = {"status": "checkpointed", "checkpoint": "ckpt-eng-1"}
+STAMPS = ("_meta.stamps",)
+STALE = "the page is stale: this agent was replaced, finished or moved task; wait for the next swarm view"
 
 
 @pytest.fixture
@@ -182,6 +186,7 @@ def test_the_same_operation_id_with_another_control_is_a_counted_conflict(store)
     ask(store, agent, "drain")
     assert refused(store, agent, "cancel") == (409, "the operation id was already sent with another control")
     assert lifecycle.conflicts(store, SLUG) == {"reused": 1}
+    assert lifecycle.view(store, SLUG, {})["conflicts"] == {"reused": 1}
     assert len(queued(store)) == 1
 
 
@@ -262,8 +267,9 @@ def test_malformed_requests_are_refused_before_any_lookup(store, change, text):
     with pytest.raises(lifecycle.Refused) as caught:
         lifecycle.request(store, SLUG, {**body(agent, "drain"), **change}, operator=True, environ={})
     assert (caught.value.status, str(caught.value)) == (400, text)
-    with pytest.raises(lifecycle.Refused):
+    with pytest.raises(lifecycle.Refused) as caught:
         lifecycle.request(store, SLUG, ["drain"], operator=True, environ={})
+    assert (caught.value.status, str(caught.value)) == (400, "a lifecycle control is a JSON object")
 
 
 def test_the_runner_drains_one_worker_and_reports_its_checkpoint(store, ran):
@@ -370,7 +376,7 @@ def test_the_ledger_server_queues_through_lifecycle_and_returns_fresh_status(sto
     agent = kube(store)
     publish(store, {"t1": 3})
     stamps = {"_meta": {"stamps": {"tasks/t1/state": {"rev": 5}}}}
-    monkeypatch.setattr(ledger_server.repository, "read", lambda slug, *keys: stamps)
+    monkeypatch.setattr(ledger_server.repository, "read", lambda slug, *keys: {(SLUG, STAMPS): stamps}[(slug, keys)])
     monkeypatch.setattr(ledger_server, "swarm_store", lambda: store)
     monkeypatch.setattr(ledger_server, "swarm_status", lambda slug: {"swarm": slug})
     assert ledger_server.lifecycle_control(SLUG, body(agent, "drain", revisions={"t1": 5}), True) == (
@@ -489,8 +495,9 @@ def test_settling_reports_when_the_records_keep_changing(store, monkeypatch):
     agent = kube(store)
     record = ask(store, agent, "drain")
     monkeypatch.setattr(store.redis, "pipeline", Busy)
-    with pytest.raises(SwarmError):
+    with pytest.raises(SwarmError) as caught:
         lifecycle.execute(store, SLUG, {"argv": ["drain", agent.name, record["op"]]}, lambda argv: "")
+    assert str(caught.value) == "lifecycle controls kept changing; the outcome was recorded without its watch"
     saved = json.loads(store.redis.hget(store.key(SLUG, "lifecycle-ops"), record["op"]))
     assert saved["state"] == "failed"
     assert saved["error"] == "commands kept changing; nothing was recorded"
@@ -536,3 +543,180 @@ def test_admission_fences_on_the_revisions_it_is_given_over_the_published_ones(s
             store, SLUG, body(agent, "drain", revisions={"t1": 3}), operator=True, environ={}, task_revisions={"t1": 4}
         )
     assert ask(store, agent, "drain", revisions={"t1": 3})["state"] == "queued"
+
+
+def racing(monkeypatch, store, part, times):
+    real, left, key = store.redis.pipeline, [times], store.key(SLUG, f"lifecycle-{part}")
+
+    class Racing:
+        def __init__(self, *args, **kwargs):
+            self.pipe = real(*args, **kwargs)
+
+        def __enter__(self):
+            self.pipe.__enter__()
+            return self
+
+        def __exit__(self, *exc):
+            return self.pipe.__exit__(*exc)
+
+        def __getattr__(self, name):
+            return getattr(self.pipe, name)
+
+        def watch(self, *keys):
+            self.pipe.watch(*keys)
+            if left[0] and key in keys:
+                left[0] -= 1
+                store.redis.hset(key, "racer", "x")
+
+    monkeypatch.setattr(store.redis, "pipeline", Racing)
+
+
+@pytest.mark.parametrize("part", ["ops", "pending"])
+def test_a_control_whose_records_keep_changing_queues_nothing(store, monkeypatch, part):
+    agent = kube(store)
+    racing(monkeypatch, store, part, lifecycle.WRITE_ATTEMPTS)
+    assert refused(store, agent, "drain") == (503, "lifecycle controls kept changing; nothing was queued")
+    assert queued(store) == []
+
+
+def test_one_racing_write_is_retried_and_the_control_queued(store, monkeypatch):
+    agent = kube(store)
+    racing(monkeypatch, store, "ops", 1)
+    assert ask(store, agent, "drain")["state"] == "queued"
+    assert len(queued(store)) == 1
+
+
+def test_settling_clears_the_agents_pending_entry(store, ran):
+    agent = local(store)
+    pending = store.key(SLUG, "lifecycle-pending")
+    ask(store, agent, "force_stop")
+    assert store.redis.hget(pending, agent.name) == "op-first-1"
+    command_runner.consume(store, SLUG)
+    assert store.redis.hget(pending, agent.name) is None
+
+
+def test_settling_retries_after_one_racing_write(store, monkeypatch):
+    agent = local(store)
+    record = ask(store, agent, "force_stop")
+    racing(monkeypatch, store, "pending", 1)
+    assert lifecycle.execute(store, SLUG, {"argv": ["force_stop", agent.name, record["op"]]}, lambda argv: "") == ""
+    monkeypatch.undo()
+    assert lifecycle.operations(store, SLUG)[0]["state"] == "applied"
+
+
+def test_the_runner_fences_at_the_exact_expiry_and_on_a_gone_or_finished_agent(store):
+    agent = kube(store)
+    record = {"control": "drain", "at": 1_000, **lifecycle.seen(agent, {})}
+    expired = 1_000 + lifecycle.PENDING_MS
+    assert lifecycle._fenced(agent, record, True, expired) == "the control expired before the controller ran it"
+    assert lifecycle._fenced(agent, record, True, expired - 1) == ""
+    assert lifecycle._fenced(None, record, True, 1_000) == "the agent is no longer in this swarm"
+    assert lifecycle._fenced(replace(agent, state="finished"), record, True, 1_000) == "the agent has finished"
+
+
+def test_pending_ends_at_the_exact_expiry_and_hold(store, ran):
+    agent = kube(store)
+    ask(store, agent, "drain")
+    at = json.loads(store.redis.hget(store.key(SLUG, "lifecycle-ops"), "op-first-1"))["at"]
+
+    def pending(now):
+        return lifecycle._pending(store, SLUG, store.redis, agent.name, now)
+
+    assert (pending(at + lifecycle.PENDING_MS - 1), pending(at + lifecycle.PENDING_MS)) == ("op-first-1", "")
+    command_runner.consume(store, SLUG)
+    hold = at + lifecycle.WORKER_HOLD_MS
+    assert (pending(hold - 1), pending(hold)) == ("op-first-1", "")
+
+
+def test_admission_counts_a_finished_agent_as_stale(store, monkeypatch):
+    agent = kube(store)
+    monkeypatch.setattr(store, "agents", lambda slug: [replace(agent, state="finished")])
+    assert refused(store, agent, "drain") == (409, STALE)
+    assert lifecycle.conflicts(store, SLUG) == {"stale": 1}
+
+
+def test_the_recorded_control_carries_its_fingerprint_and_no_error(store):
+    agent = kube(store)
+    assert ask(store, agent, "drain")["error"] == ""
+    saved = json.loads(store.redis.hget(store.key(SLUG, "lifecycle-ops"), "op-first-1"))
+    shown = {"control": "drain", "agent": agent.name, **lifecycle.seen(agent, {})}
+    assert saved["fingerprint"] == lifecycle._digest(shown)
+    assert lifecycle._digest({"b": 1, "a": 2}) == lifecycle._digest({"a": 2, "b": 1})
+
+
+def test_identity_offers_and_support_hold_for_odd_agents(store):
+    remote, other, near = kube(store), kube(store, "eng-3@life", "t3"), local(store)
+    assert len(lifecycle.incarnation(remote)) == 16
+    assert lifecycle.incarnation(remote) != lifecycle.incarnation(other)
+    assert lifecycle.disabled(replace(remote, runtime_backend="ssh"), "attach", "", True) == "a ssh agent has no attach"
+    assert lifecycle.disabled(replace(near, execution_id=""), "force_stop", "", True) == ""
+    assert lifecycle.seen(replace(remote, task=""), {"": 9})["task_revision"] == 0
+    unresolved = "an earlier control on this agent is still unresolved"
+    assert lifecycle.offer(remote, {}, "op-x", True)["disabled"]["drain"] == unresolved
+
+
+def test_operations_list_every_recent_control_newest_first(store):
+    agents = [kube(store, f"eng-{n}@life", f"t{n}") for n in (1, 3, 4)]
+    for n, agent in enumerate(agents):
+        ask(store, agent, "drain", op=f"op-drain-{n}")
+    assert [o["op"] for o in lifecycle.operations(store, SLUG)] == ["op-drain-2", "op-drain-1", "op-drain-0"]
+
+
+def test_the_runner_runs_lifecycle_commands_with_the_page_environment(store, monkeypatch):
+    envs = []
+    monkeypatch.setattr(command_runner, "run", lambda argv, env: envs.append(env) or "")
+    ask(store, local(store), "force_stop")
+    command_runner.consume(store, SLUG)
+    assert [env["AGENTIHOOKS_CONTROL_SOURCE"] for env in envs] == ["page", "page"]
+
+
+def test_the_ledger_server_reads_the_stamps_of_its_own_ledger(store, monkeypatch):
+    from scripts.swarm.store import SwarmError
+
+    first, second = kube(store), kube(store, "eng-3@life", "t3")
+    monkeypatch.setattr(ledger_server, "swarm_store", lambda: store)
+    monkeypatch.setattr(ledger_server, "swarm_status", lambda slug: {"swarm": slug})
+    for agent, stored in ((first, {}), (second, {"_meta": {}})):
+        monkeypatch.setattr(
+            ledger_server.repository, "read", lambda slug, *keys, stored=stored: {(SLUG, STAMPS): stored}[(slug, keys)]
+        )
+        sent = body(agent, "drain", op=f"op-drain-{agent.task}")
+        assert ledger_server.lifecycle_control(SLUG, sent, True) == ({"swarm": SLUG}, "")
+
+    def gone(*args, **kwargs):
+        raise SwarmError("the swarm is gone")
+
+    monkeypatch.setattr(lifecycle, "request", gone)
+    assert ledger_server.lifecycle_control(SLUG, body(first, "drain"), True) == (None, "the swarm is gone")
+
+
+def put_swarm(monkeypatch, sent, outcome):
+    raw, calls, replies = json.dumps(sent).encode(), [], []
+
+    def control(slug, given, operator):
+        calls.append((slug, given, operator))
+        return outcome()
+
+    monkeypatch.setattr(ledger_server, "lifecycle_control", control)
+    handler = SimpleNamespace(
+        exists=lambda slug: True,
+        refused=lambda slug: False,
+        principal=None,
+        headers={"Content-Length": str(len(raw))},
+        rfile=io.BytesIO(raw),
+        send=lambda *args: replies.append(args),
+    )
+    ledger_server.Handler.put_swarm(handler, SLUG)
+    return calls, replies
+
+
+def test_the_swarm_route_hands_a_lifecycle_body_to_its_control(monkeypatch):
+    sent = {"action": "lifecycle", "control": "drain"}
+    calls, replies = put_swarm(monkeypatch, sent, lambda: ({"swarm": SLUG}, ""))
+    assert calls == [(SLUG, sent, True)]
+    assert replies == [(200, json.dumps({"swarm": SLUG}), "application/json")]
+
+    def stale():
+        raise lifecycle.Refused(409, STALE)
+
+    assert put_swarm(monkeypatch, sent, stale)[1] == [(409, STALE, "text/plain")]
