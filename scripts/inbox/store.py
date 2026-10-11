@@ -40,6 +40,10 @@ class Unreachable(InboxError):
     pass
 
 
+class Contended(InboxError):
+    pass
+
+
 def new_item_id():
     return uuid.uuid4().hex[:12]
 
@@ -248,7 +252,7 @@ class InboxStore:
                 except WatchError:
                     continue
         else:
-            raise InboxError(f"aliases for {original} changed meanwhile")
+            raise Contended(f"aliases for {original} changed meanwhile")
         if seat and not self.seats.left(me, seat):
             addresses.append(seat)
         items = [item for address in addresses for item in read(address)]
@@ -321,7 +325,7 @@ class InboxStore:
                 return self._try_redirect(item_id, by, address, reason, expected_address, expected_receiver)
             except WatchError:
                 continue
-        raise InboxError(f"message {item_id} changed meanwhile; run the command again")
+        raise Contended(f"message {item_id} changed meanwhile; run the command again")
 
     def _try_redirect(self, item_id, by, address, reason, expected_address, expected_receiver):
         key = self.key("item", item_id)
@@ -445,7 +449,7 @@ class InboxStore:
                 return self._try_requeue(item_id, by, reason, before)
             except WatchError:
                 continue
-        raise InboxError(f"message {item_id} changed meanwhile; run the command again")
+        raise Contended(f"message {item_id} changed meanwhile; run the command again")
 
     def _try_requeue(self, item_id, by, reason, before):
         key = self.key("item", item_id)
@@ -561,7 +565,7 @@ class InboxStore:
                 return self._try_move(item_id, by, actors, state, reason, only_from)
             except WatchError:
                 continue
-        raise InboxError(f"message {item_id} changed meanwhile; run the command again")
+        raise Contended(f"message {item_id} changed meanwhile; run the command again")
 
     def _try_move(self, item_id, by, actors, state, reason, only_from):
         key = self.key("item", item_id)

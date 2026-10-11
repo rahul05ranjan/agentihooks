@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from scripts.inbox.store import DuplicateItem, InboxError, new_item_id, now_ms
+from scripts.inbox.store import Contended, DuplicateItem, InboxError, new_item_id, now_ms
 
 NAME = "inbox-outbox.jsonl"
 SKIPPED = "inbox-outbox.skipped.jsonl"
@@ -112,8 +112,7 @@ def append(entry: dict, environ=None) -> None:
             )
         with path().open("a") as handle:
             handle.write(line)
-            handle.flush()
-            os.fsync(handle.fileno())
+            _sync(handle)
     if grown >= warn:
         print(
             f"agentihooks msg: warning: the local inbox outbox holds {grown} bytes of its {limit} byte limit",
@@ -164,7 +163,7 @@ def _replay(store, report: Report) -> None:
             report.applied.append(entry["item"])
         except DuplicateItem:
             report.already.append(entry["item"])
-        except RedisError:
+        except (RedisError, Contended):
             _rewrite(lines[index:])
             report.left = len(lines) - index
             return
@@ -177,12 +176,20 @@ def _replay(store, report: Report) -> None:
 def _set_aside(line: str, reason: str) -> None:
     with skipped_path().open("a") as handle:
         handle.write(json.dumps({"reason": reason, "line": line.rstrip("\n")}) + "\n")
+        _sync(handle)
 
 
 def _rewrite(lines: list[str]) -> None:
     staged = path().with_suffix(".tmp")
-    staged.write_text("".join(lines))
+    with staged.open("w") as handle:
+        handle.write("".join(lines))
+        _sync(handle)
     os.replace(staged, path())
+
+
+def _sync(handle) -> None:
+    handle.flush()
+    os.fsync(handle.fileno())
 
 
 def _tell(report: Report) -> None:

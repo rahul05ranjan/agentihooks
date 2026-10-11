@@ -5,7 +5,7 @@ import redis
 
 from hooks import config
 from scripts.inbox import cli, outbox
-from scripts.inbox.store import DuplicateItem, InboxStore
+from scripts.inbox.store import Contended, DuplicateItem, InboxStore
 
 pytestmark = pytest.mark.xdist_group("fakeredis")
 
@@ -23,8 +23,8 @@ class Outage:
         original = type(self.redis.pipeline()).execute
 
         def execute(pipe, *args, **kwargs):
-            sending = any(command[0][0] == "PUBLISH" for command in pipe.command_stack)
-            mode = self.failures.pop(0) if sending and self.failures else ""
+            writing = any(command[0][0] == "RPUSH" for command in pipe.command_stack)
+            mode = self.failures.pop(0) if writing and self.failures else ""
             if mode == "before":
                 raise redis.ConnectionError("connection lost before the send landed")
             result = original(pipe, *args, **kwargs)
@@ -182,6 +182,43 @@ def test_a_reply_whose_close_failed_mid_call_replays_only_the_close(outage, monk
     assert (report.applied, report.rejected) == ([answer], [])
     assert [item.id for item in store.inbox("alice")] == [answer]
     assert store.get(asked.id).reason == f"done: replied with message {answer}"
+
+
+@pytest.mark.parametrize("command", [("reply", "on it"), ("close", "done", "answered")])
+def test_a_reply_or_close_that_lands_before_redis_fails_replays_as_already_applied(
+    outage, monkeypatch, capsys, command
+):
+    store = InboxStore(outage.redis)
+    asked = store.send("alice", "bob", "can you review")
+    monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", "bob")
+    outage.failures = ["", "after"] if command[0] == "reply" else ["after"]
+    assert run(command[0], asked.id, *command[1:]) == 0
+    assert json.loads(capsys.readouterr().out)["state"] == "queued"
+    history = store.history(asked.id)
+    report = outbox.flush(store)
+    assert (report.applied, report.rejected, len(report.already)) == ([], [], 1)
+    assert store.history(asked.id) == history
+    assert store.get(asked.id).state == "done"
+    assert len(store.inbox("alice")) == (1 if command[0] == "reply" else 0)
+
+
+def test_a_contended_replay_keeps_the_record_for_the_next_flush(outage, monkeypatch, capsys):
+    store = InboxStore(outage.redis)
+    asked = store.send("alice", "bob", "can you review")
+    monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", "bob")
+    outage.down = True
+    assert run("close", asked.id, "done", "answered") == 0
+    assert run("send", "alice", "after the close") == 0
+    outage.down = False
+    close = InboxStore.close
+    monkeypatch.setattr(InboxStore, "close", lambda *args: (_ for _ in ()).throw(Contended("changed meanwhile")))
+    report = outbox.flush(store)
+    assert (report.applied, report.rejected, report.left) == ([], [], 2)
+    assert len(records()) == 2
+    monkeypatch.setattr(InboxStore, "close", close)
+    assert len(outbox.flush(store).applied) == 2
+    assert store.get(asked.id).reason == "done: answered"
+    assert outage.texts("alice") == ["after the close"]
 
 
 def test_a_fully_replayed_record_left_in_the_file_is_not_applied_again(outage, monkeypatch, capsys):
