@@ -32,6 +32,18 @@ def test_model_defaults_and_legacy_config(store):
     assert store.config("sw") == config
 
 
+@pytest.mark.parametrize("field", ["claude_model", "codex_model"])
+def test_create_refuses_custom_unknown_models(store, field):
+    with pytest.raises(SwarmError, match="catalog"):
+        store.create(SwarmConfig("new", "/repo", 2, 1, **{field: "unknown"}))
+    assert store.redis.hgetall(store.key("new", "config")) == {}
+
+
+def test_create_accepts_catalog_models(store):
+    store.create(SwarmConfig("new", "/repo", 2, 1, claude_model="sonnet", codex_model="gpt-6-sol"))
+    assert (store.config("new").claude_model, store.config("new").codex_model) == ("sonnet", "gpt-6-sol")
+
+
 def test_set_persists_and_reports_both_models(store, capsys):
     cli.cmd_set(store, argparse.Namespace(slug="sw", pairs=["claude-model=sonnet", "codex-model=gpt-6-sol"]))
     config = store.config("sw")

@@ -134,6 +134,15 @@ class RedisStore:
         return sorted(self.redis.smembers(f"{PREFIX}:index"))
 
     def create(self, config):
+        changes = {
+            field: default_models.model(config, harness)
+            for harness, field in default_models.FIELDS.items()
+            if default_models.model(config, harness) != default_models.DEFAULTS[harness]
+        }
+        if changes and (
+            refused := default_models.refusal(changes, model_catalog.catalog(os.environ, self.redis, time.time()))
+        ):
+            raise SwarmError(refused)
         refused = effort_range.refusal((config.effort_min, config.effort_max), config.lanes) or scaling_refusal(config)
         if refused:
             raise SwarmError(refused)

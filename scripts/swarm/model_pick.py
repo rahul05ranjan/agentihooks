@@ -71,20 +71,10 @@ def pick(
     if default.model == SONNET:
         return ModelPick(SONNET, SONNET_EFFORT, BAND)
     sonnet = not fixed and clamp(harness, SONNET_EFFORT, bounds) == SONNET_EFFORT
-<<<<<<< HEAD
-    model = default.model if fixed else model_effort(harness, [], environ)[0]
+    model = default.model if fixed else default_model or model_effort(harness, [], environ)[0]
     offered = [option for option in band(harness, difficulty, rank) if sonnet or option.model != SONNET]
     options = tuple(option if option.model == SONNET else replace(option, model=model) for option in offered)
     chosen = options[offered.index(floor(offered))]
-=======
-    model = default.model if fixed else default_model or model_effort(harness, [], environ)[0]
-    options = tuple(
-        option if option.model == SONNET else replace(option, model=model)
-        for option in band(harness, difficulty, rank)
-        if sonnet or option.model != SONNET
-    )
-    chosen = floor(options)
->>>>>>> 946bdbcbf (Configure catalog backed swarm model defaults (Refs #2672))
     if len(options) == 1:
         return chosen
     try:
