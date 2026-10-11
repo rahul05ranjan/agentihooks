@@ -136,10 +136,10 @@ def derive(measured: dict, nodes: Sequence[dict], policy: Policy) -> dict:
         raise ClaimRefused("no class was admitted: " + "; ".join(f"{c}: {r}" for c, r in refused.items()), refused)
     built = {cls: profile(runs, policy) for cls, runs in accepted.items()}
     return {
-        "suite": measured.get("suite", ""),
+        "suite": measured["suite"],
         "generation": measured["generation"],
-        "source": measured.get("source", ""),
-        "host": measured.get("host", {}),
+        "source": measured["source"],
+        "host": measured["host"],
         "tools": measured["tools"],
         "policy": asdict(policy),
         "profiles": built,
@@ -179,11 +179,11 @@ def promote(accepted: dict | None, candidate: dict, policy: Policy) -> dict:
     """Decide whether candidate replaces the accepted report; a material change holds it for requalification."""
     if accepted is None:
         return {"decision": "promoted", "accepted": candidate, "changes": None}
+    if candidate["generation"] < accepted["generation"]:
+        return {"decision": "stale", "accepted": accepted, "changes": None}
     if candidate["generation"] == accepted["generation"]:
         same = _canonical(candidate) == _canonical(accepted)
         return {"decision": "replayed" if same else "conflict", "accepted": accepted, "changes": None}
-    if candidate["generation"] < accepted["generation"]:
-        return {"decision": "stale", "accepted": accepted, "changes": None}
     changes = compare(accepted, candidate, policy)
     if changes["material"] or changes["missing"]:
         return {"decision": "requalify", "accepted": accepted, "changes": changes}

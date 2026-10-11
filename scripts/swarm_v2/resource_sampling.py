@@ -2,6 +2,7 @@
 
 import os
 import signal
+import stat
 import subprocess
 import time
 from collections.abc import Mapping, Sequence
@@ -12,9 +13,9 @@ PROC = Path("/proc")
 MIB = 1024 * 1024
 PAGE = os.sysconf("SC_PAGE_SIZE")
 TICKS = os.sysconf("SC_CLK_TCK")
-STORAGE_EVERY = 5
 CORE_WINDOW = 1.0
 GONE = (FileNotFoundError, ProcessLookupError, PermissionError)
+QUIET = {"start_new_session": True, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
 
 
 @dataclass(frozen=True)
@@ -72,13 +73,11 @@ def members(processes: dict[int, Process], root: int) -> list[Process]:
     children: dict[int, list[int]] = {}
     for process in processes.values():
         children.setdefault(process.ppid, []).append(process.pid)
-    found, pending = set(), [root]
-    while pending:
-        pid = pending.pop()
-        found.add(pid)
-        pending.extend(child for child in children.get(pid, ()) if child not in found)
-    found |= {p.pid for p in processes.values() if p.session == root}
-    return [processes[pid] for pid in sorted(found)]
+    found = [root]
+    for pid in found:
+        found.extend(child for child in children.get(pid, ()) if child not in found)
+    session = {p.pid for p in processes.values() if p.session == root}
+    return [processes[pid] for pid in sorted(session.union(found))]
 
 
 def snapshot(proc: Path, root: int, at: float) -> Snapshot:
@@ -97,14 +96,18 @@ class Peaks:
     processes: int = 0
     rss_bytes: int = 0
     pss_bytes: int = 0
+    storage_bytes: int = 0
     cores: float = 0.0
+    samples: int = 0
     ticks: dict[int, int] = field(default_factory=dict)
     anchor: Snapshot | None = None
 
-    def add(self, snap: Snapshot) -> None:
+    def add(self, snap: Snapshot, storage_bytes: int) -> None:
+        self.samples += 1
         self.processes = max(self.processes, snap.processes)
         self.rss_bytes = max(self.rss_bytes, snap.rss_bytes)
         self.pss_bytes = max(self.pss_bytes, snap.pss_bytes)
+        self.store(storage_bytes)
         for pid, ticks in snap.ticks.items():
             self.ticks[pid] = max(ticks, self.ticks.get(pid, 0))
         if self.anchor is None:
@@ -114,18 +117,20 @@ class Peaks:
             self.cores = max(self.cores, used / TICKS / (snap.at - self.anchor.at))
             self.anchor = snap
 
+    def store(self, storage_bytes: int) -> None:
+        self.storage_bytes = max(self.storage_bytes, storage_bytes)
+
+
+def _size(path: Path) -> int:
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return 0
+    return info.st_size if stat.S_ISREG(info.st_mode) else 0
+
 
 def directory_bytes(path: Path) -> int:
-    total = 0
-    for folder, _, files in os.walk(path):
-        for name in files:
-            try:
-                info = os.lstat(os.path.join(folder, name))
-            except FileNotFoundError:
-                continue
-            if not os.path.islink(os.path.join(folder, name)):
-                total += info.st_size
-    return total
+    return sum(_size(entry) for entry in path.rglob("*"))
 
 
 def _stop(pid: int) -> None:
@@ -135,53 +140,40 @@ def _stop(pid: int) -> None:
         pass
 
 
-def measure(
-    command: Sequence[str],
-    workdir: Path,
-    env: Mapping[str, str],
-    interval: float = 0.1,
-    timeout: float = 600.0,
-    proc: Path = PROC,
-) -> dict:
-    """Run command in its own session under workdir, sampling its tree until it exits or the timeout kills it."""
-    started = time.monotonic()
-    child = subprocess.Popen(
-        list(command),
-        cwd=workdir,
-        env=dict(env),
-        start_new_session=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    peaks, storage, samples, timed_out = Peaks(), 0, 0, False
-    while True:
-        pid, status, usage = os.wait4(child.pid, os.WNOHANG)
-        now = time.monotonic()
-        if pid:
-            break
-        if now - started > timeout:
-            timed_out = True
-            _stop(child.pid)
-            pid, status, usage = os.wait4(child.pid, 0)
-            break
-        peaks.add(snapshot(proc, child.pid, now))
-        if samples % STORAGE_EVERY == 0:
-            storage = max(storage, directory_bytes(workdir))
-        samples += 1
-        time.sleep(interval)
-    child.returncode = os.waitstatus_to_exitcode(status)
-    _stop(child.pid)
-    storage = max(storage, directory_bytes(workdir))
-    tracked = sum(peaks.ticks.values()) / TICKS
+def summary(peaks: Peaks, usage, wall_seconds: float, status: int, timed_out: bool) -> dict:
+    cpu_seconds = usage.ru_utime + usage.ru_stime
     return {
         "peak_rss_mib": round(peaks.rss_bytes / MIB, 2),
         "peak_pss_mib": round(peaks.pss_bytes / MIB, 2),
         "peak_processes": peaks.processes,
         "peak_cores": round(peaks.cores, 3),
-        "cpu_seconds": round(max(usage.ru_utime + usage.ru_stime, tracked), 3),
-        "wall_seconds": round(time.monotonic() - started, 3),
-        "peak_storage_mib": round(storage / MIB, 2),
-        "samples": samples,
-        "exit_code": child.returncode,
+        "cpu_seconds": round(max(cpu_seconds, sum(peaks.ticks.values()) / TICKS), 3),
+        "wall_seconds": round(wall_seconds, 3),
+        "peak_storage_mib": round(peaks.storage_bytes / MIB, 2),
+        "samples": peaks.samples,
+        "exit_code": os.waitstatus_to_exitcode(status),
         "timed_out": timed_out,
     }
+
+
+def measure(
+    command: Sequence[str], workdir: Path, env: Mapping[str, str], interval: float, timeout: float, proc: Path = PROC
+) -> dict:
+    """Run command in its own session under workdir, sampling its tree until it exits or the timeout kills it."""
+    started = time.monotonic()
+    child = subprocess.Popen(list(command), cwd=workdir, env=dict(env), **QUIET)
+    peaks = Peaks()
+    pid, status, usage = os.wait4(child.pid, os.WNOHANG)
+    timed_out = False
+    while not pid and not timed_out:
+        peaks.add(snapshot(proc, child.pid, time.monotonic()), directory_bytes(workdir))
+        time.sleep(interval)
+        pid, status, usage = os.wait4(child.pid, os.WNOHANG)
+        timed_out = time.monotonic() - started > timeout
+    if not pid:
+        _stop(child.pid)
+        pid, status, usage = os.wait4(child.pid, 0)
+    child.returncode = os.waitstatus_to_exitcode(status)
+    _stop(child.pid)
+    peaks.store(directory_bytes(workdir))
+    return summary(peaks, usage, time.monotonic() - started, status, timed_out)
