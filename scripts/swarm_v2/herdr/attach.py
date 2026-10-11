@@ -1,5 +1,4 @@
 import ipaddress
-import json
 import os
 import socket
 import subprocess
@@ -12,6 +11,7 @@ from typing import NoReturn
 from cryptography.hazmat.primitives import serialization
 
 from scripts.swarm_v2.herdr.capabilities import Qualifier, Verdict, machine_probe
+from scripts.swarm_v2.herdr.catalog import Catalog
 from scripts.swarm_v2.herdr.endpoints import (
     PORT,
     Endpoint,
@@ -21,6 +21,7 @@ from scripts.swarm_v2.herdr.endpoints import (
     key_pair,
     known_hosts,
 )
+from scripts.swarm_v2.herdr.reconcile import STORE, Registrations, Store
 
 USER = "worker"
 SSH = "/usr/bin/ssh"
@@ -144,6 +145,7 @@ class Terminal:
         self.home, self.authority, self.namespace = home, authority, namespace
         self.run, self.lookup = run, lookup
         self.qualifier = Qualifier(machine_probe(run))
+        self.registrations = Registrations(Catalog(run), Store(home.terminals / STORE))
         self.failures: Counter = Counter()
 
     def _client_key(self) -> str:
@@ -182,16 +184,7 @@ class Terminal:
             raise EndpointRefused(reason, f"{endpoint.name} terminal refused the connection: {reason}")
 
     def _save(self, endpoint: Endpoint) -> None:
-        listed = self.run(["herdr", "machine", "list", "--json"])
-        try:
-            machines = json.loads(listed.stdout) if listed.returncode == 0 else []
-        except ValueError:
-            machines = []
-        if any(machine.get("label") == endpoint.name for machine in machines if isinstance(machine, dict)):
-            return
-        done = self.run(["herdr", "machine", "add", "--label", endpoint.name, endpoint.target])
-        if done.returncode != 0:
-            raise EndpointRefused("machine_refused", f"herdr could not save {endpoint.name}")
+        self.registrations.register(endpoint)
 
     def _refuse(self, refused: EndpointRefused) -> NoReturn:
         self.failures[refused.reason] += 1

@@ -1,0 +1,197 @@
+import json
+import os
+from collections import Counter
+from collections.abc import Iterable
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+
+from scripts.swarm_v2.herdr.capabilities import Incompatible, Qualifier, Unreachable
+from scripts.swarm_v2.herdr.catalog import REMOTE_SESSION, Catalog, Machine
+from scripts.swarm_v2.herdr.endpoints import Endpoint, EndpointRefused
+
+STORE = "registrations.json"
+VERSION = 1
+
+
+@dataclass(frozen=True)
+class Record:
+    """A None profile id is an add whose outcome is unknown: herdr may or may not have saved it."""
+
+    execution_id: str
+    generation: int
+    label: str
+    target: str
+    session: str
+    profile_id: str | None
+
+
+@dataclass
+class Report:
+    registered: dict[str, str] = field(default_factory=dict)
+    refused: dict[str, str] = field(default_factory=dict)
+    retired: list[str] = field(default_factory=list)
+    drift: dict[str, int] = field(default_factory=dict)
+
+    def herdr_registration_drift(self) -> int:
+        return sum(self.drift.values())
+
+
+class Store:
+    """The controller's ownership record: only profiles it names are ever renamed or removed."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    def load(self) -> dict[str, Record]:
+        if not self.path.exists():
+            return {}
+        try:
+            document = json.loads(self.path.read_text())
+            if document["version"] != VERSION:
+                raise ValueError(document["version"])
+            records = [Record(**entry) for entry in document["registrations"]]
+        except (ValueError, TypeError, KeyError):
+            raise EndpointRefused("ownership_unreadable", "the registration ownership record is unreadable") from None
+        return {record.execution_id: record for record in records}
+
+    def save(self, records: dict[str, Record]) -> None:
+        document = {"version": VERSION, "registrations": [asdict(records[key]) for key in sorted(records)]}
+        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        staged = self.path.with_name(f".{self.path.name}.tmp")
+        staged.unlink(missing_ok=True)
+        with os.fdopen(os.open(staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as handle:
+            handle.write(json.dumps(document, indent=2) + "\n")
+        staged.replace(self.path)
+
+
+def owned(record: Record | None, machines: Iterable[Machine]) -> Machine | None:
+    if record is None:
+        return None
+    if record.profile_id is not None:
+        return next((machine for machine in machines if machine.profile_id == record.profile_id), None)
+    found = [
+        machine
+        for machine in machines
+        if (machine.label, machine.target, machine.session) == (record.label, record.target, record.session)
+    ]
+    if len(found) > 1:
+        raise EndpointRefused("catalog_ambiguous", f"{record.label} was saved more than once after an interrupted add")
+    return found[0] if found else None
+
+
+def newest(desired: Iterable[Endpoint]) -> dict[str, Endpoint]:
+    wanted: dict[str, Endpoint] = {}
+    for endpoint in desired:
+        held = wanted.get(endpoint.scope.execution_id)
+        if held is None or endpoint.scope.generation > held.scope.generation:
+            wanted[endpoint.scope.execution_id] = endpoint
+    return wanted
+
+
+LABEL_TAKEN = "is the label of a machine this controller does not own"
+TARGET_TAKEN = "is already saved by a machine this controller does not own"
+
+
+class Registrations:
+    def __init__(self, catalog: Catalog, store: Store, session: str = REMOTE_SESSION) -> None:
+        self.catalog, self.store, self.session = catalog, store, session
+        self.drift: Counter = Counter()
+
+    def _collision(self, endpoint: Endpoint, machines: Iterable[Machine], keep: str | None) -> None:
+        others = [machine for machine in machines if machine.profile_id != keep]
+        if any(machine.label == endpoint.name for machine in others):
+            self.drift["collision"] += 1
+            raise EndpointRefused("label_collision", f"{endpoint.name} {LABEL_TAKEN}")
+        if keep is None and any(machine.target == endpoint.target for machine in others):
+            self.drift["collision"] += 1
+            raise EndpointRefused("target_collision", f"{endpoint.name} {TARGET_TAKEN}")
+
+    def _record(self, endpoint: Endpoint, profile_id: str | None) -> Record:
+        scope = endpoint.scope
+        return Record(scope.execution_id, scope.generation, endpoint.name, endpoint.target, self.session, profile_id)
+
+    def _add(self, endpoint: Endpoint, records: dict[str, Record], machines: tuple[Machine, ...]) -> str:
+        self._collision(endpoint, machines, None)
+        execution_id = endpoint.scope.execution_id
+        records[execution_id] = self._record(endpoint, None)
+        self.store.save(records)
+        try:
+            return self.catalog.add(endpoint.name, endpoint.target, self.session)
+        except EndpointRefused as refused:
+            if refused.reason == "machine_refused":
+                del records[execution_id]
+                self.store.save(records)
+            raise
+
+    def _claim(self, endpoint: Endpoint, records: dict[str, Record], machines: tuple[Machine, ...]) -> str:
+        record = records.get(endpoint.scope.execution_id)
+        if record is not None and endpoint.scope.generation < record.generation:
+            raise EndpointRefused(
+                "stale_generation", f"{endpoint.name} is registered for generation {record.generation}"
+            )
+        saved = owned(record, machines)
+        if saved is None:
+            self.drift["missing"] += 1
+            return self._add(endpoint, records, machines)
+        if record.profile_id is None:
+            self.drift["interrupted"] += 1
+        if saved.label != endpoint.name:
+            self._collision(endpoint, machines, saved.profile_id)
+            self.drift["label"] += 1
+            self.catalog.rename(saved.profile_id, endpoint.name)
+        return saved.profile_id
+
+    def _register(self, endpoint: Endpoint, records: dict[str, Record], machines: tuple[Machine, ...]) -> str:
+        profile_id = self._claim(endpoint, records, machines)
+        records[endpoint.scope.execution_id] = self._record(endpoint, profile_id)
+        self.store.save(records)
+        return profile_id
+
+    def register(self, endpoint: Endpoint) -> str:
+        records = self.store.load()
+        return self._register(endpoint, records, self.catalog.machines())
+
+    def _drop(self, records: dict[str, Record], execution_id: str, profile_id: str | None) -> None:
+        if profile_id is not None:
+            self.catalog.remove(profile_id)
+        del records[execution_id]
+        self.store.save(records)
+
+    def _retire(self, records: dict[str, Record], machines: tuple[Machine, ...], execution_id: str) -> None:
+        saved = owned(records[execution_id], machines)
+        if saved is not None:
+            self.drift["retired"] += 1
+        self._drop(records, execution_id, saved.profile_id if saved else None)
+
+    def _sync(self, endpoint: Endpoint, records, machines, qualifier: Qualifier, report: Report) -> None:
+        profile_id = self._register(endpoint, records, machines)
+        try:
+            compatible = qualifier.verdict(endpoint.name, endpoint.incarnation).compatible
+        except Unreachable:
+            compatible = True
+        except Incompatible:
+            compatible = False
+        if not compatible:
+            self._drop(records, endpoint.scope.execution_id, profile_id)
+            raise EndpointRefused("incompatible", f"{endpoint.name} serves an incompatible herdr")
+        report.registered[endpoint.scope.execution_id] = profile_id
+
+    def reconcile(self, desired: Iterable[Endpoint], qualifier: Qualifier) -> Report:
+        before = Counter(self.drift)
+        records = self.store.load()
+        machines = self.catalog.machines()
+        wanted = newest(desired)
+        report = Report()
+        for execution_id in sorted(wanted):
+            try:
+                self._sync(wanted[execution_id], records, machines, qualifier, report)
+            except EndpointRefused as refused:
+                report.refused[execution_id] = refused.reason
+        for execution_id in sorted(set(records) - set(wanted)):
+            try:
+                self._retire(records, machines, execution_id)
+                report.retired.append(execution_id)
+            except EndpointRefused as refused:
+                report.refused[execution_id] = refused.reason
+        report.drift = dict(self.drift - before)
+        return report
