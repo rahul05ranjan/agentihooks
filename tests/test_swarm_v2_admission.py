@@ -321,8 +321,9 @@ def test_tick_spawns_only_admitted_tasks_and_blocks_the_impossible_one():
     actions = tick("sw", store, ledger, runtime, now_ms=data["clock_ms"])
     assert [task for _, _, task in runtime.spawned] == ["t01", "t02", "t03"]
     assert ledger.rows["t04"]["state"] == "blocked"
-    assert ledger.comments[0][0] == "t04"
-    assert ledger.comments[0][1].startswith("task t04 requests 65536 MiB memory")
+    comments = [row for row in ledger.comments if row[2] != "dispatcher"]
+    assert comments[0][0] == "t04"
+    assert comments[0][1].startswith("task t04 requests 65536 MiB memory")
     assert (
         "task t05 waits: pending cap reached: 3 of 3 pending attempts for this swarm, 3 of 3 across swarms" in actions
     )
