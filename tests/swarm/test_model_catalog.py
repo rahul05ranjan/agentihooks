@@ -118,10 +118,30 @@ def test_an_unreadable_codex_cache_gives_no_models(tmp_path, body):
     assert model_catalog.codex({"CODEX_HOME": str(tmp_path)}) == []
 
 
+def unreachable(*args):
+    raise OSError("unreachable")
+
+
+def missing_data(*args):
+    raise KeyError("data")
+
+
+def no_claude():
+    raise FileNotFoundError("claude")
+
+
+def slow_claude():
+    raise subprocess.TimeoutExpired("claude", 20)
+
+
+def unread_help():
+    pytest.fail("the help is read only as a fallback")
+
+
 def test_claude_maps_each_line_to_its_newest_model_under_the_cli_alias(monkeypatch):
     seen = []
     monkeypatch.setattr(model_catalog, "fetch_models", lambda token: seen.append(token) or CLAUDE_MODELS)
-    monkeypatch.setattr(model_catalog, "cli_help", lambda: pytest.fail("the help is read only as a fallback"))
+    monkeypatch.setattr(model_catalog, "cli_help", unread_help)
     assert model_catalog.claude({"AH_CC_TOKEN_one": "routed-credential", "HOME": "/h"}) == [
         {"model": "opus", "label": "Claude Opus 5.5", "efforts": ["low", "medium", "high", "xhigh", "max"]},
         {"model": "sonnet", "label": "Claude Sonnet 5.5", "efforts": ["medium", "xhigh"]},
@@ -139,22 +159,18 @@ def test_claude_reads_with_the_oauth_credential_when_no_account_is_routed(monkey
 
 
 @pytest.mark.parametrize(
-    "environ,failure",
+    "environ,fetch,fetched",
     [
-        ({"AH_CC_TOKEN_one": "routed-credential"}, OSError("unreachable")),
-        ({"AH_CC_TOKEN_one": "routed-credential"}, KeyError("data")),
-        ({"AH_CC_TOKEN_one": "routed-credential"}, None),
-        ({"AH_CC_TOKEN_one": "a", "AH_CC_TOKEN_two": "b"}, AssertionError("two accounts name no routed one")),
-        ({}, AssertionError("no credential reads no endpoint")),
+        ({"AH_CC_TOKEN_one": "routed-credential"}, unreachable, ["routed-credential"]),
+        ({"AH_CC_TOKEN_one": "routed-credential"}, missing_data, ["routed-credential"]),
+        ({"AH_CC_TOKEN_one": "routed-credential"}, lambda token: [], ["routed-credential"]),
+        ({"AH_CC_TOKEN_one": "a", "AH_CC_TOKEN_two": "b"}, unreachable, []),
+        ({}, unreachable, []),
     ],
 )
-def test_claude_falls_back_to_the_aliases_the_installed_cli_documents(monkeypatch, environ, failure):
-    def fetch(token):
-        if failure is None:
-            return []
-        raise failure
-
-    monkeypatch.setattr(model_catalog, "fetch_models", fetch)
+def test_claude_falls_back_to_the_aliases_the_installed_cli_documents(monkeypatch, environ, fetch, fetched):
+    calls = []
+    monkeypatch.setattr(model_catalog, "fetch_models", lambda token: calls.append(token) or fetch(token))
     monkeypatch.setattr(model_catalog, "cli_help", lambda: HELP)
     efforts = ["low", "medium", "high", "xhigh", "max"]
     assert model_catalog.claude(environ) == [
@@ -162,19 +178,15 @@ def test_claude_falls_back_to_the_aliases_the_installed_cli_documents(monkeypatc
         {"model": "opus", "label": "opus", "efforts": efforts},
         {"model": "sonnet", "label": "sonnet", "efforts": efforts},
     ]
+    assert calls == fetched
 
 
 @pytest.mark.parametrize(
     "cli_help",
-    [
-        lambda: (_ for _ in ()).throw(FileNotFoundError("claude")),
-        lambda: (_ for _ in ()).throw(subprocess.TimeoutExpired("claude", 20)),
-        lambda: "",
-        lambda: HELP.replace("--model <model>", "--modelx"),
-    ],
+    [no_claude, slow_claude, lambda: "", lambda: HELP.replace("--model <model>", "--modelx")],
 )
 def test_claude_with_no_readable_source_gives_no_models(monkeypatch, cli_help):
-    monkeypatch.setattr(model_catalog, "fetch_models", lambda token: (_ for _ in ()).throw(OSError("down")))
+    monkeypatch.setattr(model_catalog, "fetch_models", unreachable)
     monkeypatch.setattr(model_catalog, "cli_help", cli_help)
     assert model_catalog.claude({"AH_CC_TOKEN_one": "routed-credential"}) == []
 
@@ -253,7 +265,7 @@ def test_the_cache_answers_inside_the_hour_and_refreshes_after_it(monkeypatch, r
     assert calls == [{"A": "1"}, {"A": "1"}]
     assert model_catalog.cached("claude", {"A": "1"}, redis, 1000.0 + 3601) == TWO
     assert len(calls) == 2
-    assert 3590 < redis.ttl("agentihooks:swarm:models:claude") <= 3600
+    assert redis.ttl("agentihooks:swarm:models:claude") == 3600
 
 
 def test_an_empty_catalog_is_never_cached(monkeypatch, redis):

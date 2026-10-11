@@ -680,7 +680,8 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/layout":
             return self.send(200, json.dumps(ledger_layout.read()), "application/json")
         if route.startswith("/api/swarm/"):
-            return self.get_swarm(*slug.removeprefix("swarm/").partition("/")[::2])
+            name, _, view = slug.removeprefix("swarm/").partition("/")
+            return self.get_swarm(name, view)
         if not self.exists(slug):
             return self.send(404, "no such ledger", "text/plain")
         if route.startswith("/api/"):
