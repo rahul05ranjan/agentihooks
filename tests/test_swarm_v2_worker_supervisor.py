@@ -2,17 +2,9 @@ import pytest
 
 from scripts.swarm_v2.checkpoints import publisher
 from scripts.swarm_v2.worker import supervisor
-from tests.test_swarm_v2_checkpoints_publisher import LostAck, checkpoint, make, pointers
+from tests.sv2_ckp04_cases import Clock, LostAck, checkpoint, make, pointers
 
 pytestmark = pytest.mark.unit
-
-
-class Clock:
-    def __init__(self) -> None:
-        self.now = 1000.0
-
-    def __call__(self) -> float:
-        return self.now
 
 
 class Capture:

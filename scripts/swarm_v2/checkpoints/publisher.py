@@ -13,6 +13,7 @@ REPLAYED = "replayed"
 SUPERSEDED = "superseded_generation"
 STALE = "stale_sequence"
 SCOPE = "scope_mismatch"
+CONFLICT = "identity_conflict"
 WIDTH = 10
 
 
@@ -69,14 +70,17 @@ class Publisher:
         if claimed != (scope.task_id, scope.execution_id, scope.generation):
             return self.refuse(SCOPE)
         checkpoint_id, sequence = doc["checkpoint_id"], doc["checkpoint_sequence"]
+        listed = _listed(doc, materials)
         blocked = self._blocked(checkpoint_id, sequence)
         if blocked == REPLAYED:
+            if self.store.recorded(checkpoint_id) != ArtifactRef.of(json.dumps(listed, sort_keys=True).encode()):
+                return self.refuse(CONFLICT)
             return Publication(True, REPLAYED, self.validator.verify(checkpoint_id))
         if blocked:
             return self.refuse(blocked)
         for role, data in materials.items():
             self.store.put(f"{checkpoint_id}.{role}", data)
-        verdict = self.validator.commit(_listed(doc, materials))
+        verdict = self.validator.commit(listed)
         if not verdict.authoritative:
             return self.refuse(verdict.reason, verdict)
         if self._newest() > scope.generation:

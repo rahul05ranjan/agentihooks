@@ -3,69 +3,14 @@ from pathlib import Path
 
 import pytest
 
-from scripts.swarm_v2.artifacts import local
 from scripts.swarm_v2.artifacts.base import ABSENT, VERIFIED, ArtifactRef
 from scripts.swarm_v2.checkpoints import model, publisher
-from tests import sv2_ckp02_cases as cases
+from tests import sv2_ckp04_cases as cases
+from tests.sv2_ckp04_cases import LostAck, checkpoint, files, make, pointers
 
 pytestmark = pytest.mark.unit
 
-
-class LostAck:
-    """Performs every mutating call, then reports a failure for the one numbered lose_at."""
-
-    kind = "local"
-
-    def __init__(self, root: Path, lose_at: int | None = None) -> None:
-        self.inner = local.LocalBackend(root)
-        self.lose_at = lose_at
-        self.calls: list[tuple[str, str]] = []
-
-    def _mutated(self, name: str, key: str) -> None:
-        self.calls.append((name, key))
-        if len(self.calls) == self.lose_at:
-            raise ConnectionError(f"acknowledgement lost after {name} {key}")
-
-    def write(self, key: str, data: bytes) -> None:
-        self.inner.write(key, data)
-        self._mutated("write", key)
-
-    def move(self, source: str, target: str) -> None:
-        self.inner.move(source, target)
-        self._mutated("move", target)
-
-    def remove(self, key: str) -> None:
-        self.inner.remove(key)
-
-    def size(self, key: str) -> int | None:
-        return self.inner.size(key)
-
-    def read(self, key: str, start: int, length: int) -> bytes:
-        return self.inner.read(key, start, length)
-
-    def keys(self, prefix: str) -> list[str]:
-        return self.inner.keys(prefix)
-
-
-def checkpoint(sequence: int, generation: int = 2, execution: str = "e1", payload: bytes | None = None):
-    doc = cases.manifest_for(f"ckpt-g{generation}-s{sequence}")
-    doc["checkpoint_sequence"] = sequence
-    doc["authority"] = {**doc["authority"], "execution_id": execution, "task_generation": generation}
-    doc["reconstruction"] = {**doc["reconstruction"], "execution_generation": generation}
-    data = payload if payload is not None else json.dumps({"generation": generation, "sequence": sequence}).encode()
-    return doc, {model.TRANSCRIPT: data}
-
-
-def make(root: Path, execution: str = "e1", generation: int = 2, backend=None) -> publisher.Publisher:
-    return publisher.Publisher(model.Validator(cases.store(root, execution, generation, backend)))
-
-
-def files(root: Path) -> dict[str, bytes]:
-    return {path.relative_to(root).as_posix(): path.read_bytes() for path in sorted(root.rglob("*")) if path.is_file()}
-
-
-def pointers(root: Path) -> list[str]:
-    return sorted(path.relative_to(root).as_posix() for path in root.rglob("*") if "/pointers/" in path.as_posix())
+EVIDENCE = Path(__file__).parents[1] / "evidence" / "SV2-CKP-04"
 
 
 def test_publish_promotes_verified_checkpoints_in_sequence(tmp_path):
@@ -169,6 +114,16 @@ def test_a_replayed_publish_promotes_once(tmp_path):
     assert again.verdict.authoritative
     assert len(pointers(tmp_path)) == 1
     assert pub.metrics() == {"checkpoint_publish_failures": {}}
+
+
+def test_a_replay_under_the_same_identity_with_other_content_is_refused(tmp_path):
+    pub = make(tmp_path)
+    assert pub.publish(*checkpoint(1)).promoted
+    before = files(tmp_path)
+    refused = pub.publish(*checkpoint(1, payload=b"other"))
+    assert (refused.promoted, refused.reason, refused.verdict) == (False, "identity_conflict", None)
+    assert files(tmp_path) == before
+    assert pub.metrics() == {"checkpoint_publish_failures": {"identity_conflict": 1}}
 
 
 def test_a_document_outside_the_granted_scope_uploads_nothing(tmp_path):
@@ -307,3 +262,13 @@ def test_reclaim_leaves_a_newer_generation_record(tmp_path):
     stale = make(tmp_path, "e1", 2)
     assert stale.reclaim("ckpt-g3-s1") == []
     assert newer.validator.store.stat(ArtifactRef.of(b"newer")) == VERIFIED
+
+
+@pytest.mark.parametrize("case", ["a", "b", "c"])
+def test_package_cases_match_their_committed_evidence(case):
+    first, second = cases.run_case(case), cases.run_case(case)
+    assert first == second
+    assert first["state"] == "passed", json.dumps(first, indent=2, sort_keys=True)
+    path = EVIDENCE / f"{case}-result.json"
+    committed = json.loads(path.read_text()) if path.exists() else None
+    assert committed == first, json.dumps(first, indent=2, sort_keys=True)
