@@ -11,12 +11,8 @@ import traceback
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 
-from redis.exceptions import WatchError
-
 from scripts.swarm import commands, lease
 from scripts.swarm.store import AgentRecord, RedisStore, SwarmError
-from scripts.swarm_v2.api.commands import CommandQueue
-from scripts.swarm_v2.auth_context import GrantRefused
 
 VIEW, AGENT, SWARM = "terminal view", "one agent", "one swarm"
 SWITCH = "AGENTIHOOKS_LIFECYCLE_DESTRUCTIVE"
@@ -129,6 +125,8 @@ def offer(agent: AgentRecord, task_revisions: Mapping[str, int], pending: str, d
 
 
 def _pending(store: RedisStore, slug: str, reader, name: str, now: int) -> str:
+    from scripts.swarm_v2.api.commands import CommandQueue
+
     op = reader.hget(_key(store, slug, "pending"), name)
     raw = op and reader.hget(_key(store, slug, "ops"), op)
     record = json.loads(raw) if raw else {}
@@ -228,6 +226,8 @@ def request(
     environ: Mapping[str, str] = os.environ,
     task_revisions: Mapping[str, int] | None = None,
 ) -> dict:
+    from redis.exceptions import WatchError
+
     parsed = _parse(body)
     control = BY_ACTION[parsed[0]]
     if control.destructive and not operator:
@@ -269,6 +269,9 @@ def _fenced(agent: AgentRecord | None, record: dict, destructive: bool, now: int
 
 
 def _apply(store: RedisStore, slug: str, agent: AgentRecord, record: dict, run: Callable[[list[str]], str]):
+    from scripts.swarm_v2.api.commands import CommandQueue
+    from scripts.swarm_v2.auth_context import GrantRefused
+
     action = record["control"]
     if action == "attach":
         return run(["swarm", slug, "terminal", agent.execution_id]), {}
@@ -285,6 +288,8 @@ def _apply(store: RedisStore, slug: str, agent: AgentRecord, record: dict, run: 
 
 
 def _settle(store: RedisStore, slug: str, record: dict, error: str, result: dict) -> None:
+    from redis.exceptions import WatchError
+
     state = "failed" if error else ISSUED if "worker_command" in result else "applied"
     settled = {**record, "state": state, "error": error, "result": result}
     pending = _key(store, slug, "pending")
@@ -329,6 +334,8 @@ def execute(
 
 
 def operations(store: RedisStore, slug: str, limit: int = SHOWN) -> list[dict]:
+    from scripts.swarm_v2.api.commands import CommandQueue
+
     order = store.redis.lrange(_key(store, slug, "order"), -limit, -1)
     found = store.redis.hmget(_key(store, slug, "ops"), order) if order else []
     shown = []

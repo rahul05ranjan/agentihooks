@@ -7,9 +7,16 @@ from unittest.mock import patch
 from scripts.swarm import command_runner, commands, lifecycle
 from scripts.swarm.store import AgentRecord, RedisStore, SwarmConfig
 from scripts.swarm_ledger import ledger_server
-from scripts.swarm_v2.api.commands import CommandQueue
 
 FIXTURES = Path(__file__).parent / "fixtures" / "swarm_v2"
+
+
+def queue_class():
+    from scripts.swarm_v2.api.commands import CommandQueue
+
+    return CommandQueue
+
+
 INPUT = "ledger-lifecycle-controls.json"
 EVIDENCE_CLASS = (
     "mocked: a fake Redis swarm store holds two Kubernetes workers and one local agent; page clicks enter through the "
@@ -87,7 +94,7 @@ class World:
 
 
 def _worker_completes(world: World, seat: str, outcome: dict) -> None:
-    queue, agent = CommandQueue(world.store, world.slug), world.seats[seat]
+    queue, agent = queue_class()(world.store, world.slug), world.seats[seat]
     [issued] = queue.pending(agent.execution_id, 5)
     queue.accept(agent.execution_id, issued["command_id"], issued["payload_digest"])
     queue.complete(agent.execution_id, issued["command_id"], outcome)
@@ -103,7 +110,7 @@ def _drained(data: dict) -> tuple[dict, World]:
     actions = world.tick()
     _worker_completes(world, drain["seat"], drain["outcome"])
     op = world.operations()[drain["op"]]
-    queue = CommandQueue(world.store, world.slug)
+    queue = queue_class()(world.store, world.slug)
     others = {
         seat: queue.pending(agent.execution_id, 5) for seat, agent in world.seats.items() if seat != drain["seat"]
     }

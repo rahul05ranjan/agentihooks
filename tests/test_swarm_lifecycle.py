@@ -6,9 +6,15 @@ import pytest
 from scripts.swarm import command_runner, commands, lifecycle
 from scripts.swarm.store import AgentRecord, RedisStore, SwarmConfig
 from scripts.swarm_ledger import ledger_server
-from scripts.swarm_v2.api.commands import CommandQueue
 
 pytestmark = pytest.mark.xdist_group("fakeredis")
+
+
+def queue_class():
+    from scripts.swarm_v2.api.commands import CommandQueue
+
+    return CommandQueue
+
 
 SLUG = "life"
 CHECKPOINT = {"status": "checkpointed", "checkpoint": "ckpt-eng-1"}
@@ -264,7 +270,7 @@ def test_the_runner_drains_one_worker_and_reports_its_checkpoint(store, ran):
     agent, other = kube(store), kube(store, "eng-3@life", "t3")
     ask(store, agent, "drain")
     assert command_runner.consume(store, SLUG) == ["control lifecycle acknowledged"]
-    queue = CommandQueue(store, SLUG)
+    queue = queue_class()(store, SLUG)
     [issued] = queue.pending(agent.execution_id, 5)
     assert (issued["kind"], issued["generation"]) == ("drain", 1)
     assert queue.pending(other.execution_id, 5) == []
@@ -317,7 +323,7 @@ def test_a_refused_worker_command_fails_the_operation(store, ran, monkeypatch):
 
     agent = kube(store)
     ask(store, agent, "cancel")
-    monkeypatch.setattr(CommandQueue, "issue", refuse)
+    monkeypatch.setattr(queue_class(), "issue", refuse)
     command_runner.consume(store, SLUG)
     op = lifecycle.operations(store, SLUG)[0]
     assert (op["state"], op["error"]) == ("failed", "the execution is not the current occupant of its seat")
@@ -448,7 +454,7 @@ def test_an_unexpected_error_settles_the_operation_and_releases_the_agent(store,
 
     agent = kube(store)
     record = ask(store, agent, "drain")
-    monkeypatch.setattr(CommandQueue, "issue", broken)
+    monkeypatch.setattr(queue_class(), "issue", broken)
     row = {"argv": ["drain", agent.name, record["op"]]}
     assert lifecycle.execute(store, SLUG, row, lambda argv: "") == "RuntimeError: queue offline"
     op = lifecycle.operations(store, SLUG)[0]
@@ -493,7 +499,7 @@ def test_settling_reports_when_the_records_keep_changing(store, monkeypatch):
 
 
 def finish(store, agent, outcome):
-    queue = CommandQueue(store, SLUG)
+    queue = queue_class()(store, SLUG)
     [issued] = queue.pending(agent.execution_id, 5)
     queue.accept(agent.execution_id, issued["command_id"], issued["payload_digest"])
     queue.complete(agent.execution_id, issued["command_id"], outcome)
@@ -512,7 +518,7 @@ def test_an_expired_or_overlong_worker_command_releases_the_agent(store, ran):
     agent = kube(store)
     ask(store, agent, "drain")
     command_runner.consume(store, SLUG)
-    key = CommandQueue(store, SLUG).key(agent.execution_id)
+    key = queue_class()(store, SLUG).key(agent.execution_id)
     [(command, raw)] = store.redis.hgetall(key).items()
     store.redis.hset(key, command, json.dumps({**json.loads(raw), "expires_at_ms": 0}))
     assert lifecycle.view(store, SLUG, {})["agents"][agent.name]["pending"] == ""
