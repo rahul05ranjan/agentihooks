@@ -22,14 +22,13 @@ def store():
 
 
 def seeded(store):
-    store.put_agent(
-        SLUG,
-        AgentRecord("worker", "eng", "t1", pane_id="w1:p1", started_at=NOW, execution_id="ex1", seat=f"eng-1@{SLUG}"),
-    )
-    store.put_agent(SLUG, AgentRecord("other", "eng", "t2", started_at=NOW, execution_id="ex2", seat=f"eng-2@{SLUG}"))
+    attached = AgentRecord(store.next_name(SLUG, "eng"), "eng", "t1", pane_id="w1:p1", seat=f"eng-1@{SLUG}")
+    detached = AgentRecord(store.next_name(SLUG, "eng"), "eng", "t2", seat=f"eng-2@{SLUG}")
+    ex1 = store.execution_registry.start(SLUG, attached, "").execution_id
+    ex2 = store.execution_registry.start(SLUG, detached, "").execution_id
     beat = {"state": "working", "accepted_at_ms": NOW - 1_000, "archive_watermark": 3}
     stale = {**beat, "archive_advanced_at_ms": NOW - 600_000}
-    store.redis.hset(store.key(SLUG, "heartbeats"), mapping={"ex1": json.dumps(beat), "ex2": json.dumps(stale)})
+    store.redis.hset(store.key(SLUG, "heartbeats"), mapping={ex1: json.dumps(beat), ex2: json.dumps(stale)})
     pending = {"reservation": "r1", "deadline_ms": NOW + 60_000, "resources": {"cpu_millis": 500, "memory_mib": 512}}
     store.redis.hset(store.key(SLUG, "pending-admission"), "t3", json.dumps(pending))
     seen = quota.Observation("acct", "claude", "ex1", 1, NOW - 5_000, "rejected", 100.0, 40.0, 1.0, 2.0)
@@ -42,10 +41,11 @@ def seeded(store):
 def test_the_sample_reads_the_registry_admissions_quota_archive_and_feed(store):
     seeded(store)
     found = metrics_fleet.sample(store, SLUG, NOW, NOW - 30_000)
-    attempts = {row["execution_id"] or row["task"]: row for row in found["attempts"]}
-    assert {key: row["phase"] for key, row in attempts.items()} == {"ex1": "active", "ex2": "active", "t3": "pending"}
-    assert attempts["ex1"]["terminal"] == "attached" and attempts["ex2"]["terminal"] == "detached"
-    assert attempts["ex1"]["authority"] == "working" and attempts["t3"]["authority"] == "pending"
+    attempts = {row["task"]: row for row in found["attempts"]}
+    assert {key: row["phase"] for key, row in attempts.items()} == {"t1": "active", "t2": "active", "t3": "pending"}
+    assert attempts["t1"]["terminal"] == "attached" and attempts["t2"]["terminal"] == "detached"
+    assert attempts["t1"]["authority"] == "working" and attempts["t3"]["authority"] == "pending"
+    assert attempts["t1"]["seat"] == f"eng-1@{SLUG}" and attempts["t1"]["execution_id"]
     assert attempts["t3"]["requested"] == {"cpu_millis": 500, "memory_mib": 512}
     waiting = {row["account"]: row for row in found["quota"]}
     assert waiting["acct"] == {
@@ -55,7 +55,10 @@ def test_the_sample_reads_the_registry_admissions_quota_archive_and_feed(store):
         "resets_at_ms": NOW + 120_000,
     }
     assert waiting["spare"]["state"] == "allowed"
-    assert {row["execution_id"] for row in found["archive"]} == {"ex1", "ex2"}
+    assert {row["execution_id"] for row in found["archive"]} == {
+        attempts["t1"]["execution_id"],
+        attempts["t2"]["execution_id"],
+    }
     assert found["brain"] == {"feed_at_ms": NOW - 30_000, "denials": []}
     assert found["pools"] == [] and found["checkpoints"] == []
     assert (found["seq"], found["at_ms"]) == (NOW, NOW)
