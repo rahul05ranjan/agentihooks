@@ -148,15 +148,15 @@ def _exited(pid: int) -> bool:
 
 
 def summary(peaks: Peaks, usage, wall_seconds: float, status: int, timed_out: bool) -> dict:
-    cpu_seconds = usage.ru_utime + usage.ru_stime
+    cpu_seconds = max(usage.ru_utime + usage.ru_stime, sum(peaks.ticks.values()) / TICKS)
     return {
         "peak_rss_mib": round(peaks.rss_bytes / MIB, 2),
         "peak_pss_mib": round(peaks.pss_bytes / MIB, 2),
         "peak_parent_rss_mib": round(peaks.parent_rss_bytes / MIB, 2),
         "peak_children_rss_mib": round(peaks.children_rss_bytes / MIB, 2),
         "peak_processes": peaks.processes,
-        "peak_cores": round(peaks.cores, 3),
-        "cpu_seconds": round(max(cpu_seconds, sum(peaks.ticks.values()) / TICKS), 3),
+        "peak_cores": round(max(peaks.cores, cpu_seconds / wall_seconds), 3),
+        "cpu_seconds": round(cpu_seconds, 3),
         "wall_seconds": round(wall_seconds, 3),
         "peak_storage_mib": round(peaks.storage_bytes / MIB, 2),
         "samples": peaks.samples,
