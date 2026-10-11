@@ -71,6 +71,16 @@ class Resumed:
     outcome: str = RESUMED
 
 
+def archive(files: tuple[tuple[str, bytes], ...]) -> bytes:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w", format=tarfile.PAX_FORMAT) as written:  # NOSONAR: writes only
+        for name, data in files:
+            info = tarfile.TarInfo(name)
+            info.size, info.mode = len(data), MEMBER_MODE
+            written.addfile(info, io.BytesIO(data))
+    return buffer.getvalue()
+
+
 @dataclass(frozen=True)
 class NativeCapture:
     harness: str
@@ -80,13 +90,7 @@ class NativeCapture:
     quiescence: str
 
     def material(self) -> bytes:
-        buffer = io.BytesIO()
-        with tarfile.open(fileobj=buffer, mode="w", format=tarfile.PAX_FORMAT) as archive:  # NOSONAR: writes only
-            for name, data in self.files:
-                info = tarfile.TarInfo(name)
-                info.size, info.mode = len(data), MEMBER_MODE
-                archive.addfile(info, io.BytesIO(data))
-        return buffer.getvalue()
+        return archive(self.files)
 
     def fields(self) -> dict:
         ref = asdict(ArtifactRef.of(self.material()))
@@ -253,7 +257,7 @@ class Codex:
 HARNESSES: dict[str, Harness] = {harness.name: harness for harness in (Claude(), Codex())}
 
 
-def _members(data: bytes) -> dict[str, bytes]:
+def members(data: bytes) -> dict[str, bytes]:
     found: dict[str, bytes] = {}
     expanded = 0
     try:
@@ -408,12 +412,12 @@ class Qualifier:
 
     def _place(self, native: Harness, doc: dict, home: Path, cwd: Path) -> Resumed:
         store = self.validator.store
-        members = _members(store.get_range(ArtifactRef(**doc["inventory"][model.NATIVE_SESSION])))
+        found = members(store.get_range(ArtifactRef(**doc["inventory"][model.NATIVE_SESSION])))
         session_id = doc["native_session_id"]
-        if native.identity(members)[0] != session_id:
+        if native.identity(found)[0] != session_id:
             raise NativeError("identity_mismatch")
         try:
-            placed = [(native.placed(session_id, cwd, name), data) for name, data in members.items()]
+            placed = [(native.placed(session_id, cwd, name), data) for name, data in found.items()]
         except ValueError as error:
             raise NativeError(ESCAPE) from error
         targets = [(_unlinked(home, home / relative), data) for relative, data in placed]

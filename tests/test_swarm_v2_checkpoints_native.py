@@ -705,9 +705,9 @@ def test_members_counts_against_the_member_limit(monkeypatch, members, limit, re
     data = tar({f"m{index}": b"abc" for index in range(members)})
     if refused:
         with pytest.raises(native.NativeError, match=f"^{native.TOO_LARGE}$"):
-            native._members(data)
+            native.members(data)
     else:
-        assert native._members(data) == {f"m{index}": b"abc" for index in range(members)}
+        assert native.members(data) == {f"m{index}": b"abc" for index in range(members)}
 
 
 @pytest.mark.parametrize(("limit", "refused"), [(6, False), (5, True)])
@@ -716,9 +716,9 @@ def test_members_sums_every_member_against_the_byte_limit(monkeypatch, limit, re
     data = tar({"a": b"abc", "b": b"def"})
     if refused:
         with pytest.raises(native.NativeError, match=f"^{native.TOO_LARGE}$"):
-            native._members(data)
+            native.members(data)
     else:
-        assert native._members(data) == {"a": b"abc", "b": b"def"}
+        assert native.members(data) == {"a": b"abc", "b": b"def"}
 
 
 def test_members_refuses_a_compressed_archive():
@@ -728,7 +728,7 @@ def test_members_refuses_a_compressed_archive():
         info.size = 3
         archive.addfile(info, io.BytesIO(b"x\n\n"))
     with pytest.raises(native.NativeError, match=f"^{native.FORMAT}$"):
-        native._members(buffer.getvalue())
+        native.members(buffer.getvalue())
 
 
 def test_write_new_never_replaces_or_follows(tmp_path):
