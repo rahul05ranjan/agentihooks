@@ -3,15 +3,24 @@
 Only numbers and known names are taken from an alert; its free text never reaches the swarm.
 """
 
+from __future__ import annotations
+
 import ipaddress
 import json
 import math
 import re
 import sys
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import TYPE_CHECKING
+
+from redis.exceptions import RedisError
 
 from scripts.swarm.health import standing
+
+if TYPE_CHECKING:
+    from redis import Redis
 
 HOST_ENV = "AGENTIHOOKS_ALERT_INTAKE_HOST"
 PORT_ENV = "AGENTIHOOKS_ALERT_INTAKE_PORT"
@@ -45,7 +54,7 @@ class Settings:
     networks: tuple | None
 
 
-def settings(environ) -> Settings:
+def settings(environ: Mapping[str, str]) -> Settings:
     sources = [part.strip() for part in environ.get(FROM_ENV, "").split(",") if part.strip()]
     return Settings(
         environ.get(HOST_ENV) or HOST,
@@ -54,7 +63,7 @@ def settings(environ) -> Settings:
     )
 
 
-def allowed(address: str, networks) -> bool:
+def allowed(address: str, networks: tuple | None) -> bool:
     try:
         source = ipaddress.ip_address(address)
     except ValueError:
@@ -109,7 +118,7 @@ def _apply(redis, alert, now_ms: int) -> str:
     return f"fired {stage} on {slug}"
 
 
-def receive(redis, payload, now_ms: int) -> list[str]:
+def receive(redis: Redis, payload: object, now_ms: int) -> list[str]:
     if not isinstance(payload, dict):
         raise ValueError("the alert body is not a JSON object")
     alerts = payload.get("alerts") or []
@@ -143,10 +152,12 @@ class Handler(BaseHTTPRequestHandler):
             actions = receive(self.server.redis, json.loads(self.rfile.read(length)), self.server.clock())
         except ValueError as exc:
             return self._reply(400, {"error": f"bad alert body: {exc}"})
+        except RedisError:
+            return self._reply(503, {"error": "swarm store unreachable"})
         return self._reply(200, {"actions": actions})
 
 
-def serve(redis, found: Settings, clock) -> bool:
+def serve(redis: Redis, found: Settings, clock: Callable[[], int]) -> bool:
     if not found.port:
         print(f"alert intake off: {PORT_ENV} is 0", file=sys.stderr)
         return False

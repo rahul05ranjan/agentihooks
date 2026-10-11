@@ -1,10 +1,16 @@
 """One standing finding per ledger and stage: a new reading updates it in place, a resolve clears it."""
 
+from __future__ import annotations
+
 import json
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from scripts.swarm.health.findings import Finding
 from scripts.swarm.store import PREFIX
+
+if TYPE_CHECKING:
+    from redis import Redis
 
 KIND = "bottleneck stage"
 STALE_MS = 6 * 3_600_000
@@ -24,11 +30,11 @@ def key(slug: str) -> str:
     return f"{PREFIX}:{slug}:standing-findings"
 
 
-def read(redis, slug: str) -> dict:
+def read(redis: Redis, slug: str) -> dict:
     return {stage: json.loads(raw) for stage, raw in sorted(redis.hgetall(key(slug)).items())}
 
 
-def fire(redis, slug: str, stage: str, reading: Reading, now_ms: int) -> dict:
+def fire(redis: Redis, slug: str, stage: str, reading: Reading, now_ms: int) -> dict:
     raw = redis.hget(key(slug), stage)
     old = json.loads(raw) if raw else {}
     episodes = old.get("episodes", [])
@@ -50,7 +56,7 @@ def fire(redis, slug: str, stage: str, reading: Reading, now_ms: int) -> dict:
     return row
 
 
-def clear(redis, slug: str, stage: str) -> bool:
+def clear(redis: Redis, slug: str, stage: str) -> bool:
     return bool(redis.hdel(key(slug), stage))
 
 
@@ -67,5 +73,5 @@ def _finding(row: dict) -> Finding:
     )
 
 
-def findings(redis, slug: str, now_ms: int) -> list[Finding]:
+def findings(redis: Redis, slug: str, now_ms: int) -> list[Finding]:
     return [_finding(row) for row in read(redis, slug).values() if now_ms - row["updated_at"] < STALE_MS]
