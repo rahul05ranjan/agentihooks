@@ -1,7 +1,8 @@
 import { $, h } from "./dom.js";
 import { writeSwarm } from "./api.js";
 import { setChatTo, showChat } from "./chat.js";
-import { capDraft, doctorOn, lifecycleBody, overlayChanges, pending, renderSwarm, saveRouting, sendLifecycle, swarm, swarmControl, toggleOverlay, unresolved } from "./swarm.js";
+import { capDraft, doctorOn, overlayChanges, pending, renderSwarm, saveRouting, swarm, swarmControl, toggleOverlay } from "./swarm.js";
+import { lifecycleBody, sendLifecycle, unresolved } from "./lifecycle.js";
 
 const GATE_MODES = ["enforce", "observe", "off"];
 const GATE_LABELS = { enforce: "deny", observe: "log only", off: "skip" };
