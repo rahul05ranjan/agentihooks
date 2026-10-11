@@ -207,6 +207,16 @@ def test_a_codex_effort_clamps_inside_its_own_levels(effort, clamped):
     assert effort_range.clamp("codex", effort, ("low", "max")) == clamped
 
 
+def test_a_preserved_effort_is_compared_by_its_name_on_the_launching_harness():
+    from scripts.swarm import runtime
+
+    chosen = {"model": "m", "effort": "max"}
+    launched = runtime._model_args("codex", chosen, {}, ("medium", "xhigh"), preserve=True)
+    assert launched == ["-m", "m", "-c", 'model_reasoning_effort="xhigh"']
+    with pytest.raises(runtime.SpawnError, match="saved effort is outside the current swarm range"):
+        runtime._model_args("claude", chosen, {}, ("medium", "xhigh"), preserve=True)
+
+
 def test_a_codex_name_sets_the_range_on_the_shared_scale(env):  # noqa: F811
     store, _, _ = env
     assert cli.EFFORT_KEYS == {"effort-min": "effort_min", "effort-max": "effort_max"}
@@ -296,7 +306,7 @@ def test_set_reports_the_range_takes_bare_pairs_and_a_one_level_range(env, capsy
     capsys.readouterr()
     assert run("sw", "effort-min=high", "max-eng-agents=3") == 0
     out = json.loads(capsys.readouterr().out.splitlines()[-1])
-    assert (out["effort_min"], out["effort_max"], out["max_eng"]) == ("high", "high", 3)
+    assert (out["effort_min"], out["effort_max"], out["max_eng"]) == ("high", "xhigh", 3)
     assert run("sw", "effort-max=max") == 0
     assert store.config("sw").effort_max == "max"
 

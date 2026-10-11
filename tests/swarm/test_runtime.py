@@ -469,17 +469,17 @@ def test_only_a_codex_planner_starts_read_only(tmp_path, lane, agent):
 
 def test_an_auto_lane_falls_back_to_the_automatic_choice(tmp_path):
     seen = _spawn_seen(tmp_path, {"eng": {"agent": "auto", "model": "auto", "effort": "auto"}})
-    assert seen["requested"] == "" and _passed(seen["argv"]) == ["--model", "opus", "--effort", "high"]
+    assert seen["requested"] == "" and _passed(seen["argv"]) == ["--model", "opus", "--effort", "medium"]
 
 
 def test_a_lane_without_an_entry_falls_back_to_the_automatic_choice(tmp_path):
     seen = _spawn_seen(tmp_path, {"eng": {"agent": "codex"}}, lane="ci")
-    assert seen["requested"] == "" and _passed(seen["argv"]) == ["--model", "opus", "--effort", "high"]
+    assert seen["requested"] == "" and _passed(seen["argv"]) == ["--model", "opus", "--effort", "medium"]
 
 
 def test_a_lane_model_goes_to_the_automatically_chosen_agent(tmp_path):
     seen = _spawn_seen(tmp_path, {"eng": {"agent": "auto", "model": "sonnet", "effort": "auto"}})
-    assert seen["requested"] == "" and _passed(seen["argv"]) == ["--model", "sonnet", "--effort", "high"]
+    assert seen["requested"] == "" and _passed(seen["argv"]) == ["--model", "sonnet", "--effort", "medium"]
 
 
 def test_the_lane_role_replaces_the_default_role_in_the_prompt(tmp_path):
@@ -731,8 +731,8 @@ def test_a_codex_launch_must_start_its_harness_inside_the_start_timeout(tmp_path
     [
         ("master", "claude", ["--model", "opus", "--effort", "high"], "frontier"),
         ("master", "codex", ["-m", "gpt-6.1-sol", "-c", 'model_reasoning_effort="high"'], "frontier"),
-        ("eng", "claude", ["--model", "opus", "--effort", "high"], "lane-default"),
-        ("eng", "codex", ["-m", "gpt-6.1-sol", "-c", 'model_reasoning_effort="high"'], "lane-default"),
+        ("eng", "claude", ["--model", "opus", "--effort", "medium"], "lane-default"),
+        ("eng", "codex", ["-m", "gpt-6.1-sol", "-c", 'model_reasoning_effort="medium"'], "lane-default"),
     ],
 )
 def test_resume_uses_defaults_when_no_resolved_model_was_recorded(tmp_path, monkeypatch, lane, harness, launch, source):
@@ -870,7 +870,7 @@ SEAT_TASKS = {
 
 @pytest.mark.parametrize("lane", sorted(SEAT_TASKS))
 @pytest.mark.parametrize("handoff", [None, "# Handoff\n<!-- handoff complete -->"])
-def test_every_seat_launch_carries_opus_and_high_effort_for_claude(tmp_path, monkeypatch, lane, handoff):
+def test_every_seat_launch_carries_opus_and_its_lane_effort_for_claude(tmp_path, monkeypatch, lane, handoff):
     from scripts.swarm.templates import DEFAULT_PROFILES
 
     transfer = (
@@ -889,7 +889,8 @@ def test_every_seat_launch_carries_opus_and_high_effort_for_claude(tmp_path, mon
         else {}
     )
     task = {**SEAT_TASKS[lane], **transfer}
-    assert _launched(tmp_path, monkeypatch, lane, task) == ["--model", "opus", "--effort", "high"]
+    effort = "high" if handoff or lane == "master" else "medium"
+    assert _launched(tmp_path, monkeypatch, lane, task) == ["--model", "opus", "--effort", effort]
 
 
 @pytest.mark.parametrize("lane", ["master", "plan"])
