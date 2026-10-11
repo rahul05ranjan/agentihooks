@@ -31,7 +31,7 @@ from scripts.swarm import (
     reaper,
     timing,
 )
-from scripts.swarm.pane import PaneObservation, selection_prompt, typed_input
+from scripts.swarm.pane import PaneObservation, provider_error, selection_prompt, typed_input
 from scripts.swarm.store import MASTER, AgentRecord, SwarmConfig, connect
 from scripts.swarm.tick import Placed, SpawnError
 
@@ -811,11 +811,14 @@ class HerdrRuntime:
             capture = self.herdr(["pane", "read", found["pane_id"], "--source", "visible", "--format", "ansi"])
         except Exception:
             return PaneObservation("unknown" if agent.lane == MASTER else state)
-        text = capture.get("text", "")
+        text = capture.get("text")
+        if not isinstance(text, str):
+            return PaneObservation("unknown")
+        error = provider_error(agent.harness, text)
         title = selection_prompt(text)
         if title or state == "blocked":
-            return PaneObservation("waiting", title)
-        return PaneObservation(state, typed=typed_input(text))
+            return PaneObservation("waiting", title, provider_error=error, provider_checked=True)
+        return PaneObservation(state, typed=typed_input(text), provider_error=error, provider_checked=True)
 
     def _get(self, target):
         try:
