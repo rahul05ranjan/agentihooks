@@ -21,6 +21,7 @@ from scripts.swarm import (
     ledger_probe,
     lifecycle,
     live_binding,
+    outage,
     overlays,
     quota_view,
     retire_watch,
@@ -100,6 +101,7 @@ def findings(store, slug, config, tasks, events):
         + spawn_stall.findings(store, slug)
         + prompt_backlog.findings(store, slug)
     )
+    found = outage.hold_findings(store, slug, found, agents)
     if ledger_probe.holding(store, slug):
         found = [f for f in found if f.kind not in PAUSED_WHILE_SLOW]
     return verdict_store(store, slug).visible(found, now_ms(), limits.cooldown_minutes * 60_000)

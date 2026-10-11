@@ -89,6 +89,7 @@ from scripts.swarm import (
     merge_queue,
     metrics,
     naming,
+    outage,
     overlays,
     phase_planning,
     phase_state,
@@ -167,6 +168,7 @@ def now_ms():
 
 
 @timing.instrument_tick
+@outage.guard_tick
 def run_tick(store, slug, ledger=None, runtime=None, messenger=None, scheduled=False):
     from scripts.swarm import command_runner, commands, controller, incidents, lease
 
@@ -1662,7 +1664,9 @@ def main(argv):
         return 1
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     try:
-        store = connect()
+        store = outage.connect_tick(connect, now_ms) if handler is cmd_tick else connect()
+        if store is None:
+            return 0
         if "slug" in args:
             args.slug = store.names.swarm_slug(args.slug)
         action = getattr(args, "command", "")

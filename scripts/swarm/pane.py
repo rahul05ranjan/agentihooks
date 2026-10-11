@@ -7,6 +7,34 @@ class PaneObservation:
     state: str
     prompt_title: str = ""
     typed: str = ""
+    provider_error: str = ""
+    provider_checked: bool = False
+
+
+PROVIDER_ERRORS = {
+    "claude": (
+        r"API Error: (?:500|502|503|504|529)\b",
+        r"Unable to connect to API",
+        r"Connection error\.",
+    ),
+    "codex": (
+        r"stream disconnected before completion",
+        r"unexpected status (?:500|502|503|504)\b",
+        r"error sending request for url",
+    ),
+    "copilot": (
+        r"Request failed with status code (?:500|502|503|504)\b",
+        r"Failed to connect to (?:the )?model provider",
+    ),
+}
+
+
+def provider_error(harness: str, text: str) -> str:
+    plain = ESCAPE.sub("", text)
+    for pattern in PROVIDER_ERRORS.get(harness, ()):
+        if match := re.search(pattern, plain, re.I):
+            return match.group()
+    return ""
 
 
 def selection_prompt(text: str) -> str:
