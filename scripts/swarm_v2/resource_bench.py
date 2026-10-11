@@ -1,6 +1,7 @@
 """Run a worker resource suite, read node capacity, derive profiles and gate their promotion."""
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -46,9 +47,14 @@ REQUIRED = {
     "nodes": (("--nodes", Path), ("--pods", Path), ("--output", Path)),
     "derive": (("--measurements", Path), ("--nodes", Path), ("--output", Path)),
     "promote": (("--accepted", Path), ("--candidate", Path)),
+    "rollback": (("--accepted", Path),),
 }
-OPTIONAL = {"derive": (("--markdown", Path, None), ("--min-repeats", int, profiles.Policy.min_repeats))}
-KEEPS = ("promoted", "replayed")
+OPTIONAL = {
+    "nodes": (("--read-at", str, ""),),
+    "derive": (("--markdown", Path, None), ("--min-repeats", int, profiles.Policy.min_repeats)),
+    "promote": (("--requalified-by", str, ""),),
+}
+KEEPS = ("promoted", "requalified", "replayed")
 TIMEOUT = 600
 
 
@@ -212,9 +218,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         _write(args.output, run(args.suite, args.root, args.generation, TOOLS, args.source))
         return 0
     if args.command == "nodes":
-        rows = nodes(json.loads(args.nodes.read_text()), json.loads(args.pods.read_text()))
-        _write(args.output, {"read_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "nodes": rows})
+        listing, pods = args.nodes.read_bytes(), args.pods.read_bytes()
+        read_at = args.read_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
+        digests = {"nodes": hashlib.sha256(listing).hexdigest(), "pods": hashlib.sha256(pods).hexdigest()}
+        _write(
+            args.output, {"read_at": read_at, "inputs": digests, "nodes": nodes(json.loads(listing), json.loads(pods))}
+        )
         return 0
+    if args.command == "rollback":
+        restored = profiles.rollback(args.accepted)
+        print(json.dumps({"restored": restored}))
+        return 0 if restored is not None else 1
     if args.command == "derive":
         policy = profiles.Policy(min_repeats=args.min_repeats)
         try:
@@ -227,7 +241,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.markdown:
             args.markdown.write_text(profiles.markdown(report))
         return 0
-    outcome = profiles.accept(args.accepted, json.loads(args.candidate.read_text()), profiles.Policy())
+    candidate = json.loads(args.candidate.read_text())
+    outcome = profiles.accept(args.accepted, candidate, profiles.Policy(), args.requalified_by)
     print(json.dumps({"decision": outcome["decision"], "changes": outcome["changes"]}))
     return 0 if outcome["decision"] in KEEPS else 1
 

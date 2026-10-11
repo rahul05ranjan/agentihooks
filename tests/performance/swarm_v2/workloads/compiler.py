@@ -4,6 +4,7 @@ import argparse
 import shutil
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 UNITS = 24
@@ -45,17 +46,14 @@ def main() -> int:
     if not compiler:
         return 3
     root = Path.cwd()
-    pending = generate(root)
-    running: list[subprocess.Popen] = []
-    failed = 0
-    while pending or running:
-        while pending and len(running) < max(args.children, 1):
-            source = pending.pop()
-            running.append(subprocess.Popen([compiler, "-O2", "-c", str(source), "-o", str(source.with_suffix(".o"))]))
-        finished = running.pop(0)
-        failed |= finished.wait()
+
+    def build(source: Path) -> int:
+        return subprocess.call([compiler, "-O2", "-c", str(source), "-o", str(source.with_suffix(".o"))])
+
+    with ThreadPoolExecutor(max_workers=max(args.children, 1)) as pool:
+        failed = any(list(pool.map(build, generate(root))))
     objects = sorted(str(p) for p in root.glob("*.o"))
-    return failed or subprocess.call([compiler, *objects, "-o", str(root / "program")])
+    return int(failed) or subprocess.call([compiler, *objects, "-o", str(root / "program")])
 
 
 if __name__ == "__main__":
