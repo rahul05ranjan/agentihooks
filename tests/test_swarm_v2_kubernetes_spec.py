@@ -38,7 +38,7 @@ def write(tmp_path, doc, name="policy.json") -> Path:
 
 
 def render(launch: dict | None = None, policy: dict | None = None):
-    template = PodTemplate(policy or load_policy(POLICY))
+    template = PodTemplate(policy or load_policy(POLICY), "agentihooks-swarm-fixture")
     return template, template.render(launch or launch_doc())
 
 
@@ -382,7 +382,7 @@ REFUSALS = [
 
 @pytest.mark.parametrize(("change", "message", "reason"), [r[1:] for r in REFUSALS], ids=[r[0] for r in REFUSALS])
 def test_hostile_launches_are_refused_without_output_and_counted(change, message, reason):
-    template = PodTemplate(load_policy(POLICY))
+    template = PodTemplate(load_policy(POLICY), "agentihooks-swarm-fixture")
     doc = launch_doc()
     change(doc)
     before = copy.deepcopy(template.policy)
@@ -396,7 +396,7 @@ def test_hostile_launches_are_refused_without_output_and_counted(change, message
 
 
 def test_a_record_that_is_not_an_object_is_refused():
-    template = PodTemplate(load_policy(POLICY))
+    template = PodTemplate(load_policy(POLICY), "agentihooks-swarm-fixture")
     with pytest.raises(PodSpecRefused) as refused:
         template.render(["not", "a", "record"])
     assert str(refused.value) == "launch must be a JSON object"
@@ -404,7 +404,7 @@ def test_a_record_that_is_not_an_object_is_refused():
 
 
 def test_failures_accumulate_per_reason_and_success_counts_nothing():
-    template = PodTemplate(load_policy(POLICY))
+    template = PodTemplate(load_policy(POLICY), "agentihooks-swarm-fixture")
     template.render(launch_doc())
     assert template.pod_spec_validation_failures_total() == {}
     for profile in ("research", "memory"):
@@ -458,7 +458,7 @@ def test_render_does_not_mutate_the_launch_or_policy():
     snapshot = copy.deepcopy(policy)
     launch = launch_doc()
     before = copy.deepcopy(launch)
-    rendered = PodTemplate(policy).render(launch)
+    rendered = PodTemplate(policy, "agentihooks-swarm-fixture").render(launch)
     rendered.pod["spec"]["nodeSelector"]["x"] = "y"
     rendered.pod["spec"]["tolerations"][0]["key"] = "changed"
     rendered.pod["spec"]["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"][
@@ -469,7 +469,7 @@ def test_render_does_not_mutate_the_launch_or_policy():
 
 
 def test_a_payload_that_refers_to_itself_is_refused():
-    template = PodTemplate(load_policy(POLICY))
+    template = PodTemplate(load_policy(POLICY), "agentihooks-swarm-fixture")
     doc = launch_doc()
     loop = {}
     loop["self"] = loop
@@ -571,7 +571,7 @@ KEY = "claude-fixtureatexample-com"
 def keyed(*keys: str) -> PodTemplate:
     policy = load_policy(POLICY)
     policy["provider_accounts"] = []
-    return PodTemplate(policy, lambda: frozenset(keys))
+    return PodTemplate(policy, "agentihooks-swarm-fixture", lambda: frozenset(keys))
 
 
 def test_a_launch_whose_account_key_the_shared_secret_holds_is_admitted():
@@ -602,7 +602,7 @@ def test_against_the_shared_secret_keys_an_account_email_is_never_approved():
 def test_the_shared_secret_keys_are_read_again_at_each_render():
     keys = {KEY}
     policy = load_policy(POLICY)
-    template = PodTemplate(policy, lambda: frozenset(keys))
+    template = PodTemplate(policy, "agentihooks-swarm-fixture", lambda: frozenset(keys))
     doc = launch_doc()
     doc["provider_account"] = KEY
     template.render(doc)
