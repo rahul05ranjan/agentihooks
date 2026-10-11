@@ -3,10 +3,10 @@ import threading
 import time
 
 import pytest
+from scripts.swarm.models import AgentRecord, SwarmConfig
 
 from scripts.inbox import wake, waker
 from scripts.inbox.store import InboxStore, now_ms
-from scripts.swarm.models import AgentRecord, SwarmConfig
 from scripts.swarm.store import RedisStore
 
 pytestmark = pytest.mark.xdist_group("fakeredis")
