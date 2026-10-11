@@ -280,6 +280,17 @@ def test_a_wrong_shaped_body_is_a_bad_request(redis):
     assert (sent.code, body) == (400, {"error": "bad alert body: the alerts are not a list"})
 
 
+def test_an_unreachable_store_answers_retry_later(redis, monkeypatch):
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    def down(*args):
+        raise RedisConnectionError("store down")
+
+    monkeypatch.setattr(redis, "hget", down)
+    sent, body = handler(redis, payload(alert()))
+    assert (sent.code, body) == (503, {"error": "swarm store unreachable"})
+
+
 def test_a_stalled_sender_times_out_instead_of_holding_the_intake():
     assert alert_intake.Handler.timeout == 10
 
