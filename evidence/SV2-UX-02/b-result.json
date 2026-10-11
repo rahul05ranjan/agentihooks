@@ -11,13 +11,13 @@
   },
   "evidence_class": "mocked: a fake Redis swarm store holds two Kubernetes workers and one local agent; page clicks enter through the ledger server's lifecycle control with the incarnation, generation and task revision a page rendered; the hive command runner consumes the queue with its terminal commands stubbed; a worker's acknowledgement and checkpoint outcome are written through the worker command queue; no ledger HTTP server, browser, worker Pod or cluster runs",
   "input_sha256": {
-    "ledger-lifecycle-controls.json": "9bc3d5b7dca5c7145be7ccb44a7850c1d80ea8b2f73812e008147639a34a5ee1"
+    "ledger-lifecycle-controls.json": "7debe263338f18145353feee5368d88748f513d5110fb23c17885940574ed7f1"
   },
   "ledger_control_conflicts_total": 1,
   "observed": {
     "stale_answer": [
       409,
-      "the page is stale: this agent was replaced, finished or moved task"
+      "the page is stale: this agent was replaced, finished or moved task; wait for the next swarm view"
     ],
     "successor_generation": 2,
     "unsupported_answer": [
