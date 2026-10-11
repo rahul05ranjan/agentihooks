@@ -250,6 +250,7 @@ def status_report(store, slug, state):
             }
             for a in store.agents(slug)
         ],
+        "outages": outage.open_records(slug),
         "last_tick": int(store.redis.get(store.key(slug, "last-tick")) or 0),
         "history": [json.loads(row) for row in store.redis.lrange(store.key(slug, "history"), 0, -1)],
         "tasks": task_counts(tasks),

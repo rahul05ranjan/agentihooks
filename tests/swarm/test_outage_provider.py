@@ -3,11 +3,11 @@ from dataclasses import replace
 import fakeredis
 import pytest
 
-from scripts.swarm import outage, pane
+from scripts.swarm import outage, pane, provider_probe
 from scripts.swarm.runtime import HerdrRuntime
 from scripts.swarm.store import AgentRecord, RedisStore, SwarmConfig
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.xdist_group(name="fakeredis")]
 
 
 @pytest.mark.parametrize(
@@ -16,6 +16,12 @@ pytestmark = pytest.mark.unit
         ("claude", "\x1b[31mAPI Error: 529\x1b[0m overloaded", "API Error: 529"),
         ("codex", "stream disconnected before completion: transport error", "stream disconnected before completion"),
         ("copilot", "Request failed with status code 503", "Request failed with status code 503"),
+        ("claude", "Unable to connect to API", "Unable to connect to API"),
+        ("claude", "Connection error.", "Connection error."),
+        ("claude", "api error: 500", "api error: 500"),
+        ("codex", "unexpected status 503 Service Unavailable", "unexpected status 503"),
+        ("codex", "error sending request for url", "error sending request for url"),
+        ("copilot", "Failed to connect to model provider", "Failed to connect to model provider"),
         ("claude", "API Error: 401 Unauthorized", ""),
         ("codex", "unexpected status 429 Too Many Requests", ""),
         ("unknown", "API Error: 529", ""),
@@ -25,11 +31,11 @@ def test_provider_errors_are_matched_only_for_their_harness(harness, text, match
     assert pane.provider_error(harness, text) == match
 
 
-def test_runtime_carries_provider_evidence_and_closes_after_a_successful_pane_read(tmp_path, monkeypatch):
+def test_runtime_carries_provider_evidence_until_an_affirmative_probe_succeeds(tmp_path, monkeypatch):
     monkeypatch.setattr(outage, "HOME", tmp_path)
     store = RedisStore(fakeredis.FakeRedis(decode_responses=True))
     store.create(SwarmConfig("sw", "/repo", 1, 1))
-    agent = AgentRecord("worker", "eng", "t1", pane_id="p1", harness="claude")
+    agent = AgentRecord("worker", "eng", "t1", pane_id="p1", harness="claude", account="alpha", model="model")
     store.put_agent("sw", agent)
     text = "API Error: 503 Service Unavailable"
 
@@ -44,9 +50,13 @@ def test_runtime_carries_provider_evidence_and_closes_after_a_successful_pane_re
     assert observed.provider_checked
     outage.providers(store, "sw", runtime, 1000)
     assert outage.open_records("sw")[0]["evidence"] == ["worker (claude): API Error: 503"]
-    text = "Ready for input"
-    outage.providers(store, "sw", runtime, 2000)
-    assert outage.read("sw")["provider"]["ended_at"] == 2000
+    monkeypatch.setattr(provider_probe, "check", lambda *args: provider_probe.Result(True, "request succeeded"))
+    outage.providers(store, "sw", runtime, 61000)
+    assert outage.read("sw")["provider"]["ended_at"] == 61000
+    assert set(outage.read("sw")["provider"]["affected_agents"]) == {"worker"}
+    outage.providers(store, "sw", runtime, 62000)
+    assert outage.read("sw")["provider"]["started_at"] == 1000
+    assert outage.read("sw")["provider"]["ended_at"] == 61000
 
 
 def test_an_unreadable_or_remote_pane_cannot_clear_a_provider_outage(tmp_path, monkeypatch):
@@ -67,3 +77,31 @@ def test_an_unreadable_or_remote_pane_cannot_clear_a_provider_outage(tmp_path, m
     assert not runtime.observe(replace(agent, runtime_backend="kubernetes")).provider_checked
     outage.providers(store, "sw", runtime, 2000)
     assert outage.read("sw")["provider"]["ended_at"] is None
+
+
+@pytest.mark.parametrize("finished", [False, True])
+def test_pane_changes_never_close_provider_records_without_a_successful_probe(tmp_path, monkeypatch, finished):
+    monkeypatch.setattr(outage, "HOME", tmp_path)
+    store = RedisStore(fakeredis.FakeRedis(decode_responses=True))
+    store.create(SwarmConfig("sw", "/repo", 1, 1))
+    affected = AgentRecord("affected", "eng", "t1", harness="claude", account="alpha", model="model")
+    unrelated = AgentRecord("unrelated", "eng", "t2", harness="claude")
+    store.put_agent("sw", affected)
+    store.put_agent("sw", unrelated)
+    runtime = HerdrRuntime()
+    observations = {
+        "affected": pane.PaneObservation("idle", provider_error="API Error: 503", provider_checked=True),
+        "unrelated": pane.PaneObservation("idle", provider_checked=True),
+    }
+    monkeypatch.setattr(runtime, "observe", lambda agent: observations[agent.name])
+    outage.providers(store, "sw", runtime, 1000)
+    if finished:
+        store.put_agent("sw", replace(affected, state="finished"))
+    else:
+        observations["affected"] = pane.PaneObservation("idle", provider_checked=True)
+        observations["unrelated"] = pane.PaneObservation("unknown")
+    outage.providers(store, "sw", runtime, 2000)
+    assert outage.read("sw")["provider"]["ended_at"] is None
+    monkeypatch.setattr(provider_probe, "check", lambda *args: provider_probe.Result(True, "request succeeded"))
+    outage.providers(store, "sw", runtime, 61000)
+    assert outage.read("sw")["provider"]["ended_at"] == 61000

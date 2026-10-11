@@ -82,6 +82,7 @@ from scripts.swarm import (
     done_gate,
     idle,
     launch_check,
+    ledger_client,
     ledger_events,
     ledger_probe,
     ledger_watchdog,
@@ -174,6 +175,11 @@ def run_tick(store, slug, ledger=None, runtime=None, messenger=None, scheduled=F
 
     ledger = ledger or LedgerClient()
     outbox.flush(InboxStore(store.redis))
+    runtime = runtime or routed(herdr=HerdrRuntime())
+    outage.providers(store, slug, runtime, now_ms())
+    if isinstance(ledger, ledger_client.LedgerClient) and not outage.ledger_health(slug, now_ms()):
+        return ["Ledger health probe failed"]
+
     held = lease.acquire(store, slug, commands.hive_id())
     if held is None:
         return ["the swarm belongs to another hive"]
@@ -325,6 +331,7 @@ def _tick_while_others_run(store, slug, firsts, until):
         _tick_one(store, slug)
 
 
+@outage.guard_command
 def cmd_tick(store, args):
     from scripts import operator_env
 
@@ -819,6 +826,7 @@ def cmd_status(store, args):
         store.config(args.slug)
         print(json.dumps(status_report(store, args.slug, LedgerClient().state(args.slug))))
         return
+    outage.show(args.slug, False)
     config = store.config(args.slug)
     agents = store.agents(args.slug)
     ledger = LedgerClient()
@@ -1678,6 +1686,8 @@ def main(argv):
         if action in control_notifications.CONTROLS:
             control_notifications.notify(store, args, LedgerClient(), before, action)
     except (SwarmError, InboxError) as exc:
+        if handler is cmd_status and outage.show(args.slug, args.json):
+            return 0
         print(f"swarm: {exc}", file=sys.stderr)
         return 1
     return 0
