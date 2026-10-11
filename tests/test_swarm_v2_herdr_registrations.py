@@ -1,0 +1,419 @@
+import json
+import stat
+import subprocess
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from scripts.swarm_v2.herdr import catalog, reconcile
+from scripts.swarm_v2.herdr.capabilities import Incompatible, Unreachable
+from scripts.swarm_v2.herdr.catalog import Catalog, Machine
+from scripts.swarm_v2.herdr.endpoints import EndpointRefused
+from scripts.swarm_v2.herdr.reconcile import Record, Registrations, Report, Store
+from tests import sv2_hdr03_cases as cases
+
+pytestmark = pytest.mark.unit
+EVIDENCE = Path(__file__).parents[1] / "evidence" / "SV2-HDR-03"
+EXE_A = "exe-" + "a" * 32
+EXE_B = "exe-" + "b" * 32
+NAME_A = f"swarm-{EXE_A}-terminal"
+TARGET_A = f"ssh://{NAME_A}.swarm-workers.svc.cluster.local"
+LISTED = {
+    "id": "dfc82003987b56c2d3094030456bbd11",
+    "label": "hdr01",
+    "target": "ssh://worker@127.0.0.1:22488",
+    "session": "default",
+    "enabled": True,
+    "selected": False,
+}
+
+
+def refusal(action) -> tuple[str, str]:
+    with pytest.raises(EndpointRefused) as caught:
+        action()
+    return caught.value.reason, str(caught.value)
+
+
+class Recorder:
+    def __init__(self, *replies) -> None:
+        self.replies = list(replies)
+        self.commands: list[list[str]] = []
+
+    def __call__(self, command: list[str]) -> subprocess.CompletedProcess:
+        self.commands.append(command)
+        reply = self.replies.pop(0)
+        if isinstance(reply, BaseException):
+            raise reply
+        return reply
+
+
+def done(code: int = 0, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess([], code, stdout, stderr)
+
+
+class Verdicts:
+    def __init__(self, outcome=True) -> None:
+        self.outcome = outcome
+        self.asked: list[tuple[str, str]] = []
+
+    def verdict(self, target: str, incarnation: str):
+        self.asked.append((target, incarnation))
+        if isinstance(self.outcome, BaseException):
+            raise self.outcome
+        return SimpleNamespace(compatible=self.outcome)
+
+
+def world(tmp_path, machines=(), ready=None):
+    desired = cases.endpoints()
+    herdr = cases.Herdr(list(machines), {e.target for e in desired} if ready is None else ready)
+    return Registrations(Catalog(herdr), Store(tmp_path / "registrations.json")), herdr, desired
+
+
+def machine(profile_id: str, label: str, target: str, session: str = "default") -> dict:
+    return {"id": profile_id, "label": label, "target": target, "session": session, "enabled": True}
+
+
+def test_a_listing_parses_into_machines_with_opaque_profile_ids():
+    assert catalog.parse(json.dumps([LISTED, LISTED | {"id": "p2", "enabled": False}])) == (
+        Machine("dfc82003987b56c2d3094030456bbd11", "hdr01", "ssh://worker@127.0.0.1:22488", "default", True),
+        Machine("p2", "hdr01", "ssh://worker@127.0.0.1:22488", "default", False),
+    )
+    assert catalog.parse("[]") == ()
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ("{", "herdr machine list is not JSON"),
+        ("{}", "herdr machine list is not a list"),
+        ('["x"]', "herdr machine list holds an entry that is not an object"),
+        (
+            json.dumps([{k: v for k, v in LISTED.items() if k != "id"}]),
+            "herdr machine list holds an incomplete machine",
+        ),
+        (json.dumps([LISTED | {"label": ""}]), "herdr machine list holds an incomplete machine"),
+        (json.dumps([LISTED | {"target": 7}]), "herdr machine list holds an incomplete machine"),
+        (json.dumps([LISTED | {"session": None}]), "herdr machine list holds an incomplete machine"),
+        (json.dumps([LISTED | {"enabled": "true"}]), "herdr machine list holds an incomplete machine"),
+        (json.dumps([LISTED | {"enabled": 1}]), "herdr machine list holds an incomplete machine"),
+    ],
+)
+def test_an_unreadable_listing_is_refused_not_read_as_empty(text, message):
+    assert refusal(lambda: catalog.parse(text)) == ("catalog_unreadable", message)
+
+
+def test_machines_lists_through_the_documented_command():
+    run = Recorder(done(stdout=json.dumps([LISTED])))
+    assert Catalog(run).machines()[0].profile_id == LISTED["id"]
+    assert run.commands == [["herdr", "machine", "list", "--json"]]
+
+
+@pytest.mark.parametrize(
+    ("reply", "expected"),
+    [
+        (done(1, "[]"), ("catalog_unreadable", "herdr machine list failed")),
+        (OSError("gone"), ("catalog_unreachable", "herdr machine list failed: herdr did not answer")),
+        (
+            subprocess.TimeoutExpired(["herdr"], 30),
+            ("catalog_unreachable", "herdr machine list failed: herdr did not answer"),
+        ),
+    ],
+)
+def test_a_failed_listing_is_refused(reply, expected):
+    assert refusal(lambda: Catalog(Recorder(reply)).machines()) == expected
+
+
+@pytest.mark.parametrize(
+    ("stdout", "stderr"),
+    [
+        ("Saved SSH machine p-1_A. Remote server is ready.\nOpen Herdr clients connect automatically.\n", ""),
+        ("", "Saved SSH machine p-1_A.\n"),
+    ],
+)
+def test_add_saves_with_an_explicit_remote_session_and_returns_the_profile_id(stdout, stderr):
+    run = Recorder(done(0, stdout, stderr))
+    assert Catalog(run).add(NAME_A, TARGET_A, "default") == "p-1_A"
+    assert run.commands == [["herdr", "machine", "add", "--label", NAME_A, "--remote-session", "default", TARGET_A]]
+
+
+def test_an_add_that_names_no_profile_id_is_ambiguous():
+    assert refusal(lambda: Catalog(Recorder(done(0, "saved"))).add("w", "ssh://w", "default")) == (
+        "catalog_ambiguous",
+        "herdr saved w without naming its profile id",
+    )
+
+
+def test_a_refused_add_names_the_label():
+    assert refusal(lambda: Catalog(Recorder(done(1, "", cases.NOT_READY))).add("w", "ssh://w", "s")) == (
+        "machine_refused",
+        "herdr could not save w",
+    )
+
+
+def test_an_unanswered_add_is_unreachable_not_refused():
+    reply = subprocess.TimeoutExpired(["herdr"], 30)
+    assert refusal(lambda: Catalog(Recorder(reply)).add("w", "ssh://w", "s")) == (
+        "catalog_unreachable",
+        "herdr could not save w: herdr did not answer",
+    )
+
+
+def test_rename_and_remove_address_one_profile_id():
+    run = Recorder(done(), done())
+    Catalog(run).rename("p1", "new")
+    Catalog(run).remove("p1")
+    assert run.commands == [
+        ["herdr", "machine", "rename", "--label", "new", "p1"],
+        ["herdr", "machine", "remove", "p1"],
+    ]
+
+
+def test_refused_rename_and_remove_name_the_profile():
+    assert refusal(lambda: Catalog(Recorder(done(1))).rename("p1", "x")) == (
+        "rename_refused",
+        "herdr could not rename p1",
+    )
+    assert refusal(lambda: Catalog(Recorder(done(1))).remove("p1")) == ("remove_refused", "herdr could not remove p1")
+
+
+def test_the_store_round_trips_a_private_sorted_document(tmp_path):
+    store = Store(tmp_path / "home" / "registrations.json")
+    assert store.load() == {}
+    records = {
+        EXE_B: Record(EXE_B, 1, "b", "ssh://b", "default", "pb"),
+        EXE_A: Record(EXE_A, 2, "a", "ssh://a", "default", None),
+    }
+    store.path.parent.mkdir()
+    (store.path.parent / ".registrations.json.tmp").write_text("stale")
+    store.save(records)
+    assert store.load() == records
+    document = json.loads(store.path.read_text())
+    assert document == {
+        "version": 1,
+        "registrations": [
+            {"execution_id": EXE_A, "generation": 2, "label": "a", "target": "ssh://a", "session": "default"}
+            | {"profile_id": None},
+            {"execution_id": EXE_B, "generation": 1, "label": "b", "target": "ssh://b", "session": "default"}
+            | {"profile_id": "pb"},
+        ],
+    }
+    assert store.path.read_text().endswith("}\n")
+    assert store.path.read_text().startswith('{\n  "version": 1,')
+    assert stat.S_IMODE(store.path.stat().st_mode) == 0o600
+    assert not (store.path.parent / ".registrations.json.tmp").exists()
+
+
+def test_the_store_creates_a_private_parent(tmp_path):
+    store = Store(tmp_path / "new" / "registrations.json")
+    store.save({})
+    assert stat.S_IMODE(store.path.parent.stat().st_mode) == 0o700
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "{",
+        '{"version": 2, "registrations": []}',
+        '{"registrations": []}',
+        '{"version": 1}',
+        '{"version": 1, "registrations": [{"execution_id": "x"}]}',
+    ],
+)
+def test_an_unreadable_ownership_record_refuses(tmp_path, text):
+    path = tmp_path / "registrations.json"
+    path.write_text(text)
+    assert refusal(lambda: Store(path).load()) == (
+        "ownership_unreadable",
+        "the registration ownership record is unreadable",
+    )
+
+
+def test_owned_finds_a_recorded_profile_by_id_only():
+    record = Record(EXE_A, 2, NAME_A, TARGET_A, "default", "p1")
+    other = Machine("p2", NAME_A, TARGET_A, "default", True)
+    mine = Machine("p1", "renamed", "ssh://elsewhere", "other", False)
+    assert reconcile.owned(None, [mine]) is None
+    assert reconcile.owned(record, [other, mine]) is mine
+    assert reconcile.owned(record, [other]) is None
+
+
+@pytest.mark.parametrize(
+    "found",
+    [
+        Machine("p1", "x", TARGET_A, "default", True),
+        Machine("p1", NAME_A, "ssh://x", "default", True),
+        Machine("p1", NAME_A, TARGET_A, "x", True),
+    ],
+)
+def test_a_pending_record_adopts_only_an_exact_label_target_and_session_match(found):
+    pending = Record(EXE_A, 2, NAME_A, TARGET_A, "default", None)
+    exact = Machine("p2", NAME_A, TARGET_A, "default", True)
+    assert reconcile.owned(pending, [found]) is None
+    assert reconcile.owned(pending, [found, exact]) is exact
+
+
+def test_a_pending_record_saved_twice_is_ambiguous():
+    pending = Record(EXE_A, 2, NAME_A, TARGET_A, "default", None)
+    twice = [Machine(f"p{n}", NAME_A, TARGET_A, "default", True) for n in (1, 2)]
+    assert refusal(lambda: reconcile.owned(pending, twice)) == (
+        "catalog_ambiguous",
+        f"{NAME_A} was saved more than once after an interrupted add",
+    )
+
+
+def test_newest_keeps_the_highest_generation_of_each_execution():
+    old, new = cases.endpoints(2)[0], cases.endpoints(3)[0]
+    same = cases.endpoints(3)[0]
+    other = cases.endpoints()[1]
+    assert reconcile.newest([new, other, old]) == {EXE_A: new, EXE_B: other}
+    assert reconcile.newest([old, new])[EXE_A] is new
+    assert reconcile.newest([new, same])[EXE_A] is new
+
+
+def test_registrations_select_the_default_remote_session(tmp_path):
+    registrations, _, _ = world(tmp_path)
+    assert registrations.session == "default" == catalog.REMOTE_SESSION
+
+
+def test_register_adds_a_missing_endpoint_and_records_its_profile(tmp_path):
+    registrations, herdr, desired = world(tmp_path)
+    profile = registrations.register(desired[0])
+    assert herdr.machines == [machine(profile, NAME_A, TARGET_A) | {"selected": False}]
+    assert registrations.store.load() == {EXE_A: Record(EXE_A, 2, NAME_A, TARGET_A, "default", profile)}
+    assert registrations.drift == {"missing": 1}
+    assert registrations.register(desired[0]) == profile
+    assert herdr.adds(NAME_A) == 1
+    assert registrations.drift == {"missing": 1}
+
+
+def test_a_stale_generation_is_refused_without_touching_the_newer_record(tmp_path):
+    registrations, herdr, _ = world(tmp_path)
+    profile = registrations.register(cases.endpoints(3)[0])
+    assert refusal(lambda: registrations.register(cases.endpoints(2)[0])) == (
+        "stale_generation",
+        f"{NAME_A} is registered for generation 3",
+    )
+    assert registrations.store.load()[EXE_A].generation == 3
+    assert registrations.register(cases.endpoints(3)[0]) == profile
+
+
+def test_a_drifted_managed_label_is_renamed_back(tmp_path):
+    registrations, herdr, desired = world(tmp_path)
+    profile = registrations.register(desired[0])
+    herdr.machines[0]["label"] = "by-hand"
+    herdr.machines.append(machine("m1", "devbox", TARGET_A))
+    assert registrations.register(desired[0]) == profile
+    assert herdr.commands[-1] == ["herdr", "machine", "rename", "--label", NAME_A, profile]
+    assert registrations.drift == {"missing": 1, "label": 1}
+
+
+def test_a_rename_onto_another_machines_label_is_refused(tmp_path):
+    registrations, herdr, desired = world(tmp_path)
+    registrations.register(desired[0])
+    herdr.machines[0]["label"] = "by-hand"
+    herdr.machines.append(machine("m1", NAME_A, "ssh://devbox"))
+    assert refusal(lambda: registrations.register(desired[0])) == (
+        "label_collision",
+        f"{NAME_A} is the label of a machine this controller does not own",
+    )
+    assert not any(command[:3] == ["herdr", "machine", "rename"] for command in herdr.commands)
+    assert registrations.drift == {"missing": 1, "collision": 1}
+
+
+def test_a_target_already_saved_unmanaged_is_refused(tmp_path):
+    registrations, herdr, desired = world(tmp_path, [machine("m1", "devbox", TARGET_A)])
+    assert refusal(lambda: registrations.register(desired[0])) == (
+        "target_collision",
+        f"{NAME_A} is already saved by a machine this controller does not own",
+    )
+    assert herdr.mutating() == []
+    assert not registrations.store.path.exists()
+    assert registrations.drift == {"missing": 1, "collision": 1}
+
+
+def test_a_refused_add_drops_its_pending_record(tmp_path):
+    registrations, herdr, desired = world(tmp_path, ready=set())
+    assert refusal(lambda: registrations.register(desired[0]))[0] == "machine_refused"
+    assert registrations.store.load() == {}
+    assert registrations.store.path.exists()
+
+
+def test_an_unanswered_add_keeps_its_pending_record(tmp_path):
+    registrations, herdr, desired = world(tmp_path)
+    herdr.unanswered.add(TARGET_A)
+    assert refusal(lambda: registrations.register(desired[0]))[0] == "catalog_unreachable"
+    assert registrations.store.load() == {EXE_A: Record(EXE_A, 2, NAME_A, TARGET_A, "default", None)}
+    herdr.unanswered.clear()
+    assert registrations.register(desired[0]) == herdr.machines[0]["id"]
+    assert herdr.adds(NAME_A) == 1
+    assert registrations.drift == {"missing": 1, "interrupted": 1}
+
+
+def test_an_ambiguous_add_keeps_its_pending_record(tmp_path):
+    run = Recorder(done(0, "[]"), done(0, "saved"))
+    registrations = Registrations(Catalog(run), Store(tmp_path / "r.json"))
+    assert refusal(lambda: registrations.register(cases.endpoints()[0]))[0] == "catalog_ambiguous"
+    assert registrations.store.load()[EXE_A].profile_id is None
+
+
+def test_reconcile_registers_desired_endpoints_in_execution_order(tmp_path):
+    registrations, herdr, desired = world(tmp_path)
+    verdicts = Verdicts()
+    report = registrations.reconcile(list(reversed(desired)), verdicts)
+    assert list(report.registered) == [EXE_A, EXE_B]
+    assert verdicts.asked == [(endpoint.name, endpoint.incarnation) for endpoint in desired]
+    assert (report.refused, report.retired, report.drift) == ({}, [], {"missing": 2})
+    assert report.herdr_registration_drift() == 2
+    again = registrations.reconcile(desired, verdicts)
+    assert (again.registered, again.drift, again.herdr_registration_drift()) == (report.registered, {}, 0)
+
+
+def test_an_empty_report_has_no_drift():
+    assert Report().herdr_registration_drift() == 0
+    assert Report(drift={"missing": 2, "label": 3}).herdr_registration_drift() == 5
+
+
+@pytest.mark.parametrize(
+    ("outcome", "kept"), [(False, False), (Incompatible("replaced"), False), (Unreachable("x"), True)]
+)
+def test_only_an_incompatible_server_is_unregistered(tmp_path, outcome, kept):
+    registrations, herdr, desired = world(tmp_path)
+    report = registrations.reconcile(desired[:1], Verdicts(outcome))
+    assert (EXE_A in report.registered, EXE_A in registrations.store.load(), len(herdr.machines)) == (
+        kept,
+        kept,
+        int(kept),
+    )
+    assert report.refused == ({} if kept else {EXE_A: "incompatible"})
+
+
+def test_reconcile_retires_only_owned_profiles_and_counts_those_still_saved(tmp_path):
+    registrations, herdr, desired = world(tmp_path, [machine("m1", "devbox", "ssh://devbox")])
+    registrations.reconcile(desired, Verdicts())
+    gone = Record(EXE_B, 1, "x", "ssh://x", "default", "gone")
+    registrations.store.save(registrations.store.load() | {"exe-" + "c" * 32: gone})
+    report = registrations.reconcile([], Verdicts())
+    assert report.retired == [EXE_A, EXE_B, "exe-" + "c" * 32]
+    assert report.drift == {"retired": 2}
+    assert herdr.machines == [machine("m1", "devbox", "ssh://devbox")]
+    assert registrations.store.load() == {}
+
+
+def test_a_failed_retirement_keeps_its_record_for_the_next_pass(tmp_path):
+    registrations, herdr, desired = world(tmp_path)
+    registrations.reconcile(desired[:1], Verdicts())
+    herdr._remove = lambda command: subprocess.CompletedProcess(command, 1, "", "")
+    report = registrations.reconcile([], Verdicts())
+    assert (report.retired, report.refused) == ([], {EXE_A: "remove_refused"})
+    assert list(registrations.store.load()) == [EXE_A]
+
+
+@pytest.mark.parametrize("case", ["a", "b", "c"])
+def test_package_cases_match_their_committed_evidence(case):
+    first, second = cases.run_case(case), cases.run_case(case)
+    assert first == second
+    assert first["state"] == "passed", json.dumps(first, indent=2, sort_keys=True)
+    path = EVIDENCE / f"{case}-result.json"
+    committed = json.loads(path.read_text()) if path.exists() else None
+    assert committed == first, json.dumps(first, indent=2, sort_keys=True)
