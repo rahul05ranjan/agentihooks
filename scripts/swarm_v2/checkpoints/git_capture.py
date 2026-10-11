@@ -14,7 +14,7 @@ from hooks import secrets
 from hooks.context.credential_guard import sensitive_kind
 from scripts.swarm_v2.artifacts.base import ArtifactRef, ArtifactStore, Scope
 from scripts.swarm_v2.checkpoints import model
-from scripts.swarm_v2.filesystem import LayoutError, contain
+from scripts.swarm_v2.filesystem import ARCHIVE_BYTES, ARCHIVE_MEMBERS, LayoutError, contain
 
 METRIC = "checkpoint_source_bytes"
 STAGED = "staged_patch"
@@ -37,6 +37,7 @@ DIFF = (
 ESCAPE = "the untracked archive holds a member that is not a regular file inside the worktree"
 DIRTY = "the restore target has changes of its own"
 INCOMPLETE = "the checkpoint does not carry every source material"
+OVERSIZED = "the untracked archive holds more members or bytes than an extraction allows"
 SOURCE_ROLES = frozenset({STAGED, UNSTAGED, UNTRACKED})
 CAPTURED = SOURCE_ROLES | {model.SOURCE_BUNDLE}
 CREATED_LINK = re.compile(r"^ create mode 120000 (.+)$", re.MULTILINE)
@@ -199,12 +200,16 @@ def _granted(scope: Scope, authority: dict) -> bool:
 
 def _members(data: bytes) -> list[tuple[str, int, bytes]]:
     found = []
-    with tarfile.open(fileobj=io.BytesIO(data)) as archive:
+    expanded = 0
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:") as archive:  # NOSONAR: uncompressed, count and size bounded
         for info in archive.getmembers():
+            expanded += info.size
+            if len(found) >= ARCHIVE_MEMBERS or expanded > ARCHIVE_BYTES:
+                raise SourceError(OVERSIZED)
             parts = PurePosixPath(info.name).parts
             if not info.isreg() or info.name.startswith("/") or {"..", ".git"}.intersection(parts):
                 raise SourceError(ESCAPE)
-            found.append((info.name, info.mode, archive.extractfile(info).read()))
+            found.append((info.name, info.mode, archive.extractfile(info).read()))  # NOSONAR: bounded above
     return found
 
 

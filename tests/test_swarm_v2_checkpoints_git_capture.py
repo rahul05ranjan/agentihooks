@@ -378,6 +378,36 @@ def test_archive_members_outside_the_worktree_or_not_regular_are_refused(info):
     assert str(raised.value) == git_capture.ESCAPE
 
 
+def _many(sizes: tuple[int, ...]) -> bytes:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        for index, size in enumerate(sizes):
+            info = tarfile.TarInfo(f"m{index}")
+            info.size = size
+            archive.addfile(info, io.BytesIO(b"x" * size))
+    return buffer.getvalue()
+
+
+def test_member_count_and_expanded_bytes_are_bounded(monkeypatch):
+    monkeypatch.setattr(git_capture, "ARCHIVE_MEMBERS", 2)
+    monkeypatch.setattr(git_capture, "ARCHIVE_BYTES", 5)
+    assert [name for name, _, _ in git_capture._members(_many((2, 3)))] == ["m0", "m1"]
+    for sizes in ((1, 1, 1), (2, 4)):
+        with pytest.raises(git_capture.SourceError) as raised:
+            git_capture._members(_many(sizes))
+        assert str(raised.value) == "the untracked archive holds more members or bytes than an extraction allows"
+
+
+def test_a_compressed_archive_is_not_expanded():
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        info = tarfile.TarInfo("a.txt")
+        info.size = 1
+        archive.addfile(info, io.BytesIO(b"a"))
+    with pytest.raises(tarfile.ReadError):
+        git_capture._members(buffer.getvalue())
+
+
 def test_regular_members_are_read_with_their_mode():
     info = _member("dir/run.sh", size=2)
     info.mode = 0o755
