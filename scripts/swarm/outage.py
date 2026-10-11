@@ -43,6 +43,24 @@ def open_records(slug: str) -> list[dict]:
     return [record for record in read(slug).values() if record["ended_at"] is None]
 
 
+def lines(slug: str) -> list[str]:
+    return [
+        f"outage {record['kind']} since {record['started_at']}: {' ; '.join(record['evidence'])}"
+        for record in open_records(slug)
+    ]
+
+
+def show(slug: str, as_json: bool) -> bool:
+    records = open_records(slug)
+    if not records:
+        return False
+    if as_json:
+        print(json.dumps({"outages": records}))
+    else:
+        print("\n".join(lines(slug)))
+    return True
+
+
 def providers(store: RedisStore, slug: str, runtime: Runtime, now_ms: int) -> None:
     observed = [(agent, runtime.observe(agent)) for agent in store.agents(slug) if agent.state != "finished"]
     evidence = [
@@ -90,12 +108,13 @@ def guard_tick(function: Callable) -> Callable:
             evidence = f"Redis ping check failed: {type(exc).__name__}"
             observe(slug, "redis", [evidence], now_ms())
             return [evidence]
-        observe(slug, "redis", [], now_ms())
         try:
-            return function(store, slug, *args, **kwargs)
+            actions = function(store, slug, *args, **kwargs)
         except RedisError as exc:
             evidence = f"Redis operation failed: {type(exc).__name__}"
             observe(slug, "redis", [evidence], now_ms())
             return [evidence]
+        observe(slug, "redis", [], now_ms())
+        return actions
 
     return guarded

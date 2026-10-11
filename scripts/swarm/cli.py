@@ -822,6 +822,7 @@ def cmd_status(store, args):
         store.config(args.slug)
         print(json.dumps(status_report(store, args.slug, LedgerClient().state(args.slug))))
         return
+    outage.show(args.slug, False)
     config = store.config(args.slug)
     agents = store.agents(args.slug)
     ledger = LedgerClient()
@@ -1681,6 +1682,8 @@ def main(argv):
         if action in control_notifications.CONTROLS:
             control_notifications.notify(store, args, LedgerClient(), before, action)
     except (SwarmError, InboxError) as exc:
+        if handler is cmd_status and outage.show(args.slug, args.json):
+            return 0
         print(f"swarm: {exc}", file=sys.stderr)
         return 1
     return 0
