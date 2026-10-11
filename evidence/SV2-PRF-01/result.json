@@ -36,7 +36,7 @@
   },
   "validation": {
     "red": "Proofs run 38139509083 on tests only commit d3fae5797: the three new test modules failed collection with ImportError",
-    "tests": "Proofs run 38148825663 at tested_commit, the three resource test modules with case records a, b and c; Proofs run 38148349275 passed the same modules at 3dc94e0d4, the same tree before the rebase onto dev",
+    "tests": "Proofs run 38148825663 at tested_commit: 95 passed across the three resource test modules, case records a, b and c matched; Proofs run 38148349275 passed the same modules at 3dc94e0d4, the same tree before the rebase onto dev",
     "mutation": "Mutation preflight run 38148804120 at tested_commit against dev; scoped mutation proof 38145001123 at c9cf291ab killed every mutant but the sampler timeout boundary, which a fake clock test now kills",
     "lint": "ruff check and ruff format passed through python -m scripts.ci_prepush",
     "earlier_runs": "Worker resources run 38139549078 refused every class because the suite path was relative; run 38139693400 refused the general class because its generated suite failed and showed peak cores above the runner's 4 CPUs, which led to whole second core windows; run 38140098792 measured the first committed record, replaced after the readers' fixes by run 38147758574"
