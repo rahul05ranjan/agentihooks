@@ -126,7 +126,7 @@ def submit(store, entry: dict, apply) -> dict:
     if store is not None and not waiting():
         try:
             return apply(store, entry)
-        except RedisError:
+        except (RedisError, Contended):
             pass
     append(entry)
     print(QUEUED, file=sys.stderr)
@@ -163,13 +163,21 @@ def _replay(store, report: Report) -> None:
         except DuplicateItem:
             report.already.append(entry["item"])
         except (RedisError, Contended):
-            _rewrite(lines[index:])
-            report.left = len(lines) - index
+            _keep(lines[index:], report)
             return
-        except Exception as exc:  # noqa: BLE001  one poisoned record must not block every later connection
+        except (InboxError, KeyError, TypeError, ValueError) as exc:
             _set_aside(line, str(exc))
             report.rejected.append((entry["item"], str(exc)))
+        except Exception as exc:
+            print(f"agentihooks msg: outbox replay stopped ({type(exc).__name__}: {exc})", file=sys.stderr)
+            _keep(lines[index:], report)
+            return
     _rewrite([])
+
+
+def _keep(lines: list[str], report: Report) -> None:
+    _rewrite(lines)
+    report.left = len(lines)
 
 
 def _set_aside(line: str, reason: str) -> None:
@@ -184,6 +192,11 @@ def _rewrite(lines: list[str]) -> None:
         handle.write("".join(lines))
         _sync(handle)
     os.replace(staged, path())
+    directory = os.open(home(), os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def _sync(handle) -> None:
@@ -192,6 +205,8 @@ def _sync(handle) -> None:
 
 
 def _tell(report: Report) -> None:
+    if report.left:
+        print(f"agentihooks msg: {report.left} queued messages wait in {path()} for Redis", file=sys.stderr)
     for _ in range(report.corrupt):
         print(f"agentihooks msg: a corrupt outbox record was skipped and kept in {skipped_path()}", file=sys.stderr)
     for item, reason in report.rejected:

@@ -45,7 +45,7 @@ class Outage:
 
 @pytest.fixture
 def outage(monkeypatch):
-    monkeypatch.setattr(cli, "registered_name", lambda: "", raising=False)
+    monkeypatch.setattr(cli, "registered_name", lambda: "")
     monkeypatch.setattr(
         "scripts.inbox.addresses.get_active_sessions",
         lambda **kwargs: {"sess-a": {"name": "alice"}, "sess-b": {"name": "bob"}},
@@ -359,3 +359,29 @@ def test_a_queued_close_matching_another_actors_close_is_refused_not_taken_as_it
     outage.down = False
     report = outbox.flush(store)
     assert (report.already, report.rejected) == ([], [(asked.id, f"message {asked.id} is closed: done: answered")])
+
+
+def test_an_unexpected_replay_error_stops_the_flush_and_keeps_the_record(outage, monkeypatch, capsys):
+    outage.down = True
+    assert run("send", "bob", "kept") == 0
+    outage.down = False
+    capsys.readouterr()
+    monkeypatch.setitem(cli.APPLY, "send", lambda *args: (_ for _ in ()).throw(RuntimeError("disk gone")))
+    report = outbox.flush(InboxStore(outage.redis))
+    assert (report.applied, report.rejected, report.left) == ([], [], 1)
+    err = capsys.readouterr().err
+    assert "outbox replay stopped (RuntimeError: disk gone)" in err and "1 queued messages wait" in err
+    assert [record["args"]["text"] for record in records()] == ["kept"]
+
+
+def test_a_live_close_that_meets_contention_is_queued_and_replays(outage, monkeypatch, capsys):
+    store = InboxStore(outage.redis)
+    asked = store.send("alice", "bob", "can you review")
+    monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", "bob")
+    close = InboxStore.close
+    monkeypatch.setattr(InboxStore, "close", lambda *args: (_ for _ in ()).throw(Contended("changed meanwhile")))
+    assert run("close", asked.id, "done", "answered") == 0
+    assert json.loads(capsys.readouterr().out)["state"] == "queued"
+    monkeypatch.setattr(InboxStore, "close", close)
+    assert outbox.flush(store).applied == [asked.id]
+    assert store.get(asked.id).reason == "done: answered"
