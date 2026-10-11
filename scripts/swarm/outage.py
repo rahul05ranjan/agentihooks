@@ -1,11 +1,13 @@
 import fcntl
 import json
+from collections.abc import Callable
 from functools import wraps
 from pathlib import Path
 
 from redis.exceptions import RedisError
 
-from scripts.swarm.store import SwarmError
+from scripts.swarm.store import RedisStore, SwarmError
+from scripts.swarm.tick import Runtime
 from scripts.swarm_v2.records import _write
 
 HOME = None
@@ -41,13 +43,21 @@ def open_records(slug: str) -> list[dict]:
     return [record for record in read(slug).values() if record["ended_at"] is None]
 
 
-def providers(store, slug: str, runtime, now_ms: int) -> None:
+def providers(store: RedisStore, slug: str, runtime: Runtime, now_ms: int) -> None:
     observed = [(agent, runtime.observe(agent)) for agent in store.agents(slug) if agent.state != "finished"]
     evidence = [
         f"{agent.name} ({agent.harness}): {pane.provider_error}" for agent, pane in observed if pane.provider_error
     ]
     if evidence or (observed and all(pane.provider_checked for _, pane in observed)):
         observe(slug, "provider", evidence, now_ms)
+
+
+def ledger_health(slug: str, now_ms: int) -> bool:
+    from scripts.swarm_ledger import ledger_link
+
+    healthy = bool(ledger_link.serving())
+    observe(slug, "ledger", [] if healthy else ["Ledger health probe failed"], now_ms)
+    return healthy
 
 
 def redis_state(evidence: list[str], now_ms: int) -> None:
@@ -57,7 +67,7 @@ def redis_state(evidence: list[str], now_ms: int) -> None:
         observe(slug, "redis", evidence, now_ms)
 
 
-def connect_tick(connector, clock):
+def connect_tick(connector: Callable[[], RedisStore], clock: Callable[[], int]) -> RedisStore | None:
     try:
         store = connector()
     except (SwarmError, RedisError) as exc:
@@ -69,7 +79,7 @@ def connect_tick(connector, clock):
     return store
 
 
-def guard_tick(function):
+def guard_tick(function: Callable) -> Callable:
     @wraps(function)
     def guarded(store, slug, *args, **kwargs):
         from scripts.swarm.cli import now_ms

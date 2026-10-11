@@ -173,6 +173,10 @@ def run_tick(store, slug, ledger=None, runtime=None, messenger=None, scheduled=F
     from scripts.swarm import command_runner, commands, controller, incidents, lease
 
     ledger = ledger or LedgerClient()
+    runtime = runtime or routed(herdr=HerdrRuntime())
+    outage.providers(store, slug, runtime, now_ms())
+    if isinstance(ledger, LedgerClient) and not outage.ledger_health(slug, now_ms()):
+        return ["Ledger health probe failed"]
     held = lease.acquire(store, slug, commands.hive_id())
     if held is None:
         return ["the swarm belongs to another hive"]
