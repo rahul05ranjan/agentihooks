@@ -27,6 +27,7 @@ NOTES = (
     "The idle class is a sleeping Python process standing in for an idle agent CLI.",
     "With nine runs per class the p95 column equals the maximum.",
     "Descendants that leave the workload's session and process tree are not counted.",
+    "The sampler walks the workload folder on every sample; that cost runs outside the measured tree.",
     "Coexistence counts whole workers in each node's allocatable capacity minus the requests already scheduled there.",
 )
 
