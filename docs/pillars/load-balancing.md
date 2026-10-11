@@ -427,8 +427,22 @@ it by name, so every Codex seat the tick offers is one `agentihooks codex
 
 - `agentihooks codex [--route <slug>] [codex args]` picks by the same rule, with
   each Codex account judged on its week alone with the top band (6 sessions, none
-  under 5% of the week). A reading older than fifteen minutes is refreshed by one
-  tiny `codex exec` on that account before placing; `--route` forces one. `init-agent --agent
+  under 5% of the week). A reading older than fifteen minutes is refreshed
+  before placing, at most once per fifteen minutes per account: a ChatGPT token
+  account, or a default login whose `auth.json` holds its token, gets a free
+  read of the ChatGPT usage endpoint (`/backend-api/wham/usage`, no inference
+  spent), cached with mode 0600 in `codex-usage.json` under `AGENTIHOOKS_HOME`
+  with the windows, plan and limit only, keyed by the account slug. Any other
+  account, and a read that fails for any reason but an expired token, gets one
+  tiny `codex exec`. A read answered `401 token_expired` marks the account
+  `EXPIRED`: no seats, and `agentihooks quota` names the login that renews it.
+  A limit reached before the 7-day reset stops counting once that reset passes. Until then the cap keeps reading an older one while it
+  is younger than `AGENTIHOOKS_CODEX_READING_MAX_AGE_H` hours (default 6), so an
+  idle account keeps its seats; a 7-day window that has reset in the meantime
+  reads 100% left. `agentihooks quota` shows `STALE` only past that age, and
+  judges a reading older than fifteen minutes on its week alone, without its old
+  five-hour window.
+  `--route` forces one. `init-agent --agent
   codex` and the swarm tick launch through it, and the route report names the
   account for the swarm panel.
 - A token account's child keeps only its `AH_CX_TOKEN_<slug>`, loses every
@@ -448,11 +462,19 @@ it by name, so every Codex seat the tick offers is one `agentihooks codex
   it counts even when started inside one of them. A Codex process whose parent
   is a Codex process belongs to that session. A run started through a shell,
   even inside a Codex session, holds its own slot.
-  Quota per account is the newest rate-limit event in the session logs the
-  session registry attributes to it; a token with no session yet shows no quota
-  and still routes.
+  Quota per account is the newest of the usage read and the rate-limit event in
+  the session logs the session registry attributes to it; a token with neither
+  shows no quota and still routes.
 - `agentihooks balance` and `agentihooks quota` list every Codex account with its
   sessions and quota; a signed-out default login shows `SIGNED_OUT`.
+- The swarm tick, the controller and `init-agent` never source the shell rc, so
+  they read the `AH_CC_TOKEN_*` and `AH_CX_TOKEN_*` export lines of the managed
+  token block that `codex login` and `claude login` write, and nothing else in
+  that file. The block value wins for a name the environment already holds (it
+  is the refreshed one); a name only in the environment stays. Every account
+  list (`balance`, `quota`, the tick, routing) counts a token value once: when
+  several names hold the same token, the block's name is kept, else the first
+  name in sort order.
 
 ### Logging in an account
 
