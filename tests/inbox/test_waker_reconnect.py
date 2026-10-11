@@ -1,6 +1,7 @@
 import queue
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 from scripts.swarm.models import AgentRecord, SwarmConfig
@@ -17,85 +18,103 @@ def backend():
     import fakeredis
 
     server = fakeredis.FakeServer()
-    client = fakeredis.FakeRedis(server=server, decode_responses=True)
-    return server, client
+    return SimpleNamespace(
+        server=server,
+        client=fakeredis.FakeRedis(server=server, decode_responses=True),
+        polling=threading.Event(),
+        retrying=threading.Event(),
+        restored=threading.Event(),
+        stopped=threading.Event(),
+        prompts=queue.Queue(),
+        errors=queue.Queue(),
+        subscriptions=[],
+        sleep=time.sleep,
+    )
 
 
-def test_running_waker_wakes_pending_items_after_redis_returns(backend, monkeypatch):
-    server, client = backend
-    store, inbox = RedisStore(client), InboxStore(client)
-    store.create(SwarmConfig("sw", "/repo", 1, 1, state="running"))
-    store.put_agent("sw", AgentRecord("bob", "eng", "t1", pane_id="p1", harness="codex"))
-    polling, retrying, restored, stopped = (threading.Event() for _ in range(4))
-    prompts, errors, subscriptions = queue.Queue(), queue.Queue(), []
-    real_pubsub = client.pubsub
-    real_sleep = time.sleep
+def subscription_factory(backend):
+    real_pubsub = backend.client.pubsub
 
     class Subscription:
         def __init__(self):
             self.inner = real_pubsub()
             self.closed = False
-            subscriptions.append(self)
+            backend.subscriptions.append(self)
 
         def subscribe(self, name):
             self.inner.subscribe(name)
 
         def get_message(self, timeout):
-            if stopped.is_set():
+            if backend.stopped.is_set():
                 raise KeyboardInterrupt
-            polling.set()
+            backend.polling.set()
             return self.inner.get_message(timeout=timeout)
 
         def close(self):
             self.closed = True
             self.inner.close()
 
-    class Herdr:
-        def agent_status(self, agent):
-            return "idle"
+    return Subscription
 
-        def typed_input(self, agent):
-            return ""
 
-        def prompt(self, agent, text):
-            prompts.put((agent.pane_id, text))
+class Herdr:
+    def __init__(self, prompts):
+        self.prompts = prompts
 
-    def sleep(delay):
-        if delay >= 1:
-            retrying.set()
-            assert restored.wait(3), "Redis recovery was never released"
-        else:
-            real_sleep(delay)
+    def agent_status(self, agent):
+        return "idle"
 
-    def run():
-        try:
-            waker.run(store, Herdr(), now_ms, {})
-        except KeyboardInterrupt:
-            pass
-        except BaseException as exc:
-            errors.put(exc)
+    def typed_input(self, agent):
+        return ""
 
-    monkeypatch.setattr(client, "pubsub", Subscription)
-    monkeypatch.setattr(waker, "RECHECK_S", 0.02)
-    monkeypatch.setattr(time, "sleep", sleep)
-    worker = threading.Thread(target=run)
-    worker.start()
+    def prompt(self, agent, text):
+        self.prompts.put((agent.pane_id, text))
+
+
+def restore_during_run(backend, inbox):
     try:
-        assert polling.wait(3), "waker never subscribed"
+        assert backend.polling.wait(3), "waker never subscribed"
         inbox.send("alice", "bob", "before outage")
-        assert prompts.get(timeout=3) == ("p1", wake.WAKE_TEXT)
-        server.connected = False
-        assert retrying.wait(3), "waker died instead of retrying"
-        assert worker.is_alive()
-        server.connected = True
+        assert backend.prompts.get(timeout=3) == ("p1", wake.WAKE_TEXT)
+        backend.server.connected = False
+        assert backend.retrying.wait(3), "waker died instead of retrying"
+        backend.server.connected = True
         inbox.send("alice", "bob", "missed during outage")
-        restored.set()
-        assert prompts.get(timeout=3) == ("p1", wake.WAKE_TEXT)
+        backend.restored.set()
+        assert backend.prompts.get(timeout=3) == ("p1", wake.WAKE_TEXT)
+    except BaseException as exc:
+        backend.errors.put(exc)
     finally:
-        server.connected = True
-        stopped.set()
-        restored.set()
-        worker.join(3)
-    assert not worker.is_alive(), "waker did not stop"
-    assert errors.empty(), list(errors.queue)
-    assert all(subscription.closed for subscription in subscriptions)
+        backend.server.connected = True
+        backend.stopped.set()
+        backend.restored.set()
+
+
+def retry_sleep(backend, delay):
+    if delay >= 1:
+        backend.retrying.set()
+        assert backend.restored.wait(3), "Redis recovery was never released"
+    else:
+        backend.sleep(delay)
+
+
+def test_running_waker_wakes_pending_items_after_redis_returns(backend, monkeypatch):
+    store, inbox = RedisStore(backend.client), InboxStore(backend.client)
+    store.create(SwarmConfig("sw", "/repo", 1, 1, state="running"))
+    store.put_agent("sw", AgentRecord("bob", "eng", "t1", pane_id="p1", harness="codex"))
+    monkeypatch.setattr(backend.client, "pubsub", subscription_factory(backend))
+    monkeypatch.setattr(waker, "RECHECK_S", 0.02)
+    monkeypatch.setattr(time, "sleep", lambda delay: retry_sleep(backend, delay))
+    driver = threading.Thread(target=restore_during_run, args=(backend, inbox))
+    driver.start()
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            waker.run(store, Herdr(backend.prompts), now_ms, {})
+    finally:
+        backend.server.connected = True
+        backend.stopped.set()
+        backend.restored.set()
+        driver.join(4)
+    assert not driver.is_alive(), "outage driver did not stop"
+    assert backend.errors.empty(), list(backend.errors.queue)
+    assert all(subscription.closed for subscription in backend.subscriptions)
