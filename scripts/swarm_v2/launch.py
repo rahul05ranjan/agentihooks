@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Protocol
 
 from hooks.context.profile_chain import PACKAGE_ROLES
+from scripts.swarm import live_binding, profile_choice
 from scripts.swarm.store import AgentRecord, SwarmError
-from scripts.swarm.templates import DEFAULT_PROFILES
 from scripts.swarm_v2 import broadcast_bridge
 from scripts.swarm_v2.accounts import AccountCapacity, Slot
 from scripts.swarm_v2.auth_context import LaunchAuthority
@@ -68,8 +68,13 @@ class Launch:
 
 
 def seat_profile(request: SpawnRequest) -> str:
-    lane = request.config.lanes.get(request.lane, {})
-    return request.task.get("profile") or lane.get("profile") or DEFAULT_PROFILES[request.lane]
+    task, lane = request.task, request.config.lanes.get(request.lane, {})
+    relaunch = live_binding.complete(task.get("launch_assignment"))
+    saved = relaunch or profile_choice.transfer(task)
+    decision = profile_choice.kept(task, saved, relaunch) or profile_choice.pick(
+        request.config.slug, request.lane, lane, task
+    )
+    return decision.profile
 
 
 def worker_profiles() -> set[str]:

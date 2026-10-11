@@ -22,6 +22,7 @@ from hooks.context.account_sessions import (
     API_ACCOUNT,
     CODEX_DEFAULT,
     CODEX_TOKEN_PREFIX,
+    INTERNAL_RUN,
     codex_sessions_by_account,
 )
 from scripts import codex_quota, session_bands
@@ -156,7 +157,7 @@ def default_signed_in(environ: Mapping[str, str], run: Callable = subprocess.run
     try:
         status = run(
             [shutil.which("codex") or "codex", "login", "status"],
-            env=_without_tokens(environ),
+            env={**_without_tokens(environ), INTERNAL_RUN: "1"},
             capture_output=True,
             timeout=30,
         )
@@ -220,7 +221,7 @@ def probe(account: CodexAccount, environ: Mapping[str, str], run: Callable = sub
         account = credential(account, environ)
         done = run(
             command(account, codex_bin, PROBE_ARGS),
-            env=child_environment(account, environ),
+            env={**child_environment(account, environ), INTERNAL_RUN: "1"},
             capture_output=True,
             text=True,
             stdin=subprocess.DEVNULL,
@@ -344,6 +345,7 @@ def _spend_by(quota: CodexQuota, now: float) -> float | None:
 
 
 def child_environment(account: CodexAccount, environ: Mapping[str, str]) -> dict[str, str]:
+    environ = {name: value for name, value in environ.items() if name != INTERNAL_RUN}
     if account.is_api:
         return envs.codex_api_child(environ)
     child = _without_tokens(environ)
