@@ -28,6 +28,7 @@
           "exe-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "label_collision"
         },
         "retired": [],
+        "unverified": [],
         "drift": {
           "missing": 2,
           "collision": 1
@@ -90,6 +91,7 @@
           "exe-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "target_collision"
         },
         "retired": [],
+        "unverified": [],
         "drift": {
           "missing": 2,
           "collision": 1
@@ -152,6 +154,7 @@
           "exe-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": "incompatible"
         },
         "retired": [],
+        "unverified": [],
         "drift": {
           "missing": 2
         },
@@ -229,6 +232,7 @@
           "exe-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": "machine_refused"
         },
         "retired": [],
+        "unverified": [],
         "drift": {
           "missing": 2
         },
@@ -360,6 +364,7 @@
         "retired": [
           "exe-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         ],
+        "unverified": [],
         "drift": {},
         "herdr_registration_drift": 0
       },
@@ -404,6 +409,7 @@
           "exe-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "label_collision"
         },
         "retired": [],
+        "unverified": [],
         "drift": {
           "missing": 2,
           "collision": 1
@@ -417,6 +423,7 @@
         },
         "refused": {},
         "retired": [],
+        "unverified": [],
         "drift": {
           "missing": 1
         },

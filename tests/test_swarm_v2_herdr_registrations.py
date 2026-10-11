@@ -554,3 +554,24 @@ def test_the_store_syncs_the_record_before_and_its_folder_after_the_replace(tmp_
         (tmp_path / ".registrations.json.tmp", '{\n  "version": 1,\n  "registrations": []\n}\n', False),
         (tmp_path, None, True),
     ]
+
+
+def test_a_verified_registration_survives_an_unreachable_probe(tmp_path):
+    registrations, herdr, desired = world(tmp_path)
+    first = registrations.reconcile(desired[:1], Verdicts())
+    later = registrations.reconcile(desired[:1], Verdicts(Unreachable("x")))
+    assert (later.registered, later.unverified, later.refused) == (first.registered, [EXE_A], {})
+    assert first.unverified == []
+    assert herdr.mutating()[-1][:3] == ["herdr", "machine", "add"]
+
+
+def test_recorded_names_the_committed_profile_only(tmp_path):
+    registrations, herdr, desired = world(tmp_path)
+    assert registrations.recorded(desired[0]) is None
+    herdr.unanswered.add(TARGET_A)
+    refusal(lambda: registrations.register(desired[0]))
+    assert registrations.recorded(desired[0]) is None
+    herdr.unanswered.clear()
+    assert registrations.recorded(desired[0]) is None
+    assert registrations.recorded(desired[0]) != registrations.register(desired[0])
+    assert registrations.recorded(desired[0]) == herdr.machines[0]["id"]

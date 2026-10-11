@@ -73,6 +73,9 @@ class Runner:
                 listing = json.dumps([saved(PROFILE, NAME, f"ssh://{HOST}")])
                 self.listed = subprocess.CompletedProcess([], 0, listing, "")
             return self.added
+        if command[:3] == ["herdr", "machine", "remove"]:
+            self.listed = subprocess.CompletedProcess([], 0, "[]", "")
+            return subprocess.CompletedProcess(command, 0, "", "")
         forwarded = [*command[:2], sv2_hdr01_cases.TARGET, *command[3:]] if "--machine" in command else command
         return self.herdr(forwarded)
 
@@ -426,6 +429,17 @@ def test_a_server_that_cannot_be_qualified_loses_its_registration(tmp_path, serv
         found.attach(scope(), HOST_KEY)
     assert runner.commands[-1] == ["herdr", "machine", "remove", PROFILE]
     assert found.registrations.store.load() == {}
+
+
+def test_a_verified_registration_survives_an_unreachable_probe(tmp_path):
+    found, runner = terminal(tmp_path)
+    found.attach(scope(), HOST_KEY)
+    found.qualifier.verdicts.clear()
+    runner.herdr = lambda command: subprocess.CompletedProcess(command, 2, "", "")
+    with pytest.raises(capabilities.Unreachable):
+        found.attach(scope(), HOST_KEY)
+    assert not any(command[:3] == ["herdr", "machine", "remove"] for command in runner.commands)
+    assert [record.profile_id for record in found.registrations.store.load().values()] == [PROFILE]
 
 
 def test_a_compatible_attach_keeps_its_registration(tmp_path):

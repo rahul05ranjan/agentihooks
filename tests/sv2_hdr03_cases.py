@@ -120,7 +120,8 @@ class Client:
         return self.registrations.reconcile(desired, self.qualifier)
 
     def records(self) -> dict:
-        return {key: asdict(record) for key, record in self.registrations.store.load().items()}
+        records = self.registrations.store.load().items()
+        return {key: asdict(record) | {"before": list(record.before)} for key, record in records}
 
 
 def _report(report: Report) -> dict:
@@ -180,7 +181,7 @@ def _positive() -> tuple[dict, bool]:
             for endpoint in desired
         )
         and len({entry["id"] for entry in registrations.values()}) == 2,
-        "boundary_bound_to_verified_incarnation": first["verified_incarnations"]
+        "verdicts_keyed_by_endpoint_incarnation": first["verified_incarnations"]
         == {endpoint.name: endpoint.incarnation for endpoint in desired},
         "two_workers_beside_local": first["sidebar"] == ["Local", "devbox", desired[0].name, desired[1].name],
         "store_matches_catalog": {key: record["profile_id"] for key, record in first["records"].items()}

@@ -191,16 +191,21 @@ class Terminal:
         try:
             endpoint = self.register(scope, host_public)
             self._connect(endpoint)
-            self.registrations.register(endpoint)
-            verdict = self._qualified(endpoint)
+            recorded = self.registrations.recorded(endpoint)
+            fresh = self.registrations.register(endpoint) != recorded
+            verdict = self._qualified(endpoint, fresh)
         except EndpointRefused as refused:
             self._refuse(refused)
         return verdict
 
-    def _qualified(self, endpoint: Endpoint) -> Verdict:
+    def _qualified(self, endpoint: Endpoint, fresh: bool) -> Verdict:
         try:
             verdict = self.qualifier.verdict(endpoint.name, endpoint.incarnation)
-        except (Incompatible, Unreachable):
+        except Unreachable:
+            if fresh:
+                self.registrations.withdraw(endpoint)
+            raise
+        except Incompatible:
             self.registrations.withdraw(endpoint)
             raise
         if not verdict.compatible:
