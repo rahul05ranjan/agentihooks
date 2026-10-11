@@ -161,7 +161,11 @@ def test_chains_count_the_longest_open_path_of_waiters_behind_each_task():
     assert dispatcher.leverage(doc(diamond)) == {"a": 3, "b": 1, "c": 1, "d": 0}
     assert dispatcher.chains(doc(chain())) == {"a": 3, "b": 2, "c": 1, "e": 0}
     looped = [task("a", depends_on=["b"]), task("b", depends_on=["a"])]
-    assert dispatcher.chains(doc(looped)) == {"a": 1, "b": 0}
+    assert dispatcher.chains(doc(looped)) == {"a": 1, "b": 1}
+    tangled = [task("a"), task("b", depends_on=["a", "c"]), task("c", depends_on=["a", "b"]), task("d")]
+    tangled.append(task("e", depends_on=["c", "d"]))
+    assert dispatcher.chains(doc(tangled)) == {"a": 3, "b": 2, "c": 2, "d": 1, "e": 0}
+    assert dispatcher.ordered(doc(tangled), "", dispatcher.leverage(doc(tangled))) == ["a", "b", "c", "d", "e"]
 
 
 def deep_and_wide():

@@ -57,7 +57,8 @@ def leverage(doc: dict) -> dict[str, int]:
 
 def chains(doc: dict) -> dict[str, int]:
     waiters, found = _waiters(doc), {}
-    return {task_id: _chain(task_id, waiters, found, frozenset()) for task_id in waiters}
+    reach = {task_id: _downstream(task_id, waiters) for task_id in waiters}
+    return {task_id: _chain(task_id, waiters, reach, found) for task_id in waiters}
 
 
 def _waiters(doc):
@@ -79,12 +80,12 @@ def _waiters(doc):
     return waiters
 
 
-def _chain(task_id, waiters, found, seen):
+def _chain(task_id, waiters, reach, found):
     if task_id not in found:
-        seen = seen | {task_id}
-        found[task_id] = max(
-            (_chain(w, waiters, found, seen) + 1 for w in waiters[task_id] if w not in seen), default=0
-        )
+        loop = {task_id} | {w for w in reach[task_id] if task_id in reach[w]}
+        after = {w for member in loop for w in waiters[member]} - loop
+        depth = len(loop) - 1 + max((_chain(w, waiters, reach, found) + 1 for w in after), default=0)
+        found.update(dict.fromkeys(loop, depth))
     return found[task_id]
 
 
