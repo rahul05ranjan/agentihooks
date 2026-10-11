@@ -24,9 +24,9 @@ def store():
 def seeded(store):
     store.put_agent(
         SLUG,
-        AgentRecord("worker", "eng", "t1", pane_id="w1:p1", started_at=NOW, execution_id="ex1", seat="eng-1"),
+        AgentRecord("worker", "eng", "t1", pane_id="w1:p1", started_at=NOW, execution_id="ex1", seat=f"eng-1@{SLUG}"),
     )
-    store.put_agent(SLUG, AgentRecord("other", "eng", "t2", started_at=NOW, execution_id="ex2", seat="eng-2"))
+    store.put_agent(SLUG, AgentRecord("other", "eng", "t2", started_at=NOW, execution_id="ex2", seat=f"eng-2@{SLUG}"))
     beat = {"state": "working", "accepted_at_ms": NOW - 1_000, "archive_watermark": 3}
     stale = {**beat, "archive_advanced_at_ms": NOW - 600_000}
     store.redis.hset(store.key(SLUG, "heartbeats"), mapping={"ex1": json.dumps(beat), "ex2": json.dumps(stale)})

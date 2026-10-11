@@ -45,6 +45,7 @@ def run(run_id, branch, created, ended, conclusion, queue_s=0.0):
 def stage(run_id, name, seconds, budget, pickup_s, runner):
     return {
         "ledger": SLUG,
+        "ts_ms": at(8, 30),
         "run_id": run_id,
         "attempt": 1,
         "stage": name,
@@ -205,7 +206,7 @@ def test_a_reopen_after_the_claim_does_not_move_the_ready_time():
 
 def test_time_before_the_window_is_not_counted():
     found = stages.report(every_stage(), [TASK], at(13))
-    assert found["total"] == at(9, 45) - at(9)
+    assert found["total"] == (at(9, 45) - at(9)) / 1000
     assert seconds_of(found) == {
         ("intent_fix", ""): 600.0,
         ("merge_queue", ""): 900.0,
