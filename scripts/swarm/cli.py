@@ -80,6 +80,7 @@ from scripts.swarm import (
     dispatch_seat,
     dispatcher,
     done_gate,
+    failed_panes,
     idle,
     launch_check,
     ledger_events,
@@ -839,7 +840,8 @@ def cmd_status(store, args):
     from scripts.swarm_ledger import ledger_freezes
 
     quota = quota_view.lines(capacity.read(store, args.slug), now_ms())
-    for line in ledger_freezes.lines(doc) + quota + spawn_holds(store, args.slug):
+    held = spawn_holds(store, args.slug) + failed_panes.status_lines(store, args.slug)
+    for line in ledger_freezes.lines(doc) + quota + held:
         print(line)
     print(bottleneck.line(bottleneck.read(store, args.slug), now_ms()))
     print(stages.line(stages.read(store, args.slug), now_ms()))
