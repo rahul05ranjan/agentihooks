@@ -680,22 +680,24 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/layout":
             return self.send(200, json.dumps(ledger_layout.read()), "application/json")
         if route.startswith("/api/swarm/"):
-            slug, _, view = slug.removeprefix("swarm/").partition("/")
-            if view not in ("", "models") or not self.exists(slug):
-                return self.send(404, "no such ledger", "text/plain")
-            if self.refused(slug):
-                return None
-            if view:
-                return self.send(200, json.dumps(swarm_models()), "application/json")
-            status = swarm_status(slug)
-            if status is None:
-                return self.send(404, "no swarm for this ledger", "text/plain")
-            return self.send(200, json.dumps(status), "application/json")
+            return self.get_swarm(*slug.removeprefix("swarm/").partition("/")[::2])
         if not self.exists(slug):
             return self.send(404, "no such ledger", "text/plain")
         if route.startswith("/api/"):
             return self.send(410, f"read the ledger from /api/v1/ledgers/{slug}", "text/plain")
         return self.send(200, page_for(slug), "text/html; charset=utf-8")
+
+    def get_swarm(self, slug, view):
+        if view not in ("", "models") or not self.exists(slug):
+            return self.send(404, "no such ledger", "text/plain")
+        if self.refused(slug):
+            return None
+        if view:
+            return self.send(200, json.dumps(swarm_models()), "application/json")
+        status = swarm_status(slug)
+        if status is None:
+            return self.send(404, "no swarm for this ledger", "text/plain")
+        return self.send(200, json.dumps(status), "application/json")
 
     def put_swarm(self, slug):
         if not self.exists(slug):
