@@ -96,11 +96,15 @@ def store(durable: Path, execution: str = "e1", generation: int = 2, backend=Non
     return base.ArtifactStore(backend or local.LocalBackend(durable), lambda token: granted, "grant")
 
 
-def commit(validator: model.Validator, source: git_capture.SourceCapture, checkpoint_id: str) -> model.Verdict:
+def manifest_for(checkpoint_id: str) -> dict:
     bundle = json.loads(TRANSCRIPT.read_text())
-    manifest = {**bundle["manifest"], "checkpoint_id": checkpoint_id, "operation_id": checkpoint_id}
-    validator.store.put(f"{checkpoint_id}.normalized_transcript", bundle["materials"]["normalized_transcript"].encode())
-    return git_capture.checkpoint(validator, source, manifest)
+    return {**bundle["manifest"], "checkpoint_id": checkpoint_id, "operation_id": checkpoint_id}
+
+
+def commit(validator: model.Validator, source: git_capture.SourceCapture, checkpoint_id: str) -> model.Verdict:
+    transcript = json.loads(TRANSCRIPT.read_text())["materials"]["normalized_transcript"]
+    validator.store.put(f"{checkpoint_id}.normalized_transcript", transcript.encode())
+    return git_capture.checkpoint(validator, source, manifest_for(checkpoint_id))
 
 
 def sha(text: str) -> str:
@@ -206,7 +210,7 @@ def _rejection_fixture(root: Path) -> dict:
     )
     held = keys(validator)
     try:
-        commit(validator, escaping, "ckpt-src-0002")
+        git_capture.checkpoint(validator, escaping, manifest_for("ckpt-src-0002"))
         refused_at_checkpoint = None
     except git_capture.SourceError as error:
         refused_at_checkpoint = str(error)
