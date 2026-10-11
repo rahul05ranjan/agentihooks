@@ -1,19 +1,23 @@
 {
   "package": "SV2-CKP-04",
-  "dependency": ["SV2-CKP-03"],
-  "dependents": ["SV2-CKP-05"],
+  "dependency": [
+    "SV2-CKP-03"
+  ],
+  "dependents": [
+    "SV2-CKP-05"
+  ],
   "integration_gate": "G8",
   "issue": "https://github.com/the-cloud-clockwork/agentihooks/issues/2622",
   "pull_request": null,
-  "tested_commit": "c0263fe055cf07a89e9e9ea62ead6921d020e887",
+  "tested_commit": "38cd1b349a0cb5bf3920098116956efedc9a4d5e",
   "status": "mocked-acceptance-qualified",
   "package_complete": false,
   "evidence_class": "mocked: a local durable directory backend behind a granted artifact store, fixture launch registrations, a backend wrapper that loses acknowledgements and a fake clock; no object store, worker Pod or harness was used. Live G8 qualification belongs to the integration package.",
   "interfaces": [
-    "Publisher.publish(doc, materials) refuses scope_mismatch before any upload when the manifest authority is not the granted store scope; refuses superseded_generation when a pointer of a newer task generation exists, scope_mismatch when another execution already holds a pointer of this generation, stale_sequence for a checkpoint_sequence at or below this generation's pointer, and identity_conflict when the same checkpoint id and sequence arrive with other content; otherwise it uploads every material under the immutable artifact id checkpoint_id.role, commits the manifest through Validator.commit only after every object reads back verified, checks the generation fence again, and writes one write-once pointer keyed by task generation and checkpoint_sequence",
-    "A replay of a promoted checkpoint with identical content returns promoted with reason replayed and adds nothing",
+    "Publisher.publish(doc, materials) refuses scope_mismatch before any upload when the manifest authority is not the granted store scope, invalid_sequence unless checkpoint_sequence is a non-negative integer, and identity_conflict when a manifest is already committed under the checkpoint id with other content; it refuses superseded_generation when a pointer of a newer task generation exists, scope_mismatch when another execution already holds a pointer of this generation, and stale_sequence for a checkpoint_sequence at or below this generation's pointer; otherwise it reclaims any orphan materials an interrupted attempt left under the checkpoint id, uploads every material under the immutable artifact id checkpoint_id.role, checks the generation fence, commits the manifest through Validator.commit only after every object reads back verified, checks the fence again, writes the pointer keyed by task generation and checkpoint_sequence, and checks the fence once more, reporting superseded_generation if a newer generation wrote meanwhile",
+    "A replay of a promoted checkpoint with identical content re-verifies it and returns promoted with reason replayed, adding nothing; a replay whose objects no longer verify is refused with the verification reason",
     "Publisher.latest() reads only the newest generation that holds a pointer and returns its highest sequence whose recorded manifest matches the pointer and verifies authoritative; it never falls back to an older generation, and a stale attempt cannot verify a newer generation's manifest",
-    "Publisher.sequence() gives this generation's highest pointer sequence; Publisher.reclaim(checkpoint_id) removes the material records of a checkpoint whose manifest never committed, never a newer generation's record, and keeps any object another record names",
+    "Publisher.sequence() gives this generation's highest pointer sequence; Publisher.reclaim(checkpoint_id) removes the manifest and material records of a checkpoint no pointer names, never a newer generation's record, and removes each object no other record names once",
     "Publisher.metrics() exposes checkpoint_publish_failures by reason",
     "worker.supervisor.Schedule.tick() captures and publishes when due, then stretches the next interval so capture time stays within Budget.overhead of it; a lost acknowledgement counts interrupted and the same captured checkpoint is republished under its identity on the next tick; superseded_generation stops periodic promotion",
     "Schedule.drain() publishes off schedule under its own Budget.drain deadline and Budget.drain_attempts, refusing drain_budget_exceeded when capture overruns the deadline; Schedule.metrics() adds checkpoint_age_seconds"
@@ -24,17 +28,18 @@
     "T-SV2-CKP-04-C": "evidence/SV2-CKP-04/c-result.json"
   },
   "outcomes": {
-    "observed": "the three case records lifted from proofs run 38153968595 at the tested commit, each run twice in independent fixtures with equal results",
+    "observed": "the three case records from proofs runs 38154647719 at beaba15e4 (all green) and 38155129459 at 38cd1b349 (47 tests passed; case C passed and differed from its committed record only by the added rollback rehearsal), each run twice in independent fixtures with equal results",
     "accepted": "the publisher returns promoted only after Validator.commit verifies the manifest and every inventory object",
     "committed": "a checkpoint is current only through its pointer, written after the manifest verifies",
     "externally_verified": "none: no object store or deployed worker was exercised"
   },
   "red": "Tests dispatch 38151815386 at 3f44dc961 failed collection: cannot import name publisher from scripts.swarm_v2.checkpoints",
-  "rollback": "Stop calling Schedule.tick and Schedule.drain to stop periodic promotion; pointers and manifests already written stay, so Publisher.latest keeps returning the last complete checkpoint. Lowering the checkpoint write_minor below 2 makes Validator.commit refuse promotion_disabled, which the publisher reports without writing a pointer.",
+  "rollback": "Stop calling Schedule.tick and Schedule.drain to stop periodic promotion; pointers and manifests already written stay, so Publisher.latest keeps returning the last complete checkpoint. Lowering the checkpoint write_minor below 2 makes Validator.commit refuse promotion_disabled, which the publisher reports without writing a pointer. Rehearsed in case C: with write_minor 1 a publish is refused promotion_disabled and latest stays on the last complete checkpoint; restoring write_minor promotes the same checkpoint.",
   "limitations": [
     "No production caller yet: the Pod supervisor drain path and the recovery Checkpoints listing do not call the publisher; SV2-CKP-05 owns restore decisions",
     "git_capture.checkpoint and the native checkpoint commit manifests directly and are not fenced by generation; only Publisher.publish promotes",
-    "The rollback has not been rehearsed against a deployed worker",
-    "Pointer writes rely on the backend's single object write being atomic, true for the local backend and an S3 put"
+    "The pointer write is a plain backend write after the fence checks, not a conditional create; a pointer an older generation writes in the last window is reported superseded_generation and never read by latest",
+    "The drain budget bounds the capture before publish; a publish already started is not interrupted, and a lost acknowledgement retries at the next interval",
+    "The rollback was rehearsed on the local backend only, not against a deployed worker"
   ]
 }
