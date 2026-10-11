@@ -427,7 +427,7 @@ def test_a_fresh_restore_is_recorded_before_the_registration_record(tmp_path):
     assert json.loads((attempt / "registration.json").read_text()) == AUTHORITY
 
 
-def test_the_launch_restore_runs_after_bootstrap_with_the_launch_record(tmp_path):
+def test_the_launch_restore_runs_after_bootstrap_with_the_launch_record(tmp_path, monkeypatch):
     seen = []
 
     def restoring(spec):
@@ -436,7 +436,8 @@ def test_the_launch_restore_runs_after_bootstrap_with_the_launch_record(tmp_path
 
     launch = material(tmp_path, {**RECORD, "restore": NATIVE_RESTORE})
     attempt = tmp_path / "attempts" / EXECUTION
-    start.prepare(attempt, launch, Controller((200, ANSWER)).send, None, Boot(), shipped(tmp_path), restoring=restoring)
+    monkeypatch.setattr(restore, "launched", restoring)
+    start.prepare(attempt, launch, Controller((200, ANSWER)).send, None, Boot(), shipped(tmp_path))
     assert seen == [(NATIVE_RESTORE, True)]
     recorded = json.loads((attempt / start.RESTORED).read_text())
     assert recorded == {

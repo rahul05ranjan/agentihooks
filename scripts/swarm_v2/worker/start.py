@@ -135,7 +135,6 @@ def prepare(
     boot: Callable[[worker_home.Request], dict] = worker_home.bootstrap,
     templates: Path = TEMPLATES,
     bundle: Path = BUNDLE,
-    restoring: Callable[[dict], restore.Restored | None] = restore.launched,
 ) -> dict:
     bundle = delivered(bundle)
     spec = _launch(launch, templates, bundle)
@@ -158,7 +157,7 @@ def prepare(
             bundle,
         )
     )
-    restored = restoring(spec)
+    restored = restore.launched(spec)
     worker_home.store_grant(attempt, grant)
     if restored is not None:
         _private(attempt / RESTORED, asdict(restored))
