@@ -91,14 +91,17 @@ def test_snapshot_sums_the_tree(proc):
     assert snap == sampling.Snapshot(2.5, 2, 5 * sampling.PAGE, 4 * 1024 + 3 * sampling.PAGE, {10: 10, 11: 3})
 
 
-def test_peaks_keep_maxima_and_count_cores_from_tick_deltas():
+def test_peaks_keep_maxima_and_count_cores_over_whole_windows():
+    t = sampling.TICKS
     peaks = sampling.Peaks()
     peaks.add(sampling.Snapshot(0.0, 2, 100, 80, {1: 10, 2: 10}))
-    peaks.add(sampling.Snapshot(0.5, 3, 300, 90, {1: 10 + sampling.TICKS, 2: 10, 3: sampling.TICKS // 2}))
-    peaks.add(sampling.Snapshot(1.5, 1, 50, 40, {1: 10 + 2 * sampling.TICKS}))
+    peaks.add(sampling.Snapshot(0.5, 3, 300, 90, {1: 10 + t, 2: 10, 3: t // 2}))
+    assert peaks.cores == 0.0
+    peaks.add(sampling.Snapshot(1.0, 3, 200, 85, {1: 10 + 2 * t, 2: 10 + t, 3: t}))
+    peaks.add(sampling.Snapshot(2.5, 1, 50, 40, {1: 10 + 3 * t}))
     assert (peaks.processes, peaks.rss_bytes, peaks.pss_bytes) == (3, 300, 90)
-    assert peaks.cores == pytest.approx(3.0)
-    assert peaks.ticks == {1: 10 + 2 * sampling.TICKS, 2: 10, 3: sampling.TICKS // 2}
+    assert peaks.cores == pytest.approx(4.0)
+    assert peaks.ticks == {1: 10 + 3 * t, 2: 10 + t, 3: t}
 
 
 def test_peaks_ignore_a_snapshot_at_the_same_instant():

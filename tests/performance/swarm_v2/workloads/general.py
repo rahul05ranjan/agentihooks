@@ -13,7 +13,7 @@ import sqlite3
 
 
 def _rows(seed):
-    return [{{"id": i, "name": f"row-{{seed}}-{{i}}", "tags": [str(i % 7), str(i % 11)]}} for i in range(4000)]
+    return [{"id": i, "name": f"row-{seed}-{i}", "tags": [str(i % 7), str(i % 11)]} for i in range(4000)]
 
 
 """
