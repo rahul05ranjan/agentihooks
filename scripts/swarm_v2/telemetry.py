@@ -42,7 +42,9 @@ AUDIT, SEQUENCE, EXPORTED, LATENCY, OBSERVABILITY = (
     "transition-latency",
     "observability",
 )
-_NAMED = r"[\w.-]*(?:token|secret|passw(?:or)?d|key|credential|authorization)[\w.-]*"
+_NAMED = (
+    r"[\w.-]*(?:token|secret|passw(?:or)?d|(?:api|private|access|signing|ssh)[_-]?key|credential|authorization)[\w.-]*"
+)
 SECRET = re.compile(
     r"(?i)\bbearer\s+[^\s'\",}]+"
     r"|\b(?:sk|ghp|gho|ghs|ghu|github_pat|xox[abprs])[-_][-\w]{8,}"
