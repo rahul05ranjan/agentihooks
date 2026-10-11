@@ -6,7 +6,7 @@ from unittest.mock import Mock
 import fakeredis
 import pytest
 
-from scripts.swarm import cli, model_catalog, model_pick, runtime
+from scripts.swarm import cli, default_models, model_catalog, model_pick, runtime
 from scripts.swarm.store import RedisStore, SwarmConfig, SwarmError
 from scripts.swarm_ledger import ledger_server
 
@@ -99,3 +99,24 @@ def test_launch_defaults_keep_explicit_choices(store):
         picked = runtime._lane_default(lane, "claude", {}, config)
         assert picked.model == "sonnet"
     assert runtime._lane_default("plan", "claude", {"model": "opus"}, config).model == "opus"
+
+
+@pytest.mark.parametrize("harness, expected", [("claude", "opus"), ("codex", "gpt-6.1-sol")])
+def test_missing_config_fields_use_harness_defaults(harness, expected):
+    assert default_models.model(None, harness) == expected
+
+
+def test_default_model_lookup_and_refusal_keep_harnesses_separate(store):
+    config = replace(store.config("sw"), claude_model="sonnet", codex_model="gpt-6-sol")
+    assert default_models.model(config, "claude") == "sonnet"
+    assert default_models.model(config, "codex") == "gpt-6-sol"
+    assert default_models.refusal({"claude_model": "sonnet", "codex_model": "gpt-6-sol"}, CATALOG) == ""
+    assert default_models.refusal({"max_eng": 3}, {}) == ""
+    assert (
+        default_models.refusal({"claude_model": "gpt-6-sol"}, CATALOG)
+        == "claude_model must be a model listed in the claude catalog"
+    )
+    assert (
+        default_models.refusal({"codex_model": "sonnet"}, CATALOG)
+        == "codex_model must be a model listed in the codex catalog"
+    )
