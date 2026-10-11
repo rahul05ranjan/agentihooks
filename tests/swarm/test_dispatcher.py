@@ -13,6 +13,7 @@ pytestmark = pytest.mark.xdist_group("fakeredis")
 
 SLUG = "sw"
 NOW = 1_800_000_000_000
+MASTER_NAME = "master@abcdef-0001"
 
 
 def task(task_id, phase="p1", state="open", lane="eng", **fields):
@@ -220,9 +221,10 @@ def test_at_delegate_the_top_leverage_tasks_are_ranked_high_with_a_log_row(store
 def test_an_operator_ranked_task_is_never_changed(store, home, shipped):
     store.update(SLUG, autonomy="full")
     ledger, tasks = Ledger(), ladder()
+    found = stamped(tasks, dict.fromkeys("ab", "operator"))
     tasks[0]["rank"] = "low"
     tasks[1]["rank"] = "normal"
-    dispatcher.rank_pass(SLUG, store.config(SLUG), store, ledger, doc(tasks), NOW)
+    dispatcher.rank_pass(SLUG, store.config(SLUG), store, ledger, found, NOW)
     assert ledger.ranks == [("c", "high", "dispatcher")]
 
 
@@ -273,8 +275,9 @@ def test_an_operator_low_rank_gives_up_its_place_in_the_window(store, home, ship
     tasks.append(task("w", phase="", depends_on=["t0", "t1", "t2", "t3"]))
     tasks.append(task("v", phase="", depends_on=["t0"]))
     tasks[0]["rank"], tasks[1]["rank"] = "low", "high"
+    stamps = {f"tasks/t{i}/rank": {"by": "operator"} for i in range(2)}
     ledger = Ledger()
-    dispatcher.rank_pass(SLUG, store.config(SLUG), store, ledger, doc(tasks, phases=[]), NOW)
+    dispatcher.rank_pass(SLUG, store.config(SLUG), store, ledger, doc(tasks, phases=[], _meta={"stamps": stamps}), NOW)
     assert [r[0] for r in ledger.ranks] == ["t2", "t3"]
 
 
@@ -354,16 +357,29 @@ def test_a_task_the_dispatcher_lowered_is_raised_again_when_it_regains_the_top(s
     assert ledger.ranks == [(t, "high", "dispatcher") for t in "abc"]
 
 
-def test_ranks_the_operator_or_master_set_stay_untouched_while_the_dispatcher_reorders(store, home, shipped):
+def test_the_dispatcher_reorders_ranks_a_master_set_by_hand_and_keeps_the_operator_rank(store, home, shipped):
     store.update(SLUG, autonomy="full")
-    tasks = merging()
+    tasks = [*merging(), task("e", state="claimed"), task("f")]
     tasks[0]["state"] = "done"
-    found = stamped(tasks, {"b": "master@abcdef-0001", "c": "operator", "p": None})
-    tasks[1]["rank"] = "urgent"
+    hands = {t: MASTER_NAME for t in ("b", "q", "c0", "e", "f")} | {"c": "operator"}
+    found = stamped(tasks, hands)
+    found["freezes"] = [{"verb": "focus", "target": "lane:eng"}]
+    rows = {t["id"]: t for t in tasks}
+    rows["b"]["rank"], rows["q"]["rank"], rows["p"]["rank"] = "urgent", "normal", "normal"
     ledger = Ledger()
-    dispatcher.rank_pass(SLUG, store.config(SLUG), store, ledger, found, NOW)
-    assert ledger.ranks == [("q", "high", "dispatcher")]
-    assert [t.get("rank") for t in tasks[1:5]] == ["urgent", "high", "high", "high"]
+    actions = dispatcher.rank_pass(SLUG, store.config(SLUG), store, ledger, found, NOW)
+    assert ledger.ranks == [("f", "normal", "dispatcher"), ("p", "high", "dispatcher"), ("q", "high", "dispatcher")]
+    assert actions[0] == f"lowered task f to normal: {dispatcher.UNREADY}"
+    assert [rows[t]["rank"] for t in ("b", "c", "c0", "e")] == ["urgent", "high", "high", "high"]
+
+
+def test_a_rank_with_no_recorded_author_is_the_dispatchers_to_reorder(store, home, shipped):
+    store.update(SLUG, autonomy="delegate")
+    tasks = ladder()
+    tasks[2]["rank"], tasks[3]["rank"] = "low", "high"
+    ledger = Ledger()
+    dispatcher.rank_pass(SLUG, store.config(SLUG), store, ledger, doc(tasks), NOW)
+    assert ledger.ranks == [("a", "high", "dispatcher"), ("b", "high", "dispatcher"), ("c", "high", "dispatcher")]
 
 
 def test_an_own_rank_on_a_task_no_longer_claimable_in_focus_is_lowered(store, home, shipped):

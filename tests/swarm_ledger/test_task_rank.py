@@ -208,33 +208,104 @@ def test_an_if_owned_rank_lands_on_an_unranked_task_and_reorders_its_own_rank():
     assert (rejected, rank_of(state), state["_meta"]["stamps"]["tasks/t1/rank"]["by"]) == ([], "normal", "dispatcher")
 
 
-@pytest.mark.parametrize(("by", "named"), [(MASTER, MASTER), ("operator", "operator")])
-def test_an_if_owned_rank_on_a_rank_someone_else_set_is_refused_and_names_who(by, named):
+def test_an_if_owned_rank_on_an_operator_rank_is_refused_and_names_him():
     owned_rank("high", 1)
-    core.sync(SLUG, ops=[{"op": "task_rank", "id": "g-1", "item": "tasks/t1", "rank": "urgent", "by": by}])
+    core.sync(SLUG, ops=[{"op": "task_rank", "id": "g-1", "item": "tasks/t1", "rank": "urgent"}])
     state, rejected = owned_rank("normal", 2)
     assert (rejected, rank_of(state)) == (["o-2"], "urgent")
-    assert state["_meta"]["warnings"][0] == f"task t1 has rank urgent set by {named}"
+    assert state["_meta"]["warnings"][0] == "task t1 has rank urgent set by operator"
 
 
-def test_an_if_owned_rank_on_a_rank_with_no_recorded_author_is_refused():
+@pytest.mark.parametrize("by", [MASTER, "swarm", DISPATCHER])
+def test_an_if_owned_rank_reorders_a_rank_a_master_or_the_swarm_set(by):
+    core.sync(SLUG, ops=[{"op": "task_rank", "id": "g-1", "item": "tasks/t1", "rank": "urgent", "by": by}])
+    state, rejected = owned_rank("normal", 2)
+    assert (rejected, rank_of(state), state["_meta"]["stamps"]["tasks/t1/rank"]["by"]) == ([], "normal", "dispatcher")
+
+
+def test_task_add_stamps_its_rank_so_the_dispatcher_may_reorder_a_master_rank():
     op = {"op": "task_add", "id": "add-9", "by": MASTER, "task": "t9", "title": "z", "lane": "eng", "rank": "low"}
-    core.sync(SLUG, ops=[op])
+    state, _ = core.sync(SLUG, ops=[op])
+    assert state["_meta"]["stamps"]["tasks/t9/rank"]["by"] == MASTER
+    assert "tasks/t1/rank" not in state["_meta"]["stamps"]
     guarded = {"op": "task_rank", "id": "o-9", "item": "tasks/t9", "rank": "high", "by": "dispatcher"}
     state, rejected = core.sync(SLUG, ops=[{**guarded, "if_owned": True}])
-    assert (rejected, rank_of(state, "t9")) == (["o-9"], "low")
-    assert state["_meta"]["warnings"][0] == "task t9 has rank low set by someone else"
+    assert (rejected, rank_of(state, "t9")) == ([], "high")
 
 
-def test_the_master_setting_the_same_rank_takes_it_from_the_dispatcher():
+def test_an_if_owned_rank_on_a_rank_with_no_recorded_author_lands():
+    doc, ctx = {"tasks": [{"id": "t1", "rank": "low"}]}, FakeContext()
+    ctx.refused = []
+    assert ledger_rank.apply(doc, {**page_rank("high"), "by": "dispatcher", "if_owned": True}, ctx) is True
+    assert (doc["tasks"][0]["rank"], ctx.stamps, ctx.refused) == ("high", {"tasks/t1/rank": {"by": "dispatcher"}}, [])
+
+
+def test_the_master_setting_the_same_rank_takes_it_from_the_dispatcher_who_may_reorder_it_again():
     owned_rank("high", 1)
     state, rejected = update(MASTER, "high")
     assert (rejected, state["_meta"]["stamps"]["tasks/t1/rank"]["by"]) == ([], MASTER)
-    state, rejected = owned_rank("normal", 2)
-    assert (rejected, rank_of(state)) == (["o-2"], "high")
     held = state["_meta"]["stamps"]["tasks/t1/rank"]
     state, rejected = update(MASTER, "high", 2)
     assert (rejected, state["_meta"]["stamps"]["tasks/t1/rank"]) == ([], held)
+    state, rejected = owned_rank("normal", 2)
+    assert (rejected, rank_of(state), state["_meta"]["stamps"]["tasks/t1/rank"]["by"]) == ([], "normal", "dispatcher")
+
+
+def relayed(quote, n=1, by=MASTER):
+    op = {"op": "task_update", "id": f"rel-{n}", "by": by, "item": "tasks/t1", "fields": {"rank": "high"}}
+    core.check_op({**op, "quote": quote})
+    return core.sync(SLUG, ops=[{**op, "quote": quote}])
+
+
+def test_a_rank_the_master_relays_with_the_operators_words_is_his_and_stays_fixed():
+    from hooks.context import operator_words
+
+    operator_words.record(MASTER, "Rank the login fix high, it blocks everything")
+    core.sync(SLUG, ops=[{"op": "join", "id": "j1", "by": MASTER, "role": "orchestrator"}])
+    state, rejected = relayed("rank the login fix high")
+    assert (rejected, rank_of(state), state["_meta"]["stamps"]["tasks/t1/rank"]["by"]) == ([], "high", "operator")
+    event = state["_meta"]["events"][-1]
+    assert (event["by"], event["kind"], event["relayed_by"], event["quote"]) == (
+        "operator",
+        "rank set",
+        MASTER,
+        "Rank the login fix high",
+    )
+    state, rejected = owned_rank("normal", 2)
+    assert (rejected, rank_of(state)) == (["o-2"], "high")
+
+
+@pytest.mark.parametrize("member", [None, "member"])
+def test_a_relayed_rank_without_recorded_words_or_from_a_non_orchestrator_is_refused(member):
+    from hooks.context import operator_words
+
+    operator_words.record(MASTER, "Rank the login fix high")
+    if member:
+        core.sync(SLUG, ops=[{"op": "join", "id": "j1", "by": MASTER, "role": member}])
+    state, rejected = relayed("rank the login fix high")
+    assert (rejected, rank_of(state)) == (["rel-1"], None)
+    assert state["_meta"]["warnings"][0] == ledger_tasks.UNRELAYED
+    core.sync(SLUG, ops=[{"op": "join", "id": "j2", "by": MASTER, "role": "orchestrator"}])
+    state, rejected = relayed("words he never said", 2)
+    assert (rejected, rank_of(state)) == (["rel-2"], None)
+
+
+@pytest.mark.parametrize(
+    ("quote", "fields"), [("", {"rank": "high"}), (7, {"rank": "high"}), ("his words", {"state": "open"})]
+)
+def test_a_task_update_quote_needs_words_and_a_rank(quote, fields):
+    op = {"op": "task_update", "id": "q", "by": MASTER, "item": "tasks/t1", "fields": fields, "quote": quote}
+    with pytest.raises(ValueError) as refused:
+        ledger_tasks.check(op)
+    assert str(refused.value) == "task_update takes quote, the operator's words, only with a rank"
+
+
+def test_task_set_passes_the_operators_quote_with_the_rank(monkeypatch):
+    sent = []
+    monkeypatch.setattr(ledger, "send", lambda args, kind, **f: sent.append((kind, f)))
+    argv = ["--slug", SLUG, "--as", MASTER, "task", "set", "t1", "rank=high", "--quote", "his words"]
+    ledger.cmd_task(ledger.build_parser().parse_args(argv))
+    assert sent == [("task_update", {"item": "tasks/t1", "fields": {"rank": "high"}, "quote": "his words"})]
 
 
 def test_the_rank_op_by_a_refused_author_changes_nothing_and_names_why():
