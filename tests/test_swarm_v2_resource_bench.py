@@ -151,6 +151,15 @@ def test_run_measures_each_child_count_and_repeat_in_a_fresh_workdir(tmp_path, m
     assert list(root.iterdir()) == []
 
 
+def test_run_resolves_workloads_beside_a_relative_suite_path(tmp_path, monkeypatch):
+    (tmp_path / "memory.py").write_bytes((WORKLOADS / "memory.py").read_bytes())
+    command = ["{python}", "{workloads}/memory.py", "--children", "{children}", "--mib", "8", "--hold", "0.1"]
+    suite(tmp_path, [{"name": "memory", "class": "memory", "version": "1", "children": [1], "command": command}])
+    monkeypatch.chdir(tmp_path)
+    result = bench.run(Path("suite.json"), Path("work"), generation=1, tools={})
+    assert [r["exit_code"] for r in result["runs"]] == [0]
+
+
 def test_tool_versions_record_a_missing_tool_as_absent():
     assert bench.versions({"none": ["/nonexistent/tool", "--version"]}) == {"none": "absent"}
 
