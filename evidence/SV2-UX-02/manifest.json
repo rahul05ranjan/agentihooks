@@ -1,0 +1,29 @@
+{
+  "case_runs": [
+    "https://github.com/the-cloud-clockwork/agentihooks/actions/runs/38146075058"
+  ],
+  "cases": [
+    "T-SV2-UX-02-A",
+    "T-SV2-UX-02-B",
+    "T-SV2-UX-02-C"
+  ],
+  "evidence_class": "mocked: a fake Redis swarm store holds two Kubernetes workers and one local agent; page clicks enter through the ledger server's lifecycle control with the incarnation, generation and task revision a page rendered; the hive command runner consumes the queue with its terminal commands stubbed; a worker's acknowledgement and checkpoint outcome are written through the worker command queue; no ledger HTTP server, browser, worker Pod or cluster runs",
+  "inputs": {
+    "scripts/swarm/command_runner.py": "809ad465d830d94fa429d6ace78a18806de3fa42c005dfa2e9b8ed77d78f0f09",
+    "scripts/swarm/commands.py": "4e3f9bcc728c649560b855aae625264532100a11615582d1994143c4bdef5a81",
+    "scripts/swarm/lifecycle.py": "958a587b9ddb2cf4ce67a41c047cf825f7fba9db36a4702ff2ab8100b2e14522",
+    "scripts/swarm/status.py": "ea6496e33e3d7ad248a7e12ba923c4701f39044e349d441c56fe169dafaa10ae",
+    "scripts/swarm_ledger/ledger_server.py": "fc2e3fecf743d1557abcc42f7b80b43b2d1d46f58e89d66960c66c45e235cf9a",
+    "scripts/swarm_ledger/static/js/controls.js": "92e6c640bdfeb963f87d48307ec07551638e3417b179eecf5a2320ce8bd23a24",
+    "scripts/swarm_ledger/static/js/swarm.js": "ca6b68abfe4fb45b20ac00186ba8e382e408c999bdbb3797894a2599db7baf5d",
+    "tests/e2e/swarm_v2/test_ledger_lifecycle_controls.py": "b17a8972000bdd5de85d97ed3f4c7a8c811a52fe36f06be74e97d1532b894c5f",
+    "tests/fixtures/swarm_v2/ledger-lifecycle-controls.json": "9bc3d5b7dca5c7145be7ccb44a7850c1d80ea8b2f73812e008147639a34a5ee1",
+    "tests/sv2_ux02_cases.py": "81fc348c6913afd30ec7bc03fcc5206a644e3f4ed637baf71dde74ad2c750307",
+    "tests/swarm_ledger/test_lifecycle_controls_page.py": "77fe42ebb49a6bdb4cfee7268176dc87232dd1bab1ca727051db6981df865989",
+    "tests/test_swarm_lifecycle.py": "a5022dd43baef925e39d4a3950ba4cbc0d8784095b9fe666731a13e6708e3b1f"
+  },
+  "red_runs": [
+    "https://github.com/the-cloud-clockwork/agentihooks/actions/runs/38146041030"
+  ],
+  "tested_commit": "002f377c6"
+}
