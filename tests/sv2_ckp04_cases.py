@@ -77,7 +77,7 @@ def files(root: Path) -> dict[str, bytes]:
 
 
 def pointers(root: Path) -> list[str]:
-    return sorted(path.relative_to(root).as_posix() for path in root.rglob("*") if "/pointers/" in path.as_posix())
+    return sorted(path.relative_to(root).as_posix() for path in root.rglob("*.json") if "/pointers/" in path.as_posix())
 
 
 def digest(root: Path) -> str:
