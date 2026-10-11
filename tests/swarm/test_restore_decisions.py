@@ -107,7 +107,7 @@ def _pod_agent(**changes):
     from scripts.swarm.store import AgentRecord
 
     agent = AgentRecord("sw-eng-1", "eng", "t1", conversation_id="s-1", state="awaiting-decision")
-    return replace(agent, execution_id="exe-1", runtime_backend="kubernetes", **changes)
+    return replace(agent, **{"execution_id": "exe-1", "runtime_backend": "kubernetes", **changes})
 
 
 @pytest.mark.parametrize("choice", ["resume", "fresh"])
