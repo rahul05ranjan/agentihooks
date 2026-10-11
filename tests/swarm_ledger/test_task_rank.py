@@ -213,7 +213,25 @@ def test_an_if_owned_rank_on_an_operator_rank_is_refused_and_names_him():
     core.sync(SLUG, ops=[{"op": "task_rank", "id": "g-1", "item": "tasks/t1", "rank": "urgent"}])
     state, rejected = owned_rank("normal", 2)
     assert (rejected, rank_of(state)) == (["o-2"], "urgent")
-    assert state["_meta"]["warnings"][0] == "task t1 has rank urgent set by operator"
+    assert state["_meta"]["warnings"][0] == (
+        "task t1 has a rank the operator set: relay his words with task set t1 rank=<rank> --quote"
+    )
+
+
+@pytest.mark.parametrize("kind", ["task_update", "task_rank"])
+def test_a_master_cannot_overwrite_an_operator_rank_without_his_words(kind):
+    core.sync(SLUG, ops=[{"op": "task_rank", "id": "g-1", "item": "tasks/t1", "rank": "urgent"}])
+    op = {"op": kind, "id": "m-1", "by": MASTER, "item": "tasks/t1"}
+    op |= {"fields": {"rank": "low"}} if kind == "task_update" else {"rank": "low"}
+    state, rejected = core.sync(SLUG, ops=[op])
+    assert (rejected, rank_of(state), state["_meta"]["stamps"]["tasks/t1/rank"]["by"]) == (
+        ["m-1"],
+        "urgent",
+        "operator",
+    )
+    assert state["_meta"]["warnings"][0].startswith("task t1 has a rank the operator set")
+    state, rejected = core.sync(SLUG, ops=[{"op": "task_rank", "id": "g-2", "item": "tasks/t1", "rank": "low"}])
+    assert (rejected, rank_of(state)) == ([], "low")
 
 
 @pytest.mark.parametrize("by", [MASTER, "swarm", DISPATCHER])
@@ -306,6 +324,19 @@ def test_task_set_passes_the_operators_quote_with_the_rank(monkeypatch):
     argv = ["--slug", SLUG, "--as", MASTER, "task", "set", "t1", "rank=high", "--quote", "his words"]
     ledger.cmd_task(ledger.build_parser().parse_args(argv))
     assert sent == [("task_update", {"item": "tasks/t1", "fields": {"rank": "high"}, "quote": "his words"})]
+
+
+@pytest.mark.parametrize("action", [["add", "t5", "b", "--rank", "high"], ["group", "t1", "t2"]])
+def test_only_task_set_takes_a_quote(monkeypatch, action):
+    sent = []
+    monkeypatch.setattr(ledger, "send", lambda args, kind, **f: sent.append((kind, f)))
+    argv = ["--slug", SLUG, "--as", MASTER, "task", *action, "--quote", "his words"]
+    with pytest.raises(SystemExit) as refused:
+        ledger.cmd_task(ledger.build_parser().parse_args(argv))
+    assert str(refused.value) == (
+        f"task {action[0]} takes no --quote: run task set <id> rank=<rank> --quote <his words> after it"
+    )
+    assert sent == []
 
 
 def test_the_rank_op_by_a_refused_author_changes_nothing_and_names_why():
