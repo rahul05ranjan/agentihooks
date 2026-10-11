@@ -313,7 +313,7 @@ def test_ci_after_the_agent_left_stays_ci_and_every_over_budget_job_gets_its_ove
     assert seconds_of(found) == {
         ("build", ""): 3600.0,
         ("claim_wait", ""): 1800.0,
-        ("ci_queue", ""): 600.0,
+        ("ci_queue", "anton-k3s"): 600.0,
         ("ci_overrun", "unit"): 780.0,
         ("ci_overrun", "lint"): 50.0,
         ("ci_run", ""): 2170.0,
