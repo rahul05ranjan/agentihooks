@@ -54,3 +54,18 @@ def test_a_redis_failure_during_a_tick_is_recorded_without_raising(store, tmp_pa
     monkeypatch.setattr(lease, "acquire", unavailable)
     assert cli.run_tick(store, "sw", tasks(), FakeRuntime()) == ["Redis operation failed: ConnectionError"]
     assert outage.open_records("sw")[0]["kind"] == "redis"
+
+
+def test_scheduled_tick_exits_cleanly_if_redis_drops_before_swarm_discovery(store, tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(outage, "HOME", tmp_path)
+    (tmp_path / "sw").mkdir()
+    monkeypatch.setattr(cli, "connect", lambda: store)
+    monkeypatch.setattr(cli.timer, "installed_refusal", lambda: None)
+
+    def unavailable():
+        raise ConnectionError("lost connection during discovery")
+
+    monkeypatch.setattr(store, "slugs", unavailable)
+    assert cli.main(["tick"]) == 0
+    assert outage.open_records("sw")[0]["kind"] == "redis"
+    assert "Redis operation failed: ConnectionError" in capsys.readouterr().out

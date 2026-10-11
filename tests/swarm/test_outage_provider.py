@@ -73,3 +73,30 @@ def test_an_unreadable_or_remote_pane_cannot_clear_a_provider_outage(tmp_path, m
     assert not runtime.observe(replace(agent, runtime_backend="kubernetes")).provider_checked
     outage.providers(store, "sw", runtime, 2000)
     assert outage.read("sw")["provider"]["ended_at"] is None
+
+
+@pytest.mark.parametrize("finished", [False, True])
+def test_provider_recovery_requires_a_clean_read_of_the_affected_agent(tmp_path, monkeypatch, finished):
+    monkeypatch.setattr(outage, "HOME", tmp_path)
+    store = RedisStore(fakeredis.FakeRedis(decode_responses=True))
+    store.create(SwarmConfig("sw", "/repo", 1, 1))
+    affected = AgentRecord("affected", "eng", "t1", harness="claude")
+    unrelated = AgentRecord("unrelated", "eng", "t2", harness="claude")
+    store.put_agent("sw", affected)
+    store.put_agent("sw", unrelated)
+    runtime = HerdrRuntime()
+    observations = {
+        "affected": pane.PaneObservation("idle", provider_error="API Error: 503", provider_checked=True),
+        "unrelated": pane.PaneObservation("idle", provider_checked=True),
+    }
+    monkeypatch.setattr(runtime, "observe", lambda agent: observations[agent.name])
+    outage.providers(store, "sw", runtime, 1000)
+    if finished:
+        store.put_agent("sw", replace(affected, state="finished"))
+        outage.providers(store, "sw", runtime, 2000)
+        assert outage.read("sw")["provider"]["ended_at"] is None
+    else:
+        observations["affected"] = pane.PaneObservation("idle", provider_checked=True)
+        observations["unrelated"] = pane.PaneObservation("unknown")
+        outage.providers(store, "sw", runtime, 2000)
+        assert outage.read("sw")["provider"]["ended_at"] == 2000
