@@ -30,11 +30,15 @@ class Record:
 
 def _entry(entry: dict) -> Record:
     record = Record(**entry)
+    if not isinstance(record.before, list | tuple):
+        raise ValueError(record.execution_id)
     before = tuple(record.before)
     texts = (record.execution_id, record.label, record.target, record.session, *before)
     if not all(isinstance(text, str) and text for text in texts):
         raise ValueError(record.execution_id)
-    if type(record.generation) is not int or not isinstance(record.profile_id, str | None):
+    if type(record.generation) is not int or record.generation < 1:
+        raise ValueError(record.execution_id)
+    if record.profile_id is not None and not (isinstance(record.profile_id, str) and record.profile_id):
         raise ValueError(record.execution_id)
     return replace(record, before=before)
 
@@ -88,6 +92,11 @@ class Store:
             handle.flush()
             os.fsync(handle.fileno())
         staged.replace(self.path)
+        folder = os.open(self.path.parent, os.O_RDONLY)
+        try:
+            os.fsync(folder)
+        finally:
+            os.close(folder)
 
 
 def owned(record: Record | None, machines: Iterable[Machine]) -> Machine | None:
@@ -159,6 +168,11 @@ class Registrations:
                 "stale_generation", f"{endpoint.name} is registered for generation {record.generation}"
             )
         saved = owned(record, machines)
+        if saved is not None and (saved.target, saved.session) != (endpoint.target, self.session):
+            self.drift["moved"] += 1
+            self.catalog.remove(saved.profile_id)
+            machines = tuple(machine for machine in machines if machine.profile_id != saved.profile_id)
+            return self._add(endpoint, records, machines)
         if saved is None:
             self.drift["missing"] += 1
             return self._add(endpoint, records, machines)
@@ -203,14 +217,14 @@ class Registrations:
     ) -> str:
         profile_id = self._register(endpoint, records, machines)
         try:
-            compatible = qualifier.verdict(endpoint.name, endpoint.incarnation).compatible
+            reason = "" if qualifier.verdict(endpoint.name, endpoint.incarnation).compatible else "incompatible"
         except Unreachable:
-            compatible = True
+            reason = "unreachable"
         except Incompatible:
-            compatible = False
-        if not compatible:
+            reason = "incompatible"
+        if reason:
             self._drop(records, endpoint.scope.execution_id, profile_id)
-            raise EndpointRefused("incompatible", f"{endpoint.name} serves an incompatible herdr")
+            raise EndpointRefused(reason, f"{endpoint.name} did not qualify: {reason}")
         return profile_id
 
     def reconcile(self, desired: Iterable[Endpoint], qualifier: Qualifier) -> Report:

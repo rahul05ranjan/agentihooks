@@ -10,6 +10,7 @@
     "checks": {
       "restart_restores_the_missing_registration": true,
       "restart_duplicates_nothing": true,
+      "durability_survivors_and_losses_recorded": true,
       "replay_has_no_drift": true,
       "label_drift_renamed_back": true,
       "new_generation_keeps_its_profile": true,
@@ -101,6 +102,12 @@
         "herdr_registration_drift": 1
       },
       "kept_profile_survived": true,
+      "durability": {
+        "survived": "eda75d4e8494f54c8a6fe05759524de3",
+        "lost": "eefed520946b717557bfbc5ef89d91ee",
+        "restored_as": "1fd37913c66d88de9c4405d58e184635",
+        "lost_still_saved": false
+      },
       "adds": {
         "swarm-exe-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-terminal": 1,
         "swarm-exe-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-terminal": 2

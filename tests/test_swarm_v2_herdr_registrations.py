@@ -196,9 +196,9 @@ def test_the_store_round_trips_a_private_sorted_document(tmp_path):
         "version": 1,
         "registrations": [
             {"execution_id": EXE_A, "generation": 2, "label": "a", "target": "ssh://a", "session": "default"}
-            | {"profile_id": None},
+            | {"profile_id": None, "before": []},
             {"execution_id": EXE_B, "generation": 1, "label": "b", "target": "ssh://b", "session": "default"}
-            | {"profile_id": "pb"},
+            | {"profile_id": "pb", "before": []},
         ],
     }
     assert store.path.read_text().endswith("}\n")
@@ -395,17 +395,16 @@ def test_an_empty_report_has_no_drift():
 
 
 @pytest.mark.parametrize(
-    ("outcome", "kept"), [(False, False), (Incompatible("replaced"), False), (Unreachable("x"), True)]
+    ("outcome", "reason"),
+    [(False, "incompatible"), (Incompatible("replaced"), "incompatible"), (Unreachable("x"), "unreachable")],
 )
-def test_only_an_incompatible_server_is_unregistered(tmp_path, outcome, kept):
+def test_a_server_that_does_not_qualify_is_unregistered(tmp_path, outcome, reason):
     registrations, herdr, desired = world(tmp_path)
     report = registrations.reconcile(desired[:1], Verdicts(outcome))
-    assert (EXE_A in report.registered, EXE_A in registrations.store.load(), len(herdr.machines)) == (
-        kept,
-        kept,
-        int(kept),
-    )
-    assert report.refused == ({} if kept else {EXE_A: "incompatible"})
+    assert (report.registered, registrations.store.load(), herdr.machines) == ({}, {}, [])
+    assert report.refused == {EXE_A: reason}
+    message = refusal(lambda: registrations._admit(desired[0], {}, (), Verdicts(outcome)))
+    assert message == (reason, f"{NAME_A} did not qualify: {reason}")
 
 
 def test_reconcile_retires_only_owned_profiles_and_counts_those_still_saved(tmp_path):
@@ -470,6 +469,9 @@ def test_machines_and_records_are_immutable():
         {"before": ["m1", ""]},
         {"before": [1]},
         {"before": 5},
+        {"before": "m1"},
+        {"generation": 0},
+        {"profile_id": ""},
     ],
 )
 def test_an_ownership_record_with_a_mistyped_field_is_unreadable(tmp_path, entry):
@@ -525,3 +527,30 @@ def test_withdraw_removes_only_a_recorded_registration(tmp_path):
     assert herdr.commands[-1] == ["herdr", "machine", "remove", profile]
     assert registrations.store.load() == {}
     assert registrations.drift == {"missing": 1, "retired": 1}
+
+
+def test_a_managed_profile_on_another_target_is_replaced(tmp_path):
+    registrations, herdr, desired = world(tmp_path)
+    profile = registrations.register(desired[0])
+    herdr.machines[0]["target"] = "ssh://old-namespace"
+    replaced = registrations.register(desired[0])
+    assert replaced != profile
+    assert ["herdr", "machine", "remove", profile] in herdr.commands
+    assert [m["target"] for m in herdr.machines] == [TARGET_A]
+    assert registrations.drift == {"missing": 1, "moved": 1}
+
+
+def test_the_store_syncs_the_record_before_and_its_folder_after_the_replace(tmp_path, monkeypatch):
+    store = Store(tmp_path / "registrations.json")
+    seen = []
+
+    def fsync(handle: int) -> None:
+        path = Path(os.readlink(f"/proc/self/fd/{handle}"))
+        seen.append((path, path.read_text() if path.is_file() else None, store.path.exists()))
+
+    monkeypatch.setattr(reconcile.os, "fsync", fsync)
+    store.save({})
+    assert seen == [
+        (tmp_path / ".registrations.json.tmp", '{\n  "version": 1,\n  "registrations": []\n}\n', False),
+        (tmp_path, None, True),
+    ]
