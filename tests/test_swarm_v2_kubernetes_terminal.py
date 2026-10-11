@@ -226,7 +226,7 @@ class Worker:
         if command[:3] == ["herdr", "machine", "list"]:
             return subprocess.CompletedProcess(command, 0, "[]", "")
         if command[:3] == ["herdr", "machine", "add"]:
-            return subprocess.CompletedProcess(command, 0, "saved", "")
+            return subprocess.CompletedProcess(command, 0, "Saved SSH machine p1. Remote server is ready.\n", "")
         forwarded = [*command[:2], sv2_hdr01_cases.TARGET, *command[3:]] if "--machine" in command else command
         return self.herdr(forwarded)
 
