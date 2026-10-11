@@ -127,6 +127,10 @@ def members(source: git_capture.SourceCapture) -> list[str]:
         return archive.getnames()
 
 
+def _unbundled(source: git_capture.SourceCapture) -> dict[str, bytes]:
+    return {role: data for role, data in source.materials.items() if role != model.SOURCE_BUNDLE}
+
+
 def keys(validator: model.Validator) -> list[str]:
     return validator.store.backend.keys("")
 
@@ -153,7 +157,8 @@ def _positive_fixture(root: Path) -> dict:
         "restored": after,
         "allowed_untracked_text": (target / "draft.md").read_text(),
         "prohibited_restored": (target / PROHIBITED).exists(),
-        "recaptured_materials_equal": again.materials == source.materials,
+        "recaptured_patches_and_archive_equal": _unbundled(again) == _unbundled(source),
+        "recaptured_commits_equal": (again.base_commit, again.head_commit) == (source.base_commit, source.head_commit),
         "checkpoint_source_bytes": source.metrics()[git_capture.METRIC],
     }
 
@@ -173,7 +178,8 @@ def _positive() -> tuple[dict, bool]:
         first["restored"] == original,
         first["allowed_untracked_text"] == "allowed untracked draft\n",
         not first["prohibited_restored"],
-        first["recaptured_materials_equal"],
+        first["recaptured_patches_and_archive_equal"],
+        first["recaptured_commits_equal"],
     ]
     return observed, all(checks)
 
