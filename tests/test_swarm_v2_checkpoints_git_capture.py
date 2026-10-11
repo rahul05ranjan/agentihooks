@@ -1,3 +1,4 @@
+import dataclasses
 import io
 import json
 import tarfile
@@ -46,8 +47,10 @@ def _round_trip(root: Path, source: git_capture.SourceCapture) -> Path:
     validator = model.Validator(cases.store(root / "durable"))
     assert cases.commit(validator, source, "ckpt-src-0001").authoritative
     target = cases.clone(root, "restored")
+    cases.git(target, "branch", cases.BRANCH)
     reader = model.Validator(cases.store(root / "durable", execution="e2", generation=3))
     assert git_capture.restore(reader, "ckpt-src-0001", target).authoritative
+    assert cases.git(target, "symbolic-ref", "--short", "HEAD").strip() == cases.BRANCH
     return target
 
 
@@ -158,9 +161,12 @@ def test_file_and_total_limits_are_inclusive(tmp_path):
     cases.write(work / "a.md", "12345")
     cases.write(work / "b.md", "1234")
     cases.write(work / "c.md", "123456")
-    assert _names(git_capture.capture(work, "origin/dev", git_capture.Policy(5, 9))) == ["a.md", "b.md"]
+    cases.write(work / "d.md", "1")
+    kept = git_capture.capture(work, "origin/dev", git_capture.Policy(5, 9))
+    assert _names(kept) == ["a.md", "b.md"]
+    assert kept.exclusions[-2:] == ("excluded size: 1", "excluded total: 1")
     excluded = git_capture.capture(work, "origin/dev", git_capture.Policy(5, 8))
-    assert _names(excluded) == ["a.md"]
+    assert _names(excluded) == ["a.md", "d.md"]
     assert excluded.exclusions[-2:] == ("excluded size: 1", "excluded total: 1")
 
 
@@ -296,8 +302,101 @@ def test_extraction_through_a_tracked_link_is_refused(tmp_path):
         git_capture._extract(target, [("out/planted.txt", 0o644, b"x")])
     assert str(raised.value) == git_capture.ESCAPE
     assert list(outside.iterdir()) == []
-    git_capture._extract(target, [("in/kept.txt", 0o600, b"x")])
-    assert (target / "in" / "kept.txt").stat().st_mode & 0o777 == 0o600
+    git_capture._extract(target, [("in/deep/kept.txt", 0o600, b"x")])
+    assert (target / "in" / "deep" / "kept.txt").stat().st_mode & 0o777 == 0o600
+
+
+def test_no_member_is_written_when_a_later_one_escapes(tmp_path):
+    target, outside = tmp_path / "target", tmp_path / "outside"
+    target.mkdir()
+    outside.mkdir()
+    (target / "out").symlink_to(outside)
+    with pytest.raises(git_capture.SourceError):
+        git_capture._extract(target, [("first.txt", 0o644, b"x"), ("out/planted.txt", 0o644, b"y")])
+    assert sorted(path.name for path in target.iterdir()) == ["out"]
+
+
+def _manifest(checkpoint_id: str) -> dict:
+    bundle = json.loads(cases.TRANSCRIPT.read_text())
+    return {**bundle["manifest"], "checkpoint_id": checkpoint_id, "operation_id": checkpoint_id}
+
+
+def test_checkpoint_refuses_an_escaping_archive_before_storing_anything(tmp_path):
+    source = git_capture.capture(cases.worktree(tmp_path), "origin/dev")
+    forged = dataclasses.replace(source, materials={**source.materials, git_capture.UNTRACKED: cases.forged("../x")})
+    validator = model.Validator(cases.store(tmp_path / "durable"))
+    with pytest.raises(git_capture.SourceError) as raised:
+        git_capture.checkpoint(validator, forged, _manifest("ckpt-src-0001"))
+    assert str(raised.value) == git_capture.ESCAPE
+    assert cases.keys(validator) == []
+
+
+def test_an_attempt_outside_the_manifest_authority_stores_nothing(tmp_path):
+    work = cases.worktree(tmp_path)
+    durable = tmp_path / "durable"
+    stale = model.Validator(cases.store(durable, generation=1))
+    first = git_capture.capture(work, "origin/dev")
+    assert git_capture.checkpoint(stale, first, _manifest("ckpt-src-0001")).reason == "scope_mismatch"
+    assert cases.keys(stale) == []
+    for key in ("task_id", "execution_id"):
+        manifest = _manifest("ckpt-src-0001")
+        manifest["authority"] = {**manifest["authority"], key: "other"}
+        current = model.Validator(cases.store(durable))
+        assert git_capture.checkpoint(current, first, manifest).reason == "scope_mismatch"
+        assert cases.keys(current) == []
+    cases.write(work / "draft.md", "changed after the stale attempt\n")
+    current = model.Validator(cases.store(durable))
+    assert cases.commit(current, git_capture.capture(work, "origin/dev"), "ckpt-src-0001").authoritative
+
+
+def test_a_manifest_without_authority_stores_nothing(tmp_path):
+    source = git_capture.capture(_pushed(tmp_path), "origin/dev")
+    manifest = _manifest("ckpt-src-0001")
+    del manifest["authority"]
+    validator = model.Validator(cases.store(tmp_path / "durable"))
+    assert git_capture.checkpoint(validator, source, manifest).reason == "invalid_record"
+    assert cases.keys(validator) == []
+
+
+def test_restore_refuses_a_checkpoint_without_every_source_material(tmp_path):
+    source = git_capture.capture(_pushed(tmp_path), "origin/dev")
+    validator = model.Validator(cases.store(tmp_path / "durable"))
+    transcript = json.loads(cases.TRANSCRIPT.read_text())["materials"]["normalized_transcript"]
+    validator.store.put("t.normalized_transcript", transcript.encode())
+    for role, data in source.materials.items():
+        validator.store.put(f"t.{role}", data)
+    for role in sorted(git_capture.SOURCE_ROLES):
+        doc = git_capture.merged(_manifest(f"ckpt-without-{role.replace('_', '-')}"), source)
+        del doc["inventory"][role]
+        del doc["artifact_hashes"][role]
+        assert validator.commit(doc).authoritative
+        target = cases.clone(tmp_path, role)
+        with pytest.raises(git_capture.SourceError) as raised:
+            git_capture.restore(validator, doc["checkpoint_id"], target)
+        assert str(raised.value) == git_capture.INCOMPLETE
+
+
+def test_restore_refuses_a_member_under_a_tracked_link_before_checkout(tmp_path):
+    work = _pushed(tmp_path)
+    (tmp_path / "outside").mkdir()
+    (work / "sub").mkdir()
+    (work / "sub" / "out").symlink_to(tmp_path / "outside")
+    cases.write(work / "zz.txt", "after the link\n")
+    cases.git(work, "add", "sub/out", "zz.txt")
+    cases.git(work, "commit", "-q", "-m", "tracked link")
+    source = git_capture.capture(work, "origin/dev")
+    forged = dataclasses.replace(
+        source, materials={**source.materials, git_capture.UNTRACKED: cases.forged("sub/out/planted.txt")}
+    )
+    validator = model.Validator(cases.store(tmp_path / "durable"))
+    assert cases.commit(validator, forged, "ckpt-src-0001").authoritative
+    target = cases.clone(tmp_path, "restored")
+    before = (cases.state(target), cases.git(target, "branch", "--list"))
+    with pytest.raises(git_capture.SourceError) as raised:
+        git_capture.restore(validator, "ckpt-src-0001", target)
+    assert str(raised.value) == git_capture.ESCAPE
+    assert (cases.state(target), cases.git(target, "branch", "--list")) == before
+    assert list((tmp_path / "outside").iterdir()) == []
 
 
 @pytest.mark.parametrize("case", ["a", "b", "c"])

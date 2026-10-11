@@ -184,7 +184,7 @@ def _positive() -> tuple[dict, bool]:
     return observed, all(checks)
 
 
-def _forged(name: str) -> bytes:
+def forged(name: str) -> bytes:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w", format=tarfile.GNU_FORMAT) as archive:
         info = tarfile.TarInfo(name)
@@ -201,15 +201,27 @@ def _rejection_fixture(root: Path) -> dict:
     text = json.dumps(source.fields())
     validator = model.Validator(store(root / "durable"))
     commit(validator, source, "ckpt-src-0001")
-    forged = dataclasses.replace(
-        source, materials={**source.materials, git_capture.UNTRACKED: _forged("../escape.txt")}
+    escaping = dataclasses.replace(
+        source, materials={**source.materials, git_capture.UNTRACKED: forged("../escape.txt")}
     )
-    forged_commit = commit(validator, forged, "ckpt-src-0002")
+    held = keys(validator)
+    try:
+        commit(validator, escaping, "ckpt-src-0002")
+        refused_at_checkpoint = None
+    except git_capture.SourceError as error:
+        refused_at_checkpoint = str(error)
+    checkpoint_stored = sorted(set(keys(validator)) - set(held))
+    for role, data in escaping.materials.items():
+        validator.store.put(f"ckpt-src-0003.{role}", data)
+    bundle = json.loads(TRANSCRIPT.read_text())
+    manifest = {**bundle["manifest"], "checkpoint_id": "ckpt-src-0003", "operation_id": "ckpt-src-0003"}
+    validator.store.put("ckpt-src-0003.normalized_transcript", bundle["materials"]["normalized_transcript"].encode())
+    forged_commit = validator.commit(git_capture.merged(manifest, escaping))
     target = clone(root, "restored")
     reader = model.Validator(store(root / "durable", execution="e2", generation=3))
     protected, stored = state(target), keys(reader)
     try:
-        git_capture.restore(reader, "ckpt-src-0002", target)
+        git_capture.restore(reader, "ckpt-src-0003", target)
         reason = None
     except git_capture.SourceError as error:
         reason = str(error)
@@ -221,7 +233,9 @@ def _rejection_fixture(root: Path) -> dict:
         "manifest_names_the_prohibited_file": PROHIBITED in text,
         "manifest_names_the_prohibited_value": PROHIBITED_TEXT.strip() in text,
         "manifest_names_the_link": "linked.txt" in text,
-        "forged_archive_commit": shown(forged_commit),
+        "escaping_archive_refused_at_checkpoint": refused_at_checkpoint,
+        "escaping_checkpoint_stored_keys": checkpoint_stored,
+        "escaping_archive_committed_outside_checkpoint": shown(forged_commit),
         "escape_reason": reason,
         "reason_names_the_member": reason is not None and "escape.txt" in reason,
         "target_unchanged_by_rejection": rejected_state == protected,
@@ -245,6 +259,8 @@ def _rejection() -> tuple[dict, bool]:
         not first["manifest_names_the_prohibited_file"],
         not first["manifest_names_the_prohibited_value"],
         not first["manifest_names_the_link"],
+        first["escaping_archive_refused_at_checkpoint"] == git_capture.ESCAPE,
+        first["escaping_checkpoint_stored_keys"] == [],
         first["escape_reason"] == git_capture.ESCAPE,
         not first["reason_names_the_member"],
         first["target_unchanged_by_rejection"],
