@@ -673,6 +673,20 @@ def test_resume_decision_uses_the_checkpoint_and_admits_one_replacement(world):
     assert recovery.decision(world.old.execution_id) == decision
 
 
+def test_each_recovery_event_reads_the_generation_holding_the_seat(world):
+    world.checkpoints.by_execution[world.old.execution_id] = []
+    recovery = world.recovery(world.live)
+    recovery.handle(world.old.execution_id, "evicted")
+    world.checkpoints.by_execution[world.old.execution_id] = world.fx["first"]["checkpoints"]
+    decision = recovery.decide(world.old.execution_id, "resume")
+
+    rows = [
+        (e["mode"], e["expected_generation"], e["observed_generation"], e.get("replacement", ""))
+        for e in world.live.telemetry.events(transition="recovery")
+    ]
+    assert rows == [("recovery_pending", 1, 1, ""), ("resume", 1, 2, decision.replacement)]
+
+
 def test_a_pull_that_recovers_restarts_its_grace(world):
     recovery = world.recovery(world.live)
     world.show(world.old, "image_pull")

@@ -60,7 +60,7 @@ def store(monkeypatch):
 
     store = RedisStore(fakeredis.FakeRedis(decode_responses=True))
     store.create(SwarmConfig(SLUG, "agentihooks", 1, 0))
-    monkeypatch.setattr(lease, "now_ms", lambda store: NOW)
+    monkeypatch.setattr(lease, "now_ms", lambda given: 0 if given is None else NOW)
     return store
 
 
@@ -118,6 +118,7 @@ def test_an_environment_dump_is_withheld_whole_and_two_pairs_are_kept():
     assert telemetry.sanitize_text(dump) == "[environment withheld]"
     assert telemetry.sanitize_text("os.environ({'HOME': '/root'})") == "[environment withheld]"
     assert telemetry.sanitize_text("HOME=/root PATH=/bin") == "HOME=/root PATH=/bin"
+    assert telemetry.sanitize_text("HOME=/root PATH=/bin SHELL=/bin/sh") == "[environment withheld]"
 
 
 def test_whitespace_collapses_and_long_text_is_cut_to_the_limit():
@@ -191,6 +192,23 @@ def test_every_transition_and_result_has_a_zeroed_histogram_row(store):
     assert list(histogram) == ["admission", "command", "heartbeat", "outcome", "fence", "recovery"]
     assert all(list(rows) == ["accepted", "refused", "failed"] for rows in histogram.values())
     assert histogram["fence"]["failed"] == {"buckets": dict.fromkeys(telemetry.BUCKETS, 0), "count": 0, "sum": 0.0}
+
+
+def test_a_duration_is_kept_in_whole_milliseconds(store):
+    recorder = telemetry.Telemetry(store, SLUG)
+
+    assert recorder.last_error == ""
+    assert recorder.record("command", "accepted", 2.0)["duration_ms"] == 2000
+    assert recorder.execution_transition_latency_seconds()["command"]["accepted"]["sum"] == 2.0
+
+
+def test_a_swarm_that_drops_its_exporter_reads_disabled_again(store):
+    telemetry.Telemetry(store, SLUG, cases.Exporter()).record("fence", "accepted", 0.0)
+    assert telemetry.observability(store, SLUG)["state"] == "ok"
+
+    telemetry.Telemetry(store, SLUG).record("fence", "accepted", 0.0)
+
+    assert telemetry.observability(store, SLUG)["state"] == "disabled"
 
 
 def test_a_negative_duration_counts_as_zero(store):
@@ -295,13 +313,14 @@ def test_an_audit_write_lost_after_its_sequence_is_counted_and_later_events_stil
 
     monkeypatch.setattr(store.redis, "pipeline", lambda **options: Lost(pipeline(**options)))
     assert recorder.record("fence", "accepted", 0.0) is None
+    assert recorder.record("fence", "accepted", 0.0) is None
     monkeypatch.setattr(store.redis, "pipeline", pipeline)
     recorder.record("fence", "accepted", 0.0)
     recorder.record("fence", "accepted", 0.0)
 
-    assert [event["seq"] for event in exporter.received] == [1, 3, 4]
+    assert [event["seq"] for event in exporter.received] == [1, 4, 5]
     found = telemetry.observability(store, SLUG)
-    assert (found["events"], found["unexported"], found["export_dropped"]) == (4, 0, 1)
+    assert (found["events"], found["unexported"], found["export_dropped"]) == (5, 0, 2)
 
 
 def test_a_failed_audit_write_is_kept_as_the_last_error_and_never_raised(store, monkeypatch):

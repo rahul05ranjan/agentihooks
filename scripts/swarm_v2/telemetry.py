@@ -89,7 +89,7 @@ def bucket(duration_s: float) -> str:
 
 
 def stdout(event: dict) -> None:
-    print(f"transition: {json.dumps(event, sort_keys=True)}", flush=True)
+    print(f"transition: {json.dumps(event, sort_keys=True)}")
 
 
 def configured_exporter(environ: Mapping[str, str]) -> Exporter | None:
@@ -170,11 +170,11 @@ class Telemetry:
         if audit:
             event["seq"] = int(redis.incr(self._key(SEQUENCE)))
         prefix = f"{event['transition']}|{event['result']}"
-        pipe = redis.pipeline(transaction=False)
+        pipe = redis.pipeline()
         if audit:
-            pipe.rpush(self._key(AUDIT), json.dumps(event, sort_keys=True))
+            pipe.rpush(self._key(AUDIT), json.dumps(event))
             pipe.ltrim(self._key(AUDIT), -AUDIT_LIMIT, -1)
-        pipe.hincrby(self._key(LATENCY), f"{prefix}|{bucket(duration_s)}", 1)
+        pipe.hincrby(self._key(LATENCY), f"{prefix}|{bucket(duration_s)}")
         pipe.hincrby(self._key(LATENCY), f"{prefix}|sum_ms", event["duration_ms"])
         if self.exporter is None:
             pipe.hset(self._key(OBSERVABILITY), "state", DISABLED)
@@ -182,10 +182,8 @@ class Telemetry:
         return event
 
     def _pending(self, done: int) -> list[dict]:
-        missing = int(self.store.redis.get(self._key(SEQUENCE)) or 0) - done
-        if missing <= 0:
-            return []
-        rows = [json.loads(raw) for raw in self.store.redis.lrange(self._key(AUDIT), -missing, -1)]
+        start = done - int(self.store.redis.get(self._key(SEQUENCE)))
+        rows = [json.loads(raw) for raw in self.store.redis.lrange(self._key(AUDIT), start, -1)]
         return [row for row in rows if row["seq"] > done]
 
     def _export(self) -> None:
@@ -196,8 +194,8 @@ class Telemetry:
             done = int(redis.get(self._key(EXPORTED)) or 0)
             for event in self._pending(done):
                 self.exporter(event)
-                if event["seq"] > done + 1:
-                    redis.hincrby(self._key(OBSERVABILITY), "export_dropped", event["seq"] - done - 1)
+                if gap := event["seq"] - done - 1:
+                    redis.hincrby(self._key(OBSERVABILITY), "export_dropped", gap)
                 done = event["seq"]
                 redis.set(self._key(EXPORTED), done)
             redis.hset(self._key(OBSERVABILITY), mapping={"state": OK, "exported_at_ms": lease.now_ms(self.store)})
@@ -212,7 +210,7 @@ class Telemetry:
                 key,
                 mapping={"state": DEGRADED, "last_error": self.last_error, "failed_at_ms": lease.now_ms(self.store)},
             )
-            self.store.redis.hincrby(key, "export_failures", 1)
+            self.store.redis.hincrby(key, "export_failures")
         except Exception as missed:
             self.last_error = sanitize_error(missed)
 
