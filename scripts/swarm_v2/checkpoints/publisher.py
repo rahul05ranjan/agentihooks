@@ -193,4 +193,4 @@ class Publisher:
             "manifest": asdict(self.store.recorded(checkpoint_id)),
         }
         key = scope.key("pointers", f"{scope.generation:0{WIDTH}d}", f"{sequence:0{WIDTH}d}.json")
-        self.store.backend.write(key, json.dumps(document, sort_keys=True).encode())
+        self.store.backend.write(key, json.dumps(document).encode())
