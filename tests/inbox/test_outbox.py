@@ -335,3 +335,27 @@ def test_the_tick_flushes_the_outbox_first(outage, monkeypatch):
     monkeypatch.setattr("scripts.swarm.lease.acquire", lambda *args: seen.append(outage.texts("bob")))
     assert swarm_cli.run_tick(RedisStore(outage.redis), "sw", ledger=object()) == ["the swarm belongs to another hive"]
     assert seen == [["for the tick"]]
+
+
+def test_a_record_that_fails_unexpectedly_is_set_aside_and_the_rest_replays(outage, capsys):
+    outage.down = True
+    assert run("send", "bob", "after the poison") == 0
+    poison = outbox.record("send", "alice", {"address": "bob"})
+    outbox.path().write_text(json.dumps(poison) + "\n" + outbox.path().read_text())
+    outage.down = False
+    report = outbox.flush(InboxStore(outage.redis))
+    assert ([item for item, _ in report.rejected], len(report.applied)) == ([poison["item"]], 1)
+    assert outage.texts("bob") == ["after the poison"]
+    assert records() == []
+
+
+def test_a_queued_close_matching_another_actors_close_is_refused_not_taken_as_its_own(outage, monkeypatch, capsys):
+    store = InboxStore(outage.redis)
+    asked = store.send("alice", "bob", "can you review")
+    monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", "bob")
+    outage.down = True
+    assert run("close", asked.id, "done", "answered") == 0
+    store.close(asked.id, "alice", "done", "answered")
+    outage.down = False
+    report = outbox.flush(store)
+    assert (report.already, report.rejected) == ([], [(asked.id, f"message {asked.id} is closed: done: answered")])

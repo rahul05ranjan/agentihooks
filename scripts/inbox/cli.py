@@ -20,7 +20,7 @@ from dataclasses import asdict
 from hooks.context.conditions import INBOX_SEND
 from hooks.filters import check as filters
 from scripts.inbox import links, outbox
-from scripts.inbox.store import CLOSED, DuplicateItem, InboxError, InboxStore, Unreachable, close_reason, connect
+from scripts.inbox.store import DuplicateItem, InboxError, InboxStore, Unreachable, close_reason, connect
 from scripts.swarm_ledger import ledger_comments
 
 OPERATOR = "operator"
@@ -135,10 +135,15 @@ def _apply_reply(store, me, record):
 def _apply_close(store, me, record):
     args = record["args"]
     item = store.get(record["item"])
-    if item.state in CLOSED and (item.state, item.reason) == close_reason(args["kind"], args["detail"]):
+    if (item.state, item.reason) == close_reason(args["kind"], args["detail"]) and _closed_by(store, item, me):
         raise DuplicateItem(f"message {item.id} is already closed: {item.reason}")
     item = store.close(record["item"], me, args["kind"], args["detail"])
     return {"id": item.id, "state": item.state, "reason": item.reason}
+
+
+def _closed_by(store: InboxStore, item, me: str) -> bool:
+    closing = next((entry for entry in reversed(store.history(item.id)) if "state" in entry), {})
+    return closing.get("state") == item.state and store.names.resolve(closing.get("by", "")) == store.names.resolve(me)
 
 
 APPLY = {"send": _apply_send, "reply": _apply_reply, "close": _apply_close}
@@ -172,7 +177,6 @@ def build_parser():
 
 
 def connected(cmd: str) -> InboxStore | None:
-    """None when Redis is unreachable for a command that queues in the outbox; any other command refuses."""
     try:
         return connect()
     except Unreachable:

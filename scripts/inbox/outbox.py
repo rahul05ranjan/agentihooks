@@ -1,9 +1,6 @@
-"""Local outbox for inbox writes made while Redis is unreachable.
+"""Local outbox for inbox sends, replies and closes made while Redis is unreachable, replayed in order once it returns.
 
-Append only JSON lines under the agentihooks home, one checksummed record per send, reply or close. Each record names
-the item it writes, assigned when the record is written, so a replay never writes twice. Every entry point that
-connects to the inbox flushes the outbox first, in order; a corrupt record or one Redis refuses is reported and set
-aside in the skipped file, never replayed again. A full outbox refuses the new write and keeps every queued record.
+A record names the item it writes, so a replay never writes twice; a full outbox refuses and never drops a record.
 """
 
 import fcntl
@@ -25,7 +22,10 @@ MAX_ENV = "AGENTIHOOKS_INBOX_OUTBOX_MAX_BYTES"
 WARN_ENV = "AGENTIHOOKS_INBOX_OUTBOX_WARN_BYTES"
 DEFAULT_MAX_BYTES = 1_048_576
 DEFAULT_WARN_BYTES = 786_432
-QUEUED = "agentihooks msg: Redis is unreachable; the message is queued locally and replays when Redis returns"
+QUEUED = (
+    "agentihooks msg: Redis is unreachable; the message is queued locally and replays when Redis returns, "
+    "where its address is checked; a refused replay is reported and kept in the skipped outbox"
+)
 
 
 class OutboxFull(InboxError):
@@ -99,9 +99,9 @@ def locked(blocking=True):
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
-def append(entry: dict, environ=None) -> None:
+def append(entry: dict) -> None:
     line = json.dumps(entry, sort_keys=True) + "\n"
-    limit, warn = bounds(environ)
+    limit, warn = bounds()
     with locked():
         size = path().stat().st_size if path().exists() else 0
         grown = size + len(line.encode())
@@ -121,7 +121,6 @@ def append(entry: dict, environ=None) -> None:
 
 
 def submit(store, entry: dict, apply) -> dict:
-    """Apply entry now when Redis answers and nothing waits ahead of it, else queue it in the outbox."""
     from redis.exceptions import RedisError
 
     if store is not None and not waiting():
@@ -167,7 +166,7 @@ def _replay(store, report: Report) -> None:
             _rewrite(lines[index:])
             report.left = len(lines) - index
             return
-        except InboxError as exc:
+        except Exception as exc:  # noqa: BLE001  one poisoned record must not block every later connection
             _set_aside(line, str(exc))
             report.rejected.append((entry["item"], str(exc)))
     _rewrite([])
