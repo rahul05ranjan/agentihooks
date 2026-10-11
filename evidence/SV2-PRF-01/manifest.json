@@ -1,18 +1,21 @@
 {
   "package": "SV2-PRF-01",
-  "tested_commit": "fc61d6a2bf62fbca63aed1d1e641003643a286f8",
-  "measured_commit": "9122150d620de942b10046f8e9d9d976c4d0cb76",
+  "tested_commit": "a46b8e125cbe46af1e5474a29c288c03649b27f5",
+  "measured_commit": "50eca72cb031bc0669440c8f48fd8dff63194e68",
   "inputs": {
-    "tests/fixtures/swarm_v2/worker-resources/measurements.json": "70c4d31a3bfc4365abb5047663ec606fbd5785efa3e644ca0e25596d4cd799ab",
-    "tests/fixtures/swarm_v2/worker-resources/update.json": "49d000237be74dc0c610a9c8ca8f5b61f13ef5677646a47587f7983fa206f27d",
-    "tests/fixtures/swarm_v2/worker-resources/nodes.json": "09216bf5c06d80e03ab661b93e7b020cc8fd5f2f6b833cc25c5a0ac409e237ff",
+    "tests/fixtures/swarm_v2/worker-resources/measurements.json": "2adc417acd6570a5a198fc88fb89d7f6b1daf9934d1fde9aae861790e4a0c9d4",
+    "tests/fixtures/swarm_v2/worker-resources/repeat.json": "45d1f5fa534a3b09036cd7d580e6f512d957d43927aeb727347bd56bb19175aa",
+    "tests/fixtures/swarm_v2/worker-resources/update.json": "03162fab18f4c685812e9d06a0b585efa43a243450a32c07515918d73f50e85d",
+    "tests/fixtures/swarm_v2/worker-resources/nodes.json": "74b07c4f56bb476f57707b29aca310d35a40f2841a6bfa685811cd613feb1e7a",
     "tests/fixtures/swarm_v2/worker-resources/disclosure.json": "5619b504a31319971f751190ca09241f1e9ac8bef2c9454d660f46662d65041c",
-    "tests/performance/swarm_v2/workloads/suite.json": "4dc097b09fb184df9a3e9fd889421bbea50c2026cf22fa13173b1069ef354b9c",
+    "tests/performance/swarm_v2/workloads/suite.json": "c8a7be21dd67762ed06f08b43e943dbd51a9eb63e180766810350c3525b3ad70",
     "tests/performance/swarm_v2/workloads/suite-update.json": "72559460df0f2d2370c9ad99e5f42af845cf62805703a8bf44363d3bd94c52e2",
     "tests/performance/swarm_v2/workloads/general.py": "707735e2a52b9f88096d75510b3d02ec1fb17e4b894785f44563c6388305251d",
-    "tests/performance/swarm_v2/workloads/compiler.py": "7712d7576451b013e141d0895137347e608d9d2f93c9275a3a919a17be6c4917",
-    "tests/performance/swarm_v2/workloads/browser.py": "bef5f3acdee2343ee1053c9f87f19fb9dda1f138583b47a37031e18ae655fff3",
+    "tests/performance/swarm_v2/workloads/compiler.py": "757c054de710818c3454f4adb1fa69f6a2a50f17d7beddf47712dfe831bd4da8",
+    "tests/performance/swarm_v2/workloads/browser.py": "1d72b514691125d9f71f73b8128fa2a12a8cae6a7ccc8b5732389129732f1531",
     "tests/performance/swarm_v2/workloads/memory.py": "d45dd766ca8fc33fc2da17d41d8c9392369486334d6dfc587bc2fcc5c62e58e3",
-    "tests/performance/swarm_v2/workloads/idle.py": "fa5992c463e78783ea4484c6b0ad0aa907525f3c767e737c025ff4135dce4a03"
+    "tests/performance/swarm_v2/workloads/idle.py": "fa5992c463e78783ea4484c6b0ad0aa907525f3c767e737c025ff4135dce4a03",
+    "scripts/swarm_v2/resource_sampling.py": "d7502dd5c5b42e8cca8c70cc5c933c230e69ee893ef675377db2f806807fa108",
+    "scripts/swarm_v2/resource_bench.py": "eca89be179a50a6cb4d3337e055a02d496ba3a4e3b2901595758d83858f9ec27"
   }
 }
