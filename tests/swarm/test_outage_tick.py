@@ -36,9 +36,7 @@ def test_a_tick_records_redis_failure_and_recovery_before_its_work(store, tmp_pa
             raise ConnectionError("unreachable")
 
         broken.setattr(store.redis, "ping", unavailable)
-        assert cli.run_tick(store, "sw", tasks(), FakeRuntime()) == [
-            "Redis ping check failed: ConnectionError"
-        ]
+        assert cli.run_tick(store, "sw", tasks(), FakeRuntime()) == ["Redis ping check failed: ConnectionError"]
     assert outage.read("sw")["redis"]["started_at"] == 1000
     monkeypatch.setattr(cli, "now_ms", lambda: 2000)
     cli.run_tick(store, "sw", tasks(), FakeRuntime())
