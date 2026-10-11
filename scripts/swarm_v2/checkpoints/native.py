@@ -2,11 +2,12 @@
 
 import io
 import json
+import os
 import re
 import sqlite3
 import tarfile
 from collections import Counter
-from contextlib import closing
+from contextlib import closing, suppress
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Protocol
@@ -28,7 +29,9 @@ EXCLUSIONS = (
 )
 FORMAT = "native_format_changed"
 BUSY = "database_busy"
+TOO_LARGE = "native_too_large"
 ESCAPE = "native_member_escapes_home"
+UNREADABLE = "native_unreadable"
 VERSION = re.compile(r"(\d+)\.(\d+)\.\d+")
 MEMBER_MODE = 0o600
 
@@ -51,7 +54,12 @@ class Unavailable:
             "continuation": model.CONTEXT,
             "native_resume_capability": "unsupported",
             "native_session_id": None,
-            "native_resume": {"outcome": self.outcome, "harness": self.harness, "cause": self.cause},
+            "native_resume": {
+                "outcome": self.outcome,
+                "harness": self.harness,
+                "cause": self.cause,
+                "decision": list(self.decision),
+            },
         }
 
 
@@ -93,6 +101,10 @@ class NativeCapture:
             "native_resume": {"outcome": CAPTURED, "harness": self.harness},
         }
 
+    @property
+    def outcome(self) -> str:
+        return CAPTURED
+
 
 class Harness(Protocol):
     name: str
@@ -107,7 +119,7 @@ class Harness(Protocol):
 
 
 def line(version_text: str) -> str | None:
-    found = VERSION.search(version_text or "")
+    found = VERSION.search(version_text)
     return f"{found[1]}.{found[2]}" if found else None
 
 
@@ -152,8 +164,13 @@ class Claude:
         return files
 
     def identity(self, files: dict[str, bytes]) -> tuple[str, str]:
-        records = _records(files.get(self.conversation, b""))
-        sessions = {r["sessionId"] for r in records if "sessionId" in r}
+        if self.conversation not in files:
+            raise NativeError(FORMAT)
+        records = _records(files[self.conversation])
+        named = [r["sessionId"] for r in records if "sessionId" in r]
+        if not all(isinstance(session, str) for session in named):
+            raise NativeError(FORMAT)
+        sessions = set(named)
         versions = [r["version"] for r in records if isinstance(r.get("version"), str)]
         if len(sessions) != 1 or not versions:
             raise NativeError(FORMAT)
@@ -169,37 +186,46 @@ class Claude:
         return ("claude", "--resume", session_id)
 
 
+def _unlinked(root: Path, path: Path) -> Path:
+    """A path under root, reached through no link, resolved; anything else is refused as an escape."""
+    for base in (root, root.resolve()):
+        if path.is_relative_to(base):
+            relative = PurePosixPath(path.relative_to(base).as_posix())
+            if _linked(base, relative):
+                raise NativeError(ESCAPE)
+            try:
+                return contain(base, relative)
+            except LayoutError as error:
+                raise NativeError(ESCAPE) from error
+    raise NativeError(ESCAPE)
+
+
 class Codex:
     name = "codex"
     index = "state_5.sqlite"
     prefix = "rollout"
 
     def _indexed(self, home: Path, session_id: str) -> str | None:
-        """The thread index is read through SQLite's online backup, never by copying a database another process writes."""
+        """One read that never waits on a writer's lock; SQLite's online backup retries forever on a locked source."""
         db = home / self.index
         if not db.is_file():
             return None
         try:
             with closing(sqlite3.connect(f"{db.resolve().as_uri()}?mode=ro", uri=True, timeout=0)) as source:
-                with closing(sqlite3.connect(":memory:")) as copy:
-                    source.backup(copy)
-                    row = copy.execute("SELECT rollout_path FROM threads WHERE id = ?", (session_id,)).fetchone()
-        except sqlite3.OperationalError as error:
-            raise NativeError(BUSY if "locked" in str(error) or "busy" in str(error) else FORMAT) from error
+                row = source.execute("SELECT rollout_path FROM threads WHERE id = ?", (session_id,)).fetchone()
+        except sqlite3.DatabaseError as error:
+            raise NativeError(BUSY if "locked" in str(error) else FORMAT) from error
         return row[0] if row else None
 
     def _rollout(self, home: Path, session_id: str) -> Path:
         sessions = home / "sessions"
         indexed = self._indexed(home, session_id)
         if indexed:
-            try:
-                return contain(sessions, indexed)
-            except LayoutError as error:
-                raise NativeError(ESCAPE) from error
+            return _unlinked(sessions, sessions / indexed)
         found = sorted(sessions.glob(f"*/*/*/rollout-*-{session_id}.jsonl"))
         if len(found) != 1:
             raise NativeError("conversation_absent")
-        return found[0].resolve()
+        return _unlinked(sessions, found[0])
 
     def collect(self, home: Path, session_id: str, cwd: Path) -> dict[str, bytes]:
         path = self._rollout(home, session_id)
@@ -236,13 +262,43 @@ def _members(data: bytes) -> dict[str, bytes]:
                 expanded += info.size
                 parts = PurePosixPath(info.name).parts
                 if len(found) >= ARCHIVE_MEMBERS or expanded > ARCHIVE_BYTES:
-                    raise NativeError(FORMAT)
+                    raise NativeError(TOO_LARGE)
                 if not info.isreg() or info.name.startswith("/") or ".." in parts:
                     raise NativeError(ESCAPE)
                 found[info.name] = archive.extractfile(info).read()  # NOSONAR: bounded above
     except tarfile.TarError as error:
         raise NativeError(FORMAT) from error
     return found
+
+
+def _write_new(path: Path, data: bytes, created: list[Path]) -> None:
+    """Every directory and file this creates is appended to created, so a failed placement removes exactly them."""
+    missing = [parent for parent in reversed(path.parents) if not parent.exists()]
+    for folder in missing:
+        folder.mkdir()
+        created.append(folder)
+    handle = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, MEMBER_MODE)
+    created.append(path)
+    with os.fdopen(handle, "wb") as out:
+        out.write(data)
+
+
+def _remove(created: list[Path]) -> None:
+    for path in reversed(created):
+        with suppress(OSError):
+            if path.is_dir() and not path.is_symlink():
+                path.rmdir()
+            else:
+                path.unlink()
+
+
+def _linked(root: Path, relative: PurePosixPath) -> bool:
+    current = root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            return True
+    return False
 
 
 def _granted(scope: Scope, authority: dict) -> bool:
@@ -265,6 +321,41 @@ def merged(manifest: dict, native: "NativeCapture | Unavailable") -> dict:
     }
 
 
+def _unqualified(harness: str, version_text: str, qualified: dict[str, tuple[str, ...]]) -> str | None:
+    if harness not in HARNESSES:
+        return "unqualified_harness"
+    return None if line(version_text) in qualified.get(harness, ()) else "unqualified_version"
+
+
+def capture(
+    harness: str,
+    home: Path,
+    session_id: str,
+    cwd: Path,
+    version_text: str,
+    stopped: bool,
+    qualified: dict[str, tuple[str, ...]] = QUALIFIED,
+) -> "NativeCapture | Unavailable":
+    if problem := _unqualified(harness, version_text, qualified):
+        return Unavailable(harness, problem)
+    native = HARNESSES[harness]
+    try:
+        files = native.collect(home, session_id, cwd)
+        found, recorded = native.identity(files)
+    except NativeError as error:
+        return Unavailable(harness, str(error))
+    except OSError:
+        return Unavailable(harness, UNREADABLE)
+    if found != session_id:
+        return Unavailable(harness, "identity_mismatch")
+    if line(recorded) != line(version_text):
+        return Unavailable(harness, "version_changed")
+    if len(files) > ARCHIVE_MEMBERS or sum(map(len, files.values())) > ARCHIVE_BYTES:
+        return Unavailable(harness, TOO_LARGE)
+    quiescence = "stopped_process" if stopped else "consistent_export"
+    return NativeCapture(harness, recorded, session_id, tuple(sorted(files.items())), quiescence)
+
+
 class Qualifier:
     """Captures and restores one harness conversation through the attempt's granted store, counting each outcome.
     An empty qualification table disables native resume and leaves context continuation as the only path."""
@@ -277,32 +368,14 @@ class Qualifier:
     def metrics(self) -> dict[str, dict[str, int]]:
         return {METRIC: dict(self.outcomes)}
 
-    def _qualified(self, harness: str, version_text: str) -> str | None:
-        if harness not in HARNESSES:
-            return "unqualified_harness"
-        return None if line(version_text) in self.qualified.get(harness, ()) else "unqualified_version"
-
     def _count(self, harness: str, result):
         self.outcomes[f"{harness}/{result.outcome}"] += 1
         return result
 
-    def capture(self, harness: str, home: Path, session_id: str, cwd: Path, version_text: str, stopped: bool):
-        if problem := self._qualified(harness, version_text):
-            return self._count(harness, Unavailable(harness, problem))
-        native = HARNESSES[harness]
-        try:
-            files = native.collect(home, session_id, cwd)
-            found, recorded = native.identity(files)
-        except NativeError as error:
-            return self._count(harness, Unavailable(harness, str(error)))
-        if found != session_id:
-            return self._count(harness, Unavailable(harness, "identity_mismatch"))
-        if line(recorded) != line(version_text):
-            return self._count(harness, Unavailable(harness, FORMAT))
-        quiescence = "stopped_process" if stopped else "consistent_export"
-        captured = NativeCapture(harness, recorded, session_id, tuple(sorted(files.items())), quiescence)
-        self.outcomes[f"{harness}/{CAPTURED}"] += 1
-        return captured
+    def capture(
+        self, harness: str, home: Path, session_id: str, cwd: Path, version_text: str, stopped: bool
+    ) -> "NativeCapture | Unavailable":
+        return self._count(harness, capture(harness, home, session_id, cwd, version_text, stopped, self.qualified))
 
     def checkpoint(self, native: "NativeCapture | Unavailable", manifest: dict) -> model.Verdict:
         """The native material is stored before the manifest; an unavailable capture commits a context continuation."""
@@ -326,7 +399,7 @@ class Qualifier:
             return self._count(harness, Unavailable(harness, "context_only"))
         if line(version_text) != line(doc["native_harness_version"]):
             return self._count(harness, Unavailable(harness, "version_changed"))
-        if problem := self._qualified(harness, version_text):
+        if problem := _unqualified(harness, version_text, self.qualified):
             return self._count(harness, Unavailable(harness, problem))
         try:
             return self._count(harness, self._place(HARNESSES[harness], doc, home, cwd))
@@ -340,16 +413,22 @@ class Qualifier:
         if native.identity(members)[0] != session_id:
             raise NativeError("identity_mismatch")
         try:
-            targets = [(contain(home, native.placed(session_id, cwd, name)), data) for name, data in members.items()]
-        except (LayoutError, ValueError) as error:
+            placed = [(native.placed(session_id, cwd, name), data) for name, data in members.items()]
+        except ValueError as error:
             raise NativeError(ESCAPE) from error
+        targets = [(_unlinked(home, home / relative), data) for relative, data in placed]
         if any(path.exists() for path, _ in targets):
             raise NativeError("conversation_present")
-        for path, data in targets:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(data)
-            path.chmod(MEMBER_MODE)
-        found, _ = native.identity(native.collect(home, session_id, cwd))
-        if found != session_id:
-            raise NativeError("identity_mismatch")
+        created: list[Path] = []
+        try:
+            for path, data in targets:
+                _write_new(path, data, created)
+            if native.identity(native.collect(home, session_id, cwd))[0] != session_id:
+                raise NativeError("identity_mismatch")
+        except NativeError:
+            _remove(created)
+            raise
+        except OSError as error:
+            _remove(created)
+            raise NativeError("placement_failed") from error
         return Resumed(native.name, session_id, native.command(session_id))
