@@ -43,7 +43,8 @@ export function unresolved() {
 
 function keep(map) {
   try {
-    sessionStorage.setItem(LIFECYCLE_KEY, JSON.stringify(map));
+    if (Object.keys(map).length) sessionStorage.setItem(LIFECYCLE_KEY, JSON.stringify(map));
+    else sessionStorage.removeItem(LIFECYCLE_KEY);
   } catch (e) {}
 }
 
