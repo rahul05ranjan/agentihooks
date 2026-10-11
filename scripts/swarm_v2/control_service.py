@@ -9,6 +9,7 @@ from scripts.hive import auth as hive_auth
 from scripts.swarm import lease, ledger_host
 from scripts.swarm.ledger_client import LedgerClient
 from scripts.swarm.store import AgentRecord, RedisStore, SwarmError
+from scripts.swarm_ledger import ledger_link
 from scripts.swarm_ledger.repository.sqlite import DATABASE, SQLiteLedgerRepository
 from scripts.swarm_v2 import deployed, ledger_writer, operator_auth, telemetry
 from scripts.swarm_v2.api import health
@@ -21,6 +22,7 @@ from scripts.swarm_v2.controller import Controller
 from scripts.swarm_v2.herdr.attach import ClientHome
 from scripts.swarm_v2.herdr.capabilities import runner
 from scripts.swarm_v2.herdr.upkeep import Upkeep, switched_on
+from scripts.swarm_v2.hosted_ledger import HostedLedger
 from scripts.swarm_v2.kubernetes import operator_terminal
 from scripts.swarm_v2.kubernetes.client import ApiRefused
 from scripts.swarm_v2.kubernetes.runtime import PodStatus
@@ -122,6 +124,7 @@ class ControlService:
         self.tasks_api: TasksAPI | None = None
         self.writer: ledger_writer.WriterLease | None = None
         self.ledger_folder: Path | None = None
+        self.hosted_ledger: HostedLedger | None = None
 
     def start(self) -> bool:
         if not self.controller.acquire():
@@ -163,6 +166,8 @@ class ControlService:
 
     def _open(self) -> None:
         if self.listen is not None and self.server is None:
+            if self.hosted_ledger is not None and self.tasks_api is None:
+                self.tasks_api = TasksAPI(self.grants, self.tasks, self.hosted_ledger)
             if self.ledger_folder is not None and self.tasks_api is None:
                 self.mount_ledger(self.ledger_folder)
             self.serve(*self.listen)
@@ -217,6 +222,9 @@ def host(environ: Mapping[str, str], store: RedisStore, owner: str) -> ControlSe
     if not port.isdigit() or not 0 < int(port) <= MAX_PORT:
         raise ControlError(f"{PORT_ENV} must be a port number")
     credential = environ.get(CREDENTIAL_ENV)
+    hosted = ledger_link.remote(environ)
+    if hosted and not credential:
+        raise ControlError(f"the hosted ledger needs {CREDENTIAL_ENV}")
     workers = deployed.Workers.from_environ(environ, slug)
     transports = () if workers is None else (workers.transport(environ, slug),)
     service = ControlService(
@@ -237,7 +245,10 @@ def host(environ: Mapping[str, str], store: RedisStore, owner: str) -> ControlSe
         service.recover = deployed.recovery_pass(service, workers, transports[0].api, LedgerClient())
         if service.controller.terminals is not None:
             service.views = deployed.terminal_views(service.controller, environ)
-    service.ledger_folder = ledger_host.folder(environ)
+    if hosted:
+        service.hosted_ledger = HostedLedger(ledger_link.base(environ), credential, store)
+    else:
+        service.ledger_folder = ledger_host.folder(environ)
     try:
         service.start()
     except BaseException:
