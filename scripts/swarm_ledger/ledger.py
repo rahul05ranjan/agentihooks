@@ -669,7 +669,7 @@ def cmd_hierarchy(args) -> None:
 
 
 def refuse_unset_quote(args):
-    if args.quote and args.action != "set":
+    if getattr(args, "quote", "") and args.action != "set":
         sys.exit(f"task {args.action} takes no --quote: run task set <id> rank=<rank> --quote <his words> after it")
 
 
@@ -741,7 +741,7 @@ def cmd_task(args):
             sys.exit(f"task set takes {name}=VALUE or {name}.KEY=VALUE pairs, not both")
         fields.setdefault(name, {})[sub] = fields.pop(dotted)
     refuse_plain_objects(fields)
-    quoted = {"quote": args.quote} if args.quote else {}
+    quoted = {"quote": args.quote} if getattr(args, "quote", "") else {}
     send(args, "task_update", item=f"tasks/{args.id}", fields=fields, **quoted)
     print(json.dumps({"task": args.id, **fields}))
 

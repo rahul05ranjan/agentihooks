@@ -99,7 +99,8 @@ def rank_pass(slug, config, store, ledger, doc, now_ms):
     ]
     if config.autonomy in APPLIES:
         mine = owned | (claimable - fixed)
-        stale = [t for t in doc["tasks"] if t["id"] in mine and t.get("rank") in WINDOW[1:] and _open(t)]
+        held = partial(_claimable_at, LOWER, known, doc, graph, fix)
+        stale = [t for t in doc["tasks"] if t["id"] in mine and _open(t) and _lowerable(t, held)]
         lowers = [(t, _why(t["id"], queue, scores, claimable)) for t in stale if t["id"] not in top]
         steps = [partial(_lower, slug, ledger, *row) for row in lowers]
         steps += [partial(_raise, slug, ledger, *row) for row in raises]
@@ -139,6 +140,16 @@ def _why(task_id, queue, scores, claimable):
     if task_id in queue:
         return OUTRANKED.format(work=_work(scores[task_id]), top=TOP)
     return IDLE if task_id in claimable else UNREADY
+
+
+def _lowerable(task, claimable_at_lower):
+    return task.get("rank") == RANK or task.get("rank") == "urgent" and claimable_at_lower(task)
+
+
+def _claimable_at(rank, known, doc, graph, fix, task):
+    from scripts.swarm import tick
+
+    return tick.ready({**task, "rank": rank}, known, doc, graph, fix)
 
 
 def _comment(slug, ledger, task, text):
