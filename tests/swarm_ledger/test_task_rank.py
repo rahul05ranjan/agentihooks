@@ -308,6 +308,30 @@ def test_a_relayed_rank_without_recorded_words_or_from_a_non_orchestrator_is_ref
     assert (rejected, rank_of(state)) == (["rel-2"], None)
 
 
+@pytest.mark.parametrize("quote", ["high", "the login fix", "Rank the login"])
+def test_a_relayed_rank_needs_three_of_his_words_naming_the_rank(quote):
+    from hooks.context import operator_words
+
+    operator_words.record(MASTER, "Rank the login fix high, it blocks everything")
+    core.sync(SLUG, ops=[{"op": "join", "id": "j1", "by": MASTER, "role": "orchestrator"}])
+    state, rejected = relayed(quote)
+    assert (rejected, rank_of(state), state["_meta"]["warnings"][0]) == (["rel-1"], None, ledger_tasks.UNRELAYED)
+
+
+@pytest.mark.parametrize(
+    ("rank", "words", "named"),
+    [
+        ("urgent", "do this one next please", True),
+        ("urgent", "make it urgent now", True),
+        ("high", "make it highest now", False),
+        ("low", "low", False),
+        ("normal", "leave it at normal", True),
+    ],
+)
+def test_quoted_needs_three_words_and_the_rank_or_its_alias(rank, words, named):
+    assert ledger_rank.quoted(rank, words) is named
+
+
 @pytest.mark.parametrize(
     ("quote", "fields"), [("", {"rank": "high"}), (7, {"rank": "high"}), ("his words", {"state": "open"})]
 )

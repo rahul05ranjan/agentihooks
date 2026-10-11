@@ -64,8 +64,8 @@ RANK_AUTHORS = ("operator", SWARM, "dispatcher")
 RANK_LANES = ("master", "dispatch")
 QUOTED = "task_update takes quote, the operator's words, only with a rank"
 UNRELAYED = (
-    "a rank relay needs the ledger's orchestrator and words the hooks recorded from the operator: "
-    "set the rank without a quote or quote his exact words"
+    "a rank relay needs the ledger's orchestrator and at least three words the hooks recorded from the operator "
+    "that name the rank: set the rank without a quote or quote his exact words"
 )
 PROPOSE = 'propose the work with agentihooks ledger followup add "<plain words>" and the master decides'
 PUBLISH = (
@@ -487,11 +487,11 @@ def _relay_rank(doc, op, ctx):
     task = next((t for t in doc.get("tasks", []) if t["id"] == op["item"].split("/")[1]), None)
     if task is None:
         return False
-    words = relayed(op, ctx.meta)
-    if refusal := update_refusal(doc, op, ctx.meta) or ("" if words else UNRELAYED):
+    rank, words = ledger_rank.canonical(op["fields"]["rank"]), relayed(op, ctx.meta)
+    named = ledger_rank.quoted(rank, words)
+    if refusal := update_refusal(doc, op, ctx.meta) or ("" if named else UNRELAYED):
         ctx.refused.append(refusal)
         return False
-    rank = ledger_rank.canonical(op["fields"]["rank"])
     task["rank"] = rank
     ctx.stamp(f"{op['item']}/rank", ledger_rank.OPERATOR)
     marks = {"relayed_by": op["by"], "relayed_from": RELAYED_FROM, "quote": words}

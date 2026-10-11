@@ -9,6 +9,7 @@ RANKS = ("urgent", "high", "normal", "low")
 ALIASES = {"next": "urgent"}
 DEFAULT = "normal"
 OPERATOR = "operator"
+QUOTE_WORDS = 3
 OPS = ("task_rank",)
 ITEM_RE = re.compile(r"^tasks/[^/]+$")
 
@@ -68,3 +69,9 @@ def pinned(task_id, owner, by) -> str:
     if owner != OPERATOR or by == OPERATOR:
         return ""
     return f"task {task_id} has a rank the operator set: relay his words with task set {task_id} rank=<rank> --quote"
+
+
+def quoted(rank, words) -> bool:
+    said = set(re.findall(r"[a-z]+", words.lower()))
+    names = {rank} | {alias for alias, target in ALIASES.items() if target == rank}
+    return len(words.split()) >= QUOTE_WORDS and bool(names & said)
