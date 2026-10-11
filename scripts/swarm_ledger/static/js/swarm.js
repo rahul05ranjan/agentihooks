@@ -16,6 +16,8 @@ const VERDICT_TEXT = { "false-positive": "FP", "early-real": "early real", estab
 export let swarm = null;
 let swarmReadError = false;
 export let pending = "";
+const LIFECYCLE_KEY = `lifecycle:${SLUG}`;
+const RECONCILING = "waiting to reconcile an earlier control by its operation id";
 
 export let capDraft = {};
 export let overlayDraft = {};
@@ -25,8 +27,48 @@ export function receiveSwarm(sw) {
   if (swarmReadError && !pending) $("swarm-note").textContent = "";
   swarmReadError = false;
   clearNoteError();
+  const resend = reconcile(sw);
   renderSwarm(sw);
   renderChatTo(sw);
+  if (resend && !pending) swarmControl(resend, resend.control);
+}
+
+export function unresolved() {
+  try {
+    return JSON.parse(sessionStorage.getItem(LIFECYCLE_KEY) || "{}");
+  } catch (e) {
+    return {};
+  }
+}
+
+function keep(map) {
+  try {
+    sessionStorage.setItem(LIFECYCLE_KEY, JSON.stringify(map));
+  } catch (e) {}
+}
+
+function settle(body) {
+  const map = unresolved();
+  if (body.action !== "lifecycle" || !map[body.agent] || map[body.agent].op !== body.op) return;
+  delete map[body.agent];
+  keep(map);
+}
+
+function reconcile(sw) {
+  const known = new Set(((sw.lifecycle && sw.lifecycle.operations) || []).map((o) => o.op)), map = unresolved();
+  const open = Object.values(map).filter((body) => !known.has(body.op));
+  if (open.length !== Object.keys(map).length) keep(Object.fromEntries(open.map((body) => [body.agent, body])));
+  return open[0];
+}
+
+export function lifecycleBody(sw, name, control) {
+  const seen = sw.lifecycle.agents[name];
+  return { action: "lifecycle", control, agent: name, op: newId("lifecycle"), incarnation: seen.incarnation, generation: seen.generation, task_revision: seen.task_revision };
+}
+
+export function sendLifecycle(body) {
+  keep({ ...unresolved(), [body.agent]: body });
+  return swarmControl(body, body.control);
 }
 
 export function swarmLost(reason) {
@@ -47,6 +89,7 @@ export async function swarmControl(body, op = body.action) {
   renderControls();
   try {
     const resp = await writeSwarm(body);
+    settle(body);
     if (resp.ok) {
       swarm = await resp.json();
       if (op === "apply") capDraft = {};
@@ -135,7 +178,7 @@ function agentRows(sw, now) {
     return { name: a.name, master, gates: a.gates || [], lane: master ? "—" : a.lane, profile: a.profile || "—", overlays: (a.overlays || []).join(" · ") || "—", model: modelText(a) || "—", task: master ? "" : a.task || "",
       state: master && (a.status || "working") === "working" ? "live" : a.status || "working", promoted: !!a.promoted, age: a.started_at ? span(now - a.started_at) : "—",
       finished: a.status === "finished", since: a.state_since || 0, terminal: terminalView((sw.terminals || {})[a.name], now),
-      execution: executionView((sw.executions || {})[a.name], now) };
+      execution: executionView((sw.executions || {})[a.name], now), lifecycle: lifecycleOffer(sw, a.name) };
   });
 }
 
@@ -155,12 +198,25 @@ function terminalCell(t, e) {
   return h("span", {}, label(t.state, TERMINAL_TONES[t.state]), detail && ` ${detail}`);
 }
 
+function lifecycleOffer(sw, name) {
+  const life = sw.lifecycle, offer = life && life.agents && life.agents[name];
+  return offer ? { offer, controls: life.controls.filter((c) => c.action in offer.disabled), legacy: life.destructive === false } : null;
+}
+
+function lifecycleButton(a, c) {
+  const reason = a.lifecycle.offer.disabled[c.action] || (unresolved()[a.name] ? RECONCILING : "");
+  return h("button", { class: `sw-btn${c.destructive ? " danger" : ""}`, type: "button", "data-lifecycle": c.action, "data-agent": a.name, "aria-label": `${c.label} ${a.name}`,
+    title: reason || `${c.scope}: ${c.consequence}`, disabled: !!(reason || pending), text: c.label });
+}
+
 function agentActions(a) {
+  const life = a.lifecycle;
   return h("div", { class: "sw-acts" },
     ...a.gates.map((g) => g.lifted ? label(`${g.gate} lifted`, "on")
       : h("button", { class: "sw-btn", type: "button", "data-lift": g.gate, "data-agent": a.name, "aria-label": `Lift the ${g.gate} gate for ${a.name}`, disabled: !!pending, text: `lift ${g.gate}` })),
     h("button", { class: "sw-btn", type: "button", "data-message": a.master ? "" : a.name, "aria-label": `Message ${a.name}`, text: "message" }),
-    h("button", { class: "sw-btn danger", type: "button", "data-terminate": a.name, "aria-label": `Terminate ${a.name}`, disabled: !!pending, text: "terminate" }));
+    ...(life ? life.controls.map((c) => lifecycleButton(a, c)) : []),
+    (!life || life.legacy) && h("button", { class: "sw-btn danger", type: "button", "data-terminate": a.name, "aria-label": `Terminate ${a.name}`, disabled: !!pending, text: "terminate" }));
 }
 
 export function wornOverlays(sw, role) {
@@ -314,6 +370,8 @@ export function renderSwarm(sw) {
     sw && (openFindings(sw).length || sw.tasks.blocked) ? h("span", { class: "attention-dot", "aria-label": "Needs attention" }) : null].filter(Boolean));
   renderGates(sw);
   renderControls();
+  const pause = sw && sw.lifecycle && sw.lifecycle.controls.find((c) => c.action === "pause");
+  if (pause) $("swarm-ctl").querySelector('[data-swarm="pause"]').title = `${pause.scope}: ${pause.consequence}`;
   if ($("swarm").hidden) return renderStats();
   renderFreezes();
   if (!sw) {
