@@ -8,7 +8,7 @@
   ],
   "integration_gate": "G8",
   "issue": "https://github.com/the-cloud-clockwork/agentihooks/issues/2590",
-  "pull_request": "pending: set when the SV2-CKP-02 pull request into dev opens",
+  "pull_request": "https://github.com/the-cloud-clockwork/agentihooks/pull/2601",
   "tested_commit": "109b465a18ffc229ad8f0314ffb24ae1032b404c",
   "status": "mocked-acceptance-qualified",
   "package_complete": false,
