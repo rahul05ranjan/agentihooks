@@ -137,7 +137,7 @@ def _archive(root: Path, policy: Policy) -> tuple[bytes, Counter[str]]:
     excluded: Counter[str] = Counter()
     total = 0
     buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w") as archive:
+    with tarfile.open(fileobj=buffer, mode="w") as archive:  # NOSONAR: writes an archive, expands nothing
         for name in sorted(filter(None, listed.split("\0"))):
             path = root / name
             kind = _refusal(name, path, policy)
