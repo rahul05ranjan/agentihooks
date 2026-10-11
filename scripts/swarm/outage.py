@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import fcntl
 import json
-from dataclasses import replace
 from collections.abc import Callable
 from contextlib import contextmanager
-
+from dataclasses import replace
 from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING
