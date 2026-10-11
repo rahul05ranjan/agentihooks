@@ -58,6 +58,7 @@ def test_running_channel_rechecks_pending_items_after_redis_returns(backend, mon
     finally:
         server.connected = True
 
+
 def test_channel_opens_while_redis_is_down_and_delivers_after_restore(backend, monkeypatch):
     import anyio
     from redis.exceptions import RedisError
