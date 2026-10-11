@@ -146,7 +146,7 @@ def _closed_by(store: InboxStore, item, me: str) -> bool:
     return closing.get("state") == item.state and store.names.resolve(closing.get("by", "")) == store.names.resolve(me)
 
 
-APPLY = {"send": _apply_send, "reply": _apply_reply, "close": _apply_close}
+APPLY = {"send": _apply_send, "reply": _apply_reply, "close": _apply_close, "post": outbox.apply_post}
 
 
 def build_parser():
