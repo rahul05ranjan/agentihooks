@@ -18,12 +18,18 @@ METRICS = (
     "peak_parent_rss_mib",
     "peak_children_rss_mib",
     "peak_cores",
+    "peak_parent_cores",
+    "peak_children_cores",
     "cpu_seconds",
+    "parent_cpu_seconds",
+    "children_cpu_seconds",
     "peak_storage_mib",
     "peak_processes",
+    "peak_children_processes",
 )
 INSTALLS = ("promoted", "requalified")
 COMPARED = ("peak_rss_mib", "peak_cores", "peak_storage_mib", "peak_processes")
+REVIEWER = "requalified_by"
 
 
 @dataclass(frozen=True)
@@ -182,7 +188,7 @@ def compare(accepted: dict, candidate: dict, policy: Policy) -> dict:
 
 
 def _canonical(report: dict) -> str:
-    return json.dumps(report, sort_keys=True)
+    return json.dumps({k: v for k, v in report.items() if k != REVIEWER}, sort_keys=True)
 
 
 def promote(accepted: dict | None, candidate: dict, policy: Policy, requalified_by: str) -> dict:
@@ -190,6 +196,9 @@ def promote(accepted: dict | None, candidate: dict, policy: Policy, requalified_
 
     A material change, a missing class or a tool change holds it until a named reviewer requalifies it.
     """
+    unsized = sorted(set(candidate["profiles"]) - set(CLASSES))
+    if unsized:
+        return {"decision": "refused", "accepted": accepted, "changes": {"unsized": unsized}}
     if accepted is None:
         return {"decision": "promoted", "accepted": candidate, "changes": None}
     if candidate["generation"] < accepted["generation"]:
@@ -200,11 +209,12 @@ def promote(accepted: dict | None, candidate: dict, policy: Policy, requalified_
     changes = compare(accepted, candidate, policy)
     if not (changes["material"] or changes["missing"] or changes["tools_changed"]):
         return {"decision": "promoted", "accepted": candidate, "changes": changes}
-    if requalified_by:
+    reviewer = requalified_by.strip()
+    if reviewer:
         return {
             "decision": "requalified",
-            "accepted": candidate,
-            "changes": {**changes, "requalified_by": requalified_by},
+            "accepted": {**candidate, REVIEWER: reviewer},
+            "changes": {**changes, REVIEWER: reviewer},
         }
     return {"decision": "requalify", "accepted": accepted, "changes": changes}
 
@@ -226,17 +236,23 @@ def accept(path: Path, candidate: dict, policy: Policy, requalified_by: str) -> 
     if outcome["decision"] in INSTALLS:
         if current is not None:
             _install(_previous(path), current)
-        _install(path, candidate)
+        _install(path, outcome["accepted"])
     return outcome
 
 
 def rollback(path: Path) -> int | None:
-    """Restore the accepted report that the last promotion replaced; None when there is none."""
+    """Swap in the accepted report that the last promotion replaced; None when there is none.
+
+    Each step is a rename, so an interruption leaves both reports on disk.
+    """
     previous = _previous(path)
     if not previous.exists():
         return None
     restored = json.loads(previous.read_text())
+    held = path.with_name(f".{path.name}.rollback")
+    path.replace(held)
     previous.replace(path)
+    held.replace(previous)
     return restored["generation"]
 
 

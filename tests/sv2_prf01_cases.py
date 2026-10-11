@@ -26,7 +26,9 @@ NOTES = (
     "The agent CLI's own resident memory is a declared reserve, not a measurement; it needs a live agent run.",
     "The idle class is a sleeping Python process standing in for an idle agent CLI.",
     "With nine runs per class the p95 column equals the maximum.",
-    "Descendants that leave the workload's session and process tree are not counted.",
+    "Descendants that leave the workload's session and process tree are neither counted nor killed.",
+    "A child that starts and exits between two samples never enters a peak window; CPU seconds still count it.",
+    "A workload change is detected through its declared version, not a fingerprint of its command.",
     "The sampler walks the workload folder on every sample; that cost runs outside the measured tree.",
     "Coexistence counts whole workers in each node's allocatable capacity minus the requests already scheduled there.",
 )
@@ -86,6 +88,7 @@ def _positive() -> tuple[dict, bool]:
         len(first["coexistence"]) == len(second["coexistence"]) == len(nodes()),
         all(set(row["fits"]) == admitted for row in first["coexistence"]),
         first == again,
+        observed["repeat_changes"] == {"material": [], "missing": [], "tools_changed": {}},
         decision == "promoted" and stored == first,
     ]
     return observed, all(checks)
@@ -94,10 +97,13 @@ def _positive() -> tuple[dict, bool]:
 def _rejection() -> tuple[dict, bool]:
     measured = load("measurements.json")
     idle = {**measured, "runs": [r for r in measured["runs"] if r["class"] == profiles.IDLE]}
+    sized = derive(measured)
+    forged = {**sized, "generation": sized["generation"] + 1, "profiles": {**sized["profiles"]}}
+    forged["profiles"][profiles.IDLE] = sized["profiles"]["memory"]
     with tempfile.TemporaryDirectory() as folder:
         root = Path(folder)
         accepted, report = root / "accepted.json", root / "report.json"
-        profiles.accept(accepted, derive(measured), POLICY, "")
+        profiles.accept(accepted, sized, POLICY, "")
         before = accepted.read_bytes()
         (root / "idle.json").write_text(json.dumps(idle))
         (root / "nodes.json").write_text(json.dumps(load("nodes.json")))
@@ -105,18 +111,28 @@ def _rejection() -> tuple[dict, bool]:
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):
             code = bench.main([*args, "--output", str(report)])
+        (root / "forged.json").write_text(json.dumps(forged))
+        promote = ["promote", "--accepted", str(accepted), "--candidate", str(root / "forged.json")]
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            forged_code = bench.main([*promote, "--requalified-by", REVIEWER])
         written = sorted(p.name for p in root.iterdir())
         unchanged = accepted.read_bytes() == before
+        texts = {p.name: p.read_text() for p in root.iterdir()}
     secret = "-".join(load("disclosure.json")["fake_secret_parts"])
-    texts = {name: (FIXTURES / f"{name}.json").read_text() for name in ("measurements", "repeat", "update")}
+    texts.update({f"fixture {name}": (FIXTURES / name).read_text() for name in INPUTS if name != "disclosure.json"})
     texts["refusal"] = stderr.getvalue()
+    texts["forged_decision"] = stdout.getvalue()
     observed = {
         "idle_runs": len(idle["runs"]),
         "idle_peak_rss_mib": max(r["peak_rss_mib"] for r in idle["runs"]),
         "exit_code": code,
         "refusal": stderr.getvalue().strip(),
+        "forged_idle_profile": json.loads(stdout.getvalue()),
+        "forged_exit_code": forged_code,
         "files_after_refusal": written,
         "accepted_unchanged": unchanged,
+        "scanned_for_secret": sorted(texts),
         "fake_secret_in": sorted(name for name, text in texts.items() if secret in text),
         "fake_secret_set_in_run": load("disclosure.json")["variable"],
     }
@@ -124,7 +140,9 @@ def _rejection() -> tuple[dict, bool]:
         len(idle["runs"]) >= POLICY.min_repeats,
         code == 2,
         observed["refusal"] == f"refused: no class was admitted: idle: {profiles.IDLE_REFUSAL}",
-        written == ["accepted.json", "idle.json", "nodes.json"],
+        observed["forged_idle_profile"] == {"decision": "refused", "changes": {"unsized": [profiles.IDLE]}},
+        forged_code == 1,
+        written == ["accepted.json", "forged.json", "idle.json", "nodes.json"],
         unchanged,
         observed["fake_secret_in"] == [],
     ]
@@ -169,15 +187,17 @@ def _recovery() -> tuple[dict, bool]:
         held_unchanged = path.read_bytes() == before
         interruption, survived = _interrupted(path, candidate)
         decisions.append(profiles.accept(path, candidate, POLICY, REVIEWER)["decision"])
-        installed = json.loads(path.read_text())["generation"]
+        installed_bytes = path.read_bytes()
+        installed = json.loads(installed_bytes)["generation"]
         restored = profiles.rollback(path)
         rolled_back = path.read_bytes() == before
+        kept = path.with_name(f"{path.name}.previous").read_bytes() == installed_bytes
     changes = profiles.compare(accepted, candidate, POLICY)
     observed = {
         "accepted_generation": accepted["generation"],
         "candidate_generation": candidate["generation"],
         "decisions": dict(
-            zip(("first", "toolchain_update", "stale", "missing_class", "replay", "requalified"), decisions)
+            zip(("first", "workload_update", "stale", "missing_class", "replay", "requalified"), decisions)
         ),
         "changes": changes,
         "missing": profiles.compare(accepted, partial, POLICY)["missing"],
@@ -187,6 +207,7 @@ def _recovery() -> tuple[dict, bool]:
         "installed_after_requalification": installed,
         "rollback_restored_generation": restored,
         "rollback_matches_prior_file": rolled_back,
+        "rollback_kept_displaced_report": kept,
         "candidate_memory_limit": candidate["profiles"]["memory"]["limits"],
         "accepted_memory_limit": accepted["profiles"]["memory"]["limits"],
     }
@@ -197,7 +218,7 @@ def _recovery() -> tuple[dict, bool]:
         observed["missing"] == ["browser"],
         held_unchanged and survived and interruption == "interrupted before install",
         installed == candidate["generation"],
-        restored == accepted["generation"] and rolled_back,
+        restored == accepted["generation"] and rolled_back and kept,
     ]
     return observed, all(checks)
 

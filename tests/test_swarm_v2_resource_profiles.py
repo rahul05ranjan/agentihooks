@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -25,10 +26,15 @@ def run(cls, children, repeat, rss, **extra):
         "peak_parent_rss_mib": 30,
         "peak_children_rss_mib": rss - 30,
         "peak_cores": cores,
+        "peak_parent_cores": 0.1,
+        "peak_children_cores": cores - 0.1,
         "cpu_seconds": cores * 2,
+        "parent_cpu_seconds": 0.2,
+        "children_cpu_seconds": cores * 2 - 0.2,
         "wall_seconds": 3.0,
         "peak_storage_mib": extra.get("storage", 10.0),
         "peak_processes": extra.get("processes", children + 1),
+        "peak_children_processes": extra.get("processes", children + 1) - 1,
         "samples": 30,
         "exit_code": extra.get("exit_code", 0),
         "timed_out": extra.get("timed_out", False),
@@ -229,12 +235,29 @@ def test_promote_decides_first_replay_stale_conflict_requalify_and_upgrade():
 def test_a_named_reviewer_requalifies_a_held_report():
     accepted = profiles.derive(measured(memory_runs()), NODES, POLICY)
     grown = profiles.derive(measured(memory_runs(1.5), 2), NODES, POLICY)
-    outcome = profiles.promote(accepted, grown, POLICY, "operator")
+    outcome = profiles.promote(accepted, grown, POLICY, " operator ")
     assert outcome == {
         "decision": "requalified",
-        "accepted": grown,
+        "accepted": {**grown, "requalified_by": "operator"},
         "changes": {**profiles.compare(accepted, grown, POLICY), "requalified_by": "operator"},
     }
+    blank = profiles.promote(accepted, grown, POLICY, "  ")
+    assert blank["decision"] == "requalify" and blank["accepted"] is accepted
+    replay = profiles.promote(outcome["accepted"], grown, POLICY, "")
+    assert replay["decision"] == "replayed"
+
+
+def test_a_candidate_sizing_an_unmeasured_class_is_refused(tmp_path):
+    accepted = profiles.derive(measured(memory_runs()), NODES, POLICY)
+    path = tmp_path / "accepted.json"
+    profiles.accept(path, accepted, POLICY, "")
+    before = path.read_bytes()
+    forged = profiles.derive(measured(memory_runs(), 2), NODES, POLICY)
+    forged["profiles"]["idle"] = forged["profiles"]["memory"]
+    outcome = profiles.accept(path, forged, POLICY, "operator")
+    assert outcome == {"decision": "refused", "accepted": accepted, "changes": {"unsized": ["idle"]}}
+    assert path.read_bytes() == before
+    assert profiles.promote(None, forged, POLICY, "")["decision"] == "refused"
 
 
 def test_accept_writes_only_a_promoted_report_and_rollback_restores_the_one_it_replaced(tmp_path):
@@ -253,12 +276,39 @@ def test_accept_writes_only_a_promoted_report_and_rollback_restores_the_one_it_r
     assert path.read_bytes() == before
     assert sorted(p.name for p in folder.iterdir()) == ["accepted.json"]
     assert profiles.accept(path, grown, POLICY, "operator")["decision"] == "requalified"
-    assert json.loads(path.read_text()) == grown
+    installed = path.read_bytes()
+    assert json.loads(installed) == {**grown, "requalified_by": "operator"}
     assert (folder / "accepted.json.previous").read_bytes() == before
     assert profiles.rollback(path) == 1
     assert path.read_bytes() == before
-    assert sorted(p.name for p in folder.iterdir()) == ["accepted.json"]
-    assert profiles.rollback(path) is None
+    assert (folder / "accepted.json.previous").read_bytes() == installed
+    assert sorted(p.name for p in folder.iterdir()) == ["accepted.json", "accepted.json.previous"]
+    assert profiles.rollback(path) == 2
+    assert path.read_bytes() == installed
+
+
+def test_an_interrupted_rollback_keeps_both_reports_on_disk(tmp_path):
+    folder = tmp_path / "reports"
+    folder.mkdir()
+    path = folder / "accepted.json"
+    accepted = profiles.derive(measured(memory_runs()), NODES, POLICY)
+    grown = profiles.derive(measured(memory_runs(1.5), 2), NODES, POLICY)
+    profiles.accept(path, accepted, POLICY, "")
+    profiles.accept(path, grown, POLICY, "operator")
+    reports = {p.read_bytes() for p in folder.iterdir()}
+    real = Path.replace
+    calls = []
+
+    def stop_after_first(self, target):
+        calls.append(self.name)
+        if len(calls) > 1:
+            raise OSError("interrupted")
+        return real(self, target)
+
+    with mock.patch.object(Path, "replace", stop_after_first), pytest.raises(OSError):
+        profiles.rollback(path)
+    assert calls == ["accepted.json", "accepted.json.previous"]
+    assert {p.read_bytes() for p in folder.iterdir()} == reports
 
 
 def test_markdown_names_every_profile_refusal_and_node():
