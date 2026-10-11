@@ -622,15 +622,15 @@ def ready(task, rows, doc, graph, fix):
     )
 
 
-def _launch_order(slug, store, tasks):
-    return sorted(
-        tasks,
-        key=lambda task: (
-            ledger_rank.order(task),
-            bool(store.launch_failure(slug, task["id"])),
-            not claim_order.resumed(task),
-        ),
-    )
+def _launch_order(slug, store, tasks, dispatched=None):
+    def key(task):
+        failed = bool(store.launch_failure(slug, task["id"]))
+        if dispatched:
+            band, position = dispatched(task)
+            return band, failed, position
+        return ledger_rank.order(task), failed, not claim_order.resumed(task)
+
+    return sorted(tasks, key=key)
 
 
 def _unblocked(task, rows):
@@ -822,11 +822,12 @@ def _spawn_order(slug, config, store, agents, rows, doc, runtime):
     from scripts.swarm import capacity
 
     decision = capacity.read(store, slug)
-    caps = decision.get("effective", {"eng": config.max_eng, "ci": config.max_ci, "plan": config.max_plan})
+    caps = capacity.caps(decision, config)
+    dispatched = dispatcher.claim_key(slug, config, store, doc)
     queue = []
     for lane, cap in caps.items():
         busy = sum(1 for a in agents if a.lane == lane and not _ended(a, rows))
-        ready = _launch_order(slug, store, _claimable(slug, store, rows, doc, lane))
+        ready = _launch_order(slug, store, _claimable(slug, store, rows, doc, lane), dispatched)
         if "tasks" in decision:
             ready = [task for task in ready if task["id"] in decision["tasks"]]
         ready = profile_first.placeable(slug, config, store, runtime, lane, ready, max(cap - busy, 0))

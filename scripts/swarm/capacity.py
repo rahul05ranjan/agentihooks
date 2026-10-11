@@ -409,6 +409,10 @@ def read(store, slug: str) -> dict:
     return json.loads(value) if value else {}
 
 
+def caps(decision: dict, config) -> dict[str, int]:
+    return decision.get("effective", {"eng": config.max_eng, "ci": config.max_ci, "plan": config.max_plan})
+
+
 def status_line(decision: dict) -> str:
     if not decision:
         return "quota capacity has not been observed"
