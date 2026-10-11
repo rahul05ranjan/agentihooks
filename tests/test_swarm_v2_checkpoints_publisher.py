@@ -48,14 +48,43 @@ def test_the_committed_manifest_lists_every_uploaded_material(root):
     assert committed["inventory"] == {model.TRANSCRIPT: {"sha256": ref.sha256, "size": ref.size}}
     assert committed["artifact_hashes"] == {model.TRANSCRIPT: "sha256:" + ref.sha256}
     assert store.recorded("ckpt-g2-s1.normalized_transcript") == ref
-    pointer = json.loads((root / pointers(root)[0]).read_text())
-    assert pointer == {
+    pointer = {
         "checkpoint_id": "ckpt-g2-s1",
         "checkpoint_sequence": 1,
         "execution_id": "e1",
         "generation": 2,
         "manifest": {"sha256": store.recorded("ckpt-g2-s1").sha256, "size": store.recorded("ckpt-g2-s1").size},
     }
+    assert (root / pointers(root)[0]).read_bytes() == json.dumps(pointer, sort_keys=True).encode()
+
+
+def test_listing_keeps_carried_roles_and_adds_each_material():
+    carried = {"sha256": "1" * 64, "size": 3}
+    doc = {"checkpoint_id": "c", "inventory": {"other": carried}, "artifact_hashes": {"other": "sha256:" + "1" * 64}}
+    ref = ArtifactRef.of(b"x")
+    assert publisher._listed(doc, {model.TRANSCRIPT: b"x"}) == {
+        "checkpoint_id": "c",
+        "inventory": {"other": carried, model.TRANSCRIPT: {"sha256": ref.sha256, "size": 1}},
+        "artifact_hashes": {"other": "sha256:" + "1" * 64, model.TRANSCRIPT: "sha256:" + ref.sha256},
+    }
+    assert publisher._listed({"checkpoint_id": "c"}, {model.TRANSCRIPT: b"x"}) == {
+        "checkpoint_id": "c",
+        "inventory": {model.TRANSCRIPT: {"sha256": ref.sha256, "size": 1}},
+        "artifact_hashes": {model.TRANSCRIPT: "sha256:" + ref.sha256},
+    }
+
+
+def test_reads_name_an_exact_length_as_an_object_store_range_needs(root):
+    class Ranged(LostAck):
+        def read(self, key, start, length):
+            assert type(length) is int
+            return self.inner.read(key, start, length)
+
+    pub = make(root, backend=Ranged(root))
+    assert pub.publish(*checkpoint(1)).promoted
+    pub.store.put("ckpt-g2-s2.normalized_transcript", b"orphan")
+    assert pub.latest() == "ckpt-g2-s1"
+    assert pub.reclaim("ckpt-g2-s2") == ["ckpt-g2-s2.normalized_transcript"]
 
 
 def test_an_older_generation_is_refused_once_a_newer_generation_has_written(root):
@@ -121,6 +150,7 @@ def test_a_generation_superseded_during_its_pointer_write_reports_the_refusal(ro
     stale._point = interleaved
     refused = stale.publish(*checkpoint(1))
     assert (refused.promoted, refused.reason) == (False, "superseded_generation")
+    assert refused.verdict.authoritative is True
     assert pointers(root) == [
         "s1/t1/pointers/0000000002/0000000001.json",
         "s1/t1/pointers/0000000003/0000000001.json",
@@ -147,6 +177,8 @@ def test_a_sequence_at_or_below_the_pointer_is_refused(root, sequence):
     assert (refused.promoted, refused.reason, refused.verdict) == (False, "stale_sequence", None)
     assert files(root) == before
     assert pub.latest() == "ckpt-g2-s2"
+    assert pub.publish(doc, materials).reason == "stale_sequence"
+    assert pub.metrics() == {"checkpoint_publish_failures": {"stale_sequence": 2}}
 
 
 def test_a_replayed_publish_promotes_once(root):

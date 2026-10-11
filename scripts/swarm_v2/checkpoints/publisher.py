@@ -103,25 +103,25 @@ class Publisher:
         checkpoint_id = doc["checkpoint_id"]
         for role, data in materials.items():
             self.store.put(f"{checkpoint_id}.{role}", data)
-        if self._superseded():
+        if self._superseded(self._pointers()):
             return self.refuse(SUPERSEDED)
         verdict = self.validator.commit(doc)
         if not verdict.authoritative:
             return self.refuse(verdict.reason, verdict)
-        if self._superseded():
+        if self._superseded(self._pointers()):
             return self.refuse(SUPERSEDED, verdict)
         self._point(checkpoint_id, doc["checkpoint_sequence"])
-        if self._superseded():
+        if self._superseded(self._pointers()):
             return self.refuse(SUPERSEDED, verdict)
         return Publication(True, PROMOTED, verdict)
 
-    def _superseded(self) -> bool:
-        return self._newest() > self.store.scope.generation
-
     def latest(self) -> str:
         found = self._pointers()
-        newest = [pointer for pointer in found if pointer.generation == self._newest(found)]
-        for pointer in sorted(newest, key=lambda pointer: pointer.sequence, reverse=True):
+        if not found:
+            return ""
+        newest = max(pointer.generation for pointer in found)
+        candidates = [pointer for pointer in found if pointer.generation == newest]
+        for pointer in sorted(candidates, key=lambda pointer: pointer.sequence, reverse=True):
             if self._current(pointer.document):
                 return pointer.document["checkpoint_id"]
         return ""
@@ -156,7 +156,7 @@ class Publisher:
     def _blocked(self, checkpoint_id: str, sequence: int) -> str | None:
         scope = self.store.scope
         found = self._pointers()
-        if self._newest(found) > scope.generation:
+        if self._superseded(found):
             return SUPERSEDED
         own = [pointer for pointer in found if pointer.generation == scope.generation]
         if any(pointer.document["execution_id"] != scope.execution_id for pointer in own):
@@ -167,9 +167,8 @@ class Publisher:
             return STALE
         return None
 
-    def _newest(self, found: list[Pointer] | None = None) -> int:
-        listed = self._pointers() if found is None else found
-        return max((pointer.generation for pointer in listed), default=0)
+    def _superseded(self, found: list[Pointer]) -> bool:
+        return any(pointer.generation > self.store.scope.generation for pointer in found)
 
     def _pointers(self) -> list[Pointer]:
         found = []

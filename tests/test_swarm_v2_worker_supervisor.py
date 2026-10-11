@@ -38,6 +38,7 @@ def test_periodic_capture_publishes_when_due_and_reports_age(root):
     capture = Capture(clock, took=1.0)
     sched = schedule(root, clock, capture)
     assert sched.metrics() == {"checkpoint_age_seconds": None, "checkpoint_publish_failures": {}}
+    assert sched.stopped is False
     first = sched.tick()
     assert (first.promoted, first.reason) == (True, "promoted")
     assert sched.publisher.latest() == "ckpt-g2-s1"
