@@ -64,7 +64,7 @@ def test_channel_opens_while_redis_is_down_and_delivers_after_restore(backend, m
     from redis.exceptions import RedisError
 
     from scripts.inbox.store import InboxError
-    from tests.inbox.test_channel_server import session
+    from tests.inbox.test_channel_server import _message, session
 
     server, inbox = backend
     server.connected = False
@@ -79,13 +79,48 @@ def test_channel_opens_while_redis_is_down_and_delivers_after_restore(backend, m
         return inbox
 
     monkeypatch.setattr(channel, "connect", connect)
+    real_sleep = anyio.sleep
 
     async def scenario(send, receive):
+        retrying, restored = anyio.Event(), anyio.Event()
+
+        async def sleep(delay):
+            if delay >= 1:
+                retrying.set()
+                await restored.wait()
+            else:
+                await real_sleep(delay)
+
+        monkeypatch.setattr(anyio, "sleep", sleep)
+        with anyio.fail_after(3):
+            await retrying.wait()
+            await send(
+                _message(
+                    id=3,
+                    method="tools/call",
+                    params={"name": "reply", "arguments": {"item_id": "unavailable", "text": "answer"}},
+                )
+            )
+            refused = await receive()
+        assert refused["result"]["content"][0]["text"] == "not sent: Redis is unavailable; retry once it returns"
         server.connected = True
         pending = inbox.send("alice", "bob", "queued before reconnect")
+        restored.set()
         with anyio.fail_after(3):
             shown = await receive()
         assert shown["params"]["meta"]["item_id"] == pending.id
+        await send(
+            _message(
+                id=4,
+                method="tools/call",
+                params={"name": "reply", "arguments": {"item_id": pending.id, "text": "received"}},
+            )
+        )
+        with anyio.fail_after(3):
+            answered = await receive()
+        assert answered["result"]["content"][0]["text"] == (
+            f"sent to alice as message {inbox.inbox('alice')[0].id}; message {pending.id} is closed"
+        )
 
     try:
         session(None, scenario)

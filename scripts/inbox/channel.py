@@ -151,11 +151,26 @@ async def run(store, me, read, write):
 
     @server.call_tool()
     async def call_tool(name, arguments):
-        return [types.TextContent(type="text", text=answer(store, me, arguments["item_id"], arguments["text"]))]
+        if store is None:
+            text = "not sent: Redis is unavailable; retry once it returns"
+        else:
+            text = answer(store, me, arguments["item_id"], arguments["text"])
+        return [types.TextContent(type="text", text=text)]
+
+    async def push():
+        nonlocal store
+        delay = 1.0
+        while store is None:
+            try:
+                store = await anyio.to_thread.run_sync(connect)
+            except InboxError:
+                await anyio.sleep(delay)
+                delay = min(delay * 2, 30.0)
+        await _push(store, me, write, ready)
 
     options = server.create_initialization_options(experimental_capabilities={"claude/channel": {}})
     async with anyio.create_task_group() as group:
-        group.start_soon(_push, store, me, write, ready)
+        group.start_soon(push)
         await server.run(read, write, options)
         group.cancel_scope.cancel()
 
@@ -171,8 +186,12 @@ def main():
     import anyio
 
     try:
-        me, store = identity(), connect()
+        me = identity()
     except InboxError as exc:
         print(f"agentihooks inbox channel: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
+    try:
+        store = connect()
+    except InboxError:
+        store = None
     anyio.run(serve, store, me)
