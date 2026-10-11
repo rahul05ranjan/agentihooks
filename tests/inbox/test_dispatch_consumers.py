@@ -52,10 +52,6 @@ def test_the_claude_channel_pushes_nothing_while_an_owner_holds_the_recipient(st
         async def send(self, message):
             sent.append(message)
 
-    class PubSub:
-        def close(self):
-            pass
-
     async def stop(*_):
         raise Stop
 
