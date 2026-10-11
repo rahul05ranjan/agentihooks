@@ -209,6 +209,7 @@ def queue_rows(slug: str, doc: dict, agents: list, pulls: dict, now_ms: int) -> 
 
 
 def launch_rows(slug: str, doc: dict, launches: list, agents: list) -> list[dict]:
+    kinds = {"failed": "launch_failed", "waiting": "launch_waiting"}
     return [
         _with_finding_kind(
             _event(
@@ -216,13 +217,13 @@ def launch_rows(slug: str, doc: dict, launches: list, agents: list) -> list[dict
                 _task(doc, source["task"]),
                 {**_owner(agents, source["task"], source["at"], source["agent"]), "name": source["agent"]},
                 source["at"],
-                "launch_failed",
+                kinds[source["state"]],
                 [source["agent"], source["at"]],
                 source["error"],
             )
         )
         for source in launches
-        if source["state"] == "failed"
+        if source["state"] in kinds
     ]
 
 

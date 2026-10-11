@@ -484,7 +484,8 @@ def test_failed_launches_become_launch_failed_events_with_their_harness():
         {"agent": "worker", "task": "t", "at": NOW, "state": "started", "error": ""},
         {"agent": "other", "task": "t", "at": NOW + 5, "state": "waiting", "error": "unavailable"},
     ]
-    (row,) = metrics_swarm.launch_rows(SLUG, doc(), launches, [AGENT])
+    row, waiting = metrics_swarm.launch_rows(SLUG, doc(), launches, [AGENT])
+    assert (waiting["kind"], waiting["agent"], waiting["reason"]) == ("launch_waiting", "other", "unavailable")
     assert (row["kind"], row["agent"], row["harness"], row["reason"], row["ts_ms"]) == (
         "launch_failed",
         "worker",

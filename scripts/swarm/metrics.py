@@ -3,6 +3,8 @@ import sqlite3
 from collections.abc import Mapping
 from functools import partial
 
+from redis.exceptions import RedisError
+
 from scripts.swarm import bottleneck, freeze, metrics_fleet, metrics_ledger, metrics_outbox, metrics_swarm, stages
 from scripts.swarm.ledger_client import LedgerClient
 from scripts.swarm.store import SwarmError
@@ -23,7 +25,7 @@ def _collect(slug, now_ms, swarm, box, errors):
     stages.record(box, swarm.store, slug, now_ms, swarm.doc.get("tasks", []))
     try:
         metrics_fleet.record(box, swarm.store, slug, now_ms)
-    except (OSError, SwarmError, ValueError, KeyError) as exc:
+    except (OSError, SwarmError, ValueError, KeyError, RedisError) as exc:
         errors.append(f"fleet metrics failed: {exc}")
 
 

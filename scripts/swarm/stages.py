@@ -63,6 +63,8 @@ def _lives(task_id: str, rows: dict, end: float) -> list[tuple[Span, Span]]:
     starts = {event["agent"]: event for event in mine if event["kind"] == "spawn"}
     stops = {event["agent"]: event["ts_ms"] for event in mine if event["kind"] == "retire"}
     failed = {event["agent"] for event in mine if event["kind"] == "launch_failed"}
+    waiting = {event["agent"] for event in mine if event["kind"] == "launch_waiting"}
+    starts = {name: spawn for name, spawn in starts.items() if name not in waiting}
     joins = [event for event in rows["ledger_events"] if event["kind"] == JOINED]
     found = []
     for name, spawn in sorted(starts.items(), key=lambda item: item[1]["ts_ms"]):

@@ -271,6 +271,22 @@ def test_a_task_merged_before_the_window_adds_nothing():
     assert found["stages"] == [] and found["total"] == 0.0
 
 
+def test_a_life_whose_spawn_waited_for_room_is_claim_wait_not_launch():
+    found = stages.report(
+        rows(
+            agent_events=[
+                agent("claim", "t1", at(9)),
+                agent("spawn", "t1", at(9), "e1", "codex"),
+                agent("launch_waiting", "t1", at(9), "e1", "codex"),
+                agent("retire", "t1", at(9, 30), "e1", "codex"),
+            ],
+        ),
+        [{**TASK, "state": "claimed"}],
+        NOW,
+    )
+    assert seconds_of(found) == {("claim_wait", ""): 3600.0}
+
+
 def test_the_merge_queue_starts_at_the_first_tick_that_saw_the_pull_request_queued():
     found = stages.report(
         rows(
