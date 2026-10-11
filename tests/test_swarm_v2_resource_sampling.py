@@ -205,6 +205,15 @@ def test_summary_rounds_every_figure_and_takes_the_larger_cpu_count():
     assert (floored["peak_parent_cores"], floored["peak_children_cores"]) == (1.25, 1.25)
 
 
+def test_summary_counts_no_parent_cpu_when_the_root_was_never_sampled(monkeypatch):
+    monkeypatch.setattr(sampling, "TICKS", 7)
+    usage = SimpleNamespace(ru_utime=0.0, ru_stime=0.0)
+    unsampled = sampling.summary(sampling.Peaks(root=5, ticks={6: 7}), usage, 1.0, 0, False)
+    assert (unsampled["parent_cpu_seconds"], unsampled["children_cpu_seconds"]) == (0.0, 1.0)
+    sampled = sampling.summary(sampling.Peaks(root=5, ticks={5: 1, 6: 6}), usage, 1.0, 0, False)
+    assert (sampled["parent_cpu_seconds"], sampled["children_cpu_seconds"]) == (0.143, 0.857)
+
+
 def test_directory_bytes_counts_regular_files_and_not_link_targets(tmp_path):
     tree = tmp_path / "tree"
     (tree / "a").mkdir(parents=True)
@@ -281,6 +290,15 @@ def test_measure_keeps_sampling_at_exactly_the_timeout(tmp_path, monkeypatch):
     result = sampling.measure([sys.executable, "-c", "import time; time.sleep(0.3)"], tmp_path, {}, 0.05, 10.0)
     assert not result["timed_out"] and result["exit_code"] == 0
     assert result["wall_seconds"] == 10.0
+
+
+def test_measure_stops_sampling_once_the_command_has_exited(tmp_path, monkeypatch):
+    readings = iter(range(100))
+    clock = SimpleNamespace(monotonic=lambda: float(next(readings)), sleep=lambda seconds: None)
+    monkeypatch.setattr(sampling, "time", clock)
+    monkeypatch.setattr(sampling, "_exited", lambda pid: True)
+    result = sampling.measure(["true"], tmp_path, {"PATH": os.environ["PATH"]}, 0.05, 20.0)
+    assert result["samples"] == 0 and not result["timed_out"]
 
 
 def test_measure_kills_the_whole_group_on_timeout(tmp_path):
