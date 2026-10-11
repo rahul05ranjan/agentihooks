@@ -14,7 +14,8 @@ KEY = f"{ROOT}:swarm:models"
 MODELS_URL = "https://api.anthropic.com/v1/models?limit=1000"
 HEADERS = {"anthropic-version": "2023-06-01", "anthropic-beta": "oauth-2025-04-20"}
 HELP_MODEL = re.compile(r"--model <model>(.*?)\n  --", re.S)
-HELP_EFFORT = re.compile(r"--effort <level>.*?\(([a-z, ]+)\)", re.S)
+HELP_EFFORT = re.compile(r"--effort <level>(.*?)\n  --", re.S)
+LEVELS = re.compile(r"\(([a-z, ]+)\)")
 ALIAS = re.compile(r"'([a-z]+)'")
 
 
@@ -71,7 +72,8 @@ def cli_help():
 def from_help(text):
     model = HELP_MODEL.search(text)
     effort = HELP_EFFORT.search(text)
-    efforts = [name.strip() for name in effort.group(1).split(",")] if effort else []
+    levels = LEVELS.search(effort.group(1)) if effort else None
+    efforts = [name.strip() for name in levels.group(1).split(",")] if levels else []
     return [entry(alias, alias, efforts) for alias in ALIAS.findall(model.group(1))] if model else []
 
 

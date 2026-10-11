@@ -188,6 +188,15 @@ def test_the_help_without_an_effort_line_lists_aliases_with_no_efforts():
     ]
 
 
+def test_the_effort_levels_come_only_from_the_effort_option_itself():
+    text = HELP.replace("(low, medium, high, xhigh, max)", "for this session") + "  --print  Print (json, text)\n"
+    assert model_catalog.from_help(text) == [
+        {"model": "fable", "label": "fable", "efforts": []},
+        {"model": "opus", "label": "opus", "efforts": []},
+        {"model": "sonnet", "label": "sonnet", "efforts": []},
+    ]
+
+
 def test_fetch_models_asks_the_anthropic_models_endpoint_with_the_oauth_bearer(monkeypatch):
     sent = {}
 
