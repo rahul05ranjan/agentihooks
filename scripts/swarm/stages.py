@@ -135,7 +135,9 @@ def _claimed(task: dict, rows: dict, now_ms: int, live: bool) -> Timeline:
     branch = task.get("branch")
     runs = [run for run in rows["ci_runs"] if branch and run["branch"] == branch]
     opened = [
-        e["ts_ms"] for e in rows["delivery_events"] if e["task"] == task_id and e["kind"] == "pull_request_opened"
+        event["ts_ms"]
+        for event in rows["delivery_events"]
+        if event["task"] == task_id and event["kind"] == "pull_request_opened"
     ]
     pushed = min([at for at in [*map(bottleneck._created, runs), *opened] if at >= claimed] + [end])
     green = bottleneck._green(runs, pushed, end)

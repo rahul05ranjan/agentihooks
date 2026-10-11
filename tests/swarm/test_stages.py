@@ -141,12 +141,12 @@ def test_stages_are_ordered_by_seconds_then_name_and_label():
 
 
 def test_the_total_is_the_sum_of_task_spans_inside_the_window_for_many_tasks():
-    second = {**every_stage()}
+    base = every_stage()
     shifted = rows(
         agent_events=[agent("claim", "t2", at(4)), agent("spawn", "t2", at(4), "e3", "claude")],
         ledger_events=[ledger("joined", at(4, 10), by="e3")],
     )
-    merged = {name: second[name] + shifted[name] for name in stages.SOURCES}
+    merged = {name: base[name] + shifted[name] for name in stages.SOURCES}
     tasks = [TASK, {"id": "t2", "state": "claimed", "branch": "b2"}]
     found = stages.report(merged, tasks, NOW)
     assert found["total"] == 13500.0 + 4 * 3600.0

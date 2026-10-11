@@ -1,9 +1,10 @@
-"""The SV2-OBS-05 fleet sample, read each tick from the sources this tick can reach, exported as panel series."""
+"""The fleet dashboard sample, read each tick from the sources this tick can reach, exported as panel series."""
 
 import json
 from collections.abc import Callable
 from pathlib import Path
 
+from hooks.context import project_cache
 from scripts.swarm import metrics_outbox
 from scripts.swarm.store import RedisStore
 from scripts.swarm_v2 import fleet_dashboard, quota
@@ -19,9 +20,7 @@ VIEWER = fleet_dashboard.Viewer("metrics", frozenset())
 
 
 def feed_path() -> Path:
-    from hooks.context import project_cache
-
-    return project_cache._feed_path(project_cache.namespace())
+    return project_cache.feed_file()
 
 
 def feed_at_ms() -> int:
