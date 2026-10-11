@@ -5,6 +5,7 @@ Only numbers and known names are taken from an alert; its free text never reache
 
 import ipaddress
 import json
+import math
 import re
 import sys
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ HOST = "0.0.0.0"
 PORT = 8796
 PATH = "/alerts"
 MAX_BODY = 1_000_000
+EPISODE_CHARS = 40
 UNIT = "task hours in the window"
 STAGES = (
     "claim_wait",
@@ -29,7 +31,6 @@ STAGES = (
     "intent_fix",
     "launch_failure",
     "launch",
-    "ci_overrun",
     "ci_queue",
     "quota_hold",
     "host_hold",
@@ -65,15 +66,24 @@ def allowed(address: str, networks) -> bool:
 
 def _number(value):
     try:
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         return None
+    return number if math.isfinite(number) else None
+
+
+def _length(raw) -> int | None:
+    try:
+        length = int(raw or 0)
+    except ValueError:
+        return None
+    return length if length >= 0 else None
 
 
 def _apply(redis, alert, now_ms: int) -> str:
     if not isinstance(alert, dict):
         return "skipped an alert: not an alert"
-    labels = alert.get("labels") or {}
+    labels = alert.get("labels") if isinstance(alert.get("labels"), dict) else {}
     stage, slug, status = str(labels.get("stage")), str(labels.get("ledger")), alert.get("status")
     if labels.get("swarm") != "bottleneck":
         return "skipped an alert: not a swarm bottleneck alert"
@@ -87,23 +97,30 @@ def _apply(redis, alert, now_ms: int) -> str:
         return f"no {stage} finding on {slug}"
     if status != "firing":
         return f"skipped an alert: unknown status {status}"
-    hours = _number((alert.get("values") or {}).get("hours"))
+    values = alert.get("values")
+    hours = _number(values.get("hours")) if isinstance(values, dict) else None
     if hours is None:
         return "skipped an alert: no hours value"
     threshold = _number(labels.get("threshold_hours"))
     if threshold is None:
         return "skipped an alert: no threshold"
-    standing.fire(redis, slug, stage, standing.Reading(hours, threshold, UNIT, str(alert.get("startsAt", ""))), now_ms)
+    episode = str(alert.get("startsAt", ""))[:EPISODE_CHARS]
+    standing.fire(redis, slug, stage, standing.Reading(hours, threshold, UNIT, episode), now_ms)
     return f"fired {stage} on {slug}"
 
 
 def receive(redis, payload, now_ms: int) -> list[str]:
     if not isinstance(payload, dict):
         raise ValueError("the alert body is not a JSON object")
-    return [_apply(redis, alert, now_ms) for alert in payload.get("alerts") or []]
+    alerts = payload.get("alerts") or []
+    if not isinstance(alerts, list):
+        raise ValueError("the alerts are not a list")
+    return [_apply(redis, alert, now_ms) for alert in alerts]
 
 
 class Handler(BaseHTTPRequestHandler):
+    timeout = 10
+
     def _reply(self, code: int, body: dict) -> None:
         raw = json.dumps(body).encode()
         self.send_response(code)
@@ -117,7 +134,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._reply(403, {"error": "source not allowed"})
         if self.path != PATH:
             return self._reply(404, {"error": "not found"})
-        length = int(self.headers.get("Content-Length") or 0)
+        length = _length(self.headers.get("Content-Length"))
+        if length is None:
+            return self._reply(400, {"error": "bad content length"})
         if length > MAX_BODY:
             return self._reply(413, {"error": "body too large"})
         try:
