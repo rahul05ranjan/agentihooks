@@ -25,8 +25,8 @@ UNIT = "agentihooks-hive.service"
 def beat(redis: "Redis", local_id: str) -> None:
     from scripts.routing.reservation import LaunchSlots
 
-    report = observe()
     executions = _executions(redis, local_id)
+    report = observe()
     if executions:
         report["sessions"]["_executions"] = executions
     key = registry.key(local_id)

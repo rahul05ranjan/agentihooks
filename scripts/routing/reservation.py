@@ -128,14 +128,13 @@ local raw = redis.call('GET', KEYS[2])
 local held = raw and cjson.decode(raw) or nil
 local now = redis.call('TIME')
 local millis = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
-local reports, seen, used = {}, {}, 0
+local seen, used, previous = {}, 0, nil
 for _, hive in ipairs(redis.call('SMEMBERS', KEYS[3])) do
     local key = ARGV[6] .. ':hive:' .. hive
     local heartbeat = tonumber(redis.call('HGET', key, 'heartbeat_at') or '0')
     local sessions = redis.call('GET', key .. ':sessions')
     if heartbeat > 0 and millis - heartbeat <= 90000 and sessions then
         local report = cjson.decode(sessions)
-        reports[key] = report
         used = used + (report[slot] or 0)
         for _, id in ipairs((report._executions or {})[slot] or {}) do
             seen[id] = true
@@ -167,11 +166,18 @@ for _, id in ipairs(redis.call('SMEMBERS', KEYS[1])) do
         local row = cjson.decode(other)
         if row.slot == slot then
             if row.state == 'exited' and seen[id] then used = used - 1 end
-            if row.state ~= 'exited' and not seen[id] then used = used + 1 end
+            if row.state ~= 'exited' and not seen[id] then
+                if id == ARGV[7] and row.state == 'reserved' then previous = id
+                else used = used + 1 end
+            end
         end
     end
 end
 if used >= tonumber(ARGV[4]) then return 0 end
+if previous then
+    redis.call('DEL', ARGV[6] .. ':launch-slot:' .. previous)
+    redis.call('SREM', KEYS[1], previous)
+end
 redis.call('SET', KEYS[2], cjson.encode({slot=slot, state='reserved'}), 'PX', ARGV[5])
 redis.call('SADD', KEYS[1], execution)
 return 1
@@ -182,7 +188,7 @@ return 1
 class LaunchSlots:
     redis: object
 
-    def _call(self, mode: str, slot: str, execution: str, cap: int, ttl_ms: int) -> bool:
+    def _call(self, mode: str, slot: str, execution: str, cap: int, ttl_ms: int, previous: str = "") -> bool:
         from scripts.hive import registry
         from scripts.swarm.keyspace import ROOT
 
@@ -199,13 +205,14 @@ class LaunchSlots:
                 cap,
                 ttl_ms,
                 ROOT,
+                previous,
             )
         )
 
-    def reserve(self, slot: str, execution: str, cap: int, ttl_ms: int) -> bool:
+    def reserve(self, slot: str, execution: str, cap: int, ttl_ms: int, previous: str = "") -> bool:
         if type(cap) is not int or cap < 0 or type(ttl_ms) is not int or not 0 < ttl_ms <= 300000:
             raise ValueError("invalid launch slot cap or lifetime")
-        return self._call("reserve", slot, execution, cap, ttl_ms)
+        return self._call("reserve", slot, execution, cap, ttl_ms, previous)
 
     def acknowledge(self, execution: str) -> bool:
         return self._call("ack", "", execution, 0, 45000)

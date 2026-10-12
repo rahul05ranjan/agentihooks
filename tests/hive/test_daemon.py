@@ -492,3 +492,29 @@ def test_observe_reports_host_counts_in_nonlocal_mode(observations, monkeypatch)
     monkeypatch.setattr(daemon.account_sessions, "codex_sessions_by_account", lambda *, local=False: {})
     report = daemon.observe()
     assert report["sessions"]["claude:one"] == 2
+
+
+def test_beat_keeps_a_launch_counted_between_process_samples(redis, monkeypatch):
+    from scripts.routing import aggregate, reservation
+
+    monkeypatch.setattr("time.time", lambda: 100)
+    slots = reservation.LaunchSlots(redis)
+    started = []
+
+    def observe():
+        assert slots.reserve("claude:one", "first", 1, 1000)
+        assert slots.acknowledge("first")
+        started.append("first")
+        return {
+            "slots": [{"harness": "claude", "account": "one", "kind": "subscription", "cap": 1}],
+            "interactive": {},
+            "repos": [],
+            "quota": {},
+            "sessions": {"claude:one": 0},
+        }
+
+    monkeypatch.setattr(daemon, "observe", observe)
+    monkeypatch.setattr(daemon, "_executions", lambda redis, hive: {"claude:one": list(started)} if started else {})
+    daemon.beat(redis, "hive")
+    assert aggregate.read(redis, 100)["claude:one"]["sessions"] == 1
+    assert not slots.reserve("claude:one", "second", 1, 1000)
