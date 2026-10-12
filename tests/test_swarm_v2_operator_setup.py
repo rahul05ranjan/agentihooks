@@ -19,6 +19,7 @@ from scripts import cli_delegates, openbao_kv
 from scripts.gates.base import Who
 from scripts.swarm_v2.deployed import pod_policy
 from scripts.swarm_v2.herdr import operator_setup
+from scripts.swarm_v2.herdr.attach import ClientHome
 from scripts.swarm_v2.herdr.operator_setup import SetupRefused
 from scripts.swarm_v2.kubernetes import operator_terminal
 
@@ -328,19 +329,22 @@ def test_install_writes_and_enables_the_timer(tmp_path):
     assert operator_setup.install("/opt/bin/agentihooks", tmp_path, systemctl) is True
     assert (tmp_path / "agentihooks-swarm-terminal.service").read_text() == operator_setup.unit("/opt/bin/agentihooks")
     assert (tmp_path / "agentihooks-swarm-terminal.timer").read_text() == operator_setup.timer()
+    assert (tmp_path / "agentihooks-swarm-terminal-sync.service").read_text() == operator_setup.sync_unit(
+        "/opt/bin/agentihooks"
+    )
     assert sorted(path.name for path in tmp_path.iterdir()) == [
+        "agentihooks-swarm-terminal-sync.service",
         "agentihooks-swarm-terminal.service",
         "agentihooks-swarm-terminal.timer",
     ]
-    assert systemctl.calls == [
-        (["systemctl", "--user", "daemon-reload"], {**QUIET, "check": True}),
+    enable = [
         (["systemctl", "--user", "enable", "--now", "agentihooks-swarm-terminal.timer"], QUIET),
+        (["systemctl", "--user", "enable", "--now", "agentihooks-swarm-terminal-sync.service"], QUIET),
     ]
+    assert systemctl.calls == [(["systemctl", "--user", "daemon-reload"], {**QUIET, "check": True}), *enable]
 
     assert operator_setup.install("/opt/bin/agentihooks", tmp_path, systemctl) is True
-    assert systemctl.calls[2:] == [
-        (["systemctl", "--user", "enable", "--now", "agentihooks-swarm-terminal.timer"], QUIET)
-    ]
+    assert systemctl.calls[3:] == enable
 
 
 def test_install_reports_a_failed_enable(tmp_path):
@@ -357,6 +361,7 @@ def test_install_defaults_to_the_agentihooks_executable_and_user_units(tmp_path,
     units = tmp_path / ".config" / "systemd" / "user"
     assert looked_up == ["agentihooks"]
     assert sorted(path.name for path in units.iterdir()) == [
+        "agentihooks-swarm-terminal-sync.service",
         "agentihooks-swarm-terminal.service",
         "agentihooks-swarm-terminal.timer",
     ]
@@ -487,3 +492,71 @@ def test_a_manifest_that_is_not_utf8_is_refused(tmp_path):
 def test_swarm_terminal_is_a_delegated_command():
     assert cli_delegates.DELEGATED_CLIS["swarm-terminal"] == "scripts.swarm_v2.herdr.operator_setup"
     assert cli_delegates.delegated_cli(["swarm-terminal", "setup"]) is operator_setup.main
+
+
+JUMP_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJumpHostKey"
+JUMP_REFUSED = "AGENTIHOOKS_TERMINAL_JUMP must be host:port with AGENTIHOOKS_TERMINAL_JUMP_HOST_KEY naming its host key"
+
+
+def test_the_jump_comes_from_the_environment():
+    from scripts.swarm_v2.herdr.attach import Jump
+
+    environ = {"AGENTIHOOKS_TERMINAL_JUMP": "swarm.example:2223", "AGENTIHOOKS_TERMINAL_JUMP_HOST_KEY": JUMP_KEY}
+    assert operator_setup.jump(environ) == Jump("swarm.example", 2223, JUMP_KEY)
+    assert operator_setup.jump({}) is None
+
+
+@pytest.mark.parametrize(
+    "value, key",
+    [("swarm.example", JUMP_KEY), (":2223", JUMP_KEY), ("swarm.example:ssh", JUMP_KEY), ("swarm.example:2223", "")],
+)
+def test_a_malformed_jump_is_refused(value, key):
+    environ = {"AGENTIHOOKS_TERMINAL_JUMP": value, "AGENTIHOOKS_TERMINAL_JUMP_HOST_KEY": key}
+    with pytest.raises(SetupRefused) as refused:
+        operator_setup.jump(environ)
+    assert str(refused.value) == JUMP_REFUSED
+
+
+def test_the_sync_unit_keeps_the_service_running():
+    assert operator_setup.sync_unit("/opt/bin/agentihooks") == (
+        "[Unit]\nDescription=agentihooks operator herdr sync of hive workers\n\n"
+        "[Service]\nType=simple\nRestart=always\nRestartSec=30\n"
+        "Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin:/bin\n"
+        "EnvironmentFile=-%h/.agentihooks/.env\n"
+        'ExecStart="/opt/bin/agentihooks" swarm-terminal sync\n\n'
+        "[Install]\nWantedBy=default.target\n"
+    )
+
+
+def test_install_reports_a_failed_sync_enable(tmp_path):
+    class Refusing(Systemctl):
+        def __call__(self, command, **kwargs):
+            self.code = 1 if command[-1] == "agentihooks-swarm-terminal-sync.service" else 0
+            return super().__call__(command, **kwargs)
+
+    assert operator_setup.install("/opt/bin/agentihooks", tmp_path, Refusing()) is False
+
+
+def test_sync_command_refusals_exit_one(tmp_path, monkeypatch):
+    monkeypatch.setattr(operator_setup.Path, "home", lambda: tmp_path)
+    environ = {"AGENTIHOOKS_TERMINAL_JUMP": "swarm.example"}
+    assert run_main(["sync"], environ, Who(), tmp_path / "home") == (
+        1,
+        "",
+        f"operator terminal sync refused: {JUMP_REFUSED}\n",
+    )
+
+
+def test_sync_command_runs_the_service_on_the_operator_home(tmp_path, monkeypatch):
+    built = {}
+    monkeypatch.setattr(operator_setup.Path, "home", lambda: tmp_path / "operator")
+
+    def service(environ, client, root):
+        built.update(environ=environ, client=client, root=root)
+        return "service"
+
+    monkeypatch.setattr(operator_setup, "service", service)
+    monkeypatch.setattr(operator_setup, "serve", lambda running: 0 if running == "service" else 2)
+
+    assert run_main(["sync"], {"A": "b"}, Who(), tmp_path / "home") == (0, "", "")
+    assert built == {"environ": {"A": "b"}, "client": ClientHome(tmp_path / "operator"), "root": tmp_path / "home"}
