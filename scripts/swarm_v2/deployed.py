@@ -183,7 +183,9 @@ class Workers:
     def grants(
         self, environ: Mapping[str, str], slug: str, verify: Callable[[str], Registration], store: RedisStore
     ) -> PodGrants:
-        supervision = Supervision(HARNESS, self.exporter, self.terms.api_url)
+        supervision = Supervision(
+            HARNESS, self.exporter, self.terms.api_url, environ.get(checkpoint_runtime.REMOTE) == "true"
+        )
         api = pod_api(environ, self.policy["namespace"])
         terminal = None if self.terminal is None else TerminalObjects(api, self.terminal, HostKeys(store))
         return PodGrants(api, slug, verify, supervision, terminal, partial(restore_directive, store, slug))
@@ -316,8 +318,14 @@ def recovery_pass(
 
     capacity = AccountCapacity(controller.store, slug, verify)
     releases = {"grant": GrantRelease(grants, slug), "account": AccountSlot(controller.store, slug, capacity)}
+
+    def registered(execution_id: str):
+        registration = grants.registration(slug, execution_id)
+        journal = service.tasks.journal(registration.task_id) if registration is not None else []
+        return checkpoint_runtime.historical(registration, journal)
+
     checkpoints = checkpoint_runtime.Checkpoints(
-        checkpoint_runtime.configured(environ or {}), partial(grants.registration, slug), workers.image_tag
+        checkpoint_runtime.configured(environ or {}), registered, workers.image_tag
     )
     recovery = Recovery(controller.store, slug, controller, checkpoints, releases, workers.image_tag)
     recovering = RecoveryPass(recovery, api, f"{OWNER_LABEL}={owner_for(slug)}")

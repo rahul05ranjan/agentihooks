@@ -11,7 +11,7 @@ from scripts.swarm_v2.supervision_protocol import write
 
 
 def enabled(environ: Mapping[str, str]) -> bool:
-    return bool(environ.get(runtime.ROOT))
+    return bool(environ.get(runtime.ROOT)) or environ.get(runtime.REMOTE) == "true"
 
 
 def transcript(path: Path) -> tuple[bytes, int]:
@@ -60,7 +60,7 @@ def publish(attempt: Path, scope: dict, environ: Mapping[str, str], newest: Path
     spec = json.loads((attempt / "launch.json").read_text())
     if "image_digest" not in spec:
         return {"status": "incomplete", "reason": "image_identity_absent"}
-    store = runtime.worker_store(spec, environ)
+    store = runtime.worker_store(spec, attempt, environ)
     qualifier = native.Qualifier(model.Validator(store))
     record = json.loads((attempt / "execution.json").read_text())
     execution = filesystem.recorded(attempt.resolve(), record)
@@ -71,6 +71,8 @@ def publish(attempt: Path, scope: dict, environ: Mapping[str, str], newest: Path
     sequence = publisher.Publisher(qualifier.validator).sequence() + 1
     checkpoint_id = f"ckp-{scope['incarnation']}"
     doc = document(spec, checkpoint_id, sequence, source)
+    doc["authority"]["task_generation"] = store.scope.generation
+    doc["reconstruction"]["execution_generation"] = store.scope.generation
     text, records = transcript(newest)
     doc["transcript_durable_cursor"] = {"sequence": records, "byte_offset": len(text)}
     harness = spec["harness"]

@@ -115,6 +115,19 @@ def test_master_resume_with_compatible_checkpoint_replaces_the_attempt(pending):
     assert result["replacement"] == pending.world.occupant().execution_id
 
 
+def test_a_master_lists_verified_checkpoints_for_a_recovery(pending):
+    entries = pending.world.fx["first"]["checkpoints"]
+    pending.world.checkpoints.by_execution[pending.old.execution_id] = entries
+    code, answer = pending.service.recovery_api.route(
+        "POST",
+        f"/v1/executions/{pending.old.execution_id}/checkpoints",
+        "Bearer " + pending.token,
+        {"agent": "coordinator"},
+    )
+    assert code == 200
+    assert answer["checkpoints"] == entries
+
+
 @pytest.mark.parametrize("choice", ["fresh", "resume"])
 def test_restore_command_delivers_master_decision_to_anton(pending, monkeypatch, capsys, choice):
     from scripts.gates import Who

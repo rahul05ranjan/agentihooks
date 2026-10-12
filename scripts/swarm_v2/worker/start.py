@@ -159,9 +159,11 @@ def prepare(
             bundle,
         )
     )
+    if spec.get("checkpoint_remote") is True:
+        os.environ[checkpoint_runtime.REMOTE] = "true"
     _private(attempt / "launch.json", spec)
-    restored = checkpoint_runtime.prepare(spec, attempt)
     worker_home.store_grant(attempt, grant)
+    restored = checkpoint_runtime.prepare(spec, attempt)
     if restored is not None:
         _private(attempt / RESTORED, asdict(restored))
     _private(attempt / RECORD, authority)

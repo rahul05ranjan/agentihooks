@@ -5,23 +5,32 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from scripts.swarm_v2 import filesystem
-from scripts.swarm_v2.artifacts.base import ArtifactRef, ArtifactStore
+from scripts.swarm_v2.artifacts.base import ArtifactRef, ArtifactStore, Backend
 from scripts.swarm_v2.artifacts.local import LocalBackend
 from scripts.swarm_v2.auth_context import Registration
 from scripts.swarm_v2.checkpoints import model, native, restore
 
 ROOT = "AGENTIHOOKS_CHECKPOINT_ROOT"
+REMOTE = "AGENTIHOOKS_CHECKPOINT_REMOTE"
 
 
-def granted(root: Path, registration: Registration) -> ArtifactStore:
+from dataclasses import replace
+
+
+def granted(root: Path | Backend, registration: Registration) -> ArtifactStore:
+    backend = LocalBackend(root) if isinstance(root, Path) else root
     return ArtifactStore(
-        LocalBackend(root),
+        backend,
         lambda token: registration if token == registration.grant_id else None,
         registration.grant_id,
     )
 
 
-def configured(environ: Mapping[str, str]) -> Path | None:
+def configured(environ: Mapping[str, str]) -> Path | Backend | None:
+    if environ.get(REMOTE) == "true":
+        from scripts.swarm_v2.artifacts.remote import controller_backend
+
+        return controller_backend(environ)
     value = environ.get(ROOT)
     if not value:
         return None
@@ -31,7 +40,23 @@ def configured(environ: Mapping[str, str]) -> Path | None:
     return path
 
 
-def worker_store(spec: dict, environ: Mapping[str, str]) -> ArtifactStore:
+def historical(registration: Registration | None, journal: list[dict]) -> Registration | None:
+    if registration is None:
+        return None
+    matches = [
+        entry["claim"]
+        for entry in journal
+        if entry.get("claim", {}).get("execution_id") == registration.execution_id
+        and entry["claim"].get("execution_generation") == registration.generation
+    ]
+    return replace(registration, generation=matches[-1]["generation"]) if matches else None
+
+
+def worker_store(spec: dict, attempt: Path, environ: Mapping[str, str]) -> ArtifactStore:
+    if environ.get(REMOTE) == "true":
+        from scripts.swarm_v2.artifacts.remote import worker_store as remote_store
+
+        return remote_store(spec, attempt, environ)
     root = configured(environ)
     if root is None:
         raise restore.RestoreRefused(restore.STORE_MISSING)
@@ -49,10 +74,10 @@ def version(harness: str, environ: Mapping[str, str]) -> str:
 
 
 def validate_export(attempt: Path, identifier: str, environ: Mapping[str, str]) -> bool:
-    if configured(environ) is None:
+    if not environ.get(ROOT) and environ.get(REMOTE) != "true":
         return False
     spec = json.loads((attempt / "launch.json").read_text())
-    return model.Validator(worker_store(spec, environ)).verify(identifier).authoritative
+    return model.Validator(worker_store(spec, attempt, environ)).verify(identifier).authoritative
 
 
 def restoring(store: ArtifactStore, directive: restore.Directive, paths: restore.Paths) -> restore.Restored:
@@ -66,7 +91,7 @@ def prepare(spec: dict, attempt: Path, environ: Mapping[str, str] = os.environ) 
     directive = restore.Directive.parse(spec["restore"])
     if directive.recovery == restore.FRESH:
         return restore.launched(spec)
-    store = worker_store(spec, environ)
+    store = worker_store(spec, attempt, environ)
     record = json.loads((attempt / "execution.json").read_text())
     execution = filesystem.recorded(attempt.resolve(), record)
     harness = spec["harness"]
@@ -97,7 +122,9 @@ def command(attempt: Path, original: tuple[str, ...]) -> tuple[str, ...]:
 
 
 class Checkpoints:
-    def __init__(self, root: Path | None, registered: Callable[[str], Registration | None], compatibility: str) -> None:
+    def __init__(
+        self, root: Path | Backend | None, registered: Callable[[str], Registration | None], compatibility: str
+    ) -> None:
         self.root, self.registered, self.compatibility = root, registered, compatibility
 
     def validator(self, execution_id: str) -> model.Validator | None:

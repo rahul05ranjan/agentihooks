@@ -21,6 +21,7 @@ class Supervision:
     harness: str
     exporter: tuple[str, ...] | None
     control_url: str
+    checkpoint_remote: bool = False
 
     def record(self, registration: Registration, profile: str, restore: dict | None = None) -> str:
         record = {
@@ -34,6 +35,8 @@ class Supervision:
             "profile": profile,
             "registration": asdict(registration),
         }
+        if self.checkpoint_remote:
+            record["checkpoint_remote"] = True
         if self.exporter:
             record["exporter"] = list(self.exporter)
         if restore is not None:

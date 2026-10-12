@@ -457,7 +457,7 @@ def test_a_checkpoint_restore_without_a_store_refuses_the_start_and_registers_no
     attempt = tmp_path / "attempts" / EXECUTION
     assert not (attempt / "registration.json").exists()
     assert not (attempt / start.RESTORED).exists()
-    assert not (attempt / "run" / GRANT_NAME).exists()
+    assert (attempt / "run" / GRANT_NAME).exists()
 
 
 def test_a_refused_restore_is_a_refused_start(tmp_path, monkeypatch, capsys):
