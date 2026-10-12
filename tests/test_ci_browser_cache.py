@@ -9,7 +9,11 @@ ROOT = Path(__file__).resolve().parents[1]
 ACTION = ROOT / ".github/actions/browser-cache"
 
 
-def _setup(tmp_path, monkeypatch, *, cached, ready, recovery=True):
+READY = "steps.launch.outputs.ready != 'true'"
+HOSTED = READY + " && runner.environment == 'github-hosted'"
+
+
+def _setup(tmp_path, monkeypatch, *, cached, ready, recovery=True, hosted=True):
     executable = tmp_path / "python"
     calls = tmp_path / "calls"
     marker = tmp_path / "ready"
@@ -43,8 +47,10 @@ def _setup(tmp_path, monkeypatch, *, cached, ready, recovery=True):
     start = next(i for i, step in enumerate(steps) if step.get("id") == "launch")
     for step in steps[start:]:
         condition = step.get("if")
-        assert condition in (None, "steps.launch.outputs.ready != 'true'")
+        assert condition in (None, READY, HOSTED)
         if condition and output.read_text().strip() == "ready=true":
+            continue
+        if condition == HOSTED and not hosted:
             continue
         result = subprocess.run(["bash", "-euo", "pipefail", "-c", step["run"]], capture_output=True, text=True)
         if result.returncode:
@@ -63,6 +69,12 @@ def test_missing_browser_or_os_dependencies_are_recovered(tmp_path, monkeypatch,
     result, calls = _setup(tmp_path, monkeypatch, cached=cached, ready=False)
     assert result.returncode == 0, result.stderr
     assert calls == (["launch"] if cached else []) + ["mirror", "install", "launch"]
+
+
+def test_self_hosted_runner_recovers_without_the_hosted_mirror_edit(tmp_path, monkeypatch):
+    result, calls = _setup(tmp_path, monkeypatch, cached=False, ready=False, hosted=False)
+    assert result.returncode == 0, result.stderr
+    assert calls == ["install", "launch"]
 
 
 def test_failed_browser_recovery_is_red(tmp_path, monkeypatch):
