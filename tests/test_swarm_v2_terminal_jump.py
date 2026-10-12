@@ -1,0 +1,147 @@
+import stat
+
+import pytest
+
+pytestmark = [pytest.mark.unit, pytest.mark.xdist_group("fakeredis")]
+HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJumpHostKey"
+JUMP_REFUSED = "AGENTIHOOKS_TERMINAL_JUMP must be host:port with AGENTIHOOKS_TERMINAL_JUMP_HOST_KEY naming its host key"
+
+
+def store():
+    import fakeredis
+
+    from scripts.swarm.store import RedisStore
+
+    return RedisStore(fakeredis.FakeRedis(decode_responses=True))
+
+
+def ca_key(tmp_path):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    path = tmp_path / "user_ca"
+    path.write_bytes(
+        Ed25519PrivateKey.generate().private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.OpenSSH, serialization.NoEncryption()
+        )
+    )
+    return path
+
+
+def mode(path) -> int:
+    return stat.S_IMODE(path.stat().st_mode)
+
+
+def test_the_jump_sshd_only_forwards_to_worker_terminal_ports(tmp_path):
+    from scripts.swarm_v2.kubernetes import jump
+
+    assert jump.sshd_config(tmp_path, "worker").splitlines() == [
+        "Port 2222",
+        "ListenAddress 0.0.0.0",
+        f"HostKey {tmp_path}/host_key",
+        f"PidFile {tmp_path}/sshd.pid",
+        "AuthorizedKeysFile none",
+        f"TrustedUserCAKeys {tmp_path}/user_ca.pub",
+        f"AuthorizedPrincipalsFile {tmp_path}/principals",
+        "AllowUsers worker",
+        "ForceCommand /bin/false",
+        "PermitTTY no",
+        "AllowTcpForwarding local",
+        "PermitOpen *:2222",
+        "AllowStreamLocalForwarding no",
+        "AllowAgentForwarding no",
+        "X11Forwarding no",
+        "PermitTunnel no",
+        "GatewayPorts no",
+        "PermitRootLogin no",
+        "PubkeyAuthentication yes",
+        "PasswordAuthentication no",
+        "KbdInteractiveAuthentication no",
+        "HostbasedAuthentication no",
+        "UsePAM no",
+        "StrictModes yes",
+        "PermitUserEnvironment no",
+        "PrintMotd no",
+        "LogLevel VERBOSE",
+    ]
+
+
+def test_prepare_writes_the_jump_material_privately_and_keeps_its_host_key(tmp_path):
+    from cryptography.hazmat.primitives import serialization
+
+    from scripts.swarm_v2.herdr.attach import USER
+    from scripts.swarm_v2.kubernetes import jump
+
+    state = tmp_path / "jump"
+    user_ca = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIUserCa"
+
+    host_public = jump.prepare(state, user_ca)
+
+    key = serialization.load_ssh_private_key((state / "host_key").read_bytes(), None)
+    shown = key.public_key().public_bytes(serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH)
+    assert host_public == shown.decode()
+    assert (state / "user_ca.pub").read_text() == f"{user_ca}\n"
+    assert (state / "principals").read_text() == f"{jump.PRINCIPAL}\n"
+    assert (state / "sshd_config").read_text() == jump.sshd_config(state, USER)
+    assert {name: mode(state / name) for name in ("host_key", "user_ca.pub", "principals", "sshd_config")} == {
+        "host_key": 0o600,
+        "user_ca.pub": 0o600,
+        "principals": 0o600,
+        "sshd_config": 0o600,
+    }
+    assert jump.prepare(state, user_ca) == host_public
+
+
+def test_the_controller_records_the_jump_for_the_operator():
+    from scripts.swarm_v2.herdr.attach import Jump
+    from scripts.swarm_v2.kubernetes import jump
+
+    made = store()
+    assert jump.recorded(made) is None
+
+    jump.record(made, Jump("swarm.example", 2223, HOST_KEY))
+
+    assert jump.recorded(made) == Jump("swarm.example", 2223, HOST_KEY)
+
+
+def test_prepare_command_places_the_material_and_records_the_jump(tmp_path):
+    from scripts.swarm_v2.herdr.attach import Jump
+    from scripts.swarm_v2.kubernetes import jump, operator_terminal
+
+    made, key = store(), ca_key(tmp_path)
+    environ = {"AGENTIHOOKS_TERMINAL_CA_KEY": str(key), "AGENTIHOOKS_TERMINAL_JUMP": "swarm.example:2223"}
+
+    assert jump.main(["prepare", "--state", str(tmp_path / "jump")], environ, lambda: made) == 0
+
+    host_public = jump.prepare(tmp_path / "jump", operator_terminal.authority(environ).user_ca)
+    assert jump.recorded(made) == Jump("swarm.example", 2223, host_public)
+    assert (tmp_path / "jump" / "user_ca.pub").read_text() == operator_terminal.authority(environ).user_ca + "\n"
+
+
+@pytest.mark.parametrize(
+    "with_ca, address, message",
+    [
+        (False, "swarm.example:2223", "opening a worker terminal needs AGENTIHOOKS_TERMINAL_CA_KEY"),
+        (True, "", "the controller jump needs AGENTIHOOKS_TERMINAL_JUMP"),
+        (True, "swarm.example", JUMP_REFUSED),
+    ],
+)
+def test_prepare_command_refusals_exit_one_and_record_nothing(tmp_path, capsys, with_ca, address, message):
+    from scripts.swarm_v2.kubernetes import jump
+
+    made = store()
+    environ = {"AGENTIHOOKS_TERMINAL_JUMP": address}
+    if with_ca:
+        environ["AGENTIHOOKS_TERMINAL_CA_KEY"] = str(ca_key(tmp_path))
+
+    assert jump.main(["prepare", "--state", str(tmp_path / "jump")], environ, lambda: made) == 1
+
+    assert capsys.readouterr().err == f"controller jump refused: {message}\n"
+    assert jump.recorded(made) is None
+
+
+def test_swarm_jump_is_a_delegated_command():
+    from scripts import cli_delegates
+    from scripts.swarm_v2.kubernetes import jump
+
+    assert cli_delegates.delegated_cli(["swarm-jump", "prepare"]) is jump.main

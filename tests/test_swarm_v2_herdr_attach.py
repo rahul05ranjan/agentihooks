@@ -555,7 +555,7 @@ def test_the_jump_block_pins_the_controller_host_key(tmp_path):
         f"Host {attach.JUMP}",
         f"  HostName {JUMP_HOST}",
         "  Port 2223",
-        "  User jump",
+        "  User worker",
         f"  HostKeyAlias {JUMP_HOST}",
         f'  UserKnownHostsFile "{terminals}/known_hosts/{attach.JUMP}"',
         "  GlobalKnownHostsFile /dev/null",
@@ -565,6 +565,7 @@ def test_the_jump_block_pins_the_controller_host_key(tmp_path):
         "  BatchMode yes",
         "  IdentitiesOnly yes",
         f'  IdentityFile "{terminals}/id_ed25519"',
+        f'  CertificateFile "{terminals}/certificates/{attach.JUMP}-cert.pub"',
         "  ForwardAgent no",
     ]
 
@@ -587,3 +588,32 @@ def test_without_a_jump_no_jump_files_are_written(tmp_path):
     found, _ = terminal(tmp_path)
     found.register(scope(), HOST_KEY)
     assert (found.home.jump_config.exists(), found.home.jump_known_hosts.exists()) == (False, False)
+
+
+def test_register_through_the_jump_signs_a_jump_only_certificate(tmp_path):
+    from scripts.swarm_v2.herdr import endpoints
+
+    home = jumped(tmp_path)
+    authority = TerminalAuthority(Ed25519PrivateKey.generate(), lambda: fixture()["now"])
+    found = Terminal(home, authority, "swarm-workers", Runner(home), no_dns)
+
+    found.register(scope(), HOST_KEY)
+
+    certificate = serialization.load_ssh_public_identity(home.jump_certificate.read_bytes())
+    client = serialization.load_ssh_private_key(home.identity.read_bytes(), None).public_key()
+    assert certificate.valid_principals == [endpoints.JUMP_PRINCIPAL.encode()]
+    assert certificate.key_id == b"jump"
+    assert (
+        certificate.valid_before - certificate.valid_after
+        == endpoints.CERTIFICATE_SECONDS + endpoints.CLOCK_SKEW_SECONDS
+    )
+    assert certificate.public_key().public_bytes_raw() == client.public_bytes_raw()
+    certificate.verify_cert_signature()
+    assert certificate.signature_key().public_bytes_raw() == authority.key.public_key().public_bytes_raw()
+    assert _mode(home.jump_certificate) == 0o600
+
+
+def test_without_a_jump_no_jump_certificate_is_signed(tmp_path):
+    found, _ = terminal(tmp_path)
+    found.register(scope(), HOST_KEY)
+    assert not found.home.jump_certificate.exists()
