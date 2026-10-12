@@ -528,7 +528,10 @@ def test_beat_keeps_a_launch_counted_between_process_samples(redis, monkeypatch)
     assert not slots.reserve("claude:one", "second", 1, 1000)
 
 
-def test_beat_exit_between_samples_cannot_create_negative_capacity(redis, observations, monkeypatch):
+@pytest.mark.parametrize("hive,host,remaining", [("", "hive", 0), ("hive", "cluster", 0), ("other", "hive", 1)])
+def test_beat_exit_between_samples_cannot_create_negative_capacity(
+    redis, observations, monkeypatch, hive, host, remaining
+):
     from scripts.routing import aggregate, reservation
     from scripts.swarm.store import AgentRecord, RedisStore, SwarmConfig
     from scripts.swarm_v2.controller import Controller
@@ -544,6 +547,7 @@ def test_beat_exit_between_samples_cannot_create_negative_capacity(redis, observ
             store.next_name("swarm", "eng"),
             "eng",
             "task",
+            hive=hive,
             seat="eng-1@swarm",
             harness="claude",
             account="one",
@@ -551,7 +555,7 @@ def test_beat_exit_between_samples_cannot_create_negative_capacity(redis, observ
     )
     session = Session(
         "session",
-        Scope("kubernetes", "hive", "worker"),
+        Scope("kubernetes", host, "worker"),
         4242,
         1,
         "claude",
@@ -571,6 +575,6 @@ def test_beat_exit_between_samples_cannot_create_negative_capacity(redis, observ
 
     monkeypatch.setattr(daemon, "observe", observe)
     daemon.beat(redis, "hive")
-    assert aggregate.read(redis, 100)["claude:one"]["sessions"] == 0
-    assert slots.reserve("claude:one", "second", 1, 1000)
+    assert aggregate.read(redis, 100)["claude:one"]["sessions"] == remaining
+    assert slots.reserve("claude:one", "second", 1, 1000) is (remaining == 0)
     assert not slots.reserve("claude:one", "third", 1, 1000)
