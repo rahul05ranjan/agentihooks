@@ -64,6 +64,7 @@ class Controller:
         self._authorize()
         self.held = lease.acquire(self.store, self.slug, self.owner)
         if self.held is None:
+            self._route([])
             return False
         with lease.fencing(self.held.epoch):
             self.operations.recover(self.slug)
@@ -77,8 +78,7 @@ class Controller:
                 f"controller: kept saved herdr machines for {self.slug} on start: registered "
                 f"{len(report.registered)}, refused {dict(sorted(report.refused.items()))}"
             )
-        if self.jump is not None:
-            self.jump.publish(self._attempts())
+        self._route(self._attempts())
         self.reconciled_epoch = self.held.epoch
         self.ready = True
         return True
@@ -99,18 +99,23 @@ class Controller:
         except SwarmError:
             self.held = None
             self.ready = False
+            self._route([])
             return False
         if self.reconciled_epoch != self.held.epoch:
             self.ready = False
+            self._route([])
             return False
         self._authority()
         self.accounts.reconcile()
         if self.terminals is not None:
             self.terminals.change(self._attempts())
-        if self.jump is not None:
-            self.jump.publish(self._attempts())
+        self._route(self._attempts())
         self.ready = True
         return True
+
+    def _route(self, attempts: list[Attempt]) -> None:
+        if self.jump is not None:
+            self.jump.publish(attempts)
 
     def _authorize(self) -> None:
         if self.authorize() is not True:
