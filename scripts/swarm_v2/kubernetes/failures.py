@@ -221,6 +221,10 @@ class Recovery:
 
     def confirm(self, replacement: str, restored: dict) -> dict:
         self.controller.require()
+        agent = self.store.execution(self.slug, replacement)
+        occupant = self.store.execution_occupants(self.slug)[agent.seat]
+        if occupant.execution_id != replacement or occupant.generation != agent.generation:
+            raise SwarmError("restore outcome is for a superseded execution")
         directive = self.restore(replacement)
         if (
             directive is None

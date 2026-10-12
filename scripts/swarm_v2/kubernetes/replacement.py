@@ -76,6 +76,10 @@ class Replacements:
 
     def _record(self) -> None:
         for execution_id, successor in sorted(self.store.redis.hgetall(self._key(LAUNCHED)).items()):
+            agent = self.store.execution(self.slug, successor)
+            if self.store.execution_occupants(self.slug)[agent.seat].execution_id != successor:
+                self.store.redis.hset(self._key(RECORDED), execution_id, SUPERSEDED)
+                continue
             outcome = self.recovery.outcome(successor)
             recorded = self.store.redis.hget(self._key(RECORDED), execution_id)
             if recorded == SUPERSEDED or recorded == "verified" or (recorded == "accepted" and outcome is None):
