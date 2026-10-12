@@ -136,3 +136,25 @@ def test_protected_loader_reads_only_dev_approvals():
     assert checkout["with"]["ref"] == "dev"
     assert checkout["with"]["repository"] == "the-cloud-clockwork/agentihooks"
     assert any("--actors-output" in step.get("run", "") for step in job["steps"])
+
+
+@pytest.mark.parametrize("override", ["extra-step", "replace-command", "change-ref", "change-output", "workflow-env"])
+def test_loader_cannot_override_protected_actor_data(override):
+    from pathlib import Path
+
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    loader = yaml.safe_load((root / ".github/workflows/runner-trust.yml").read_text())
+    job = loader["jobs"]["actors"]
+    if override == "extra-step":
+        job["steps"].append({"run": 'echo \'actors=["stranger"]\' >> "$GITHUB_OUTPUT"'})
+    elif override == "replace-command":
+        job["steps"][-1]["run"] += '\necho \'actors=["stranger"]\' >> "$GITHUB_OUTPUT"'
+    elif override == "change-ref":
+        job["steps"][0]["with"]["ref"] = "${{ github.sha }}"
+    elif override == "change-output":
+        job["outputs"]["actors"] = '["stranger"]'
+    else:
+        loader["env"] = {"GITHUB_OUTPUT": "override"}
+    assert ci_runner_trust.check({"runner-trust.yml": loader}, ACTORS)
