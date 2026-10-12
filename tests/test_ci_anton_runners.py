@@ -23,7 +23,6 @@ MOVED = {
     ("test.yml", "unit"): "anton-oss",
     ("test.yml", "shard-check"): "anton-oss",
     ("test.yml", "test-count"): "anton-oss",
-    ("test.yml", "lint"): "anton-oss",
     ("test.yml", "mutation-stats"): "anton-oss-batch",
     ("test.yml", "mutation"): "anton-oss-batch",
     ("mutation-preflight.yml", "stats"): "anton-oss-batch",
