@@ -237,7 +237,7 @@ def _executions(redis: "Redis", local_id: str, processes: dict[str, dict[int, st
         for raw in redis.hvals(store.key(swarm, "fleet-sessions")):
             record = decode(raw)
             agent = agents.get(record.execution_id)
-            if record.state == CLOSED or agent is None or record.scope.host != local_id:
+            if record.state == CLOSED or agent is None or (agent.hive or record.scope.host) != local_id:
                 continue
             identity = record.harness, record.pid
             if identity in counted or record.generation != agent.generation:
