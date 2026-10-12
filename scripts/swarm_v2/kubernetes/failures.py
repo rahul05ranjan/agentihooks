@@ -431,6 +431,9 @@ class Recovery:
         return self.controller.admit(record, agent.execution_id)
 
     def _record(self, agent: AgentRecord, decision: Decision, observed_generation: int) -> Decision:
+        fence = self.fence(decision.execution_id)
+        fence["checkpoint"] = self._checkpoint(decision.execution_id)
+        self._write(FENCES, decision.execution_id, fence)
         self._write(RECOVERIES, decision.execution_id, asdict(decision))
         self.controller.telemetry.record(
             "recovery",
