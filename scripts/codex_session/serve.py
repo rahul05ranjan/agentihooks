@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -158,6 +159,15 @@ def main(
         f"endpoint={record.endpoint_ref} state={record.state}",
         flush=True,
     )
-    started.process.wait()
-    supervisor.finish(store, spec.slug, started, int(time.time() * 1000))
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(signum, _exit_on_signal)
+    try:
+        started.process.wait()
+    finally:
+        supervisor.stop(started.process)
+        supervisor.finish(store, spec.slug, started, int(time.time() * 1000))
     return started.process.returncode or 0
+
+
+def _exit_on_signal(signum: int, frame: object) -> None:
+    raise SystemExit(128 + signum)

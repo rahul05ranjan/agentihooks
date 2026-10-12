@@ -3,6 +3,7 @@ from dataclasses import replace
 
 import pytest
 
+from scripts.swarm import execution
 from scripts.swarm.store import APP_SERVER_TRANSPORT, LEGACY_TRANSPORT, AgentRecord, SwarmError
 from tests.swarm.test_cli import env, run  # noqa: F401
 
@@ -56,4 +57,4 @@ def test_the_transport_stays_off_the_agent_projection_and_comes_back_from_the_ex
     admitted = store.start_execution("sw", agent)
     raw = json.loads(store.redis.hget(store.key("sw", "agents"), admitted.name))
     assert "transport" not in raw
-    assert [found.transport for found in store.agents("sw")] == [APP_SERVER_TRANSPORT]
+    assert [found.transport for found in execution.ExecutionRegistry(store).agents("sw")] == [APP_SERVER_TRANSPORT]

@@ -63,7 +63,7 @@ def test_provider_args_follow_the_routed_account():
     assert serve.provider_args(codex_router.CodexAccount("default")) == ()
 
 
-def test_account_type_is_checked_only_where_cxch_01_proved_it():
+def test_account_type_is_checked_only_for_default_interactive_and_api_accounts():
     assert serve.account_type(codex_router.CodexAccount("api", key_env="OPENAI_API_KEY"), "") == "apiKey"
     assert serve.account_type(codex_router.CodexAccount("default"), "") == "chatgpt"
     assert serve.account_type(codex_router.CodexAccount("me"), serve.INTERACTIVE) == "chatgpt"
@@ -140,21 +140,48 @@ def test_prepare_routes_renders_and_builds_the_launch(tmp_path, monkeypatch):
     assert (spec.account_type, spec.allowed_tokens, spec.bundle_revision) == ("", frozenset({"AH_CX_TOKEN_t"}), "abc")
 
 
-def test_main_supervises_the_server_until_it_exits(tmp_path, monkeypatch, capsys):
-    process = SimpleNamespace(wait=lambda: 0, returncode=0)
+def supervised(monkeypatch, wait):
+    process = SimpleNamespace(wait=wait, returncode=0)
     record = SimpleNamespace(
         execution_id="exe-1", thread_id="thread-1", endpoint_ref="unix:///run/cx/s", state="connected"
     )
     started = SimpleNamespace(record=record, process=process)
-    finished = []
+    seen = {"finished": [], "stopped": [], "signals": []}
     monkeypatch.setattr(serve, "prepare", lambda args, agent_args, environ: SimpleNamespace(slug="sw"))
     monkeypatch.setattr(serve, "connect", lambda environ: "store")
+    monkeypatch.setattr(serve.signal, "signal", lambda signum, handler: seen["signals"].append((signum, handler)))
     monkeypatch.setattr(supervisor, "launch", lambda store, spec, deps: started)
-    monkeypatch.setattr(supervisor, "finish", lambda store, slug, done, now: finished.append((store, slug, done)))
+    monkeypatch.setattr(supervisor, "stop", lambda proc: seen["stopped"].append(proc))
+    monkeypatch.setattr(
+        supervisor, "finish", lambda store, slug, done, now: seen["finished"].append((store, slug, done))
+    )
+    return started, seen
+
+
+def test_main_supervises_the_server_until_it_exits(tmp_path, monkeypatch, capsys):
+    started, seen = supervised(monkeypatch, lambda: 0)
     argv = ["serve", "--cwd", str(tmp_path), "--profile", "engineer", "--seat", "eng-1@sw"]
     assert serve.main(argv, dict(SWARM_ENV)) == 0
     assert "execution=exe-1 thread=thread-1 endpoint=unix:///run/cx/s state=connected" in capsys.readouterr().out
-    assert finished == [("store", "sw", started)]
+    assert seen["finished"] == [("store", "sw", started)]
+    assert seen["stopped"] == [started.process]
+    assert seen["signals"] == [
+        (serve.signal.SIGTERM, serve._exit_on_signal),
+        (serve.signal.SIGHUP, serve._exit_on_signal),
+    ]
+
+
+def test_a_signal_while_supervising_still_stops_the_server_and_finishes_the_record(tmp_path, monkeypatch):
+    def interrupted():
+        serve._exit_on_signal(serve.signal.SIGTERM, None)
+
+    started, seen = supervised(monkeypatch, interrupted)
+    argv = ["serve", "--cwd", str(tmp_path), "--profile", "engineer", "--seat", "eng-1@sw"]
+    with pytest.raises(SystemExit) as stopped:
+        serve.main(argv, dict(SWARM_ENV))
+    assert stopped.value.code == 128 + serve.signal.SIGTERM
+    assert seen["stopped"] == [started.process]
+    assert seen["finished"] == [("store", "sw", started)]
 
 
 def test_main_reports_a_refused_launch(tmp_path, monkeypatch, capsys):

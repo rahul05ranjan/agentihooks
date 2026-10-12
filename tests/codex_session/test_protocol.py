@@ -62,6 +62,15 @@ def test_a_lost_connection_is_a_protocol_error():
         protocol.Connection(ws, 5).request("hooks/list")
 
 
+def test_a_frame_that_is_not_json_is_a_protocol_error():
+    class Garbled(Socket):
+        def recv(self, timeout):
+            return "not json"
+
+    with pytest.raises(protocol.ProtocolError, match="thread/start got a frame that is not JSON"):
+        protocol.Connection(Garbled(), 5).request("thread/start")
+
+
 def test_connect_initializes_then_announces_initialized():
     ws = Socket([{"id": 1, "result": {"codexHome": "/home/codex"}}])
     opened = []
