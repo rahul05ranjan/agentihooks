@@ -11,7 +11,10 @@ def enabled(environ: Mapping[str, str] | None = None) -> bool:
 
 
 def read(redis, now: float) -> dict[str, dict]:
+    from scripts.routing.reservation import LaunchSlots
+
     rows: dict[str, dict] = {}
+    seen: set[str] = set()
     for hive in registry.hives(redis):
         if not registry.live(hive, int(now * 1000)):
             continue
@@ -20,16 +23,24 @@ def read(redis, now: float) -> dict[str, dict]:
         if raw is None:
             continue
         counts = json.loads(raw)
+        seen.update(execution for ids in counts.get("_executions", {}).values() for execution in ids)
         quotas = json.loads(redis.get(f"{key}:quota") or "{}")
         for slot in hive["slots"]:
             name = f"{slot['harness']}:{slot['account']}"
             row = rows.setdefault(name, {**slot, "sessions": 0, "quota": None})
             row["sessions"] += counts.get(name, 0)
+            row["masters"] = row.get("masters", 0) + counts.get(f"interactive:{name}", 0)
             quota = quotas.get(name)
             if quota is not None and quota["observed_at"] is not None:
                 previous = row["quota"]
                 if previous is None or quota["observed_at"] > previous["observed_at"]:
                     row.update(slot, quota=quota)
+    for name, count in LaunchSlots(redis).counts(seen).items():
+        harness, account = name.split(":", 1)
+        row = rows.setdefault(
+            name, {"harness": harness, "account": account, "kind": "subscription", "quota": None, "sessions": 0}
+        )
+        row["sessions"] += count
     return rows
 
 

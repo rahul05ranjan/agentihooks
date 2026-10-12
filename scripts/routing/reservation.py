@@ -102,7 +102,16 @@ def current(
         if declared is None:
             return None
         store = _store(environ) if store is ... else store
-        return Reservation(harness, declared.slug, masters_live(harness, declared.slug, store, proc))
+        from scripts.routing import aggregate
+
+        if aggregate.enabled(environ):
+            import time
+
+            row = aggregate.current(time.time()).get(f"{harness}:{declared.slug}", {})
+            masters = row.get("masters", 0) + master_agents(store, harness, declared.slug)
+        else:
+            masters = masters_live(harness, declared.slug, store, proc)
+        return Reservation(harness, declared.slug, masters)
     except (OSError, RedisError):
         return None
 
