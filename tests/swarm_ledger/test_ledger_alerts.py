@@ -614,7 +614,7 @@ def test_write_with_fifty_alerts_resolves_a_bounded_number_of_names(inbox, monke
     guards = {}
     if refused:
         op = {"op": "task_add", "id": "one", "by": "writer", "task": "t1", "title": "Proof", "lane": "eng"}
-        guards = {"tasks": resources.resource_revision(state, "tasks")}
+        guards = {"tasks/t1": resources.resource_revision(state, "tasks/t1")}
     reply = mutations.apply(ledger_server, SLUG, "", {"operation_id": "timed", "ops": [op], "guards": guards})
     assert reply["rejected"] == (["one"] if refused else [])
     assert len(resolved) <= (4 if refused else 2), resolved
