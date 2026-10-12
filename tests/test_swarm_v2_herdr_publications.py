@@ -62,8 +62,9 @@ def test_private_url_falls_back_to_the_swarm_url_and_its_default_port():
     assert seen == [(HOST, 6379, socket.SOCK_STREAM)]
 
 
-def test_private_url_keeps_other_query_options():
-    url = URL + "?socket_keepalive=true"
+@pytest.mark.parametrize("query", ["?socket_keepalive=true", "?sslnote=1"])
+def test_private_url_keeps_other_query_options(query):
+    url = URL + query
 
     assert publications.private_url(hive(url), lookup_of("10.10.30.207")) == url
 
