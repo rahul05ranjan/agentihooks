@@ -299,6 +299,8 @@ jobs:
 
       - name: Fail when a shard did not finish
         if: needs.plan.outputs.changed != '0' && needs.mutation-shard.result != 'success'
+        env:
+          RESULT: ${{ needs.mutation-shard.result }}
         run: |
-          echo "::error::A mutation shard ended ${{ needs.mutation-shard.result }}; the merged report is incomplete."
+          echo "::error::A mutation shard ended $RESULT; the merged report is incomplete."
           exit 1
