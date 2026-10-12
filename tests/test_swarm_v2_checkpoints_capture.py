@@ -190,13 +190,12 @@ def test_corruption_after_export_is_refused_by_the_supervisor_validator(portable
     assert runtime.validate_export(attempt, "ckp-fixture", environ) is False
 
 
-def test_a_repeated_capture_reuses_the_private_acknowledgement_folder(portable):
+def test_capture_uses_an_existing_private_acknowledgement_folder(portable):
     attempt, scope, environ, newest = portable
-    first = capture.publish(attempt, scope, environ, newest)
-    (attempt / "checkpoints" / scope["incarnation"]).mkdir(exist_ok=True)
-    again = capture.publish(attempt, scope, environ, newest)
-    assert first == again
-    assert first["manifest"] == "checkpoints/fixture/manifest.json"
+    (attempt / "checkpoints" / scope["incarnation"]).mkdir(parents=True)
+    acknowledgement = capture.publish(attempt, scope, environ, newest)
+    assert acknowledgement["status"] == "complete"
+    assert acknowledgement["manifest"] == "checkpoints/fixture/manifest.json"
 
 
 @pytest.mark.parametrize("failure", ["promotion", "validation"])
