@@ -195,12 +195,13 @@ def test_final_artifact_deletion_is_refused_before_a_provider_takeover(storage, 
 @pytest.mark.parametrize("operation", ["write", "read", "move"])
 def test_artifact_outcomes_log_only_authenticated_scope_and_status(storage, capsys, operation):
     api, backend, authority = storage
-    key = "swarm/task/execution/gen-7/staging/object"
+    digest = hashlib.sha256(b"private conversation bytes").hexdigest()
+    key = f"swarm/task/staging/execution/{digest}"
     backend.write(key, b"private conversation bytes")
     fields = {
         "write": {"key": key, "data": encoded(b"private conversation bytes")},
         "read": {"key": key, "start": 0, "length": 26},
-        "move": {"key": key, "target": "swarm/task/execution/gen-7/objects/object"},
+        "move": {"key": key, "target": f"swarm/task/objects/{digest}"},
     }
     status, _ = request(api, operation, **fields[operation])
     assert status == 200
