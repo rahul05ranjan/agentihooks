@@ -51,7 +51,7 @@ def post(url: str, grant: str, body: dict) -> tuple[int, object]:
         return status, {}
 
 
-def report(spec: dict, grant: str, restored: restore.Restored) -> None:
+def report(spec: dict, grant: str, restored: checkpoint_runtime.restore.Restored) -> None:
     path = f"/v1/executions/{spec['execution_id']}/restore-outcome"
     headers = {**JSON_HEADERS, AUTHORIZATION: f"Bearer {grant}"}
     request = urllib.request.Request(
