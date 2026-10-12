@@ -62,6 +62,12 @@ def test_private_url_falls_back_to_the_swarm_url_and_its_default_port():
     assert seen == [(HOST, 6379, socket.SOCK_STREAM)]
 
 
+def test_private_url_keeps_other_query_options():
+    url = URL + "?socket_keepalive=true"
+
+    assert publications.private_url(hive(url), lookup_of("10.10.30.207")) == url
+
+
 @pytest.mark.parametrize(
     "environ, lookup, message",
     [
@@ -92,8 +98,18 @@ def test_private_url_falls_back_to_the_swarm_url_and_its_default_port():
         ),
         (hive(URL), no_dns, f"{HOST} has no route"),
         (hive(URL), lookup_of(), f"{HOST} has no route"),
-        (hive(URL), lookup_of("10.10.30.207", "203.0.113.9"), f"{HOST} resolves outside the private network"),
+        (hive(URL), lookup_of("10.10.30.207", "8.8.8.8"), f"{HOST} resolves outside the private network"),
         (hive("rediss:///0"), lookup_of("10.10.30.207"), "the publication transport URL names no host"),
+        (
+            hive(URL + "?ssl_cert_reqs="),
+            lookup_of("10.10.30.207"),
+            "the publication transport sets its own TLS checks, so its URL may carry no ssl_ options",
+        ),
+        (
+            hive(f"rediss://{HOST}:port/0"),
+            lookup_of("10.10.30.207"),
+            "the publication transport URL names an invalid port",
+        ),
     ],
 )
 def test_private_url_refuses_anything_but_verified_tls_to_a_private_address(environ, lookup, message):

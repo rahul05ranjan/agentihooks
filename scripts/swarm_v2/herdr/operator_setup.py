@@ -25,7 +25,7 @@ CA_FIELD = "user_ca"
 POLICY_MANIFEST = Path("k8s", "manifests", "swarm", "policy", "pod-policy.yaml")
 POLICY_KEY = "pod-policy.json"
 ANTONCORE_ENV = "AGENTIHOOKS_ANTONCORE_DIR"
-# Below the home, where the hooks' *.env autoload never hands the CA key path to agent sessions.
+# Not a top level *.env: the hooks autoload ~/.agentihooks/*.env into every agent session.
 FOLDER = "swarm-terminal"
 UNIT = "agentihooks-swarm-terminal.service"
 TIMER = "agentihooks-swarm-terminal.timer"
@@ -77,10 +77,11 @@ def place_ca_key(placement: Placement, bao: openbao_kv.OpenBao) -> str:
     staged = _stage(placement.ca_key, values[CA_FIELD].encode())
     try:
         user_ca = authority({CA_KEY_ENV: str(staged)}).user_ca
+        staged.replace(placement.ca_key)
     except SwarmError as refused:
-        staged.unlink()
         raise SetupRefused(str(refused)) from None
-    staged.replace(placement.ca_key)
+    finally:
+        staged.unlink(missing_ok=True)
     return _fingerprint(user_ca)
 
 
@@ -90,7 +91,7 @@ def place_policy(placement: Placement, antoncore: Path) -> str:
         manifest = yaml.safe_load(source.read_text())
     except OSError as error:
         raise SetupRefused(f"the Pod policy manifest {source} is unreadable: {error.strerror}") from None
-    except yaml.YAMLError:
+    except (yaml.YAMLError, UnicodeDecodeError):
         raise SetupRefused(f"the Pod policy in {source} is not a YAML ConfigMap") from None
     data = manifest.get("data") if isinstance(manifest, dict) else None
     text = data.get(POLICY_KEY) if isinstance(data, dict) else None
@@ -99,11 +100,17 @@ def place_policy(placement: Placement, antoncore: Path) -> str:
     staged = _stage(placement.policy, text.encode())
     try:
         namespace = pod_policy(str(staged))["namespace"]
+        staged.replace(placement.policy)
     except SwarmError as refused:
-        staged.unlink()
         raise SetupRefused(f"the Pod policy in {source} is refused: {refused}") from None
-    staged.replace(placement.policy)
+    finally:
+        staged.unlink(missing_ok=True)
     return namespace
+
+
+def settings(home: Path) -> dict[str, str]:
+    lines = Placement(home / FOLDER).env.read_text().splitlines()
+    return dict(line.split("=", 1) for line in lines)
 
 
 def place(home: Path, bao: openbao_kv.OpenBao, antoncore: Path) -> dict:
@@ -160,11 +167,14 @@ def install(binary: str | None = None, unit_dir: Path | None = None, run: Callab
     for name, text in ((UNIT, unit(binary)), (TIMER, timer())):
         path = unit_dir / name
         if not path.exists() or path.read_text() != text:
-            path.write_text(text)
+            _stage(path, text.encode()).replace(path)
             changed = True
-    if changed:
-        run(["systemctl", "--user", "daemon-reload"], capture_output=True, text=True, timeout=30, check=True)
-    result = run(["systemctl", "--user", "enable", "--now", TIMER], capture_output=True, text=True, timeout=30)
+    try:
+        if changed:
+            run(["systemctl", "--user", "daemon-reload"], capture_output=True, text=True, timeout=30, check=True)
+        result = run(["systemctl", "--user", "enable", "--now", TIMER], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise SetupRefused(f"systemctl could not enable {TIMER}: {type(error).__name__}") from None
     return result.returncode == 0
 
 
@@ -183,9 +193,9 @@ def main(
     args = _parser().parse_args(argv)
     environ = os.environ if environ is None else environ
     try:
+        outside_agent(Who.from_env() if who is None else who)
         if args.command == "install":
             return 0 if install() else 1
-        outside_agent(Who.from_env() if who is None else who)
         bao = openbao_kv.from_env(environ)
         if bao is None:
             raise SetupRefused(f"it needs {openbao_kv.URL_ENV} and {openbao_kv.TOKEN_ENV}")

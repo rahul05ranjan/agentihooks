@@ -49,7 +49,11 @@ def private_url(environ: Mapping[str, str], lookup: Lookup | None = None) -> str
         )
     if not parts.hostname:
         raise TransportRefused("the publication transport URL names no host")
-    _route(parts.hostname, parts.port or PORT, lookup)
+    try:
+        port = parts.port or PORT
+    except ValueError:
+        raise TransportRefused("the publication transport URL names an invalid port") from None
+    _route(parts.hostname, port, lookup)
     return url
 
 
