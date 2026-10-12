@@ -91,6 +91,5 @@ def claude_interactive_child(environ: Mapping[str, str], slug: str) -> dict[str,
 
 def codex_interactive_child(environ: Mapping[str, str], slug: str) -> dict[str, str]:
     child = codex_subscription_child(environ)
-    child.pop(API_MARKER, None)
     child[f"{INTERACTIVE_PREFIX}{slug}"] = "1"
     return child

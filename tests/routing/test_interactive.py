@@ -1,3 +1,5 @@
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -53,24 +55,45 @@ def test_interactive_login_presence_and_missing_login(tmp_path, monkeypatch, har
     from scripts.routing import interactive
 
     declared = master_account.MasterAccount(harness, "master")
-    monkeypatch.setattr(master_account, "load", lambda _: {harness: declared})
     home = tmp_path / "profile"
     home.mkdir()
     credentials = home / ".credentials.json"
     credentials.symlink_to(tmp_path / "login")
     (tmp_path / "login").touch()
     source = {**dict.fromkeys(CODEX_DROP, "sentinel"), "CLAUDE_CONFIG_DIR": str(home)}
+    monkeypatch.setattr(master_account, "load", lambda env: {harness: declared} if env is source else {})
+    monkeypatch.setattr(interactive.shutil, "which", {"codex": "/opt/codex"}.get)
     run = Mock(return_value=SimpleNamespace(returncode=0))
+    if harness == "claude":
+        run.side_effect = AssertionError("a claude login check must not run codex")
     assert interactive.account(harness, source, run) == declared
     assert credentials.is_symlink()
     if harness == "codex":
-        args, kwargs = run.call_args
-        assert args[0][-2:] == ["login", "status"]
-        assert not any(key in kwargs["env"] for key in CODEX_DROP)
+        run.assert_called_once_with(
+            ["/opt/codex", "login", "status"],
+            env=envs.codex_interactive_child(source, "master"),
+            capture_output=True,
+            timeout=30,
+        )
     credentials.unlink()
     run.return_value.returncode = 1
-    with pytest.raises(ClaudeError if harness == "claude" else CodexError, match="^interactive login missing$"):
+    error = ClaudeError if harness == "claude" else CodexError
+    with pytest.raises(error, match="^interactive login missing$") as raised:
         interactive.account(harness, source, run)
+    assert type(raised.value) is error
+
+
+@pytest.mark.parametrize("failure", [OSError("no codex"), subprocess.TimeoutExpired(["codex"], 30)])
+def test_codex_login_check_failure_reads_as_missing_login(monkeypatch, failure):
+    from scripts.codex_router import RoutingError
+    from scripts.routing import interactive
+
+    monkeypatch.setattr(master_account, "load", lambda _: {"codex": master_account.MasterAccount("codex", "master")})
+    monkeypatch.setattr(interactive.shutil, "which", lambda _: None)
+    run = Mock(side_effect=failure)
+    with pytest.raises(RoutingError, match="^interactive login missing$"):
+        interactive.account("codex", {}, run)
+    assert run.call_args.args[0] == ["codex", "login", "status"]
 
 
 @pytest.mark.parametrize("harness", ["claude", "codex"])
@@ -86,31 +109,60 @@ def test_interactive_route_requires_a_declaration(monkeypatch, harness):
         interactive.account(harness, {})
 
 
+class _Stdout:
+    def __init__(self):
+        self.text, self.flushed = "", ""
+
+    def write(self, text):
+        self.text += text
+
+    def flush(self):
+        self.flushed = self.text
+
+
 @pytest.mark.parametrize("harness", ["claude", "codex"])
 def test_interactive_launch_routes_without_reading_subscription_quota(tmp_path, monkeypatch, harness):
     from scripts import codex_router, install
     from scripts.routing import interactive
 
+    report = tmp_path / "report"
     source = {**dict.fromkeys(CLAUDE_DROP + CODEX_DROP, "sentinel"), "HOME": str(tmp_path)}
-    monkeypatch.setattr(interactive, "account", lambda kind, env, *args: master_account.MasterAccount(kind, "master"))
-    executed = []
+    checked, executed, out = [], [], _Stdout()
+
+    def account(kind, env, *rest):
+        checked.append((kind, env.get("AH_CC_TOKEN_one"), rest))
+        return master_account.MasterAccount(kind, "master")
 
     def execute(binary, argv, child):
-        executed.append((binary, argv, child))
+        executed.append((binary, argv, child, out.flushed))
 
+    monkeypatch.setattr(interactive, "account", account)
+    monkeypatch.setattr(install.shutil, "which", lambda name: f"/opt/{name}")
+    monkeypatch.setattr(sys, "stdout", out)
+    argv = ["--route", "interactive", "--agentihooks-report", str(report), "--version"]
     if harness == "codex":
-        assert codex_router.main(["--route", "interactive", "--version"], source, execute) == 0
+        run = Mock()
+        assert codex_router.main(argv, source, execute, run) == 0
+        assert checked == [("codex", "sentinel", (run,))]
+        line = "[agentihooks codex] account=master sessions=0/? placement=forced"
     else:
         monkeypatch.setattr(install, "_load_claude_runtime_env", lambda: None)
         monkeypatch.setattr("scripts.deps_preflight.ensure", lambda: None)
         monkeypatch.setattr("scripts.claude_quota_balancer._cache_path", lambda _: tmp_path / "quota.json")
-        monkeypatch.setattr(install.os, "environ", source)
+        for name, value in source.items():
+            monkeypatch.setenv(name, value)
         monkeypatch.setattr(install.os, "execvpe", execute)
-        install.cmd_claude(["--route", "interactive", "--version"])
-    _, argv, child = executed[0]
-    assert "--route" not in argv
-    assert argv[-1] == "--version"
+        install.cmd_claude(argv)
+        assert checked == [("claude", "sentinel", ())]
+        line = "[agenti] account=master route=interactive"
+    binary, command, child, flushed = executed[0]
+    assert binary == command[0] == f"/opt/{harness}"
+    assert "--route" not in command
+    assert command[-1] == "--version"
+    assert line in flushed
+    assert report.read_text().splitlines() == ["status=routed", "account=master", "placement=forced"]
     assert child["AH_ROUTE_INTERACTIVE_master"] == "1"
+    assert child["HOME"] == str(tmp_path)
     assert all(name not in child for name in (CLAUDE_DROP if harness == "claude" else CODEX_DROP))
 
 
@@ -124,6 +176,16 @@ def test_init_agent_explicit_interactive_auth_routes_the_selected_harness(tmp_pa
         init_agent.AgentSpec(agent=harness, auth=parsed.auth), Path("/report"), "probe", [], {}, tmp_path
     )
     assert command[command.index("--route") + 1] == "interactive"
+
+
+def test_init_agent_auth_option_accepts_only_interactive(capsys):
+    from scripts import init_agent
+
+    parser = init_agent._parser()
+    assert parser.parse_args([]).auth == ""
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--auth", "token"])
+    assert "Use the declared interactive login" in " ".join(parser.format_help().split())
 
 
 @pytest.mark.parametrize("harness", ["claude", "codex"])
@@ -159,6 +221,7 @@ def test_init_agent_interactive_auth_bypasses_subscription_harness_rotation(tmp_
     launcher = next(line.split("=", 1)[1] for line in output.splitlines() if line.startswith("launcher="))
     assert "--route interactive" in Path(launcher).read_text()
     assert f"agent={harness}" in output
+    assert "agent_reason=interactive" in output.splitlines()
     choose.assert_not_called()
 
 
