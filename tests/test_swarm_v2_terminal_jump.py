@@ -127,7 +127,9 @@ def test_with_no_live_worker_the_jump_admits_nobody(tmp_path):
 def test_routes_are_built_only_when_the_jump_state_is_set(tmp_path):
     from scripts.swarm_v2.kubernetes import jump
 
+    assert jump.STATE_ENV == "AGENTIHOOKS_TERMINAL_JUMP_STATE"
     assert jump.routes({}, "workers") is None
+    assert jump.routes({jump.STATE_ENV: ""}, "workers") is None
     built = jump.routes({jump.STATE_ENV: str(tmp_path)}, "workers")
     assert (built.state, built.namespace) == (tmp_path, "workers")
 
