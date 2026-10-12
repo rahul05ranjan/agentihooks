@@ -16,6 +16,8 @@ from urllib.parse import urlsplit
 
 from scripts.swarm_v2 import supervision_runtime, worker_home
 from scripts.swarm_v2.broadcast_bridge import API_URL, AUTHORIZATION, GRANT_NAME, JSON_HEADERS
+from scripts.swarm_v2.checkpoints import runtime as checkpoint_runtime
+from scripts.swarm_v2.checkpoints.restore import Restored
 from scripts.swarm_v2.supervision import SCHEMA_VERSION, LaunchRefused, checked_authority
 
 TEMPLATES = Path("/opt/agentihooks/templates")
@@ -30,9 +32,6 @@ TIMEOUT_SECONDS = 10
 CONFIRMED = ("execution_id", "task_id", "grant_id")
 
 Send = Callable[[str, str, dict], tuple[int, object]]
-
-
-from scripts.swarm_v2.checkpoints import runtime as checkpoint_runtime
 
 
 def post(url: str, grant: str, body: dict) -> tuple[int, object]:
@@ -51,7 +50,7 @@ def post(url: str, grant: str, body: dict) -> tuple[int, object]:
         return status, {}
 
 
-def report(spec: dict, grant: str, restored: checkpoint_runtime.restore.Restored) -> None:
+def report(spec: dict, grant: str, restored: Restored) -> None:
     path = f"/v1/executions/{spec['execution_id']}/restore-outcome"
     headers = {**JSON_HEADERS, AUTHORIZATION: f"Bearer {grant}"}
     request = urllib.request.Request(

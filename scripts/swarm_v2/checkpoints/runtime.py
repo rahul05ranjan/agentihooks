@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from pathlib import Path
 
 from scripts.swarm_v2 import filesystem
@@ -12,9 +13,6 @@ from scripts.swarm_v2.checkpoints import git_capture, model, native, restore
 
 ROOT = "AGENTIHOOKS_CHECKPOINT_ROOT"
 REMOTE = "AGENTIHOOKS_CHECKPOINT_REMOTE"
-
-
-from dataclasses import replace
 
 
 def granted(root: Path | Backend, registration: Registration) -> ArtifactStore:

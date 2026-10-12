@@ -1,4 +1,5 @@
 import json
+from dataclasses import asdict
 
 import pytest
 
@@ -45,9 +46,6 @@ LABELS = {
     "swarm.agentihooks.io/execution-id": EXECUTION,
     "swarm.agentihooks.io/generation": "3",
 }
-
-
-from dataclasses import asdict
 
 
 def agent(execution_id=EXECUTION, generation=3, profile="engineer") -> AgentRecord:
