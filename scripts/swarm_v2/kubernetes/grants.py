@@ -16,6 +16,7 @@ from scripts.swarm_v2.kubernetes.watch import EXECUTION_LABEL, OWNER_LABEL, owne
 from scripts.swarm_v2.supervision import AUTHORITY, SCHEMA_VERSION, Budgets
 
 PROJECT_ANNOTATION = f"{DOMAIN}/project"
+GITHUB = "github.com/"
 
 
 @dataclass(frozen=True)
@@ -109,7 +110,8 @@ class PodGrants:
         project = pod["metadata"].get("annotations", {}).get(PROJECT_ANNOTATION)
         if project is not None and project not in registration.project_ids:
             return Hand(False, "project_unpermitted", self._remove(pod))
-        checkout = None if project is None else {"project": project, "agent": agent.name}
+        hosted = project is not None and project.startswith(GITHUB)
+        checkout = {"project": project, "agent": agent.name} if hosted else None
         record = self.supervision.record(registration, agent.profile, checkout, opening)
         try:
             self.api.create_config_map(_material(pod, labels, grant, record))

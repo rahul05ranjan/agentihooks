@@ -37,16 +37,18 @@ def _prompt(value: object) -> str:
     return value
 
 
-def _checkout(execution: filesystem.Execution, task: str) -> Path | None:
+def _checkout(execution: filesystem.Execution, task: str) -> Path:
+    refused = LaunchRefused("invalid checkout")
     if not filesystem.SEGMENT.fullmatch(task):
-        return None
+        raise refused
     record = execution.path("spool") / "workspaces" / f"{task}.json"
-    if not record.is_file():
-        return None
+    try:
+        tree = Path(json.loads(record.read_text())["path"]).resolve()
+    except (OSError, ValueError, KeyError, TypeError):
+        raise refused from None
     root = execution.path("worktree").resolve()
-    tree = Path(json.loads(record.read_text())["path"]).resolve()
     if not tree.is_relative_to(root) or tree == root or not tree.is_dir():
-        raise LaunchRefused("invalid checkout")
+        raise refused
     return tree
 
 
@@ -139,5 +141,5 @@ class Launch:
             _command(spec.get("herdr", ["herdr", "server"])),
             budgets,
             _prompt(spec["prompt"]) if "prompt" in spec else "",
-            _checkout(execution, authority["task_id"]),
+            _checkout(execution, authority["task_id"]) if "checkout" in spec else None,
         )

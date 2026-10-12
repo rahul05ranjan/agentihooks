@@ -174,7 +174,7 @@ def test_the_controller_start_hands_the_tick_the_kubernetes_runtime_and_the_dist
     def tick(given, runtimes):
         service = hosted[0]
         runtime = runtimes[SLUG]
-        task = {"id": "t1", "seat": SEAT, "controller_epoch": service.controller.held.epoch}
+        task = {"id": "t1", "title": "Fixture", "seat": SEAT, "controller_epoch": service.controller.held.epoch}
         task["profile_decision"] = {
             "profile": profile,
             "source": "classifier",

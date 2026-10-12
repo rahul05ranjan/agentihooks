@@ -212,6 +212,17 @@ def test_a_pod_project_the_grant_does_not_permit_takes_no_config_map_and_its_pod
     assert api.deleted == [("pods", POD, "uid-1")]
 
 
+def test_a_permitted_project_hosted_outside_github_launches_without_a_checkout():
+    api = Api(pod(project="local:fixture"))
+    permitted = Registration(**{**registration().__dict__, "project_ids": ["local:fixture"]})
+
+    assert PodGrants(api, SLUG, lambda token: permitted, Supervision("claude", None, CONTROL)).hand(
+        agent(), GRANT
+    ) == Hand(True, "handed", False)
+
+    assert "checkout" not in json.loads(api.created[0]["data"][LAUNCH_RECORD])
+
+
 def test_a_pod_without_a_project_is_handed_a_launch_record_without_a_checkout():
     found = pod()
     del found["metadata"]["annotations"]

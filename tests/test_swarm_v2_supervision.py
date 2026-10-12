@@ -124,8 +124,16 @@ def recorded_checkout(attempt, task, tree):
     (folder / f"{task}.json").write_text(json.dumps({"path": str(tree)}))
 
 
+def checked_out_launch(tmp_path, task="fixture"):
+    attempt, path, spec = launch_files(tmp_path)
+    spec["authority"]["task_id"] = task
+    (attempt / "registration.json").write_text(json.dumps(spec["authority"]))
+    path.write_text(json.dumps({**spec, "checkout": {"project": "github.com/o/r", "agent": "engineer@323133-1222"}}))
+    return attempt, path
+
+
 def test_a_launch_opens_in_the_worktree_its_task_recorded(tmp_path):
-    attempt, path, _ = launch_files(tmp_path)
+    attempt, path = checked_out_launch(tmp_path)
     tree = attempt / "worktrees" / "engineer-323133-1222"
     tree.mkdir(parents=True)
     recorded_checkout(attempt, "fixture", tree)
@@ -133,12 +141,25 @@ def test_a_launch_opens_in_the_worktree_its_task_recorded(tmp_path):
     assert Launch.load(attempt, path).checkout == tree.resolve()
 
 
-@pytest.mark.parametrize("where", ["outside", "missing", "root"])
-def test_a_recorded_checkout_outside_the_worktree_root_is_refused(tmp_path, where):
+def test_a_launch_without_a_checkout_ignores_a_recorded_worktree(tmp_path):
     attempt, path, _ = launch_files(tmp_path)
+    tree = attempt / "worktrees" / "engineer-323133-1222"
+    tree.mkdir(parents=True)
+    recorded_checkout(attempt, "fixture", tree)
+
+    assert Launch.load(attempt, path).checkout is None
+
+
+@pytest.mark.parametrize("where", ["outside", "missing", "root", "absent", "unreadable"])
+def test_a_launch_whose_checkout_has_no_valid_worktree_is_refused(tmp_path, where):
+    attempt, path = checked_out_launch(tmp_path)
     (attempt / "worktrees").mkdir()
     trees = {"outside": tmp_path, "missing": attempt / "worktrees" / "gone", "root": attempt / "worktrees"}
-    recorded_checkout(attempt, "fixture", trees[where])
+    if where in trees:
+        recorded_checkout(attempt, "fixture", trees[where])
+    if where == "unreadable":
+        recorded_checkout(attempt, "fixture", attempt)
+        (attempt / "spool" / "workspaces" / "fixture.json").write_text(json.dumps({"tree": "elsewhere"}))
 
     with pytest.raises(LaunchRefused) as refused:
         Launch.load(attempt, path)
@@ -146,16 +167,16 @@ def test_a_recorded_checkout_outside_the_worktree_root_is_refused(tmp_path, wher
     assert str(refused.value) == "invalid checkout"
 
 
-def test_a_task_id_that_names_no_workspace_record_opens_without_a_checkout(tmp_path):
-    attempt, path, spec = launch_files(tmp_path)
-    spec["authority"]["task_id"] = "Fixture"
-    (attempt / "registration.json").write_text(json.dumps(spec["authority"]))
-    path.write_text(json.dumps(spec))
+def test_a_checkout_for_a_task_id_no_workspace_can_hold_is_refused(tmp_path):
+    attempt, path = checked_out_launch(tmp_path, "Fixture")
     tree = attempt / "worktrees" / "engineer-323133-1222"
     tree.mkdir(parents=True)
     recorded_checkout(attempt, "Fixture", tree)
 
-    assert Launch.load(attempt, path).checkout is None
+    with pytest.raises(LaunchRefused) as refused:
+        Launch.load(attempt, path)
+
+    assert str(refused.value) == "invalid checkout"
 
 
 def wait_for(path, child):

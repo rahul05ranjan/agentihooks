@@ -27,7 +27,7 @@ REGISTER_ATTEMPTS = 10
 RETRY_SECONDS = 2
 TIMEOUT_SECONDS = 10
 CONFIRMED = ("execution_id", "task_id", "grant_id")
-PROJECT = re.compile(r"github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
+PROJECT = re.compile(r"github\.com/[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*")
 
 Send = Callable[[str, str, dict], tuple[int, object]]
 

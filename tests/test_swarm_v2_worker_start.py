@@ -730,8 +730,10 @@ def test_a_launch_record_without_a_checkout_prepares_none(tmp_path, monkeypatch)
 def test_a_checkout_that_cannot_be_prepared_refuses_the_start_without_a_registration_record(tmp_path, monkeypatch):
     prepared = Workspaces(workspaces.WorkspaceError("fetch of the project failed"))
 
-    with pytest.raises(workspaces.WorkspaceError):
+    with pytest.raises(workspaces.WorkspaceError) as refused:
         checked_out(tmp_path, monkeypatch, prepared)
+
+    assert str(refused.value) == "fetch of the project failed"
 
     assert not (tmp_path / "attempts" / EXECUTION / "registration.json").exists()
 
@@ -743,6 +745,8 @@ def test_a_checkout_that_cannot_be_prepared_refuses_the_start_without_a_registra
         {"project": "x-access-token@github.com/the-cloud-clockwork/agentihooks", "agent": AGENT},
         {"project": "local:fixture", "agent": AGENT},
         {"project": "github.com/the-cloud-clockwork/agentihooks/extra", "agent": AGENT},
+        {"project": "github.com/the-cloud-clockwork/..", "agent": AGENT},
+        {"project": "github.com/.hidden/agentihooks", "agent": AGENT},
         {"project": "gitlab.com/the-cloud-clockwork/agentihooks", "agent": AGENT},
         {"project": 7, "agent": AGENT},
         {"agent": AGENT},

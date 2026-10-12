@@ -134,11 +134,7 @@ class Supervisor:
         if not self.ready("agent", deadline):
             return "termination" if self.stop else "agent_startup_failure"
         if self.launch.prompt:
-            text = self.launch.prompt.encode()
-            delivered = {"bytes": len(text), "sha256": hashlib.sha256(text).hexdigest()}
-            print(
-                json.dumps({"supervisor": "prompt_delivered", "incarnation": self.root.name, **delivered}), flush=True
-            )
+            self.delivered()
         write(self.root / "running.json", {**self.scope, "pane_id": pane, "status": "running"})
         return None
 
@@ -146,9 +142,14 @@ class Supervisor:
         if not self.launch.prompt:
             return []
         path = self.root / PROMPT
-        with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as handle:
+        with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as handle:
             handle.write(self.launch.prompt)
         return ["--prompt-file", str(path)]
+
+    def delivered(self) -> None:
+        text = self.launch.prompt.encode()
+        digest = {"bytes": len(text), "sha256": hashlib.sha256(text).hexdigest()}
+        print(json.dumps({"supervisor": "prompt_delivered", "incarnation": self.root.name, **digest}), flush=True)
 
     def running(self) -> str:
         while True:

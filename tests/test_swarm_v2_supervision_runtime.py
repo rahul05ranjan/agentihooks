@@ -264,14 +264,14 @@ def test_start_opens_the_harness_in_the_prepared_checkout(supervisor, monkeypatc
 
 
 def test_start_hands_the_opening_prompt_to_the_harness_and_logs_its_delivery(supervisor, monkeypatch, capsys):
-    text = "You are engineer@323133-1222. Your one task is t1."
+    text = "You are engineer@323133-1222. Your one task is t1 → résumé."
     supervisor.launch = replace(supervisor.launch, prompt=text)
 
     reason, _, herdr = started(supervisor, monkeypatch)
 
     assert reason is None
     held = supervisor.root / "prompt.md"
-    assert held.read_text() == text
+    assert held.read_bytes() == text.encode()
     assert oct(held.stat().st_mode & 0o777) == oct(0o600)
     assert shlex.split(herdr.call_args_list[1].args[0][3]) == [
         sys.executable,
@@ -313,7 +313,7 @@ def test_the_agent_wrapper_hands_the_prompt_file_text_to_the_harness_as_its_last
     monkeypatch.setenv("SWARM_SUPERVISION_DIR", str(tmp_path))
     monkeypatch.setattr(agent.signal, "signal", lambda sig, handler: None)
     held = tmp_path / "prompt.md"
-    held.write_text("Your one task is t1.\nRead steering first.")
+    held.write_bytes("Your one task is t1 → résumé.\nRead steering first.".encode())
     child = Mock(pid=321)
     child.wait.return_value = 0
     spawn = Mock(return_value=child)
@@ -322,7 +322,9 @@ def test_the_agent_wrapper_hands_the_prompt_file_text_to_the_harness_as_its_last
 
     assert agent.main(["--prompt-file", str(held), "claude", "--name", "eng"]) == 0
 
-    spawn.assert_called_once_with(["claude", "--name", "eng", "Your one task is t1.\nRead steering first."], stdin=None)
+    spawn.assert_called_once_with(
+        ["claude", "--name", "eng", "Your one task is t1 → résumé.\nRead steering first."], stdin=None
+    )
 
 
 def test_drain_without_an_exporter_waits_for_no_checkpoint_and_reports_it_incomplete(supervisor, monkeypatch):
