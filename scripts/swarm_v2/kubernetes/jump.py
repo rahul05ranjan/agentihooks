@@ -4,7 +4,7 @@ import argparse
 import json
 import os
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 
 from cryptography.hazmat.primitives import serialization
@@ -12,11 +12,13 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from scripts.swarm.store import PREFIX, RedisStore, SwarmError, connect
 from scripts.swarm_v2.herdr.attach import USER, Jump
-from scripts.swarm_v2.herdr.endpoints import JUMP_PRINCIPAL, PORT
+from scripts.swarm_v2.herdr.endpoints import JUMP_PRINCIPAL, PORT, Endpoint
+from scripts.swarm_v2.herdr.upkeep import Attempt
 from scripts.swarm_v2.kubernetes import operator_terminal
 
 PRINCIPAL = JUMP_PRINCIPAL
 KEY = f"{PREFIX}:terminal-jump"
+STATE_ENV = "AGENTIHOOKS_TERMINAL_JUMP_STATE"
 
 
 def sshd_config(state: Path, user: str) -> str:
@@ -74,11 +76,30 @@ def _host_key(path: Path) -> Ed25519PrivateKey:
     return key
 
 
+def principals(hosts: Iterable[str]) -> str:
+    opens = ",".join(f'permitopen="{host}:{PORT}"' for host in sorted(hosts))
+    return f"restrict,port-forwarding,{opens} {PRINCIPAL}\n" if opens else ""
+
+
+class Routes:
+    def __init__(self, state: Path, namespace: str) -> None:
+        self.state, self.namespace = state, namespace
+
+    def publish(self, attempts: Iterable[Attempt]) -> None:
+        hosts = (Endpoint(attempt.scope, self.namespace).host for attempt in attempts)
+        _write(self.state / "principals", principals(hosts).encode())
+
+
+def routes(environ: Mapping[str, str], namespace: str) -> Routes | None:
+    state = environ.get(STATE_ENV)
+    return Routes(Path(state), namespace) if state else None
+
+
 def prepare(state: Path, user_ca: str) -> str:
     state.mkdir(mode=0o700, parents=True, exist_ok=True)
     key = _host_key(state / "host_key")
     _write(state / "user_ca.pub", f"{user_ca}\n".encode())
-    _write(state / "principals", f"{PRINCIPAL}\n".encode())
+    _write(state / "principals", principals(()).encode())
     _write(state / "sshd_config", sshd_config(state, USER).encode())
     return key.public_key().public_bytes(serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH).decode()
 

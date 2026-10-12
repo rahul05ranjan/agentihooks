@@ -47,6 +47,7 @@ class Controller:
         self.store, self.slug, self.authorize = store, slug, authorize
         self.telemetry = Telemetry(store, slug)
         self.terminals: Upkeep | None = None
+        self.jump = None
         self.host_keys = HostKeys(store)
         self.pods, self.reconciler = pods, Reconciler(owner_for(slug), orphan_cleanup)
         self.accounts = AccountReconciler(store, slug)
@@ -76,6 +77,8 @@ class Controller:
                 f"controller: kept saved herdr machines for {self.slug} on start: registered "
                 f"{len(report.registered)}, refused {dict(sorted(report.refused.items()))}"
             )
+        if self.jump is not None:
+            self.jump.publish(self._attempts())
         self.reconciled_epoch = self.held.epoch
         self.ready = True
         return True
@@ -104,6 +107,8 @@ class Controller:
         self.accounts.reconcile()
         if self.terminals is not None:
             self.terminals.change(self._attempts())
+        if self.jump is not None:
+            self.jump.publish(self._attempts())
         self.ready = True
         return True
 
