@@ -147,7 +147,7 @@ def published_attempt(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("recovery", ["native", "reconstructed"])
-def test_worker_prepare_materializes_source_and_conversation(published_attempt, tmp_path, recovery):
+def test_worker_prepare_materializes_source_and_conversation(published_attempt, tmp_path, monkeypatch, recovery):
     from scripts.swarm_v2 import filesystem
     from tests import sv2_ckp02_cases as sources
 
@@ -166,6 +166,18 @@ def test_worker_prepare_materializes_source_and_conversation(published_attempt, 
         "session_id": cases.SESSIONS["claude"] if recovery == "native" else "",
         "watermark": 41,
     }
+    original_store = runtime.worker_store
+
+    def scoped(actual, root, environment):
+        assert (actual, root, environment) == (spec, attempt, environ)
+        return original_store(actual, root, environment)
+
+    def installed(harness, environment):
+        assert environment == environ
+        return cases.VERSIONS[harness]
+
+    monkeypatch.setattr(runtime, "worker_store", scoped)
+    monkeypatch.setattr(runtime, "version", installed)
     result = runtime.prepare(spec, attempt, environ)
     assert result.recovery == recovery
     assert result.checkpoint_id == "ckp-fixture"
@@ -240,7 +252,9 @@ def test_controller_listing_checks_original_execution_generation(published_attem
     )
     assert good.list("e1")[0]["checkpoint_id"] == "ckp-fixture"
     assert good.list("unknown") == []
-    bad = runtime.Checkpoints(runtime.configured(environ), lookup, "fixture", lambda execution: 3)
+    bad = runtime.Checkpoints(
+        runtime.configured(environ), lookup, "fixture", lambda execution: 3 if execution == "e1" else None
+    )
     assert bad.list("e1") == []
     assert runtime.Checkpoints(None, lookup, "fixture").list("e1") == []
 
@@ -283,6 +297,36 @@ def test_worker_prepare_restores_a_codex_checkpoint_into_its_isolated_home(tmp_p
     assert not (attempt / "homes/codex/.claude").exists()
 
 
+def test_production_restorer_clones_the_declared_source_before_applying_checkpoint(tmp_path, monkeypatch):
+    from scripts.swarm_v2.checkpoints import capture
+    from tests.test_swarm_v2_checkpoints_capture import portable
+
+    attempt, scope, environ, newest = portable.__wrapped__(tmp_path, monkeypatch)
+    spec = json.loads((attempt / "launch.json").read_text())
+    spec["registration"]["project_ids"] = ["github.com/fixture/project"]
+    (attempt / "launch.json").write_text(json.dumps(spec))
+    assert capture.publish(attempt, scope, environ, newest)["status"] == "complete"
+    store = runtime.worker_store(spec, attempt, environ)
+    target = tmp_path / "cold-source"
+    original_run = runtime.subprocess.run
+    clones = []
+
+    def run(argv, **kwargs):
+        if argv[:2] == ["git", "clone"]:
+            clones.append(argv)
+            argv = [*argv[:2], str(tmp_path / "remote.git"), *argv[3:]]
+        return original_run(argv, **kwargs)
+
+    monkeypatch.setattr(runtime.subprocess, "run", run)
+    directive = restore.Directive("ckp-fixture", "native", cases.SESSIONS["claude"], 41)
+    paths = restore.Paths(target, tmp_path / "new-home", attempt, cases.VERSIONS["claude"])
+    restored = runtime.restoring(store, directive, paths)
+    assert restored.recovery == "native"
+    assert clones == [["git", "clone", "https://github.com/fixture/project.git", str(target)]]
+    assert (target / "app.py").read_text() == "print('committed locally')\n"
+    assert (target / "draft.md").read_text() == "allowed untracked draft\n"
+
+
 def test_historical_store_scope_selects_last_matching_task_claim():
     from scripts.swarm_v2.auth_context import Registration
 
@@ -295,8 +339,9 @@ def test_historical_store_scope_selects_last_matching_task_claim():
         {"claim": {"execution_id": "e1", "execution_generation": 1, "generation": 98}},
         {"claim": {"execution_id": "e1", "execution_generation": 2, "generation": 7}},
         {"claim": {"execution_id": "e1", "execution_generation": 2, "generation": 8}},
+        {"claim": {"execution_id": "e1", "execution_generation": 2, "generation": 9}},
     ]
-    assert runtime.historical(registration, journal) == replace(registration, generation=8)
+    assert runtime.historical(registration, journal) == replace(registration, generation=9)
     assert runtime.historical(registration, []) is None
     assert runtime.historical(None, journal) is None
 
