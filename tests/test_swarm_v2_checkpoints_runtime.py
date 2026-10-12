@@ -94,20 +94,25 @@ def test_replacement_restores_the_registered_checkpoint_before_returning_a_resum
     assert result.recovery == "native"
 
 
-def test_a_drain_requires_a_durable_verified_checkpoint(tmp_path, monkeypatch):
+@pytest.mark.parametrize("storage", [{}, {runtime.ROOT: "/fixture"}, {runtime.REMOTE: "true"}])
+@pytest.mark.parametrize("verified", [False, True])
+def test_a_drain_requires_a_durable_verified_checkpoint(tmp_path, monkeypatch, storage, verified):
     from scripts.swarm_v2 import supervision_runtime
     from tests.test_swarm_v2_supervision_runtime import supervisor
 
     owner = supervisor.__wrapped__(tmp_path, monkeypatch)
-    owner.environment[runtime.ROOT] = str(tmp_path / "durable")
+    owner.environment.update(storage)
     monkeypatch.setattr(owner, "quiesce", lambda: True)
     monkeypatch.setattr(owner, "wait", lambda: pytest.fail("unbounded wait"))
     monkeypatch.setattr(supervision_runtime, "checkpoint", lambda *args: "unverified")
     monkeypatch.setattr(supervision_runtime.trees, "cleanup", lambda *args: None)
-    monkeypatch.setattr(runtime, "validate_export", lambda *args: False)
+    calls = []
+    monkeypatch.setattr(runtime, "validate_export", lambda *args: calls.append(args) or verified)
     result = owner.drain("termination")
-    assert result["checkpoint_status"] == "incomplete"
-    assert result["checkpoint_id"] is None
+    complete = not storage or verified
+    assert result["checkpoint_status"] == ("complete" if complete else "incomplete")
+    assert result["checkpoint_id"] == ("unverified" if complete else None)
+    assert calls == ([(owner.launch.attempt, "unverified", owner.environment)] if storage else [])
 
 
 def test_a_supervisor_launch_uses_the_restored_native_command(tmp_path, monkeypatch):
