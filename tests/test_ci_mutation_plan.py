@@ -150,7 +150,7 @@ def test_main_writes_one_matrix_entry_per_shard(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", [*__import__("sys").argv, "--stats-target", "100"])
     assert plan.main() == 0
     assert calls == [(tmp_path, ["earlier", "merged"], "HEAD")]
-    assert output.read_text() == "shards=[0, 1, 2, 3]\nstats_parts=[0, 1, 2]\nbases=earlier,merged\n"
+    assert output.read_text() == "shards=[0, 1, 2, 3]\nstats_parts=[0, 1, 2]\nbases=earlier,merged\nchanged=1\n"
     assert capsys.readouterr().out == (
         "Mutation bases: earlier merged\n"
         "Changed line mutants: 50\nEstimated mutation seconds: 1601, slowest stats bucket: 121\n"
@@ -186,4 +186,4 @@ def test_main_defaults_to_origin_dev_a_four_minute_target_a_half_minute_stats_bu
     monkeypatch.setattr("scripts.ci_mutation.plan.estimate", lambda root, changes: estimated)
     assert plan.main() == 0
     assert calls == [(tmp_path, ["origin/dev@HEAD"], "HEAD")]
-    assert output.read_text() == f"shards={shards}\nstats_parts={parts}\nbases=origin/dev@HEAD\n"
+    assert output.read_text() == f"shards={shards}\nstats_parts={parts}\nbases=origin/dev@HEAD\nchanged=0\n"

@@ -120,3 +120,10 @@ def test_main_writes_into_a_new_nested_folder_and_into_an_existing_one(tmp_path,
     assert merge.main([str(shards), "--shards", "3", "--output", str(nested)]) == 1
     assert json.loads((nested / "report.json").read_text())["failed"] is True
     assert capsys.readouterr().out.count("Merged 1 of 3 mutation shard reports") == 2
+
+
+def test_main_writes_a_complete_empty_report_when_the_plan_found_nothing_to_mutate(tmp_path, capsys):
+    out = tmp_path / "gate"
+    assert merge.main([str(tmp_path / "absent"), "--shards", "0", "--output", str(out)]) == 0
+    assert json.loads((out / "report.json").read_text()) == {"files": [], "not_mutated": [], "failed": False}
+    assert capsys.readouterr().out == "Merged 0 of 0 mutation shard reports\n"

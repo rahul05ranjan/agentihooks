@@ -51,6 +51,9 @@ def test_preflight_skips_a_branch_with_an_open_pull_request():
     assert jobs["plan"]["needs"] == "pull-request"
     for name in ("stats", "mutation-shard", "mutation"):
         assert jobs[name]["if"].startswith("${{ !cancelled() && needs.plan.result == 'success'"), name
+    for name in ("stats", "mutation-shard"):
+        assert "needs.plan.outputs.changed != '0'" in jobs[name]["if"], name
+    assert "changed" not in jobs["mutation"]["if"]
 
 
 def test_preflight_reuses_a_green_report_before_the_mutation_job_takes_a_lane():
@@ -92,6 +95,7 @@ def test_preflight_sizes_its_stats_parts_and_shards_from_the_plan():
         "shards": "${{ steps.plan.outputs.shards }}",
         "stats_parts": "${{ steps.plan.outputs.stats_parts }}",
         "bases": "${{ steps.plan.outputs.bases }}",
+        "changed": "${{ steps.plan.outputs.changed }}",
     }
     steps, names = _steps(plan)
     assert steps[0]["with"] == {"fetch-depth": 0}
@@ -111,7 +115,8 @@ def test_preflight_sizes_its_stats_parts_and_shards_from_the_plan():
     }
     assert (
         jobs["mutation-shard"]["if"]
-        == "${{ !cancelled() && needs.plan.result == 'success' && needs.stats.result == 'success' }}"
+        == "${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.changed != '0'"
+        " && needs.stats.result == 'success' }}"
     )
 
 
@@ -171,7 +176,7 @@ def test_preflight_merges_every_shard_into_the_one_report_its_readers_take():
     scope = steps[names.index("Record the revisions the report grades")]
     assert '"$(git merge-base "$BASE" HEAD)" "$(git rev-parse HEAD)" > .mutation-gate/scope.json' in scope["run"]
     merge = steps[names.index("Merge the shard reports")]
-    assert merge["env"] == {"SHARDS": "${{ needs.plan.outputs.shards }}"}
+    assert merge["env"] == {"SHARDS": "${{ needs.plan.outputs.changed != '0' && needs.plan.outputs.shards || '[]' }}"}
     assert merge["run"] == (
         "python -m scripts.ci_mutation."
         'merge .mutation-shards --shards "$(jq length <<< "$SHARDS")" --output .mutation-gate'
@@ -181,7 +186,7 @@ def test_preflight_merges_every_shard_into_the_one_report_its_readers_take():
     assert upload["if"] == "always()"
     assert upload["with"]["name"] == "mutation-preflight-report"
     shards = steps[names.index("Fail when a shard did not finish")]
-    assert shards["if"] == "needs.mutation-shard.result != 'success'"
+    assert shards["if"] == "needs.plan.outputs.changed != '0' && needs.mutation-shard.result != 'success'"
     assert names.index(upload["name"]) < names.index(shards["name"])
 
 
