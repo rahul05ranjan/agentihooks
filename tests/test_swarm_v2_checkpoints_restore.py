@@ -107,7 +107,9 @@ def test_a_native_checkpoint_restores_the_expected_conversation_in_a_fresh_home(
     command = native.HARNESSES["claude"].command(CLAUDE)
     assert restored == Restored("native", checkpoint, WATERMARK, CLAUDE, command)
     assert spy.calls == []
-    assert any(native_cases.CODEWORD in path.read_text() for path in (tmp_path / "fresh").rglob("*.jsonl"))
+    _, _, cwd = _paths(tmp_path)
+    restored_session = tmp_path / "fresh" / "projects" / native.encoded(cwd) / f"{CLAUDE}.jsonl"
+    assert native_cases.CODEWORD in restored_session.read_text()
     assert restorer.metrics() == {"restore_outcomes_by_type": {"native": 1}}
     assert restorer.validator is restorer.qualifier.validator
 
@@ -148,7 +150,8 @@ def test_a_corrupt_material_object_is_refused(tmp_path):
 def test_an_absent_checkpoint_is_refused(tmp_path):
     restorer = restore.Restorer(_reader(tmp_path), SourceSpy())
     assert _refused(restorer, tmp_path, Directive("ckpt-9", "reconstructed", "", 0)) == "manifest_absent"
-    assert restorer.metrics() == {"restore_outcomes_by_type": {"refused/manifest_absent": 1}}
+    assert _refused(restorer, tmp_path, Directive("ckpt-9", "reconstructed", "", 0)) == "manifest_absent"
+    assert restorer.metrics() == {"restore_outcomes_by_type": {"refused/manifest_absent": 2}}
 
 
 def test_an_unsupported_harness_version_is_refused_and_nothing_lands(tmp_path):
@@ -221,7 +224,8 @@ def test_a_source_read_error_is_reported_as_a_refused_restore(tmp_path):
 def test_a_fresh_directive_restores_nothing(tmp_path):
     restorer = restore.Restorer(_reader(tmp_path), SourceSpy())
     assert _restore(restorer, tmp_path, Directive("", "fresh", "", 7)) == Restored("fresh", "", 7)
-    assert restorer.metrics() == {"restore_outcomes_by_type": {"fresh": 1}}
+    assert _restore(restorer, tmp_path, Directive("", "fresh", "", 8)) == Restored("fresh", "", 8)
+    assert restorer.metrics() == {"restore_outcomes_by_type": {"fresh": 2}}
 
 
 def test_the_default_source_restore_is_the_git_capture_restore(tmp_path):
