@@ -1213,7 +1213,6 @@ def test_tick_launch_reserves_the_selected_harness(world, harness, live):
         assert world.launcher.launch_slots.counts() == {f"{harness}:{ACCOUNT}": 1}
 
 
-
 def test_registration_reports_a_missing_global_reservation(world, monkeypatch):
     launch = world.launch(FIRST)
     monkeypatch.setattr(type(world.launcher.launch_slots), "acknowledge", lambda self, execution: False)
