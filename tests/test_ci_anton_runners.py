@@ -233,6 +233,12 @@ def test_jobs_with_service_or_job_containers_run_on_the_docker_pool():
             assert MOVED.get((name, job)) == STANDARD, f"{name}:{job}"
 
 
+def test_jobs_with_service_or_job_containers_run_on_the_docker_pool():
+    for (name, job), spec in runner_jobs().items():
+        if "services" in spec or "container" in spec:
+            assert MOVED.get((name, job)) == STANDARD, f"{name}:{job}"
+
+
 def test_the_expression_reader_tells_trusted_from_untrusted_runs():
     assert resolve(pool(LIGHT), **event("pull_request")) == LIGHT
     assert resolve(pool(LIGHT), **event("pull_request", head="stranger/agentihooks")) == "ubuntu-latest"
