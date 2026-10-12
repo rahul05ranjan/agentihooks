@@ -126,7 +126,10 @@ class DistributedLaunch:
     ) -> None:
         self.controller, self.grants, self.capacity = controller, grants, capacity
         self.fleet, self.router, self.homes = fleet, router, homes
+        from scripts.routing.reservation import LaunchSlots
+
         self.slug = capacity.slug
+        self.launch_slots = LaunchSlots(controller.store.redis)
         self.accounts: AccountChooser | None = None
         self.planned: PlannedAccount | None = None
         self.opening: Callable[[SpawnRequest], str] = opening
@@ -154,8 +157,13 @@ class DistributedLaunch:
         )
         backend = self.router.spawn_backend(request)
         try:
+            if not self.launch_slots.reserve(
+                f"{admitted.harness or 'claude'}:{terms.account}", admitted.execution_id, terms.cap, terms.ttl_ms
+            ):
+                raise SwarmError(ACCOUNT_FULL)
             slot = self.capacity.reserve(grant, terms.cap, terms.ttl_ms)
         except SwarmError as error:
+            self.launch_slots.release(admitted.execution_id)
             ended = refused(admitted, str(error))
             self.grants.withdraw(self.slug, grant)
             status = Status.UNAVAILABLE if str(error) == ACCOUNT_FULL else Status.REFUSED
@@ -228,7 +236,10 @@ class DistributedLaunch:
         self.grants.register(self.slug, grant, body)
         record = self.fleet.register(session, grant)
         try:
-            return self.capacity.occupy(grant, record.scope, record.session_id)
+            slot = self.capacity.occupy(grant, record.scope, record.session_id)
+            if not self.launch_slots.acknowledge(record.execution_id):
+                raise SwarmError("reservation_expired")
+            return slot
         except SwarmError:
             self.fleet.close(record.scope, record.session_id, grant)
             raise

@@ -122,8 +122,8 @@ def test_observe_selects_fields_and_never_publishes_credentials(redis, monkeypat
     monkeypatch.setenv("AH_CX_TOKEN_two", sentinel)
     monkeypatch.setenv("ANTHROPIC_API_KEY", sentinel)
     monkeypatch.setenv("OPENAI_API_KEY", sentinel)
-    monkeypatch.setattr(daemon.account_sessions, "sessions_by_account", lambda: {"one": 2})
-    monkeypatch.setattr(daemon.account_sessions, "codex_sessions_by_account", lambda: {"two": 3, "default": 1})
+    monkeypatch.setattr(daemon.account_sessions, "sessions_by_account", lambda **kwargs: {"one": 2})
+    monkeypatch.setattr(daemon.account_sessions, "codex_sessions_by_account", lambda **kwargs: {"two": 3, "default": 1})
     result = balancer.ProbeResult(
         "one", "allowed", "OK", 60, balancer.QuotaWindow(20, 1000), balancer.QuotaWindow(40, 2000), error=sentinel
     )
@@ -463,8 +463,8 @@ def test_snapshot_missing_windows_bad_records_and_newer_cache(monkeypatch, tmp_p
 def test_api_fields_empty_login_and_zero_sessions(observations, monkeypatch):
     from scripts.routing.slots import Slot
 
-    monkeypatch.setattr(daemon.account_sessions, "sessions_by_account", lambda: {})
-    monkeypatch.setattr(daemon.account_sessions, "codex_sessions_by_account", lambda: {})
+    monkeypatch.setattr(daemon.account_sessions, "sessions_by_account", lambda **kwargs: {})
+    monkeypatch.setattr(daemon.account_sessions, "codex_sessions_by_account", lambda **kwargs: {})
     monkeypatch.setattr(daemon, "repositories", lambda: [])
     monkeypatch.setattr(daemon.time, "time", lambda: 122)
     calls = []

@@ -23,7 +23,12 @@ UNIT = "agentihooks-hive.service"
 
 
 def beat(redis: "Redis", local_id: str) -> None:
+    from scripts.routing.reservation import LaunchSlots
+
     report = observe()
+    executions = _executions(redis, local_id)
+    if executions:
+        report["sessions"]["_executions"] = executions
     key = registry.key(local_id)
     with redis.pipeline() as pipe:
         for field, value in registry._default(local_id).items():
@@ -35,6 +40,7 @@ def beat(redis: "Redis", local_id: str) -> None:
         for field in ("sessions", "quota"):
             pipe.set(f"{key}:{field}", json.dumps(report[field]), ex=TTL_SECONDS)
         pipe.execute()
+    LaunchSlots(redis).refresh([execution for ids in executions.values() for execution in ids])
 
 
 def run(redis: "Redis") -> None:
@@ -180,8 +186,8 @@ def observe() -> dict:
     environ = os.environ
     now = time.time()
     counts = {
-        "claude": account_sessions.sessions_by_account(),
-        "codex": account_sessions.codex_sessions_by_account(),
+        "claude": account_sessions.sessions_by_account(local=True),
+        "codex": account_sessions.codex_sessions_by_account(local=True),
     }
     slots, quota = _subscriptions(environ, counts, now)
     for source in (claude_api.ClaudeApiSource(counts["claude"]), codex_api.CodexApiSource(counts["codex"])):
@@ -204,4 +210,32 @@ def observe() -> dict:
     sessions = {
         f"{slot['harness']}:{slot['account']}": counts[slot["harness"]].get(slot["account"], 0) for slot in slots
     }
+    from scripts.routing import reservation
+
+    for slot in slots:
+        count = reservation.interactive_sessions(slot["harness"], slot["account"])
+        if count:
+            sessions[f"interactive:{slot['harness']}:{slot['account']}"] = count
     return {"slots": slots, "interactive": interactive, "repos": repositories(), "sessions": sessions, "quota": quota}
+
+
+def _executions(redis: "Redis", local_id: str) -> dict[str, list[str]]:
+    from scripts.routing.reservation import _session
+    from scripts.swarm.store import RedisStore
+    from scripts.swarm_v2.registry import CLOSED, decode
+
+    store = RedisStore(redis)
+    found: dict[str, list[str]] = {}
+    for swarm in store.slugs():
+        agents = {agent.execution_id: agent for agent in store.agents(swarm)}
+        for raw in redis.hvals(store.key(swarm, "fleet-sessions")):
+            record = decode(raw)
+            agent = agents.get(record.execution_id)
+            if record.state == CLOSED or agent is None or record.scope.host != local_id:
+                continue
+            if record.generation != agent.generation or not _session(
+                record.harness, record.pid, account_sessions._PROC
+            ):
+                continue
+            found.setdefault(f"{record.harness}:{agent.account}", []).append(record.execution_id)
+    return found

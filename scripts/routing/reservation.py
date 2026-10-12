@@ -143,39 +143,32 @@ for _, hive in ipairs(redis.call('SMEMBERS', KEYS[3])) do
     end
 end
 if mode == 'release' then
-    if not held then return 0 end
-    for key, report in pairs(reports) do
-        local ids = (report._executions or {})[held.slot] or {}
-        for index, id in ipairs(ids) do
-            if id == execution then
-                table.remove(ids, index)
-                report[held.slot] = math.max(0, report[held.slot] - 1)
-                redis.call('SET', key .. ':sessions', cjson.encode(report), 'KEEPTTL')
-                break
-            end
-        end
-    end
-    redis.call('DEL', KEYS[2])
-    redis.call('SREM', KEYS[1], execution)
+    if not held or held.state == 'exited' then return 0 end
+    held.state = 'exited'
+    redis.call('SET', KEYS[2], cjson.encode(held), 'PX', 45000)
     return 1
 end
 if mode == 'ack' then
-    if not held then return 0 end
+    if not held or held.state == 'exited' then return 0 end
     if held.state == 'live' then return 1 end
     held.state = 'live'
     redis.call('SET', KEYS[2], cjson.encode(held), 'PX', ARGV[5])
     return 1
 end
 if held then
-    if held.slot ~= slot then return 0 end
+    if held.slot ~= slot or held.state == 'exited' then return 0 end
     return 1
 end
 for _, id in ipairs(redis.call('SMEMBERS', KEYS[1])) do
     local other = redis.call('GET', ARGV[6] .. ':launch-slot:' .. id)
     if not other then
         redis.call('SREM', KEYS[1], id)
-    elseif cjson.decode(other).slot == slot and not seen[id] then
-        used = used + 1
+    else
+        local row = cjson.decode(other)
+        if row.slot == slot then
+            if row.state == 'exited' and seen[id] then used = used - 1 end
+            if row.state ~= 'exited' and not seen[id] then used = used + 1 end
+        end
     end
 end
 if used >= tonumber(ARGV[4]) then return 0 end
@@ -230,9 +223,13 @@ class LaunchSlots:
             raw = self.redis.get(f"{ROOT}:launch-slot:{execution}")
             if raw is None:
                 self.redis.srem(f"{ROOT}:launch-slots", execution)
-            elif execution not in (seen or set()):
-                slot = json.loads(raw)["slot"]
-                counts[slot] = counts.get(slot, 0) + 1
+                continue
+            row = json.loads(raw)
+            reported = execution in (seen or set())
+            delta = -int(reported) if row["state"] == "exited" else int(not reported)
+            if delta:
+                slot = row["slot"]
+                counts[slot] = counts.get(slot, 0) + delta
         return counts
 
     def refresh(self, executions: list[str]) -> None:

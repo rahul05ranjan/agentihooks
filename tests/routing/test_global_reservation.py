@@ -48,3 +48,39 @@ def test_expiry_and_exit_release_capacity(redis, clock):
     assert not slots.release("second")
     assert slots.counts() == {}
     assert slots.reserve("claude:one", "third", 1, 1000)
+
+
+@pytest.mark.parametrize("cap,ttl", [(-1, 1), (True, 1), (1, 0), (1, 300001), (1, True), (1.0, 1), (1, 1.0)])
+def test_invalid_launch_bounds_are_refused(redis, cap, ttl):
+    with pytest.raises(ValueError, match="invalid launch slot cap or lifetime"):
+        reservation.LaunchSlots(redis).reserve("claude:one", "first", cap, ttl)
+
+
+def test_acknowledgement_and_heartbeat_refresh_are_bounded(redis, clock):
+    slots = reservation.LaunchSlots(redis)
+    assert not slots.acknowledge("missing")
+    assert not slots.reserve("claude:one", "none", 0, 1000)
+    assert slots.reserve("claude:one", "first", 1, 1)
+    assert slots.acknowledge("first")
+    assert slots.acknowledge("first")
+    clock[0] += 44
+    slots.refresh(["first", "missing"])
+    clock[0] += 1
+    assert slots.counts() == {"claude:one": 1}
+    assert slots.counts({"first"}) == {}
+    clock[0] += 44
+    assert slots.counts() == {}
+    assert not slots.release("first")
+    assert not slots.acknowledge("first")
+
+
+def test_pending_refresh_and_cross_account_retry_do_not_take_new_room(redis, clock):
+    slots = reservation.LaunchSlots(redis)
+    assert slots.reserve("claude:one", "first", 1, 1000)
+    assert not slots.reserve("codex:one", "first", 1, 1000)
+    slots.refresh(["first"])
+    clock[0] += 1
+    assert slots.counts() == {}
+    assert slots.reserve("codex:one", "second", 1, 300000)
+    assert slots.reserve("claude:one", "third", 1, 1000)
+    assert slots.counts() == {"codex:one": 1, "claude:one": 1}
