@@ -124,7 +124,7 @@ def prepare(spec: dict, attempt: Path, environ: Mapping[str, str] = os.environ) 
         material = doc["inventory"][model.TRANSCRIPT]
         text = store.get_range(ArtifactRef(**material)).decode()
         target = attempt / "continuation.txt"
-        target.write_text("Continue from this recorded conversation. Native resume was unavailable.\\n" + text)
+        target.write_text("Continue from this recorded conversation. Native resume was unavailable.\n" + text)
         target.chmod(0o600)
     return restored
 
@@ -162,7 +162,7 @@ class Checkpoints:
             granted(self.root, registration), execution_generation=self.execution_generation(execution_id)
         )
 
-    def list(self, execution_id: str) -> list[dict]:
+    def list(self, execution_id: str) -> "list[dict]":
         validator = self.validator(execution_id)
         if validator is None:
             return []
