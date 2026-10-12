@@ -209,6 +209,18 @@ def codex_sessions_by_account(proc: Path = _PROC, *, local: bool = False) -> dic
     return counts
 
 
+def local_processes(proc: Path = _PROC) -> dict[str, dict[int, str]]:
+    found = {"claude": live_sessions(proc, handed_off_pids()), "codex": {}}
+    try:
+        entries = [int(entry.name) for entry in proc.iterdir() if entry.name.isdigit()]
+    except OSError:
+        return found
+    for pid in entries:
+        if _is_codex_session(pid, proc):
+            found["codex"][pid] = codex_account_from_names(_env_names(pid, proc))
+    return found
+
+
 def handed_off_pids() -> set[int]:
     from hooks.context.broadcast import _load_sessions
 

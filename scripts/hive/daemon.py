@@ -25,8 +25,9 @@ UNIT = "agentihooks-hive.service"
 def beat(redis: "Redis", local_id: str) -> None:
     from scripts.routing.reservation import LaunchSlots
 
-    executions = _executions(redis, local_id)
-    report = observe()
+    processes = account_sessions.local_processes()
+    executions = _executions(redis, local_id, processes)
+    report = observe(processes=processes)
     if executions:
         report["sessions"]["_executions"] = executions
     key = registry.key(local_id)
@@ -182,13 +183,17 @@ def repositories() -> list[str]:
     return sorted(str(path) for path in candidates + nested if (path / ".git").exists())
 
 
-def observe() -> dict:
+def observe(processes: dict[str, dict[int, str]] | None = None) -> dict:
+    from collections import Counter
+
     environ = os.environ
     now = time.time()
     counts = {
         "claude": account_sessions.sessions_by_account(local=True),
         "codex": account_sessions.codex_sessions_by_account(local=True),
     }
+    if processes is not None:
+        counts = {harness: dict(Counter(found.values())) for harness, found in processes.items()}
     slots, quota = _subscriptions(environ, counts, now)
     for source in (claude_api.ClaudeApiSource(counts["claude"]), codex_api.CodexApiSource(counts["codex"])):
         for slot in source.slots(environ, now):
@@ -219,13 +224,13 @@ def observe() -> dict:
     return {"slots": slots, "interactive": interactive, "repos": repositories(), "sessions": sessions, "quota": quota}
 
 
-def _executions(redis: "Redis", local_id: str) -> dict[str, list[str]]:
-    from scripts.routing.reservation import _session
+def _executions(redis: "Redis", local_id: str, processes: dict[str, dict[int, str]]) -> dict[str, list[str]]:
     from scripts.swarm.store import RedisStore
     from scripts.swarm_v2.registry import CLOSED, decode
 
     store = RedisStore(redis)
     found: dict[str, list[str]] = {}
+    counted: set[tuple[str, int]] = set()
     for swarm in store.slugs():
         agents = {agent.execution_id: agent for agent in store.agents(swarm)}
         for raw in redis.hvals(store.key(swarm, "fleet-sessions")):
@@ -233,9 +238,11 @@ def _executions(redis: "Redis", local_id: str) -> dict[str, list[str]]:
             agent = agents.get(record.execution_id)
             if record.state == CLOSED or agent is None or record.scope.host != local_id:
                 continue
-            if record.generation != agent.generation or not _session(
-                record.harness, record.pid, account_sessions._PROC
-            ):
+            identity = record.harness, record.pid
+            if identity in counted or record.generation != agent.generation:
                 continue
+            if processes.get(record.harness, {}).get(record.pid) != agent.account:
+                continue
+            counted.add(identity)
             found.setdefault(f"{record.harness}:{agent.account}", []).append(record.execution_id)
     return found

@@ -30,7 +30,7 @@ def test_beat_refreshes_reported_fields_and_expires_telemetry(redis, monkeypatch
             }
         },
     }
-    monkeypatch.setattr(daemon, "observe", lambda: report)
+    monkeypatch.setattr(daemon, "observe", lambda **kwargs: report)
     monkeypatch.setattr(daemon.time, "time", lambda: 123.456)
     daemon.beat(redis, "machine")
     record = registry.show(redis, "machine")
@@ -53,7 +53,7 @@ def test_three_missed_beats_expire_both_keys(redis, monkeypatch):
     import time
 
     monkeypatch.setattr(
-        daemon, "observe", lambda: {"slots": [], "interactive": {}, "repos": [], "sessions": {}, "quota": {}}
+        daemon, "observe", lambda **kwargs: {"slots": [], "interactive": {}, "repos": [], "sessions": {}, "quota": {}}
     )
     daemon.beat(redis, "machine")
     future = time.time() + 46
@@ -501,7 +501,7 @@ def test_beat_keeps_a_launch_counted_between_process_samples(redis, monkeypatch)
     slots = reservation.LaunchSlots(redis)
     started = []
 
-    def observe():
+    def observe(**kwargs):
         assert slots.reserve("claude:one", "first", 1, 1000)
         assert slots.acknowledge("first")
         started.append("first")
@@ -514,7 +514,50 @@ def test_beat_keeps_a_launch_counted_between_process_samples(redis, monkeypatch)
         }
 
     monkeypatch.setattr(daemon, "observe", observe)
-    monkeypatch.setattr(daemon, "_executions", lambda redis, hive: {"claude:one": list(started)} if started else {})
+    monkeypatch.setattr(
+        daemon, "_executions", lambda redis, hive, processes: {"claude:one": list(started)} if started else {}
+    )
     daemon.beat(redis, "hive")
     assert aggregate.read(redis, 100)["claude:one"]["sessions"] == 1
     assert not slots.reserve("claude:one", "second", 1, 1000)
+
+
+def test_beat_exit_between_samples_cannot_create_negative_capacity(redis, observations, monkeypatch):
+    from scripts.routing import aggregate, reservation
+    from scripts.swarm.store import AgentRecord, RedisStore, SwarmConfig
+    from scripts.swarm_v2.registry import Scope, Session, encode
+
+    monkeypatch.setattr("time.time", lambda: 100)
+    store = RedisStore(redis)
+    store.create(SwarmConfig("swarm", "repo", 1, 0))
+    store.put_agent(
+        "swarm",
+        AgentRecord(
+            "agent",
+            "eng",
+            "task",
+            harness="claude",
+            account="one",
+            execution_id="first",
+            generation=1,
+        ),
+    )
+    session = Session(
+        "session", Scope("kubernetes", "hive", "worker"), 4242, 1, "claude", execution_id="first", generation=1
+    )
+    redis.hset(store.key("swarm", "fleet-sessions"), session.key(), encode(session))
+    monkeypatch.setattr(daemon.account_sessions, "local_processes", lambda: {"claude": {4242: "one"}, "codex": {}})
+    slots = reservation.LaunchSlots(redis)
+    assert slots.reserve("claude:one", "first", 1, 1000)
+    assert slots.acknowledge("first")
+    original = daemon.observe
+
+    def observe(**kwargs):
+        assert slots.release("first")
+        return original(**kwargs)
+
+    monkeypatch.setattr(daemon, "observe", observe)
+    daemon.beat(redis, "hive")
+    assert aggregate.read(redis, 100)["claude:one"]["sessions"] == 0
+    assert slots.reserve("claude:one", "second", 1, 1000)
+    assert not slots.reserve("claude:one", "third", 1, 1000)
