@@ -188,11 +188,12 @@ def observe(processes: dict[str, dict[int, str]] | None = None) -> dict:
 
     environ = os.environ
     now = time.time()
-    counts = {
-        "claude": account_sessions.sessions_by_account(local=True),
-        "codex": account_sessions.codex_sessions_by_account(local=True),
-    }
-    if processes is not None:
+    if processes is None:
+        counts = {
+            "claude": account_sessions.sessions_by_account(local=True),
+            "codex": account_sessions.codex_sessions_by_account(local=True),
+        }
+    else:
         counts = {harness: dict(Counter(found.values())) for harness, found in processes.items()}
     slots, quota = _subscriptions(environ, counts, now)
     for source in (claude_api.ClaudeApiSource(counts["claude"]), codex_api.CodexApiSource(counts["codex"])):

@@ -107,3 +107,14 @@ def test_aggregate_includes_reservations_once_and_exit_releases(redis, monkeypat
     assert redis.get(f"{registry.key('a')}:sessions") == before
     assert aggregate.read(redis, 100)["claude:one"]["sessions"] == 0
     assert slots.reserve("claude:one", "second", 1, 1000)
+
+
+def test_local_process_snapshot_preserves_harness_and_account(tmp_path):
+    from hooks.context import account_sessions
+    from tests.context.test_account_sessions import _proc
+
+    root = tmp_path / "proc"
+    _proc(root, 1000, "claude", 1, ["claude"], {f"{account_sessions.TOKEN_PREFIX}one": "fixture"})
+    _proc(root, 2000, "codex", 1, ["codex", "exec", "prompt"], {f"{account_sessions.CODEX_TOKEN_PREFIX}two": "fixture"})
+    assert account_sessions.local_processes(root) == {"claude": {1000: "one"}, "codex": {2000: "two"}}
+    assert account_sessions.local_processes(tmp_path / "gone") == {"claude": {}, "codex": {}}
