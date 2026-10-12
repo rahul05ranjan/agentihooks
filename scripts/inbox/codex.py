@@ -32,6 +32,10 @@ def stderr(line: str) -> None:
     print(f"[agentihooks codex-pump] {line}", file=sys.stderr)
 
 
+class StaleExecution(DispatchError):
+    pass
+
+
 @dataclass
 class ThreadState:
     """The active turn and open server requests, folded from events and refreshed from thread/read."""
@@ -77,8 +81,40 @@ class Transport:
     execution_id: str
 
     def mark(self, **changes) -> None:
+        import json
+        from dataclasses import asdict
+
+        from scripts.codex_session.binding import RECORDS
+        from scripts.inbox.receipts import transact
+
+        key = self.bindings.store.key(self.slug, RECORDS)
+
+        def update(pipe):
+            pipe.watch(key)
+            record = self.require(pipe)
+            pipe.multi()
+            pipe.hset(key, self.execution_id, json.dumps(asdict(replace(record, **changes))))
+
+        transact(self.bindings.redis, update)
+
+    def require(self, pipe=None):
+        from scripts.codex_session.binding import EXITED, FAILED
+
+        store = self.bindings.store
+        if pipe is not None:
+            pipe.watch(store.key(self.slug, "executions"))
         record = self.bindings.get(self.slug, self.execution_id)
-        self.bindings.put(self.slug, replace(record, **changes))
+        if record is None or record.state in {EXITED, FAILED}:
+            raise StaleExecution("execution is no longer current")
+        current = store.execution_registry.occupants(self.slug, pipe).get(record.seat)
+        if (
+            current is None
+            or (current.execution_id, current.generation, current.name, current.task)
+            != (self.execution_id, record.execution_generation, record.agent_name, record.task_id)
+            or current.state == "finished"
+        ):
+            raise StaleExecution("execution is no longer current")
+        return record
 
 
 @dataclass(frozen=True)
@@ -109,6 +145,7 @@ class Pump:
         self.store = store
         self.dispatcher = Dispatcher(store)
         self.receipts = self.dispatcher.receipts
+        self.receipts.authority = binding.transport.require
         self.binding = binding
         self.timing = timing
         self.log = log
@@ -135,6 +172,9 @@ class Pump:
                         return STOPPED
                     self.step()
                     backoff = self.timing.backoff_s
+                except StaleExecution as failure:
+                    self.log(DEGRADED_LOG.format(self.binding.recipient, type(failure).__name__, failure))
+                    return DEGRADED
                 except DispatchError as failure:
                     self._degrade(failure)
                     return DEGRADED
@@ -156,7 +196,7 @@ class Pump:
         self.log(DEGRADED_LOG.format(self.binding.recipient, type(failure).__name__, failure))
         try:
             self.binding.transport.mark(state=DEGRADED, last_error_class=type(failure).__name__)
-        except RedisError:
+        except (RedisError, StaleExecution):
             pass
 
     def _reconnect(self) -> None:
@@ -180,6 +220,7 @@ class Pump:
 
     def start(self) -> None:
         binding = self.binding
+        binding.transport.require()
         binding.connection.listener = self.state.observe
         self.dispatcher.own(binding.recipient, binding.owner)
         self.receipts.recover(binding.recipient, binding.owner)
@@ -192,6 +233,7 @@ class Pump:
         binding.transport.mark(state=CONNECTED, last_error_class="")
 
     def step(self) -> None:
+        self.binding.transport.require()
         self.binding.connection.poll(self.timing.poll_s)
         woken = self._hinted()
         if self.timing.clock() >= self.next_reconcile:
@@ -275,6 +317,7 @@ class Pump:
             self._send(text)
 
     def _send(self, text: str) -> None:
+        self.binding.transport.require()
         connection, thread = self.binding.connection, self.binding.thread_id
         if self.state.active_turn:
             self.state.follow(protocol.steer_turn(connection, thread, self.state.active_turn, text))
