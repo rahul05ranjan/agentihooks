@@ -58,6 +58,7 @@ def document():
         "created_at": 1,
         "updated_at": 2,
         "members": {},
+        "stamps": {},
         "seeds": {"1": copy.deepcopy(seed), "2": copy.deepcopy(seed)},
         "events": [{"rev": n, "kind": "comment", "text": "j" * 200} for n in range(2000)],
     }
