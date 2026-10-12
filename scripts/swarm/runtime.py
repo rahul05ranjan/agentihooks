@@ -360,8 +360,8 @@ class HerdrRuntime:
 
         return [row for row in self._quota_open() if row.harness == harness and free_seats(row)]
 
-    def _quota_choice(self, agent, reason, fixed, lane, route_kind="subscription"):
-        if route_kind == "interactive" or not hasattr(self, "_quota_accounts"):
+    def _quota_choice(self, agent, reason, fixed, lane):
+        if not hasattr(self, "_quota_accounts"):
             return agent, reason
         allocation = getattr(self, "_quota_allocations", {}).get(lane)
         eligible = [h for h in agent_choice.AGENTS if self._quota_eligible(h) and (allocation is None or allocation[h])]
