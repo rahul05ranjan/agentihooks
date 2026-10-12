@@ -1335,6 +1335,54 @@ def test_restore_command_sequences_are_recorded_as_json_lists(world, command):
     assert recovery.confirm(decision.replacement, restored) == outcome
 
 
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("recovery", "fresh"),
+        ("checkpoint_id", "another"),
+        ("session_id", "another"),
+        ("watermark", -1),
+        ("watermark", True),
+        ("watermark", 0.0),
+        ("watermark", None),
+    ],
+)
+def test_restore_receipt_fields_must_match_the_accepted_native_directive(world, field, value):
+    recovery = world.recovery(world.live)
+    decision = recovery.handle(world.old.execution_id, "node_lost")
+    restored = {**recovery.restore(decision.replacement), "command": [], field: value}
+    with pytest.raises(SwarmError) as caught:
+        recovery.confirm(decision.replacement, restored)
+    assert str(caught.value) == "restore outcome does not match the accepted directive"
+    assert recovery.outcome(decision.replacement) is None
+
+
+@pytest.mark.parametrize("restored", [None, [], {}, {"unknown": "value"}])
+def test_restore_receipt_shape_is_refused_before_recording(world, restored):
+    recovery = world.recovery(world.live)
+    decision = recovery.handle(world.old.execution_id, "node_lost")
+    with pytest.raises(SwarmError) as caught:
+        recovery.confirm(decision.replacement, restored)
+    assert str(caught.value) == "no restore directive for this attempt"
+    assert recovery.outcome(decision.replacement) is None
+
+
+def test_a_restore_receipt_requires_a_directive_and_accepts_zero_cursor(world):
+    recovery = world.recovery(world.live)
+    decision = recovery.handle(world.old.execution_id, "node_lost")
+    restored = {**recovery.restore(decision.replacement), "command": [], "watermark": 0}
+    verified = recovery.confirm(decision.replacement, restored)
+    assert verified["watermark"] == 0
+    with pytest.raises(SwarmError) as caught:
+        recovery.confirm(decision.replacement, {**restored, "watermark": 1})
+    assert str(caught.value) == "restore outcome is already recorded"
+    assert recovery.outcome(decision.replacement) == verified
+    world.store.redis.hdel(world.store.key(recovery.slug, "attempt-restores"), decision.replacement)
+    with pytest.raises(SwarmError) as caught:
+        recovery.confirm(decision.replacement, restored)
+    assert str(caught.value) == "no restore directive for this attempt"
+
+
 def test_a_repeated_restore_request_reuses_the_accepted_decision_without_a_second_replacement(world):
     recovery = world.recovery(world.live, automatic=False)
     recovery.handle(world.old.execution_id, "oom_killed")
@@ -1381,6 +1429,7 @@ def test_a_pending_request_is_applied_once_on_the_next_pass_and_a_bad_one_is_dro
         f"controller: the recovery request for {other.execution_id} was refused: "
         "no recovery decision is pending for this attempt\n"
     )
+    assert stdout.flushes == 1
     assert world.store.redis.hgetall(requests) == {}
     world.store.redis.hset(requests, world.old.execution_id, "fresh")
     attempts = world.attempts()
