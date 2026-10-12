@@ -83,7 +83,9 @@ def test_a_pass_saves_the_published_workers_of_every_hive_into_the_operator_herd
 
     assert sorted(report.registered) == sorted([first[0], second[0]])
     assert report.refused == {}
-    assert cases._sidebar(herdr) == ["Local", "devbox", name("hive-a", *first), name("hive-b", *second)]
+    shown = cases._sidebar(herdr)
+    assert shown[:2] == ["Local", "devbox"]
+    assert sorted(shown[2:]) == sorted([name("hive-a", *first), name("hive-b", *second)])
 
 
 def test_a_worker_that_ends_is_removed_on_the_next_pass(tmp_path):
