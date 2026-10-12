@@ -553,6 +553,28 @@ def test_only_confirmed_restore_outcomes_have_a_public_summary(monkeypatch, caps
     }
 
 
+def test_confirmed_restore_summary_is_delivered_before_report_returns(monkeypatch):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    from tests.public_output import BufferedOutput
+
+    output = BufferedOutput()
+    monkeypatch.setattr("sys.stdout", output)
+    monkeypatch.setattr(
+        start.urllib.request, "urlopen", lambda *args, **kwargs: nullcontext(SimpleNamespace(status=200))
+    )
+    restored = restore.Restored("native", "ckp-one", 41, "private-session", ("claude", "--resume", "private-session"))
+    start.report({"execution_id": EXECUTION, "control_url": CONTROL}, GRANT, restored)
+    assert json.loads(output.visible) == {
+        "event": "restore_verified",
+        "execution_id": EXECUTION,
+        "recovery": "native",
+        "checkpoint_id": "ckp-one",
+        "watermark": 41,
+    }
+
+
 def test_a_checkpoint_restore_without_a_store_refuses_the_start_and_registers_nothing(tmp_path):
     launch = material(tmp_path, {**RECORD, "restore": NATIVE_RESTORE})
     with pytest.raises(restore.RestoreRefused) as refused:

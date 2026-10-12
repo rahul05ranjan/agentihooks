@@ -232,3 +232,40 @@ def test_artifact_refusals_log_no_grant_or_provider_error_message(storage, capsy
         "status": status,
         "error_class": error_class,
     }
+
+
+@pytest.mark.parametrize("body", [None, {"operation": "untrusted-operation"}, {"operation": "write"}])
+def test_invalid_artifact_requests_emit_only_the_fixed_operation_label(storage, monkeypatch, body):
+    from tests.public_output import BufferedOutput
+
+    api, _, _ = storage
+    output = BufferedOutput()
+    monkeypatch.setattr("sys.stdout", output)
+    assert api.route("POST", artifacts.PATH, "Bearer grant", body)[0] == 400
+    assert json.loads(output.visible) == {
+        "event": "checkpoint_storage",
+        "backend": "object-store",
+        "operation": "invalid_request",
+        "execution_id": None,
+        "generation": None,
+        "status": 400,
+        "error_class": "invalid_request",
+    }
+
+
+def test_authenticated_artifact_refusal_keeps_its_scope_in_the_immediate_event(storage, monkeypatch):
+    from tests.public_output import BufferedOutput
+
+    api, _, _ = storage
+    output = BufferedOutput()
+    monkeypatch.setattr("sys.stdout", output)
+    assert request(api, "write", key="outside/task", data=encoded(b"private bytes"))[0] == 403
+    assert json.loads(output.visible) == {
+        "event": "checkpoint_storage",
+        "backend": "object-store",
+        "operation": "write",
+        "execution_id": "execution",
+        "generation": 7,
+        "status": 403,
+        "error_class": "forbidden_scope",
+    }
