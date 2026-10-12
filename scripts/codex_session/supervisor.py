@@ -105,9 +105,12 @@ def check_environment(environ: Mapping[str, str], allowed: frozenset) -> None:
 
 
 def admit(store: RedisStore, launch: Launch, deps: Deps) -> AgentRecord:
+    chosen = store.config(launch.slug).codex_inbox_transport
+    if chosen != APP_SERVER_TRANSPORT:
+        raise LaunchFailure("transport", f"swarm {launch.slug} runs the {chosen} Codex inbox transport")
     pid_start = deps.start_identity(os.getpid())
     target = {"pid": os.getpid(), "pid_start": pid_start} if pid_start else {}
-    agent = replace(launch.agent, harness="codex", transport=APP_SERVER_TRANSPORT, runtime_target=target)
+    agent = replace(launch.agent, harness="codex", transport=chosen, runtime_target=target)
     return store.start_execution(launch.slug, agent, launch.previous_execution_id)
 
 
@@ -131,16 +134,24 @@ def wait_ready(
     raise LaunchFailure("startup_timeout", "app-server started but never answered initialize in time")
 
 
-def ensure_hooks(connection: protocol.Connection, cwd: str) -> None:
+def profile_hooks(connection: protocol.Connection, cwd: str, codex_home: str) -> list[dict]:
+    home = Path(os.path.realpath(codex_home))
     listed = protocol.hooks(connection, cwd)
-    missing = [event for event in REQUIRED_HOOKS if event not in {hook.get("eventName") for hook in listed}]
+    return [hook for hook in listed if home in Path(os.path.realpath(hook.get("sourcePath") or "/")).parents]
+
+
+def ensure_hooks(connection: protocol.Connection, cwd: str, codex_home: str) -> None:
+    owned = profile_hooks(connection, cwd, codex_home)
+    missing = [event for event in REQUIRED_HOOKS if event not in {hook.get("eventName") for hook in owned}]
     if missing:
-        raise LaunchFailure("hooks_missing", f"required hooks are missing: {missing}")
-    untrusted = [hook for hook in listed if hook.get("trustStatus") != "trusted"]
+        raise LaunchFailure("hooks_missing", f"required profile hooks are missing: {missing}")
+    untrusted = [hook for hook in owned if hook.get("trustStatus") != "trusted"]
     if untrusted:
         protocol.trust(connection, untrusted)
         still = {
-            hook.get("eventName") for hook in protocol.hooks(connection, cwd) if hook.get("trustStatus") != "trusted"
+            hook.get("eventName")
+            for hook in profile_hooks(connection, cwd, codex_home)
+            if hook.get("trustStatus") != "trusted"
         }
         if still & set(REQUIRED_HOOKS):
             raise LaunchFailure("hooks_untrusted", f"required hooks stay untrusted: {sorted(still)}")
@@ -149,7 +160,7 @@ def ensure_hooks(connection: protocol.Connection, cwd: str) -> None:
 def check_binding(connection: protocol.Connection, info: dict, launch: Launch) -> None:
     if os.path.realpath(info.get("codexHome", "")) != os.path.realpath(launch.codex_home):
         raise LaunchFailure("wrong_profile", "the server runs from another Codex home than the rendered profile")
-    ensure_hooks(connection, launch.cwd)
+    ensure_hooks(connection, launch.cwd, launch.codex_home)
     if launch.account_type and protocol.account_type(connection) != launch.account_type:
         raise LaunchFailure("wrong_account", f"the server is not signed in with a {launch.account_type} account")
 

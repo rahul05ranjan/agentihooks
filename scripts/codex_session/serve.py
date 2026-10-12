@@ -17,7 +17,7 @@ from scripts.routing import codex_api, envs
 from scripts.swarm.store import AgentRecord, SwarmError, connect
 
 IDENTITY_ENV = ("AGENTIHOOKS_SWARM", "AGENTIHOOKS_SWARM_LANE", "AGENTIHOOKS_SWARM_TASK", "AGENTIHOOKS_AGENT_NAME")
-KEPT_FLAGS = ("-c", "--config", "--enable", "--disable")
+KEPT_FLAGS = ("-c", "--enable", "--disable")
 INTERACTIVE = "interactive"
 
 

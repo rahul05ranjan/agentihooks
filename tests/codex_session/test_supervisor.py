@@ -22,7 +22,7 @@ def store():
     import fakeredis
 
     store = RedisStore(fakeredis.FakeRedis(decode_responses=True))
-    store.create(SwarmConfig(SLUG, "agentihooks", 1, 0))
+    store.create(SwarmConfig(SLUG, "agentihooks", 1, 0, codex_inbox_transport=APP_SERVER_TRANSPORT))
     return store
 
 
@@ -179,14 +179,14 @@ def test_the_selected_account_credential_is_allowed(store, server, clock, root, 
 
 
 def test_missing_required_hooks_are_refused(store, server, clock, root, tmp_path):
-    server.hooks = hooks(events=("sessionStart", "userPromptSubmit", "preToolUse", "postToolUse"))
+    server.hooks = hooks(server.source, events=("sessionStart", "userPromptSubmit", "preToolUse", "postToolUse"))
     failure = failed(store, server, clock, root, launch_spec(store, server, tmp_path), "hooks_missing")
     assert "stop" in str(failure)
     assert_failed_cleanly(store, server, "hooks_missing")
 
 
 def test_untrusted_hooks_are_trusted_before_the_thread_starts(store, server, clock, root, tmp_path):
-    server.hooks = hooks(trust="untrusted")
+    server.hooks = hooks(server.source, trust="untrusted")
     supervisor.launch(store, launch_spec(store, server, tmp_path), deps(server, clock, root))
     methods = server.methods()
     assert methods.index("config/batchWrite") < methods.index("thread/start")
@@ -199,10 +199,29 @@ def test_untrusted_hooks_are_trusted_before_the_thread_starts(store, server, clo
 
 
 def test_hooks_that_stay_untrusted_are_refused(store, server, clock, root, tmp_path):
-    server.hooks = hooks(trust="untrusted")
+    server.hooks = hooks(server.source, trust="untrusted")
     server.trust_to = "untrusted"
     failed(store, server, clock, root, launch_spec(store, server, tmp_path), "hooks_untrusted")
     assert_failed_cleanly(store, server, "hooks_untrusted")
+
+
+def test_a_hook_from_outside_the_profile_home_is_never_trusted_or_counted(store, server, clock, root, tmp_path):
+    repo_hooks = hooks(str(tmp_path / ".codex" / "hooks.json"), trust="untrusted")
+    server.hooks = hooks(server.source) + repo_hooks
+    supervisor.launch(store, launch_spec(store, server, tmp_path), deps(server, clock, root))
+    assert "config/batchWrite" not in server.methods()
+    server.hooks = repo_hooks
+    other = launch_spec(store, server, tmp_path)
+    other = replace(other, agent=replace(other.agent, seat=f"eng-2@{SLUG}"))
+    failed(store, server, clock, root, other, "hooks_missing")
+
+
+def test_a_swarm_on_the_legacy_transport_admits_no_app_server(store, server, clock, root, tmp_path):
+    store.update(SLUG, codex_inbox_transport="legacy")
+    failure = failed(store, server, clock, root, launch_spec(store, server, tmp_path), "transport")
+    assert "runs the legacy Codex inbox transport" in str(failure)
+    assert server.commands == []
+    assert store.executions(SLUG, SEAT) == []
 
 
 def test_a_server_that_came_up_but_never_answered_times_out_and_is_stopped(store, server, clock, root, tmp_path):
