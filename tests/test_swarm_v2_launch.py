@@ -934,6 +934,7 @@ def test_a_tick_spawn_admits_its_agent_with_the_seat_profile(world, lane, lanes,
 
     [sent] = world.runtime.requests
     assert world.store.execution(SLUG, sent.task["execution_id"]).profile == profile
+    assert world.store.execution(SLUG, sent.task["execution_id"]).harness == "claude"
 
 
 @pytest.mark.parametrize("profile", ["designer", "_guards", "../engineer"])

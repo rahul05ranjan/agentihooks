@@ -64,7 +64,7 @@ def test_nonlocal_consumers_use_aggregate_without_credential_probes(redis, monke
     from scripts.swarm import capacity
 
     report(redis, "a", {"claude:one": 2, "codex:one": 1}, 90)
-    report(redis, "b", {"claude:one": 1, "codex:one": 2}, 95)
+    report(redis, "b", {"claude:one": 1, "codex:one": 3}, 95)
     monkeypatch.setenv("AGENTIHOOKS_RUNTIME_BACKEND", "kubernetes")
     monkeypatch.setattr("hooks._redis.get_redis", lambda: redis)
     monkeypatch.setattr("time.time", lambda: 100)
@@ -75,7 +75,7 @@ def test_nonlocal_consumers_use_aggregate_without_credential_probes(redis, monke
     monkeypatch.setattr(capacity.balancer.ClaudeTokenSource, "results", forbidden)
     monkeypatch.setattr(capacity.codex_router.CodexAccountSource, "readings", forbidden)
     assert account_sessions.sessions_by_account() == {"one": 3}
-    assert account_sessions.codex_sessions_by_account() == {"one": 3}
+    assert account_sessions.codex_sessions_by_account() == {"one": 4}
     rows = capacity.accounts({"AGENTIHOOKS_RUNTIME_BACKEND": "kubernetes"}, 100)
     claude = next(row for row in rows if row.harness == "claude")
     assert (claude.sessions, claude.five_left, claude.week_left, claude.cap) == (3, 80, 70, 6)
@@ -230,3 +230,32 @@ def test_global_capacity_preserves_api_policy_and_future_reset_fields(redis, mon
     )
     monkeypatch.setattr(reservation, "current", lambda harness, env: None)
     assert capacity.accounts(environ, 100) == [capacity.Account("claude", "one", "OPEN", 2, 100, 100, 6)]
+
+
+@pytest.mark.parametrize("missing", ["stale", "sessions"])
+def test_aggregate_keeps_reading_after_an_unavailable_hive(redis, missing):
+    report(redis, "a", {"claude:one": 99}, 90)
+    report(redis, "b", {"claude:one": 2}, 95)
+    if missing == "stale":
+        redis.hset(registry.key("a"), "heartbeat_at", 1)
+    else:
+        redis.delete(f"{registry.key('a')}:sessions")
+    assert aggregate.read(redis, 100)["claude:one"]["sessions"] == 2
+
+
+def test_aggregate_uses_milliseconds_at_the_live_hive_boundary(redis):
+    report(redis, "a", {"claude:one": 1}, 90)
+    assert aggregate.read(redis, 190)["claude:one"]["sessions"] == 1
+
+
+@pytest.mark.parametrize(("first", "second", "cap"), [(95, 90, 6), (90, 95, 4), (95, 95, 6)])
+def test_aggregate_selects_slot_metadata_and_keeps_the_first_equal_observation(redis, first, second, cap):
+    report(redis, "a", {"claude:one": 1}, first, used=20)
+    report(redis, "b", {"claude:one": 2}, second, used=40)
+    redis.hset(
+        registry.key("b"), "slots", json.dumps([{"harness": "claude", "account": "one", "kind": "api", "cap": 4}])
+    )
+    row = aggregate.read(redis, 100)["claude:one"]
+    assert row["cap"] == cap
+    assert row["kind"] == ("subscription" if cap == 6 else "api")
+    assert row["quota"]["five_hour"]["used"] == (20 if cap == 6 else 40)

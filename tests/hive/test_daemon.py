@@ -605,7 +605,7 @@ def test_observe_reports_interactive_counts_with_their_harness_and_account(obser
 def test_execution_report_deduplicates_processes_and_skips_stale_records(redis, monkeypatch):
     from scripts.swarm.store import AgentRecord, RedisStore, SwarmConfig
     from scripts.swarm_v2.controller import Controller
-    from scripts.swarm_v2.registry import Scope, Session, encode
+    from scripts.swarm_v2.registry import CLOSED, Scope, Session, encode
 
     monkeypatch.setattr("time.time", lambda: 100)
     store = RedisStore(redis)
@@ -624,14 +624,20 @@ def test_execution_report_deduplicates_processes_and_skips_stale_records(redis, 
                 account="one",
             )
         )
-        for index in range(5)
+        for index in range(7)
     ]
+    orphan = Session(
+        "orphan", Scope("kubernetes", "hive", "worker"), 70, 7, "claude", execution_id="exe-absent", generation=1
+    )
+    redis.hset(store.key("swarm", "fleet-sessions"), orphan.key(), encode(orphan))
     records = [
         (agents[0], 10, 1, "claude"),
         (agents[1], 20, 1, "claude"),
-        (agents[2], 20, 1, "claude"),
-        (agents[3], 30, 2, "claude"),
-        (agents[4], 40, 1, "unknown"),
+        (agents[2], 30, 1, "claude"),
+        (agents[3], 30, 1, "claude"),
+        (agents[4], 40, 2, "claude"),
+        (agents[5], 50, 1, "unknown"),
+        (agents[6], 60, 1, "claude"),
     ]
     for index, (agent, pid, generation, harness) in enumerate(records):
         session = Session(
@@ -642,11 +648,14 @@ def test_execution_report_deduplicates_processes_and_skips_stale_records(redis, 
             harness,
             execution_id=agent.execution_id,
             generation=generation,
+            **({"state": CLOSED} if index == 1 else {}),
         )
         redis.hset(store.key("swarm", "fleet-sessions"), session.key(), encode(session))
-    processes = {"claude": {10: "other", 20: "one", 30: "one"}, "codex": {}}
-    assert daemon._executions(redis, "hive", processes) == {"claude:one": [agents[1].execution_id]}
+    processes = {"claude": {10: "other", 20: "one", 30: "one", 40: "one", 60: "one"}, "codex": {}}
+    assert daemon._executions(redis, "hive", processes) == {
+        "claude:one": [agents[2].execution_id, agents[6].execution_id]
+    }
     processes["claude"][10] = "one"
     assert daemon._executions(redis, "hive", processes) == {
-        "claude:one": [agents[0].execution_id, agents[1].execution_id]
+        "claude:one": [agents[0].execution_id, agents[2].execution_id, agents[6].execution_id]
     }
