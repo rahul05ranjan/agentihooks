@@ -57,7 +57,7 @@ check() {
     printf 'the master identity %s was refused for another reason: %s\n' "$master" "$out"
     return 1
   fi
-  printf 'the master identity was refused: %s\n' "$(tail -1 <<< "$out")"
+  printf 'the master identity was refused: %s\n' "$(grep -m1 '^swarm: ' <<< "$out")"
   if out="$(terminal "$fault" AGENTIHOOKS_AGENT_NAME="$agent" AGENTIHOOKS_SWARM="$slug")"; then
     printf 'the agent identity %s was not refused the worker terminal: %s\n' "$agent" "$out"
     return 1
@@ -66,7 +66,7 @@ check() {
     printf 'the agent identity %s was refused for another reason: %s\n' "$agent" "$out"
     return 1
   fi
-  printf 'the agent identity was refused: %s\n' "$(tail -1 <<< "$out")"
+  printf 'the agent identity was refused: %s\n' "$(grep -m1 '^swarm: ' <<< "$out")"
 }
 
 if ! check ""; then
@@ -80,4 +80,4 @@ if [[ $planted != *"the master identity $master was not refused the worker termi
   printf 'the identity check missed the planted operator fallback for the master: %s\n' "$planted" >&2
   exit 1
 fi
-printf 'the identity check flagged the planted operator fallback: %s\n' "$(tail -1 <<< "$planted")"
+printf 'the identity check flagged the planted operator fallback: %s\n' "$(grep -m1 'was not refused' <<< "$planted")"
