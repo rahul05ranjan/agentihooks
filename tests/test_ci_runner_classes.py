@@ -12,7 +12,17 @@ POLICY = {"actors": ["nestorcolt", "agenticore-app[bot]", "tcc-main-ci[bot]"], "
 
 
 def routed(label, policy=POLICY):
-    return ci_runner_trust.routed_runner(label, policy)
+    actors = json.dumps(policy["actors"], separators=(",", ":"))
+    queue = policy["queue_actor"]
+    trusted = (
+        "(github.event_name != 'pull_request_target'"
+        " && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)"
+        f" && contains(fromJSON('{actors}'), github.actor)"
+        f" && contains(fromJSON('{actors}'), github.triggering_actor)"
+        " || (github.event_name == 'merge_group' || github.event_name == 'push' && github.ref == 'refs/heads/dev')"
+        f" && github.actor == '{queue}' && github.triggering_actor == '{queue}')"
+    )
+    return "${{ " + trusted + " && '" + label + "' || 'ubuntu-latest' }}"
 
 
 def workflow(runner="ubuntu-latest"):
@@ -106,47 +116,15 @@ def test_pinned_hosted_jobs_cover_every_named_release_path():
     } <= ci_runner_classes.PINNED_HOSTED
 
 
-def test_routed_runner_is_the_trusted_pool_expression_with_hosted_fallback():
-    runner = routed("anton-oss-batch")
-    assert runner.startswith("${{ (github.event_name != 'pull_request_target'")
-    assert (
-        """contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.triggering_actor)"""
-        in runner
-    )
-    assert (
-        "github.actor == 'github-merge-queue[bot]' && github.triggering_actor == 'github-merge-queue[bot]')" in runner
-    )
-    assert runner.endswith(" && 'anton-oss-batch' || 'ubuntu-latest' }}")
-
-
 @pytest.mark.parametrize("label", ["anton-oss-light", "anton-oss", "anton-oss-batch"])
 def test_runner_trust_accepts_the_routed_runner(label):
     assert trust({"b.yml": workflow(routed(label))}) == []
 
 
-@pytest.mark.parametrize(
-    "runner",
-    [
-        routed("anton"),
-        routed("anton-batch"),
-        routed("anton-oss").replace("'ubuntu-latest'", "'anton'"),
-        routed("anton-oss").replace("github.triggering_actor)", "github.actor)"),
-        routed("anton-oss").replace("github.event.pull_request.head.repo.full_name == github.repository", "true"),
-        routed("anton-oss").replace(" && github.triggering_actor == 'github-merge-queue[bot]'", ""),
-    ],
-)
-def test_runner_trust_rejects_a_routed_runner_that_can_leave_the_oss_sets(runner):
+def test_a_routed_runner_that_can_leave_the_oss_sets_is_red_in_both_gates():
+    runner = routed("anton-oss").replace("'ubuntu-latest'", "'anton'")
+    assert classes({"b.yml": workflow(runner)}, {"b.yml/build": "standard"}) != []
     assert trust({"b.yml": workflow(runner)}) != []
-
-
-def test_runner_trust_needs_the_protected_policy_to_admit_a_routed_runner():
-    assert ci_runner_trust.check({"b.yml": workflow(routed("anton-oss"))}) != []
-
-
-def test_runner_trust_rejects_a_routed_runner_on_target_events():
-    target = workflow(routed("anton-oss"))
-    target["on"] = {"pull_request_target": {}}
-    assert trust({"b.yml": target}) != []
 
 
 def test_repository_jobs_all_carry_a_runner_class():

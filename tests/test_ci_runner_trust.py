@@ -215,6 +215,85 @@ def test_approved_usernames_can_contain_uppercase():
     assert ci_runner_trust.validate_actors(["Operator", "One[bot]", "Two[bot]"]) == ["Operator", "One[bot]", "Two[bot]"]
 
 
+def test_separately_scoped_queue_identity_can_contain_uppercase():
+    policy = {"actors": ACTORS, "queue_actor": "Queue[bot]"}
+    assert ci_runner_trust.validate_actors(policy) == ACTORS + ["Queue[bot]"]
+
+
+def selector(pool="anton-oss"):
+    return (
+        "${{ (github.event_name != 'pull_request_target' && "
+        "(github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && "
+        'contains(fromJSON(\'["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]\'), github.actor) && '
+        'contains(fromJSON(\'["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]\'), github.triggering_actor) || '
+        "(github.event_name == 'merge_group' || github.event_name == 'push' && github.ref == 'refs/heads/dev') && "
+        "github.actor == 'github-merge-queue[bot]' && github.triggering_actor == 'github-merge-queue[bot]') && '"
+        + pool
+        + "' || 'ubuntu-latest' }}"
+    )
+
+
+@pytest.mark.parametrize("pool", ["anton-oss", "anton-oss-light", "anton-oss-batch"])
+def test_safe_pool_selector_passes_without_job_admission_skip(pool):
+    candidate = {
+        "on": {"pull_request": {}, "push": {}, "merge_group": {}},
+        "jobs": {"test": {"runs-on": selector(pool)}},
+    }
+    assert (
+        ci_runner_trust.check({"test.yml": candidate}, {"actors": ACTORS, "queue_actor": "github-merge-queue[bot]"})
+        == []
+    )
+
+
+@pytest.mark.parametrize("replace", ["actor", "trigger", "target", "fork", "queue-ref", "outsider", "fallback", "pool"])
+def test_selector_cannot_loosen_actor_or_event_policy(replace):
+    runner = selector()
+    changes = {
+        "actor": (
+            'contains(fromJSON(\'["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]\'), github.actor) && ',
+            "",
+        ),
+        "trigger": (
+            'contains(fromJSON(\'["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]\'), github.triggering_actor) || ',
+            "true || ",
+        ),
+        "target": ("github.event_name != 'pull_request_target' && ", ""),
+        "fork": ("github.event.pull_request.head.repo.full_name == github.repository", "true"),
+        "queue-ref": ("github.ref == 'refs/heads/dev'", "true"),
+        "outsider": ('"nestorcolt"', '"stranger"'),
+        "fallback": ("'ubuntu-latest'", "'anton-oss'"),
+        "pool": ("'anton-oss'", "'anton-other'"),
+    }
+    before, after = changes[replace]
+    runner = runner.replace(before, after)
+    assert ci_runner_trust.check(
+        {"test.yml": {"jobs": {"test": {"runs-on": runner}}}},
+        {"actors": ACTORS, "queue_actor": "github-merge-queue[bot]"},
+    )
+
+
+def test_selector_is_graded_against_base_approvals_instead_of_head_literals():
+    policy = {
+        "actors": ["different-owner", "agenticore-app[bot]", "tcc-main-ci[bot]"],
+        "queue_actor": "github-merge-queue[bot]",
+    }
+    assert ci_runner_trust.check({"test.yml": {"jobs": {"test": {"runs-on": selector()}}}}, policy)
+
+
+def test_runner_cli_accepts_the_selector_only_with_protected_policy_metadata(tmp_path):
+    import json
+
+    import yaml
+
+    folder = tmp_path / ".github/workflows"
+    folder.mkdir(parents=True)
+    (folder / "trusted-actors.json").write_text(
+        json.dumps({"actors": ACTORS, "queue_actor": "github-merge-queue[bot]"})
+    )
+    (folder / "selected.yml").write_text(yaml.safe_dump({"jobs": {"test": {"runs-on": selector()}}}))
+    assert ci_runner_trust.main(["--root", str(tmp_path)]) == 0
+
+
 @pytest.mark.parametrize(
     "guard", ["${{ " + GUARD + " }}", "${{" + GUARD + "}}", GUARD + " && (true)", GUARD + " && ((true))"]
 )
