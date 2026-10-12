@@ -35,11 +35,11 @@ EXPECTED = {"heartbeat": (DEADLINE, int), "credential": ("credential", str)}
 Send = Callable[[str, str, str, dict], tuple[int, object]]
 
 
-def send(method: str, url: str, grant: str, body: dict) -> tuple[int, object]:
+def send(method: str, url: str, grant: str, body: dict, timeout: float = TIMEOUT_SECONDS) -> tuple[int, object]:
     headers = {**JSON_HEADERS, AUTHORIZATION: f"Bearer {grant}"}
     request = urllib.request.Request(url, json.dumps(body).encode(), headers, method=method)
     try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as answer:
+        with urllib.request.urlopen(request, timeout=timeout) as answer:
             status, text = answer.status, answer.read()
     except urllib.error.HTTPError as error:
         return error.code, {}

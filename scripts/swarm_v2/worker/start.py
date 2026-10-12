@@ -40,7 +40,7 @@ from scripts.swarm_v2.worker.lease_renewal import send as transport
 
 
 def post(url: str, grant: str, body: dict) -> tuple[int, object]:
-    return transport("POST", url.rstrip("/") + REGISTER, grant, body)
+    return transport("POST", url.rstrip("/") + REGISTER, grant, body, TIMEOUT_SECONDS)
 
 
 def report(spec: dict, grant: str, restored: Restored) -> None:
