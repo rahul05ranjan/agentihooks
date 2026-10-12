@@ -35,7 +35,10 @@ def test_ci_creates_no_commits_or_bot_pull_requests():
             job = workflow["jobs"]["audit"]
             assert job["runs-on"] == "ubuntu-latest"
             steps = job["steps"]
-            assert steps[0]["with"] == {"ref": "dev", "persist-credentials": False}
+            assert steps[0] == {
+                "uses": "actions/checkout@v4",
+                "with": {"ref": "dev", "persist-credentials": False},
+            }
             token_steps = [step for step in steps if "ORG_GITHUB_TOKEN" in json.dumps(step)]
             assert token_steps == [
                 {
