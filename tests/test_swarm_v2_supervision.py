@@ -150,16 +150,31 @@ def test_a_launch_without_a_checkout_ignores_a_recorded_worktree(tmp_path):
     assert Launch.load(attempt, path).checkout is None
 
 
-@pytest.mark.parametrize("where", ["outside", "missing", "root", "absent", "unreadable"])
+@pytest.mark.parametrize(
+    "where", ["outside", "missing", "root", "absent", "unnamed", "empty", "garbled", "folder", "loop"]
+)
 def test_a_launch_whose_checkout_has_no_valid_worktree_is_refused(tmp_path, where):
     attempt, path = checked_out_launch(tmp_path)
     (attempt / "worktrees").mkdir()
-    trees = {"outside": tmp_path, "missing": attempt / "worktrees" / "gone", "root": attempt / "worktrees"}
+    (attempt / "worktrees" / "loop").symlink_to(attempt / "worktrees" / "loop")
+    trees = {
+        "outside": tmp_path,
+        "missing": attempt / "worktrees" / "gone",
+        "root": attempt / "worktrees",
+        "empty": "",
+        "loop": attempt / "worktrees" / "loop",
+    }
     if where in trees:
         recorded_checkout(attempt, "fixture", trees[where])
-    if where == "unreadable":
-        recorded_checkout(attempt, "fixture", attempt)
-        (attempt / "spool" / "workspaces" / "fixture.json").write_text(json.dumps({"tree": "elsewhere"}))
+    held = attempt / "spool" / "workspaces" / "fixture.json"
+    if where in ("unnamed", "garbled", "folder"):
+        held.parent.mkdir(parents=True)
+    if where == "unnamed":
+        held.write_text(json.dumps({"tree": "elsewhere"}))
+    if where == "garbled":
+        held.write_text("{not json")
+    if where == "folder":
+        held.mkdir()
 
     with pytest.raises(LaunchRefused) as refused:
         Launch.load(attempt, path)

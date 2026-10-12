@@ -43,9 +43,12 @@ def _checkout(execution: filesystem.Execution, task: str) -> Path:
         raise refused
     record = execution.path("spool") / "workspaces" / f"{task}.json"
     try:
-        tree = Path(json.loads(record.read_text())["path"]).resolve()
-    except (OSError, ValueError, KeyError, TypeError):
+        held = json.loads(record.read_text())["path"]
+        tree = Path(held).resolve() if held else None
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError):
         raise refused from None
+    if tree is None:
+        raise refused
     root = execution.path("worktree").resolve()
     if not tree.is_relative_to(root) or tree == root or not tree.is_dir():
         raise refused

@@ -88,7 +88,12 @@ def recorded(execution: Execution, task: str) -> dict | None:
 
 def _environ() -> dict[str, str]:
     environ = {key: value for key, value in os.environ.items() if key not in GIT_SCOPE}
-    helper = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "credential.helper", "GIT_CONFIG_VALUE_0": HELPER}
+    index = environ.get("GIT_CONFIG_COUNT", "0")
+    helper = {
+        "GIT_CONFIG_COUNT": str(int(index) + 1),
+        f"GIT_CONFIG_KEY_{index}": "credential.https://github.com.helper",
+        f"GIT_CONFIG_VALUE_{index}": HELPER,
+    }
     return {**environ, "GIT_TERMINAL_PROMPT": "0", **helper}
 
 
