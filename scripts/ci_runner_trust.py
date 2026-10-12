@@ -57,7 +57,7 @@ def loader_contract() -> dict:
 
 def validate_actors(actors: object) -> list[str]:
     if isinstance(actors, dict):
-        if set(actors) != {"actors", "queue_actor"}:
+        if set(actors) != {"actors", "queue_actor"} or not isinstance(actors["actors"], list):
             raise ValueError("trusted actors policy requires actors and queue_actor")
         approved = validate_actors(actors["actors"])
         queue = actors["queue_actor"]
@@ -151,7 +151,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", type=Path, default=Path("."))
     parser.add_argument("--actors-output", action="store_true")
     args = parser.parse_args(argv)
-    actors = validate_actors(json.loads((args.root / ACTORS).read_text()))
+    policy = json.loads((args.root / ACTORS).read_text())
+    actors = validate_actors(policy)
     if args.actors_output:
         print("actors=" + json.dumps(actors, separators=(",", ":")))
         return 0
@@ -162,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
         for path in (args.root / ".github/workflows").iterdir()
         if path.suffix in (".yml", ".yaml")
     }
-    problems = check(workflows, actors)
+    problems = check(workflows, policy)
     print(
         f"Runner trust: {len(workflows)} workflows, {sum(len(workflow.get('jobs', {})) for workflow in workflows.values())} jobs, {len(problems)} problems"
     )

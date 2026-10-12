@@ -304,6 +304,12 @@ def test_incomplete_or_extended_policy_is_not_an_approval(policy):
         ci_runner_trust.validate_actors(policy)
 
 
+def test_queue_policy_cannot_nest_another_policy_as_the_app_list():
+    policy = {"actors": {"actors": ACTORS, "queue_actor": "inner[bot]"}, "queue_actor": "outer[bot]"}
+    with pytest.raises(ValueError, match="trusted actors"):
+        ci_runner_trust.validate_actors(policy)
+
+
 @pytest.mark.parametrize("events", ["pull_request_target", {True: {"pull_request_target": {}}}])
 def test_all_yaml_target_trigger_forms_are_rejected(events):
     candidate = workflow()
