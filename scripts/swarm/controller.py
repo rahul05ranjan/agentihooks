@@ -206,6 +206,7 @@ def main(argv: list[str]) -> int:
     from scripts.swarm_v2 import control_service, proof_swarm
 
     operator_env.fill(os.environ)
+    operator_env.classifier(os.environ)
     store = connect()
     service = None
     try:

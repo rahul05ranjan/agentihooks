@@ -176,6 +176,17 @@ def now_ms():
     return int(time.time() * 1000)
 
 
+def _publish_tick_status(store, slug, doc):
+    from scripts.swarm import command_runner
+
+    failure = sys.exception()
+    try:
+        timing.call(command_runner.publish, store, slug, doc)
+    except Exception:
+        if failure is None:
+            raise
+
+
 @timing.instrument_tick
 @outage.guard_tick
 def run_tick(store, slug, ledger=None, runtime=None, messenger=None, scheduled=False):
@@ -191,6 +202,7 @@ def run_tick(store, slug, ledger=None, runtime=None, messenger=None, scheduled=F
     if token is None:
         return ["another tick is running"]
     keeping = timing.BEFORE_STEP.set(lambda: controller.keep_tick(store, slug, held, token, TICK_LOCK_MS))
+    doc = {}
     try:
         outage.providers(store, slug, runtime, now_ms())
         if isinstance(ledger, ledger_client.LedgerClient) and not outage.ledger_health(
@@ -302,11 +314,14 @@ def run_tick(store, slug, ledger=None, runtime=None, messenger=None, scheduled=F
             )
             taken = timing.call(snapshot.auto, store, slug, now_ms(), os.environ)
             store.redis.set(store.key(slug, "last-tick"), now_ms())
-            timing.call(command_runner.publish, store, slug, timing.call(ledger.state, slug))
+            doc = timing.call(ledger.state, slug)
             return probed + controls + actions + ([f"took automatic snapshot {taken.name}"] if taken else [])
     finally:
-        timing.BEFORE_STEP.reset(keeping)
-        controller.release_tick_lock(store, slug, token)
+        try:
+            _publish_tick_status(store, slug, doc)
+        finally:
+            timing.BEFORE_STEP.reset(keeping)
+            controller.release_tick_lock(store, slug, token)
 
 
 def cmd_list(store, args):
@@ -356,6 +371,7 @@ def cmd_tick(store, args):
     if why := timer.installed_refusal():
         raise SwarmError(f"the tick refused to run: {why}")
     operator_env.fill(os.environ)
+    operator_env.classifier(os.environ)
     if os.environ.get("AGENTIHOOKS_CONTROLLER_TICK_SECONDS"):
         raise SwarmError(
             "the tick refused to run: AGENTIHOOKS_CONTROLLER_TICK_SECONDS is for controller installs, "
@@ -1349,10 +1365,10 @@ def cmd_wait(store, args):
         if problem := waits.target_problem(held["kind"], held["target"], agent.task, rows, get):
             raise SwarmError(problem)
         if held["kind"] == "checks":
-            pull = ledger_events.view(held["target"])
-            if pull is None or not pull.head:
+            head = ledger_events.head(held["target"])
+            if not head:
                 raise SwarmError("cannot read the pull request head; retry the checks wait")
-            held["head"] = pull.head
+            held["head"] = head
         if held["kind"] == "mutation":
             held["head"] = waits.mutation_wait.bind(held["target"])
     at = now_ms()
