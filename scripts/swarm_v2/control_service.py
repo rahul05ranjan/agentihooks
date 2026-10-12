@@ -25,7 +25,7 @@ from scripts.swarm_v2.herdr.attach import ClientHome
 from scripts.swarm_v2.herdr.capabilities import runner
 from scripts.swarm_v2.herdr.upkeep import Upkeep, switched_on
 from scripts.swarm_v2.hosted_ledger import HostedLedger
-from scripts.swarm_v2.kubernetes import operator_terminal
+from scripts.swarm_v2.kubernetes import jump, operator_terminal
 from scripts.swarm_v2.kubernetes.client import ApiRefused
 from scripts.swarm_v2.kubernetes.runtime import PodStatus
 from scripts.swarm_v2.kubernetes.spec import pod_name
@@ -252,6 +252,7 @@ def host(environ: Mapping[str, str], store: RedisStore, owner: str) -> ControlSe
     service.controller.terminals = anton_client(environ, slug, workers)
     service.listen = (HOST, int(port))
     if workers is not None:
+        service.controller.jump = jump.routes(environ, workers.policy["namespace"])
         service.api_url = workers.terms.api_url
         service.runtime = deployed.tick_runtime(service, workers, environ)
         service.pods = transports[0].status
