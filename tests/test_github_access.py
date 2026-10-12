@@ -3,13 +3,22 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_read_back_accepts_the_operator_access_boundary(tmp_path):
+@pytest.fixture
+def access_responses():
     responses = {
         "orgs/the-cloud-clockwork": {"default_repository_permission": "read"},
         "orgs/the-cloud-clockwork/members?per_page=100": [{"login": "nestorcolt"}],
+        "orgs/the-cloud-clockwork/installations?per_page=100": {
+            "installations": [
+                {"app_id": 2988497, "app_slug": "agenticore-app"},
+                {"app_id": 5243008, "app_slug": "tcc-main-ci"},
+            ]
+        },
         "orgs/the-cloud-clockwork/actions/runner-groups/1": {
             "id": 1,
             "name": "Default",
@@ -23,9 +32,6 @@ def test_read_back_accepts_the_operator_access_boundary(tmp_path):
             "rules": [{"type": "creation"}, {"type": "update"}],
             "bypass_actors": [
                 {"actor_type": "RepositoryRole", "actor_id": 5, "bypass_mode": "always"},
-                {"actor_type": "Integration", "actor_id": 81054, "bypass_mode": "always"},
-                {"actor_type": "Integration", "actor_id": 1144995, "bypass_mode": "always"},
-                {"actor_type": "Integration", "actor_id": 1236702, "bypass_mode": "always"},
                 {"actor_type": "Integration", "actor_id": 2988497, "bypass_mode": "always"},
             ],
         },
@@ -44,25 +50,129 @@ def test_read_back_accepts_the_operator_access_boundary(tmp_path):
         ]
         responses[f"{prefix}/teams?per_page=100"] = []
         responses[f"{prefix}/keys?per_page=100"] = []
+    return responses
+
+
+def run_access(tmp_path, responses, mode="check", **environment):
     fixture = tmp_path / "responses.json"
     fixture.write_text(json.dumps(responses))
     gh = tmp_path / "gh"
     gh.write_text(
         "#!/usr/bin/env python3\n"
         "import json, os, sys\n"
+        "from pathlib import Path\n"
         "assert sys.argv[1] == 'api'\n"
         "assert '--method' not in sys.argv and '-X' not in sys.argv\n"
-        "data = json.load(open(os.environ['GH_ACCESS_FIXTURE']))\n"
+        "data = json.loads(Path(os.environ['GH_ACCESS_FIXTURE']).read_text())\n"
         "value = data[sys.argv[2]]\n"
-        "print(json.dumps(value))\n"
+        "if isinstance(value, dict) and 'pages' in value:\n"
+        "    assert '--paginate' in sys.argv\n"
+        "    for page in value['pages']: print(json.dumps(page))\n"
+        "else: print(json.dumps(value))\n"
     )
     gh.chmod(0o755)
-    result = subprocess.run(
-        ["bash", str(ROOT / "scripts/github_access.sh"), "check"],
+    return subprocess.run(
+        ["bash", str(ROOT / "scripts/github_access.sh"), mode],
         cwd=ROOT,
-        env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "GH_ACCESS_FIXTURE": str(fixture)},
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "GH_ACCESS_FIXTURE": str(fixture),
+            **environment,
+        },
         text=True,
         capture_output=True,
     )
+
+
+def test_read_back_accepts_the_operator_access_boundary(tmp_path, access_responses):
+    result = run_access(tmp_path, access_responses)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "GitHub access controls verified" in result.stdout
+
+
+@pytest.mark.parametrize("repository", ["agentihooks", "agentibrain-kernel"])
+@pytest.mark.parametrize(
+    ("setting", "changed"),
+    [
+        ("fork-pr-contributor-approval", {"approval_policy": "first_time_contributors"}),
+        ("workflow", {"default_workflow_permissions": "read", "can_approve_pull_request_reviews": True}),
+        ("workflow", {"default_workflow_permissions": "write", "can_approve_pull_request_reviews": False}),
+        ("workflow", {"default_workflow_permissions": "read"}),
+    ],
+)
+def test_read_back_rejects_repository_actions_drift(tmp_path, access_responses, repository, setting, changed):
+    access_responses[f"repos/the-cloud-clockwork/{repository}/actions/permissions/{setting}"] = changed
+    result = run_access(tmp_path, access_responses)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert f"DRIFT {repository}" in result.stderr
+
+
+def test_read_back_rejects_public_access_to_default_runners(tmp_path, access_responses):
+    access_responses["orgs/the-cloud-clockwork/actions/runner-groups/1"]["allows_public_repositories"] = True
+    result = run_access(tmp_path, access_responses)
+    assert result.returncode == 1
+    assert "DRIFT Default runner public access" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("field", "changed"),
+    [
+        ("enforcement", "disabled"),
+        ("conditions", {"ref_name": {"include": ["~ALL"], "exclude": ["refs/heads/dev"]}}),
+        ("conditions", {"ref_name": {"include": ["~ALL"], "exclude": []}}),
+        ("rules", [{"type": "creation"}]),
+        ("bypass_actors", [{"actor_type": "RepositoryRole", "actor_id": 4, "bypass_mode": "always"}]),
+    ],
+)
+def test_read_back_rejects_branch_rule_drift(tmp_path, access_responses, field, changed):
+    access_responses["repos/the-cloud-clockwork/agentihooks/rulesets/24942335"][field] = changed
+    result = run_access(tmp_path, access_responses)
+    assert result.returncode == 1
+    assert "DRIFT agentihooks branch access" in result.stderr
+
+
+def test_read_back_rejects_an_additional_writer_on_a_later_page(tmp_path, access_responses):
+    endpoint = "repos/the-cloud-clockwork/agentihooks/collaborators?per_page=100"
+    access_responses[endpoint] = {
+        "pages": [
+            access_responses[endpoint],
+            [{"login": "outsider", "permissions": {"push": True, "admin": False}}],
+        ]
+    }
+    result = run_access(tmp_path, access_responses)
+    assert result.returncode == 1
+    assert "DRIFT agentihooks writers" in result.stderr
+    assert '"outsider"' in result.stdout
+
+
+def test_read_back_fails_when_the_api_cannot_read_a_setting(tmp_path, access_responses):
+    del access_responses["repos/the-cloud-clockwork/agentibrain-kernel/actions/permissions/workflow"]
+    result = run_access(tmp_path, access_responses)
+    assert result.returncode != 0
+    assert "GitHub access controls verified" not in result.stdout
+
+
+@pytest.mark.parametrize("variable", ["AGENTIHOOKS_AGENT_NAME", "AGENTIHOOKS_SWARM_TASK", "GITHUB_ACTIONS"])
+def test_apply_is_refused_in_an_agent_or_ci_session(tmp_path, access_responses, variable):
+    result = run_access(tmp_path, access_responses, mode="apply", **{variable: "active"})
+    assert result.returncode == 1
+    assert "Only the operator may apply" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("app_id", "app_slug"),
+    [
+        (1236702, "claude"),
+        (81054, "aws-connector-for-github"),
+        (1144995, "chatgpt-codex-connector"),
+        (999, "unknown-app"),
+    ],
+)
+def test_read_back_rejects_an_unapproved_installed_app(tmp_path, access_responses, app_id, app_slug):
+    access_responses["orgs/the-cloud-clockwork/installations?per_page=100"]["installations"].append(
+        {"app_id": app_id, "app_slug": app_slug}
+    )
+    result = run_access(tmp_path, access_responses)
+    assert result.returncode == 1
+    assert "DRIFT installed GitHub apps" in result.stderr
