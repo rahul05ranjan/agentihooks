@@ -311,14 +311,14 @@ def test_service_unit_runs_setup_outside_agent_sessions():
 
 
 class Systemctl:
-    def __init__(self, code=0, error=None) -> None:
-        self.code, self.error, self.calls = code, error, []
+    def __init__(self, code=0, error=None, stderr="") -> None:
+        self.code, self.error, self.stderr, self.calls = code, error, stderr, []
 
     def __call__(self, command, **kwargs):
         self.calls.append((command, kwargs))
         if self.error is not None:
             raise self.error
-        return subprocess.CompletedProcess(command, self.code, "", "")
+        return subprocess.CompletedProcess(command, self.code, "", self.stderr)
 
 
 QUIET = {"capture_output": True, "text": True, "timeout": 30}
@@ -328,7 +328,7 @@ def test_install_writes_and_enables_the_timer(tmp_path):
     systemctl = Systemctl()
     tmp_path = tmp_path / "units"
 
-    assert operator_setup.install("/opt/bin/agentihooks", tmp_path, systemctl) is True
+    operator_setup.install("/opt/bin/agentihooks", tmp_path, systemctl)
     assert (tmp_path / "agentihooks-swarm-terminal.service").read_text() == operator_setup.unit("/opt/bin/agentihooks")
     assert (tmp_path / "agentihooks-swarm-terminal.timer").read_text() == operator_setup.timer()
     assert (tmp_path / "agentihooks-swarm-terminal-sync.service").read_text() == operator_setup.sync_unit(
@@ -345,12 +345,17 @@ def test_install_writes_and_enables_the_timer(tmp_path):
     ]
     assert systemctl.calls == [(["systemctl", "--user", "daemon-reload"], {**QUIET, "check": True}), *enable]
 
-    assert operator_setup.install("/opt/bin/agentihooks", tmp_path, systemctl) is True
+    operator_setup.install("/opt/bin/agentihooks", tmp_path, systemctl)
     assert systemctl.calls[3:] == enable
 
 
 def test_install_reports_a_failed_enable(tmp_path):
-    assert operator_setup.install("/opt/bin/agentihooks", tmp_path, Systemctl(code=1)) is False
+    with pytest.raises(SetupRefused) as refused:
+        operator_setup.install("/opt/bin/agentihooks", tmp_path, Systemctl(code=1, stderr="Unit not found.\n"))
+    assert str(refused.value) == (
+        "systemctl could not enable agentihooks-swarm-terminal.timer: Unit not found.; "
+        "agentihooks-swarm-terminal-sync.service: Unit not found."
+    )
 
 
 def test_install_defaults_to_the_agentihooks_executable_and_user_units(tmp_path, monkeypatch):
@@ -358,7 +363,7 @@ def test_install_defaults_to_the_agentihooks_executable_and_user_units(tmp_path,
     monkeypatch.setattr(operator_setup.Path, "home", lambda: tmp_path)
     monkeypatch.setattr(operator_setup.shutil, "which", lambda name: looked_up.append(name) or "/opt/bin/agentihooks")
 
-    assert operator_setup.install(run=Systemctl()) is True
+    operator_setup.install(run=Systemctl())
 
     units = tmp_path / ".config" / "systemd" / "user"
     assert looked_up == ["agentihooks"]
@@ -458,11 +463,24 @@ def test_install_command_refuses_inside_an_agent_session(tmp_path, monkeypatch):
     )
 
 
-@pytest.mark.parametrize("enabled, code", [(True, 0), (False, 1)])
-def test_install_command_exit_follows_the_enable(tmp_path, monkeypatch, enabled, code):
-    monkeypatch.setattr(operator_setup, "install", lambda: enabled)
+def test_install_command_exits_zero_when_installed(tmp_path, monkeypatch):
+    monkeypatch.setattr(operator_setup, "install", lambda: None)
 
-    assert run_main(["install"], {}, Who(), tmp_path / "home") == (code, "", "")
+    assert run_main(["install"], {}, Who(), tmp_path / "home") == (0, "", "")
+
+
+def test_install_command_names_a_refused_enable(tmp_path, monkeypatch):
+    def refuse():
+        raise SetupRefused("systemctl could not enable agentihooks-swarm-terminal-sync.service: bus down")
+
+    monkeypatch.setattr(operator_setup, "install", refuse)
+
+    assert run_main(["install"], {}, Who(), tmp_path / "home") == (
+        1,
+        "",
+        "operator terminal install refused: systemctl could not enable "
+        "agentihooks-swarm-terminal-sync.service: bus down\n",
+    )
 
 
 def test_placed_settings_open_the_terminal_command_inputs(tmp_path):
@@ -571,7 +589,9 @@ def test_install_reports_a_failed_sync_enable(tmp_path):
             self.code = 1 if command[-1] == "agentihooks-swarm-terminal-sync.service" else 0
             return super().__call__(command, **kwargs)
 
-    assert operator_setup.install("/opt/bin/agentihooks", tmp_path, Refusing()) is False
+    with pytest.raises(SetupRefused) as refused:
+        operator_setup.install("/opt/bin/agentihooks", tmp_path, Refusing(stderr="bus down"))
+    assert str(refused.value) == "systemctl could not enable agentihooks-swarm-terminal-sync.service: bus down"
 
 
 def test_sync_command_refusals_exit_one(tmp_path, monkeypatch):

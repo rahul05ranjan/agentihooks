@@ -211,7 +211,7 @@ def sync_unit(binary: str) -> str:
     )
 
 
-def install(binary: str | None = None, unit_dir: Path | None = None, run: Callable = subprocess.run) -> bool:
+def install(binary: str | None = None, unit_dir: Path | None = None, run: Callable = subprocess.run) -> None:
     binary = binary or shutil.which("agentihooks")
     if not binary:
         raise SetupRefused("the agentihooks executable is not on PATH")
@@ -224,13 +224,15 @@ def install(binary: str | None = None, unit_dir: Path | None = None, run: Callab
     try:
         if stale:
             run(["systemctl", "--user", "daemon-reload"], capture_output=True, text=True, timeout=30, check=True)
-        results = [
-            run(["systemctl", "--user", "enable", "--now", name], capture_output=True, text=True, timeout=30)
+        results = {
+            name: run(["systemctl", "--user", "enable", "--now", name], capture_output=True, text=True, timeout=30)
             for name in (TIMER, SYNC)
-        ]
+        }
     except (OSError, subprocess.SubprocessError) as error:
         raise SetupRefused(f"systemctl could not enable {TIMER} and {SYNC}: {type(error).__name__}") from None
-    return all(result.returncode == 0 for result in results)
+    failed = [f"{name}: {result.stderr.strip()}" for name, result in results.items() if result.returncode]
+    if failed:
+        raise SetupRefused(f"systemctl could not enable {'; '.join(failed)}")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -251,7 +253,8 @@ def main(
     try:
         outside_agent(Who.from_env() if who is None else who)
         if args.command == "install":
-            return 0 if install() else 1
+            install()
+            return 0
         root = home or Path(environ.get("AGENTIHOOKS_HOME") or Path.home() / ".agentihooks")
         if args.command == "sync":
             return serve(service(environ, operator_terminal.client_home(environ), root))
