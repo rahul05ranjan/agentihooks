@@ -260,7 +260,7 @@ def test_codex_capture_uses_its_native_home_and_rollout_session_suffix(portable,
     home = native_cases.home_for("codex", tmp_path, attempt)
     environ["CODEX_HOME"] = str(home)
     monkeypatch.setattr(runtime, "version", lambda harness, environment: native_cases.VERSIONS[harness])
-    [newest] = list(home.rglob("*.jsonl"))
+    [newest] = list(home.rglob(f"*{native_cases.SESSIONS['codex']}.jsonl"))
     acknowledgment = capture.publish(attempt, scope, environ, newest)
     assert acknowledgment["status"] == "complete"
     store = runtime.worker_store(spec, attempt, environ)
