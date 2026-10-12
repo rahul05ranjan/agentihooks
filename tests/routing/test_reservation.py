@@ -5,6 +5,7 @@ import pytest
 
 from scripts.routing import reservation
 from scripts.routing.master_account import MasterAccount
+from scripts.swarm import store as swarm_store
 
 
 @pytest.mark.parametrize(
@@ -34,17 +35,8 @@ def test_reached_at_the_ceiling(week_used, masters, expected):
     assert reservation.reached(week_used, masters) is expected
 
 
-def test_worker_cap_closes_at_the_ceiling():
-    assert reservation.cap(6, 69.9, 1) == 6
-    assert reservation.cap(6, 70.0, 1) == 0
-    assert reservation.cap(None, 70.0, 1) == 0
-    assert reservation.cap(None, 69.9, 1) is None
-    assert reservation.cap(4, 50.0, 0) == 4
-
-
-def test_master_is_never_capped():
-    assert reservation.cap(6, 99.0, 3, master=True) == 6
-    assert reservation.cap(None, 99.0, 3, master=True) is None
+def test_lowest_ceiling_is_the_three_master_step():
+    assert reservation.LOWEST == 50.0
 
 
 def test_reason_names_the_reservation():
@@ -71,6 +63,10 @@ class _Store:
 
     def agents(self, slug):
         return self.swarms[slug]
+
+
+def _no_store(environ):
+    return None
 
 
 def test_two_swarms_masters_sum():
@@ -123,19 +119,19 @@ def test_current_reads_the_declared_account(tmp_path, monkeypatch):
     _process(tmp_path, 10, ["claude"], {"AH_ROUTE_INTERACTIVE_main": "1"}, "claude")
     declared = {"claude": MasterAccount("claude", "main")}
     monkeypatch.setattr(reservation.master_account, "load", lambda environ: declared)
-    held = reservation.current("claude", {}, store=None, proc=tmp_path)
+    held = reservation.current("claude", {}, store_of=_no_store, proc=tmp_path)
     assert held == reservation.Reservation("claude", "main", 1)
     assert held.ceiling == 70.0
     assert held.closes("main", 70.0)
     assert not held.closes("main", 69.9)
     assert not held.closes("other", 99.0)
     assert held.reason == "reserved for 1 live master: workers stop at 70% of the week"
-    assert reservation.current("codex", {}, store=None, proc=tmp_path) is None
+    assert reservation.current("codex", {}, store_of=_no_store, proc=tmp_path) is None
 
 
 def test_current_without_live_masters_holds_nothing(tmp_path, monkeypatch):
     monkeypatch.setattr(reservation.master_account, "load", lambda environ: {"claude": MasterAccount("claude", "main")})
-    held = reservation.current("claude", {}, store=None, proc=tmp_path)
+    held = reservation.current("claude", {}, store_of=_no_store, proc=tmp_path)
     assert held == reservation.Reservation("claude", "main", 0)
     assert held.ceiling is None
     assert not held.closes("main", 99.0)
@@ -147,7 +143,7 @@ def test_current_survives_an_unreadable_declaration(tmp_path, monkeypatch):
         raise OSError("redis down")
 
     monkeypatch.setattr(reservation.master_account, "load", broken)
-    assert reservation.current("claude", {}, store=None, proc=tmp_path) is None
+    assert reservation.current("claude", {}, store_of=_no_store, proc=tmp_path) is None
 
 
 @pytest.mark.parametrize(
@@ -178,14 +174,66 @@ def test_current_survives_a_redis_failure(tmp_path, monkeypatch):
         raise ConnectionError("refused")
 
     monkeypatch.setattr(reservation.master_account, "load", broken)
-    assert reservation.current("claude", {}, store=None, proc=tmp_path) is None
+    assert reservation.current("claude", {}, store_of=_no_store, proc=tmp_path) is None
 
 
-def test_store_wraps_the_routing_client(monkeypatch):
-    from scripts.routing import place
+def test_store_wraps_the_swarm_client(monkeypatch):
+    from redis.exceptions import ConnectionError
 
-    monkeypatch.setattr(place, "_client", lambda environ: None)
+    def refused(environ):
+        raise ConnectionError("refused")
+
+    monkeypatch.setattr(swarm_store, "redis_client", refused)
     assert reservation._store({}) is None
     client = object()
-    monkeypatch.setattr(place, "_client", lambda environ: client)
+    monkeypatch.setattr(swarm_store, "redis_client", lambda environ: client)
     assert reservation._store({}).redis is client
+
+
+def test_current_reads_masters_through_the_given_store(tmp_path, monkeypatch):
+    store = _Store({"one": [_Agent("master", "claude", "main")]})
+    monkeypatch.setattr(reservation.master_account, "load", lambda environ: {"claude": MasterAccount("claude", "main")})
+    held = reservation.current("claude", {}, store_of=lambda environ: store, proc=tmp_path)
+    assert held == reservation.Reservation("claude", "main", 1)
+
+
+def test_current_survives_a_store_that_raises(tmp_path, monkeypatch):
+    from redis.exceptions import ConnectionError
+
+    def broken(environ):
+        raise ConnectionError("refused")
+
+    monkeypatch.setattr(reservation.master_account, "load", lambda environ: {"claude": MasterAccount("claude", "main")})
+    assert reservation.current("claude", {}, store_of=broken, proc=tmp_path) is None
+
+
+def test_reason_at_three_masters_names_fifty():
+    assert reservation.reason(3) == "reserved for 3 live masters: workers stop at 50% of the week"
+
+
+def test_interactive_sessions_skip_non_process_entries(tmp_path):
+    _process(tmp_path, 10, ["claude"], {"AH_ROUTE_INTERACTIVE_main": "1"}, "claude")
+    (tmp_path / "self").mkdir()
+    (tmp_path / "self" / "environ").write_bytes(b"AH_ROUTE_INTERACTIVE_main=1\0")
+    assert reservation.interactive_sessions("claude", "main", tmp_path) == 1
+
+
+@pytest.mark.parametrize(
+    "environ",
+    [
+        {"AGENTIHOOKS_AGENT_NAME": "master-x"},
+        {"AGENTIHOOKS_AGENT_NAME": "masterful@1"},
+        {"X_AH_ROUTE_INTERACTIVE_main": "1"},
+    ],
+)
+def test_names_near_the_master_markers_are_workers(environ):
+    assert reservation.is_master_session(environ) is False
+
+
+def test_the_real_process_table_is_the_default(monkeypatch):
+    monkeypatch.setattr(
+        reservation.master_account, "load", lambda environ: {"claude": MasterAccount("claude", "absent-slug")}
+    )
+    assert reservation.interactive_sessions("claude", "absent-slug") == 0
+    assert reservation.masters_live("claude", "absent-slug") == 0
+    assert reservation.current("claude", {}, store_of=_no_store) == reservation.Reservation("claude", "absent-slug", 0)

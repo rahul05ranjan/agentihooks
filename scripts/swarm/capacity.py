@@ -2,6 +2,7 @@ import json
 import sys
 from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING
 
 from hooks.context import account_sessions
 from scripts import claude_quota_balancer as balancer
@@ -10,6 +11,9 @@ from scripts.routing import claude_api, codex_api, place
 from scripts.routing.slots import API, SUBSCRIPTION
 from scripts.swarm import autoscale, freeze, host_budget
 from scripts.swarm.store import AUTO_SCALING, RedisStore, SwarmConfig
+
+if TYPE_CHECKING:
+    from scripts.routing.reservation import Reservation
 
 LANES = ("eng", "ci", "plan")
 LABELS = {"claude": "Claude", "codex": "Codex"}
@@ -132,7 +136,7 @@ def accounts(environ: dict, now: float, refresh: bool = True) -> list[Account]:
     return rows
 
 
-def reserve(rows: list[Account], held) -> list[Account]:
+def reserve(rows: list[Account], held: "Reservation | None") -> list[Account]:
     if held is None:
         return rows
     return [
@@ -383,10 +387,9 @@ def fixture_inputs(readings: dict) -> ScaleInputs:
 
 def record(row: Account) -> dict:
     """The stored row; pool rows keep their pre-api fields so decisions without an api stay byte identical."""
-    stored = {key: value for key, value in row.__dict__.items() if key != "reserved" or value}
-    if row.kind == API:
-        return stored
-    return {key: value for key, value in stored.items() if key not in {"kind", "weight"}}
+    dropped = set() if row.kind == API else {"kind", "weight"}
+    dropped |= set() if row.reserved else {"reserved"}
+    return {key: value for key, value in row.__dict__.items() if key not in dropped}
 
 
 def _api_reason(row: Account) -> str:

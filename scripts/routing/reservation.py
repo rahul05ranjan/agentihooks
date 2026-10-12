@@ -1,13 +1,17 @@
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from hooks.context import account_sessions
 from hooks.context.account_sessions import INTERACTIVE_PREFIX
 from scripts.routing import master_account
 
+if TYPE_CHECKING:
+    from scripts.swarm.store import RedisStore
+
 CEILINGS = ((3, 50.0), (2, 60.0), (1, 70.0))
-MASTER_LANE = "master"
+LOWEST = min(limit for _, limit in CEILINGS)
 MASTER_NAME = "master@"
 
 
@@ -18,10 +22,6 @@ def ceiling(masters_live: int) -> float | None:
 def reached(week_used: float | None, masters_live: int) -> bool:
     limit = ceiling(masters_live)
     return limit is not None and week_used is not None and week_used >= limit
-
-
-def cap(base: int | None, week_used: float | None, masters_live: int, master: bool = False) -> int | None:
-    return 0 if not master and reached(week_used, masters_live) else base
 
 
 def reason(masters_live: int) -> str:
@@ -47,14 +47,16 @@ def interactive_sessions(harness: str, slug: str, proc: Path = account_sessions.
     return sum(1 for pid in pids if _session(harness, pid, proc) and marker in account_sessions._env_names(pid, proc))
 
 
-def master_agents(store, harness: str, slug: str) -> int:
+def master_agents(store: "RedisStore | None", harness: str, slug: str) -> int:
+    from scripts.swarm.store import MASTER
+
     if store is None:
         return 0
     return sum(
         1
         for swarm in store.slugs()
         for agent in store.agents(swarm)
-        if agent.lane == MASTER_LANE
+        if agent.lane == MASTER
         and agent.state != "finished"
         and agent.harness == harness
         and agent.account == slug
@@ -62,7 +64,9 @@ def master_agents(store, harness: str, slug: str) -> int:
     )
 
 
-def masters_live(harness: str, slug: str, store=None, proc: Path = account_sessions._PROC) -> int:
+def masters_live(
+    harness: str, slug: str, store: "RedisStore | None" = None, proc: Path = account_sessions._PROC
+) -> int:
     return interactive_sessions(harness, slug, proc) + master_agents(store, harness, slug)
 
 
@@ -84,23 +88,34 @@ class Reservation:
         return slug == self.slug and reached(week_used, self.masters)
 
 
-def _store(environ: Mapping[str, str]):
-    from scripts.routing import place
-    from scripts.swarm.store import RedisStore
+def _store(environ: Mapping[str, str]) -> "RedisStore | None":
+    from redis.exceptions import RedisError
 
-    client = place._client(environ)
-    return None if client is None else RedisStore(client)
+    from scripts.swarm.store import RedisStore, redis_client
+
+    try:
+        return RedisStore(redis_client(environ))
+    except (RedisError, OSError):
+        return None
 
 
 def current(
-    harness: str, environ: Mapping[str, str], store=..., proc: Path = account_sessions._PROC
+    harness: str,
+    environ: Mapping[str, str],
+    store_of: "Callable[[Mapping[str, str]], RedisStore | None] | None" = None,
+    proc: Path = account_sessions._PROC,
 ) -> Reservation | None:
+    # redis is imported here: the quota hook loads this module on every tool call.
     from redis.exceptions import RedisError
 
     try:
         declared = master_account.load(environ).get(harness)
         if declared is None:
             return None
+        store = (store_of or _store)(environ)
+        return Reservation(harness, declared.slug, masters_live(harness, declared.slug, store, proc))
+    except (OSError, RedisError):
+        return None
         store = _store(environ) if store is ... else store
         return Reservation(harness, declared.slug, masters_live(harness, declared.slug, store, proc))
     except (OSError, RedisError):
