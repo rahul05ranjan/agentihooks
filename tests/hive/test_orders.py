@@ -175,3 +175,162 @@ def test_daemon_consumes_orders_after_its_heartbeat(setup, monkeypatch):
     setup.orders.send("host", setup.order)
     daemon.beat(setup.redis, "host")
     assert setup.orders.ack(setup.order).status == "live"
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("lane", "ci"),
+        ("task", "different"),
+        ("harness", "claude"),
+        ("profile", "qa"),
+        ("slot", "other"),
+        ("route_kind", "interactive"),
+        ("execution_id", "unknown"),
+    ],
+)
+def test_changed_order_identity_is_refused(setup, field, value):
+    order = replace(setup.order, **{field: value})
+    setup.orders.send("host", order)
+    setup.consumer.poll()
+    assert setup.orders.ack(order).failure == "identity"
+    setup.runtime.spawn.assert_not_called()
+
+
+@pytest.mark.parametrize("raw", ["not json", "[]", "{}", '{"id":"other"}'])
+def test_unusable_prompt_is_refused(setup, raw):
+    setup.redis.set("prompt", raw)
+    setup.orders.send("host", setup.order)
+    setup.consumer.poll()
+    assert setup.orders.ack(setup.order).failure == "prompt"
+    setup.runtime.spawn.assert_not_called()
+
+
+def test_inflight_replay_never_publishes_a_failure_over_a_live_launch(setup):
+    from scripts.hive.orders import Consumer
+
+    original = setup.runtime.spawn.return_value
+
+    def overlap(request):
+        assert Consumer(setup.redis, "host", setup.runtime).poll() == 1
+        assert setup.orders.ack(setup.order) is None
+        return original
+
+    setup.runtime.spawn.side_effect = overlap
+    setup.orders.send("host", setup.order)
+    setup.consumer.poll()
+    assert setup.orders.ack(setup.order).status == "live"
+    setup.runtime.spawn.assert_called_once()
+
+
+def test_started_order_expires_at_its_deadline_without_relaunch(setup, monkeypatch):
+    from scripts.swarm import lease
+
+    setup.orders.send("host", setup.order)
+    setup.redis.hset(setup.orders.receipt(setup.order), "started", str(setup.order.expires_at - 60000))
+    monkeypatch.setattr(lease, "now_ms", lambda store: setup.order.expires_at)
+    setup.consumer.poll()
+    assert setup.orders.ack(setup.order).failure == "expired"
+    setup.runtime.spawn.assert_not_called()
+
+
+def test_finish_publishes_the_canonical_ack_for_every_delivery(setup):
+    from scripts.hive.orders import Ack
+
+    first = setup.orders.send("host", setup.order)
+    live = Ack("live", {"host_id": "host"})
+    setup.orders.finish("host", first, setup.order, live)
+    second = setup.orders.send("host", setup.order)
+    setup.orders.finish("host", second, setup.order, Ack("failed", {}, "expired"))
+    assert setup.orders.ack(setup.order) == live
+    assert json.loads(setup.redis.hget(f"{setup.orders.stream('host')}:acks", second)) == {
+        "status": "live",
+        "target": {"host_id": "host"},
+        "failure": "",
+    }
+
+
+@pytest.mark.parametrize("raw", ["not json", "{}", "[]"])
+def test_malformed_delivery_is_acknowledged_and_does_not_block_the_stream(setup, raw):
+    item = setup.redis.xadd(setup.orders.stream("host"), {"order": raw})
+    setup.orders.send("host", setup.order)
+    setup.consumer.poll()
+    ack = json.loads(setup.redis.hget(f"{setup.orders.stream('host')}:acks", item))
+    assert ack["failure"] == "invalid_order"
+    assert setup.orders.ack(setup.order).status == "live"
+
+
+def test_missing_delivery_payload_is_acknowledged(setup):
+    item = setup.redis.xadd(setup.orders.stream("host"), {"bad": "payload"})
+    setup.consumer.poll()
+    assert json.loads(setup.redis.hget(f"{setup.orders.stream('host')}:acks", item))["failure"] == "invalid_order"
+
+
+@pytest.mark.parametrize("field,value", [("harness", "claude"), ("profile", "qa"), ("account", "other")])
+def test_runtime_substitution_is_refused_and_terminated(setup, field, value):
+    placed = setup.runtime.spawn.return_value.value
+    setup.runtime.spawn.return_value = replace(
+        setup.runtime.spawn.return_value, value=replace(placed, **{field: value})
+    )
+    setup.orders.send("host", setup.order)
+    setup.consumer.poll()
+    assert setup.orders.ack(setup.order).failure == "identity"
+    setup.runtime.terminate.assert_called_once()
+
+
+def test_launch_that_crosses_expiry_is_terminated(setup, monkeypatch):
+    from scripts.swarm import lease
+
+    original = setup.runtime.spawn.return_value
+
+    def delayed(request):
+        monkeypatch.setattr(lease, "now_ms", lambda store: setup.order.expires_at)
+        return original
+
+    setup.runtime.spawn.side_effect = delayed
+    setup.orders.send("host", setup.order)
+    setup.consumer.poll()
+    assert setup.orders.ack(setup.order).failure == "expired"
+    setup.runtime.terminate.assert_called_once()
+
+
+def test_epoch_takeover_during_launch_refuses_live_admission(setup, monkeypatch):
+    from scripts.swarm import lease
+    from scripts.swarm.store import SwarmError
+
+    original = setup.runtime.spawn.return_value
+
+    def takeover(request):
+        monkeypatch.setattr(lease, "require_epoch", Mock(side_effect=SwarmError("stale")))
+        return original
+
+    setup.runtime.spawn.side_effect = takeover
+    setup.orders.send("host", setup.order)
+    setup.consumer.poll()
+    assert setup.orders.ack(setup.order).failure == "refused"
+    setup.runtime.terminate.assert_called_once()
+
+
+@pytest.mark.parametrize("pid,table", [(None, {12: SimpleNamespace(start_time=34)}), (12, {})])
+def test_unqualified_process_after_spawn_is_reported_ambiguous(setup, pid, table):
+    placed = replace(setup.runtime.spawn.return_value.value, profile_decision={"validation": {"pid": pid}})
+    setup.runtime.spawn.return_value = replace(setup.runtime.spawn.return_value, value=placed)
+    setup.runtime.table.return_value = table
+    setup.orders.send("host", setup.order)
+    setup.consumer.poll()
+    ack = setup.orders.ack(setup.order)
+    assert ack.failure == "ambiguous"
+    assert ack.target == {"host_id": "host"}
+    assert setup.store.execution("fixture", setup.agent.execution_id).state == "launching"
+
+
+def test_failed_cleanup_is_reported_ambiguous(setup):
+    from scripts.swarm_v2.runtime.base import Outcome, Status
+
+    placed = replace(setup.runtime.spawn.return_value.value, profile="qa")
+    setup.runtime.spawn.return_value = replace(setup.runtime.spawn.return_value, value=placed)
+    setup.runtime.terminate.return_value = Outcome("terminate", Status.REFUSED, "local")
+    setup.orders.send("host", setup.order)
+    setup.consumer.poll()
+    assert setup.orders.ack(setup.order).failure == "ambiguous"
+    setup.runtime.terminate.assert_called_once()

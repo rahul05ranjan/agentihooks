@@ -1,11 +1,17 @@
 import json
 from dataclasses import asdict, dataclass, replace
+from typing import TYPE_CHECKING
 
 from scripts.hive import registry
 from scripts.swarm import lease
-from scripts.swarm.store import RedisStore, SwarmError
+from scripts.swarm.store import AgentRecord, RedisStore, SwarmError
 from scripts.swarm_v2.runtime.base import SpawnRequest
 from scripts.swarm_v2.runtime.process import launch_target
+
+if TYPE_CHECKING:
+    from redis import Redis
+
+    from scripts.swarm_v2.runtime.local import LocalHerdrRuntime
 
 
 @dataclass(frozen=True)
@@ -32,7 +38,7 @@ class Ack:
 
 
 class Orders:
-    def __init__(self, redis):
+    def __init__(self, redis: "Redis") -> None:
         self.redis = redis
 
     def stream(self, hive: str) -> str:
@@ -49,21 +55,22 @@ class Orders:
         return Ack(**json.loads(raw)) if raw else None
 
     def finish(self, hive: str, item: str, order: LaunchOrder, ack: Ack) -> None:
+        self.redis.hsetnx(self.receipt(order), "ack", json.dumps(asdict(ack)))
+        canonical = self.redis.hget(self.receipt(order), "ack")
         with self.redis.pipeline() as pipe:
-            pipe.hsetnx(self.receipt(order), "ack", json.dumps(asdict(ack)))
-            pipe.hset(f"{self.stream(hive)}:acks", item, json.dumps(asdict(ack)))
+            pipe.hset(f"{self.stream(hive)}:acks", item, canonical)
             pipe.xdel(self.stream(hive), item)
             pipe.execute()
 
 
 class Consumer:
-    def __init__(self, redis, hive: str, runtime):
+    def __init__(self, redis: "Redis", hive: str, runtime: "LocalHerdrRuntime") -> None:
         self.store = RedisStore(redis)
         self.orders = Orders(redis)
         self.hive, self.runtime = hive, runtime
 
     @classmethod
-    def local(cls, redis, hive: str):
+    def local(cls, redis: "Redis", hive: str) -> "Consumer":
         from scripts.swarm.runtime import HerdrRuntime
         from scripts.swarm_v2.runtime.local import LocalHerdrRuntime
 
@@ -95,7 +102,11 @@ class Consumer:
         now = lease.now_ms(self.store)
         started = self.store.redis.hget(self.orders.receipt(order), "started")
         if started is not None:
+            if order.expires_at <= now:
+                return Ack("failed", {}, "expired")
             return Ack("failed", {}, "ambiguous") if now - int(started) >= 300000 else None
+        if not self.store.redis.hsetnx(self.orders.receipt(order), "started", str(now)):
+            return None
         if order.expires_at <= now:
             return Ack("failed", {}, "expired")
         try:
@@ -116,14 +127,12 @@ class Consumer:
             return Ack("failed", {}, "prompt")
         if not isinstance(task, dict) or task.get("id") != order.task:
             return Ack("failed", {}, "prompt")
-        if not self.store.redis.hsetnx(self.orders.receipt(order), "started", str(now)):
-            return None
         try:
             return self.launch(order, agent, task)
         except SwarmError:
             return Ack("failed", {}, "refused")
 
-    def identity(self, order: LaunchOrder, agent) -> None:
+    def identity(self, order: LaunchOrder, agent: AgentRecord) -> None:
         if (
             agent.generation != order.generation
             or agent.lane != order.lane
@@ -141,7 +150,7 @@ class Consumer:
         if current is None or current.execution_id != agent.execution_id:
             raise SwarmError("launch order names a replaced execution")
 
-    def launch(self, order: LaunchOrder, agent, task: dict) -> Ack:
+    def launch(self, order: LaunchOrder, agent: AgentRecord, task: dict) -> Ack:
         config = self.store.config(order.slug)
         chosen = {**config.lanes.get(order.lane, {}), "agent": order.harness, "role": order.profile}
         config = replace(config, lanes={**config.lanes, order.lane: chosen})
@@ -160,7 +169,10 @@ class Consumer:
             return Ack("failed", {}, outcome.status.value)
         placed = outcome.value
         pid = placed.profile_decision.get("validation", {}).get("pid")
-        target = {"host_id": self.hive, **launch_target(pid, self.runtime.namespace(), self.runtime.table())}
+        try:
+            target = {"host_id": self.hive, **launch_target(pid, self.runtime.namespace(), self.runtime.table())}
+        except SwarmError:
+            return Ack("failed", {"host_id": self.hive}, "ambiguous")
         live = replace(
             agent,
             runtime_target=target,
@@ -170,10 +182,17 @@ class Consumer:
             effort=placed.effort,
             profile_decision=placed.profile_decision,
         )
+        if order.expires_at <= lease.now_ms(self.store):
+            return self._stop(live, "expired")
+        if (placed.harness, placed.profile, placed.account) != (order.harness, order.profile, order.slot):
+            return self._stop(live, "identity")
         try:
             lease.require_epoch(self.store, order.slug, order.epoch)
             self.store.execution_registry.update(order.slug, live)
         except SwarmError:
-            self.runtime.terminate(live)
-            return Ack("failed", target, "refused")
+            return self._stop(live, "refused")
         return Ack("live", target)
+
+    def _stop(self, agent: AgentRecord, failure: str) -> Ack:
+        outcome = self.runtime.terminate(agent)
+        return Ack("failed", agent.runtime_target, failure if outcome.ok else "ambiguous")
