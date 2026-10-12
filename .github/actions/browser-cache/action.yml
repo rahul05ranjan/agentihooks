@@ -3,7 +3,14 @@ description: Reuse Chromium only after its runtime dependencies pass a launch ch
 runs:
   using: composite
   steps:
+    - name: Use Chromium and OS dependencies from the runner image
+      id: image
+      shell: bash
+      env:
+        PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright
+      run: bash "$GITHUB_ACTION_PATH/use-image.sh"
     - name: Read the installed Playwright version
+      if: steps.image.outputs.ready != 'true'
       id: version
       shell: bash
       run: |
@@ -14,6 +21,7 @@ runs:
             output.write(f'version={version("playwright")}\n')
         PY
     - name: Restore Chromium
+      if: steps.image.outputs.ready != 'true'
       id: cache
       uses: actions/cache@v4
       with:
@@ -23,10 +31,13 @@ runs:
       id: launch
       shell: bash
       env:
+        IMAGE_READY: ${{ steps.image.outputs.ready }}
         CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
         PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright
       run: |
-        if [[ "$CACHE_HIT" == true ]] && timeout 10s bash "$GITHUB_ACTION_PATH/verify.sh"; then
+        if [[ "${IMAGE_READY:-false}" == true ]]; then
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+        elif [[ "$CACHE_HIT" == true ]] && timeout 10s bash "$GITHUB_ACTION_PATH/verify.sh"; then
           echo "ready=true" >> "$GITHUB_OUTPUT"
         else
           echo "ready=false" >> "$GITHUB_OUTPUT"
