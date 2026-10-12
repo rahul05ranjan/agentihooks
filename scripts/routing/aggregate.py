@@ -1,16 +1,20 @@
 import json
 import os
 from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
 from scripts.hive import registry
 from scripts.swarm_v2.runtime.base import LOCAL, RuntimeRouter
+
+if TYPE_CHECKING:
+    from redis import Redis
 
 
 def enabled(environ: Mapping[str, str] | None = None) -> bool:
     return RuntimeRouter.from_environ((), os.environ if environ is None else environ).spawn_backend() != LOCAL
 
 
-def read(redis, now: float) -> dict[str, dict]:
+def read(redis: "Redis", now: float) -> dict[str, dict]:
     from scripts.routing.reservation import LaunchSlots
 
     rows: dict[str, dict] = {}

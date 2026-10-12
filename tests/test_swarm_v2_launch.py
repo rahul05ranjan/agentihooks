@@ -1185,3 +1185,29 @@ def test_hive_launch_registration_and_exit_keep_one_global_slot(world):
     assert slots.counts() == {f"claude:{ACCOUNT}": 1}
     world.launcher.exited(launch.agent)
     assert slots.counts() == {}
+
+
+@pytest.mark.parametrize(("harness", "live"), [("claude", 0), ("claude", 1), ("codex", 0), ("codex", 1)])
+def test_tick_launch_reserves_the_selected_harness(world, harness, live):
+    from scripts.hive import registry
+
+    redis = world.store.redis
+    registry.update(redis, "hive", ["max-agents=4"])
+    redis.hset(registry.key("hive"), "heartbeat_at", world.clock[0])
+    redis.set(f"{registry.key('hive')}:sessions", json.dumps({f"{harness}:{ACCOUNT}": live}), ex=45)
+    config = SwarmConfig(SLUG, "agentihooks", 2, 0, api_url=OTHER_API)
+    request = SpawnRequest(
+        config, "eng", world.store.next_name(SLUG, "eng"), {"id": "task", "seat": FIRST, "harness": harness}
+    )
+
+    outcome = world.launcher.from_tick(request, world.terms, pod_target)
+
+    if live:
+        assert outcome.status is Status.UNAVAILABLE
+        assert world.runtime.requests == []
+    else:
+        assert outcome.status is Status.LAUNCHED
+        [sent] = world.runtime.requests
+        admitted = world.store.execution(SLUG, sent.task["execution_id"])
+        assert admitted.harness == harness
+        assert world.launcher.launch_slots.counts() == {f"{harness}:{ACCOUNT}": 1}
