@@ -28,6 +28,7 @@ class Account:
     kind: str = SUBSCRIPTION
     weight: int | None = None
     five_resets_at: int | None = None
+    reserved: str = ""
 
 
 def _left(window: balancer.QuotaWindow, now: float) -> float | None:
@@ -123,7 +124,26 @@ def _codex(environ: dict, now: float, refresh: bool) -> list[Account]:
 
 def accounts(environ: dict, now: float, refresh: bool = True) -> list[Account]:
     """Every account with its band cap; ``refresh`` probes stale Codex readings, which costs a Codex request."""
-    return _claude(environ, now) + _codex(environ, now, refresh)
+    from scripts.routing import reservation
+
+    rows = _claude(environ, now) + _codex(environ, now, refresh)
+    for harness in LABELS:
+        rows = reserve(rows, reservation.current(harness, environ))
+    return rows
+
+
+def reserve(rows: list[Account], held) -> list[Account]:
+    if held is None:
+        return rows
+    return [
+        replace(row, state=_state(0), cap=0, reserved=held.reason)
+        if row.harness == held.harness
+        and row.kind != API
+        and row.week_left is not None
+        and held.closes(row.name, 100 - row.week_left)
+        else row
+        for row in rows
+    ]
 
 
 def _seat(row: Account, cap: int) -> session_bands.Seat:
@@ -363,9 +383,10 @@ def fixture_inputs(readings: dict) -> ScaleInputs:
 
 def record(row: Account) -> dict:
     """The stored row; pool rows keep their pre-api fields so decisions without an api stay byte identical."""
+    stored = {key: value for key, value in row.__dict__.items() if key != "reserved" or value}
     if row.kind == API:
-        return dict(row.__dict__)
-    return {key: value for key, value in row.__dict__.items() if key not in {"kind", "weight"}}
+        return stored
+    return {key: value for key, value in stored.items() if key not in {"kind", "weight"}}
 
 
 def _api_reason(row: Account) -> str:
