@@ -237,6 +237,26 @@ def test_an_unchanged_pass_prints_nothing(tmp_path):
     assert len(out.getvalue().splitlines()) == 1
 
 
+def test_the_service_runs_herdr_as_the_client_home_by_default(tmp_path, monkeypatch):
+    from scripts.swarm_v2.herdr import operator_setup
+    from scripts.swarm_v2.herdr.attach import ClientHome
+    from scripts.swarm_v2.kubernetes import operator_terminal
+
+    made, herdr, environs = store(), Herdr(), []
+    publish(made, "hive-a", *worker(made, "hive-a"))
+
+    def runner(environ):
+        environs.append(environ)
+        return herdr_run(herdr)
+
+    monkeypatch.setattr(operator_setup, "runner", runner)
+    client = ClientHome(tmp_path / "client", jump=operator_terminal.jump(JUMP))
+    report = operator_setup.service({"PATH": "/usr/bin"}, client, placed(tmp_path), connect=lambda: made).run_pass()
+
+    assert len(report.registered) == 1
+    assert environs == [client.environment({"PATH": "/usr/bin"})]
+
+
 def test_the_service_reads_the_transport_from_its_environment(tmp_path):
     import io
     import json
