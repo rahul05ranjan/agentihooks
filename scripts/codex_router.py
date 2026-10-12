@@ -395,7 +395,7 @@ def select(
     pool_live = sum(sessions.get(account.name, 0) for account in pool)
     from scripts.routing import reservation
 
-    held = reservation.current("codex", environ or {})
+    held = reservation.for_worker("codex", environ or {})
     seat = place.place(
         api, CodexAccountSource(sessions=sessions, held=held).offer(pool, quotas, now), weight, pool_live
     )

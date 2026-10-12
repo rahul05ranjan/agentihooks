@@ -122,3 +122,7 @@ def is_master_session(environ: Mapping[str, str]) -> bool:
     if any(name.startswith(INTERACTIVE_PREFIX) for name in environ):
         return True
     return environ.get("AGENTIHOOKS_AGENT_NAME", "").startswith(MASTER_NAME)
+
+
+def for_worker(harness: str, environ: Mapping[str, str]) -> Reservation | None:
+    return None if is_master_session(environ) else current(harness, environ)

@@ -237,3 +237,25 @@ def test_the_real_process_table_is_the_default(monkeypatch):
     assert reservation.interactive_sessions("claude", "absent-slug") == 0
     assert reservation.masters_live("claude", "absent-slug") == 0
     assert reservation.current("claude", {}, store_of=_no_store) == reservation.Reservation("claude", "absent-slug", 0)
+
+
+def test_only_workers_are_held_by_the_reservation(monkeypatch):
+    monkeypatch.setattr(reservation, "current", lambda harness, environ: reservation.Reservation(harness, "main", 1))
+    assert reservation.for_worker("claude", {"AGENTIHOOKS_AGENT_NAME": "master@1"}) is None
+    assert reservation.for_worker("codex", {"AGENTIHOOKS_AGENT_NAME": "engineer@1"}) == reservation.Reservation(
+        "codex", "main", 1
+    )
+
+
+def test_store_survives_an_unreachable_socket(monkeypatch):
+    def unreachable(environ):
+        raise OSError("no route")
+
+    monkeypatch.setattr(swarm_store, "redis_client", unreachable)
+    assert reservation._store({}) is None
+
+
+def test_an_interactive_master_counts_once(tmp_path):
+    _process(tmp_path, 10, ["claude"], {"AH_ROUTE_INTERACTIVE_main": "1"}, "claude")
+    store = _Store({"one": [_Agent("master", "claude", "main", route_kind="interactive")]})
+    assert reservation.masters_live("claude", "main", store, tmp_path) == 1

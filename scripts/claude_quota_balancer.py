@@ -751,7 +751,7 @@ def select_credential(
     }
     from scripts.routing import reservation
 
-    tokens = ClaudeTokenSource(options, live, frozenset(excluded), reservation.current(HARNESS, active_env))
+    tokens = ClaudeTokenSource(options, live, frozenset(excluded), reservation.for_worker(HARNESS, active_env))
     results, source = tokens.results(active_env)
     seats = tokens.offer(results, timestamp)
     reserve = {
