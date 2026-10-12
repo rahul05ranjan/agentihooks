@@ -139,6 +139,28 @@ def test_protected_loader_reads_only_dev_approvals():
     assert ci_runner_trust.check({"runner-trust.yml": workflow}, ACTORS) == []
 
 
+def test_actor_loader_cannot_import_checkout_modules(tmp_path):
+    import json
+    import shlex
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.safe_load((root / ".github/workflows/runner-trust.yml").read_text())
+    command = workflow["jobs"]["actors"]["steps"][-1]["run"].split(" >> ")[0]
+    (tmp_path / "json.py").write_text('raise RuntimeError("untrusted checkout module executed")')
+    (tmp_path / "pathlib.py").write_text('raise RuntimeError("untrusted checkout module executed")')
+    policy = tmp_path / ".github/workflows/trusted-actors.json"
+    policy.parent.mkdir(parents=True)
+    policy.write_text(json.dumps(ACTORS))
+    result = subprocess.run([sys.executable, *shlex.split(command)[1:]], cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout.strip().removeprefix("actors=")) == ACTORS
+
+
 @pytest.mark.parametrize("override", ["extra-step", "replace-command", "change-ref", "change-output", "workflow-env"])
 def test_loader_cannot_override_protected_actor_data(override):
     from pathlib import Path

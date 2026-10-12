@@ -15,7 +15,7 @@ GUARD = (
 
 def loader_contract() -> dict:
     command = (
-        "python3 -c 'import json; from pathlib import Path; "
+        "python3 -I -c 'import json; from pathlib import Path; "
         'print("actors=" + json.dumps(json.loads(Path(".github/workflows/trusted-actors.json").read_text()), '
         'separators=(",", ":")))'
         '\' >> "$GITHUB_OUTPUT"'
