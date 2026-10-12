@@ -66,11 +66,7 @@ def grade(
     problems = _aggregator_problems(base_gates[0], head_gates[0])
     file = base_gates[0][0]
     problems += _reuse_problems(base_workflows[file]["jobs"], (head_workflows.get(file) or {}).get("jobs") or {})
-    return (
-        problems
-        + ci_wiring.check(head_workflows, _protected_config(base_config, head_config), today)
-        + ci_runner_trust.check(head_workflows)
-    )
+    return problems + ci_wiring.check(head_workflows, _protected_config(base_config, head_config), today)
 
 
 def _git(root: Path, *args: str) -> str:
@@ -104,6 +100,9 @@ def main(argv: list[str] | None = None) -> int:
     }
     head_workflows, head_config = load(root, args.head)
     problems = grade(base_workflows, base_config, head_workflows, head_config, datetime.now(UTC).date())
+    if ci_runner_trust.ACTORS in _git(root, "ls-tree", "-r", "--name-only", args.base).splitlines():
+        actors = json.loads(_git(root, "show", f"{args.base}:{ci_runner_trust.ACTORS}"))
+        problems += ci_runner_trust.check(head_workflows, actors)
     print(f"graded {args.head[:12]} against merge base {merge_base[:12]}: {len(problems)} protected gate problems")
     for problem in problems:
         print(f"::error::{problem}")

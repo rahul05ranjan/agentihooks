@@ -121,3 +121,17 @@ def test_repository_workflows_are_graded():
 
     root = Path(__file__).resolve().parents[1]
     assert ci_runner_trust.main(["--root", str(root)]) == 0
+
+
+def test_protected_loader_reads_only_dev_approvals():
+    import yaml
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.safe_load((root / ".github/workflows/runner-trust.yml").read_text())
+    job = workflow["jobs"]["actors"]
+    assert job["runs-on"] == "ubuntu-latest"
+    checkout = next(step for step in job["steps"] if step.get("uses", "").startswith("actions/checkout@"))
+    assert checkout["with"]["ref"] == "dev"
+    assert checkout["with"]["repository"] == "the-cloud-clockwork/agentihooks"
+    assert any("--actors-output" in step.get("run", "") for step in job["steps"])
