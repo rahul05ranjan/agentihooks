@@ -266,6 +266,7 @@ def test_the_renewal_adopts_the_new_controller_epoch_after_a_failover(tmp_path):
     lease = renewer(tmp_path, clock, controller)
 
     lease.tick()
+    adopted = lease.record()["controller_epoch"]
     clock.advance(lease_renewal.INTERVAL_SECONDS)
     lease.tick()
 
@@ -273,7 +274,7 @@ def test_the_renewal_adopts_the_new_controller_epoch_after_a_failover(tmp_path):
     assert first[3]["authority"]["controller_epoch"] == 7
     assert second[3]["authority"]["controller_epoch"] == 8
     assert second[3]["authority"]["task_generation"] == 4
-    assert lease.record()["controller_epoch"] == 8
+    assert adopted == 8
     assert lease.lost is None
 
 
