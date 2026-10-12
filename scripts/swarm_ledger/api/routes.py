@@ -149,12 +149,15 @@ def ledger_operation(handler: object, server: ModuleType, slug: str, path: str, 
             if status is None:
                 raise APIError(404, "swarm_missing", "No swarm for this ledger")
             return {"data": status}
-        state = server.repository.get_document(slug)
-        state["_meta"] = {key: item for key, item in state["_meta"].items() if key not in ("seeds", "api_operations")}
-        return {"data": state}
+        return handler.send(200, server.repository.encoded_view(slug, export_body), "application/json")
     if path == "operations":
         return mutations.apply(server, slug, principal, payload)
     raise APIError(404, "resource_missing", "No such operation resource")
+
+
+def export_body(state: dict) -> str:
+    meta = {key: item for key, item in state["_meta"].items() if key not in ("seeds", "api_operations")}
+    return json.dumps({"data": {**state, "_meta": meta}}, ensure_ascii=False)
 
 
 def handle(handler: object, server: ModuleType) -> None:

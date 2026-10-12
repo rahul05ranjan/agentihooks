@@ -47,7 +47,7 @@ class Entry:
     """One ledger as last stored: its generation, canonical text and a parsed copy no caller receives."""
 
     def __init__(self, generation, text, state):
-        self.generation, self.text, self.state = generation, text, state
+        self.generation, self.text, self.state, self.views = generation, text, state, {}
 
 
 def summarize(slug: str, state: dict) -> dict:
@@ -320,6 +320,16 @@ class SQLiteLedgerRepository:
         with self.connect() as connection, connection:
             connection.execute(BEGIN)
             return json.loads(self._entry(connection, slug).text)
+
+    def encoded_view(self, slug: str, view) -> str:
+        """view(state) of the stored ledger, built once per generation; view must not change the state it reads."""
+        self._adopt(slug)
+        with self.connect() as connection, connection:
+            connection.execute(BEGIN)
+            entry = self._entry(connection, slug)
+        if view not in entry.views:
+            entry.views[view] = view(entry.state)
+        return entry.views[view]
 
     def read(self, slug: str, *keys: str) -> dict:
         """Only the named parts of a ledger, such as `overview`, `_meta.members` or `tasks/t1`."""

@@ -1864,7 +1864,7 @@ def test_export_encodes_once_per_ledger_generation(live, monkeypatch):
     monkeypatch.setattr(json, "dumps", encode)
     assert [export() for _ in range(3)] == [first] * 3
     assert counts == {"decode": 0, "encode": 0}
-    ops = [{"op": "add", "id": "export-generation", "thread": "chat", "text": "Written after the first export"}]
+    ops = [{"op": "add", "id": "export-generation", "thread": "chat", "text": "Written after the first export, café"}]
     headers = {"X-Ledger-Token": live["admin"], "Content-Type": "application/json"}
     assert send(live, "PUT", f"/api/{SLUG}", dumps({"ops": ops}).encode(), **headers)[0] == 200
     counts.update(decode=0, encode=0)
@@ -1876,7 +1876,7 @@ def test_export_encodes_once_per_ledger_generation(live, monkeypatch):
     hidden = ("seeds", "api_operations")
     stored["_meta"] = {key: item for key, item in stored["_meta"].items() if key not in hidden}
     assert json.loads(after[0]) == {"data": stored}
-    assert "Written after the first export" in after[0].decode()
+    assert "Written after the first export, café" in after[0].decode()
 
 
 def test_raw_upload_headers_reject_invalid_lengths_and_names(live):
