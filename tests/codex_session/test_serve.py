@@ -46,6 +46,7 @@ def test_server_options_turn_the_model_into_config_and_keep_config_flags():
     [
         (["-s", "read-only"], "app-server takes only -m, -c, --enable and --disable; got -s"),
         (["--no-daemon", "x"], "got --no-daemon"),
+        (["--config", "x=1"], "got --config"),
         (["-c"], "-c requires a value"),
     ],
 )
@@ -182,6 +183,23 @@ def test_a_signal_while_supervising_still_stops_the_server_and_finishes_the_reco
     assert stopped.value.code == 128 + serve.signal.SIGTERM
     assert seen["stopped"] == [started.process]
     assert seen["finished"] == [("store", "sw", started)]
+
+
+def test_the_signal_handlers_are_in_place_before_the_launch_starts(tmp_path, monkeypatch):
+    _, seen = supervised(monkeypatch, lambda: 0)
+    installed_at_launch = []
+
+    def launching(store, spec, deps):
+        installed_at_launch.extend(seen["signals"])
+        serve._exit_on_signal(serve.signal.SIGHUP, None)
+
+    monkeypatch.setattr(supervisor, "launch", launching)
+    argv = ["serve", "--cwd", str(tmp_path), "--profile", "engineer", "--seat", "eng-1@sw"]
+    with pytest.raises(SystemExit) as stopped:
+        serve.main(argv, dict(SWARM_ENV))
+    assert stopped.value.code == 128 + serve.signal.SIGHUP
+    assert [signum for signum, _ in installed_at_launch] == [serve.signal.SIGTERM, serve.signal.SIGHUP]
+    assert seen["finished"] == []
 
 
 def test_main_reports_a_refused_launch(tmp_path, monkeypatch, capsys):
