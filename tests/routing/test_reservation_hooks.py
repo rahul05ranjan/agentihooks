@@ -15,6 +15,30 @@ def _row(name="main", week_left=30.0, harness="claude", **extra):
     return capacity.Account(harness, name, "OPEN", 1, 80.0, week_left, 6, **extra)
 
 
+def _held_for(harness, slug):
+    return lambda asked, environ: reservation.Reservation(harness, slug, 1) if asked == harness else None
+
+
+def test_capacity_accounts_reserve_the_declared_account_per_harness(monkeypatch):
+    claude, codex = _row(), _row(harness="codex")
+    monkeypatch.setattr(capacity, "_claude", lambda environ, now: [claude])
+    monkeypatch.setattr(capacity, "_codex", lambda environ, now, refresh: [codex])
+    monkeypatch.setattr(reservation, "current", _held_for("claude", "main"))
+    rows = capacity.accounts({}, 0.0, refresh=False)
+    assert [(row.harness, row.cap, row.reserved) for row in rows] == [("claude", 0, REASON), ("codex", 6, "")]
+
+
+def test_row_marks_carry_the_reservation_reason(monkeypatch):
+    from scripts.routing import master_account
+
+    declared = MasterAccount("claude", "main")
+    monkeypatch.setattr(master_account, "load", lambda environ: {"claude": declared})
+    monkeypatch.setattr(reservation, "current", _held_for("claude", "main"))
+    assert master_account.row_marks("now", {}) == balancer.RowMarks("now", declared, REASON)
+    monkeypatch.setattr(reservation, "current", lambda harness, environ: None)
+    assert master_account.row_marks("now", {}) == balancer.RowMarks("now", declared, "")
+
+
 def test_capacity_closes_the_master_account_for_workers():
     rows = capacity.reserve([_row(), _row(week_left=30.1), _row("other"), _row(harness="codex")], ONE)
     assert [(row.cap, row.state, row.reserved) for row in rows] == [
@@ -71,7 +95,7 @@ def test_balance_table_names_the_reservation():
     master = MasterAccount("claude", "main")
     marks = balancer.RowMarks("", master, REASON)
     table = balancer.render_table([_result("main", 75.0)], now=0, marks=marks)
-    assert table.endswith(f"main: {REASON}")
+    assert table.splitlines()[-2:] == ["", f"main: {REASON}"]
     assert REASON not in balancer.render_table([_result("main", 75.0)], now=0, marks=balancer.RowMarks("", master))
     assert REASON not in balancer.render_table(
         [_result("main", 75.0)], now=0, marks=balancer.RowMarks("", None, REASON)
@@ -83,7 +107,7 @@ WORKER_ENV = {"AGENTIHOOKS_AGENT_NAME": "engineer@1"}
 
 
 def test_claude_routing_skips_the_master_account_for_workers_only(monkeypatch, tmp_path):
-    monkeypatch.setattr(reservation, "current", lambda harness, environ: reservation.Reservation(harness, "MAIN", 1))
+    monkeypatch.setattr(reservation, "current", _held_for("claude", "MAIN"))
     monkeypatch.setattr(
         balancer, "collect_results", lambda *a, **k: ([_result("MAIN", 75.0), _result("SPARE", 30.0)], "live")
     )
@@ -100,7 +124,7 @@ def test_claude_routing_skips_the_master_account_for_workers_only(monkeypatch, t
 
 
 def test_codex_routing_skips_the_master_account_for_workers_only(monkeypatch):
-    monkeypatch.setattr(reservation, "current", lambda harness, environ: reservation.Reservation(harness, "default", 1))
+    monkeypatch.setattr(reservation, "current", _held_for("codex", "default"))
     quotas = {"default": CodexQuota(0.0, "team", balancer.QuotaWindow(20.0), balancer.QuotaWindow(80.0))}
     pool = [codex_router.CodexAccount("default")]
     account, _, _ = codex_router.select(pool, quotas, {}, 0.0, environ=MASTER_ENV)

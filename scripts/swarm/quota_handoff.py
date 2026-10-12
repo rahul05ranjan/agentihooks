@@ -33,7 +33,7 @@ def windows(account: capacity.Account, thresholds: Thresholds) -> list[str]:
             ("week", account.week_left, thresholds.week),
             ("five hour", account.five_left, thresholds.five),
         )
-        if left is not None and (100 - left >= limit or (window == "week" and account.reserved))
+        if left is not None and (100 - left >= limit or (window == "week" and account.reserved != ""))
     ]
 
 

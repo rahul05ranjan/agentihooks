@@ -186,14 +186,18 @@ def test_store_wraps_the_swarm_client(monkeypatch):
     monkeypatch.setattr(swarm_store, "redis_client", refused)
     assert reservation._store({}) is None
     client = object()
-    monkeypatch.setattr(swarm_store, "redis_client", lambda environ: client)
-    assert reservation._store({}).redis is client
+    environ = {"AGENTIHOOKS_SWARM_REDIS_URL": "redis://swarm"}
+    monkeypatch.setattr(swarm_store, "redis_client", lambda given: client if given == environ else None)
+    assert reservation._store(environ).redis is client
 
 
 def test_current_reads_masters_through_the_given_store(tmp_path, monkeypatch):
     store = _Store({"one": [_Agent("master", "claude", "main")]})
+    environ = {"AGENTIHOOKS_SWARM_REDIS_URL": "redis://swarm"}
     monkeypatch.setattr(reservation.master_account, "load", lambda environ: {"claude": MasterAccount("claude", "main")})
-    held = reservation.current("claude", {}, store_of=lambda environ: store, proc=tmp_path)
+    held = reservation.current(
+        "claude", environ, store_of=lambda given: store if given == environ else None, proc=tmp_path
+    )
     assert held == reservation.Reservation("claude", "main", 1)
 
 
@@ -240,11 +244,20 @@ def test_the_real_process_table_is_the_default(monkeypatch):
 
 
 def test_only_workers_are_held_by_the_reservation(monkeypatch):
-    monkeypatch.setattr(reservation, "current", lambda harness, environ: reservation.Reservation(harness, "main", 1))
+    monkeypatch.setattr(
+        reservation,
+        "current",
+        lambda harness, environ: reservation.Reservation(harness, environ["AGENTIHOOKS_AGENT_NAME"], 1),
+    )
     assert reservation.for_worker("claude", {"AGENTIHOOKS_AGENT_NAME": "master@1"}) is None
     assert reservation.for_worker("codex", {"AGENTIHOOKS_AGENT_NAME": "engineer@1"}) == reservation.Reservation(
-        "codex", "main", 1
+        "codex", "engineer@1", 1
     )
+
+
+def test_codex_masters_are_counted_by_the_codex_marker(tmp_path):
+    _process(tmp_path, 15, ["codex"], {"AH_ROUTE_INTERACTIVE_default": "1"}, "codex")
+    assert reservation.masters_live("codex", "default", None, tmp_path) == 1
 
 
 def test_store_survives_an_unreachable_socket(monkeypatch):
