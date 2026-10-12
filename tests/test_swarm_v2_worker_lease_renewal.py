@@ -260,6 +260,23 @@ def test_an_acknowledgement_for_another_task_generation_loses_the_lease(tmp_path
     assert lease.lost == "generation_changed"
 
 
+def test_the_renewal_adopts_the_new_controller_epoch_after_a_failover(tmp_path):
+    clock = Clock()
+    controller = Controller(clock, (200, acknowledged(clock, controller_epoch=8)))
+    lease = renewer(tmp_path, clock, controller)
+
+    lease.tick()
+    clock.advance(lease_renewal.INTERVAL_SECONDS)
+    lease.tick()
+
+    first, second = heartbeats(controller)
+    assert first[3]["authority"]["controller_epoch"] == 7
+    assert second[3]["authority"]["controller_epoch"] == 8
+    assert second[3]["authority"]["task_generation"] == 4
+    assert lease.record()["controller_epoch"] == 8
+    assert lease.lost is None
+
+
 def test_an_acknowledgement_without_a_deadline_is_retried(tmp_path):
     clock = Clock()
     controller = Controller(clock, (200, {}))

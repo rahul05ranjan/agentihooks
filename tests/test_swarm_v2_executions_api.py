@@ -185,17 +185,43 @@ def test_authority_outside_the_registration_is_forbidden(world, worker, field):
     assert world.protected() == before
 
 
-def test_a_heartbeat_from_another_controller_epoch_is_stale(world, worker):
+def test_a_heartbeat_from_a_later_controller_epoch_is_stale(world, worker):
     agent, token = worker
     assert world.controller.release() and world.controller.acquire()
     assert world.controller.held.epoch == 2
-    for epoch in (1, 3):
-        body = world.beat(agent, 1)
-        body["authority"]["controller_epoch"] = epoch
-        status, refusal = world.put(agent.execution_id, token, body)
-        assert (status, refusal["error_class"]) == (409, "stale_generation")
+    body = world.beat(agent, 1)
+    body["authority"]["controller_epoch"] = 3
+    status, refusal = world.put(agent.execution_id, token, body)
+    assert (status, refusal["error_class"]) == (409, "stale_generation")
+    assert refusal["message"] == "heartbeat names a later controller epoch"
     assert stored(world, agent) is None
     assert world.put(agent.execution_id, token, world.beat(agent, 1))[0] == 200
+
+
+def test_a_live_worker_is_reauthorized_under_the_new_epoch_after_a_controller_failover(world, worker):
+    agent, token = worker
+    assert world.controller.release() and world.controller.acquire()
+    body = world.beat(agent, 1)
+    body["authority"]["controller_epoch"] = 1
+
+    status, ack = world.put(agent.execution_id, token, body)
+
+    assert (status, ack["controller_epoch"], ack["task_generation"]) == (200, 2, 1)
+    assert stored(world, agent)["renewal_sequence"] == 1
+
+
+def test_a_failover_never_reauthorizes_a_changed_task_generation(world, worker):
+    agent, token = worker
+    assert world.controller.release() and world.controller.acquire()
+    claim = world.tasks.current("task")
+    body = world.beat(agent, 1, generation=2)
+    body["authority"]["controller_epoch"] = 1
+
+    status, refusal = world.put(agent.execution_id, token, body)
+
+    assert (status, refusal["error_class"]) == (409, "stale_generation")
+    assert world.tasks.current("task") == claim
+    assert stored(world, agent) is None
 
 
 def test_a_heartbeat_without_a_controller_lease_is_unavailable(world, worker):
@@ -693,7 +719,7 @@ def test_each_refusal_names_its_cause(world, worker):
     )
     assert message(other.execution_id, token, world.beat(other, 1)) == "heartbeat names another execution"
     assert message(agent.execution_id, token, foreign) == "heartbeat authority is outside its registered execution"
-    assert message(agent.execution_id, token, epoch) == "heartbeat names another controller epoch"
+    assert message(agent.execution_id, token, epoch) == "heartbeat names a later controller epoch"
     assert message(agent.execution_id, token, world.beat(agent, 1, generation=2)) == (
         "the task generation is no longer current"
     )
