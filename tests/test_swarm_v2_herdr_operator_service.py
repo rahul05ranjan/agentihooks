@@ -194,11 +194,12 @@ def test_the_installed_service_saves_a_published_worker_and_removes_it_when_it_e
 
     from scripts.swarm_v2.herdr import operator_setup
     from scripts.swarm_v2.herdr.attach import ClientHome
+    from scripts.swarm_v2.kubernetes import operator_terminal
 
     made, herdr = store(), Herdr()
     started = worker(made, "hive-a")
     publish(made, "hive-a", *started)
-    client = ClientHome(tmp_path / "client", jump=operator_setup.jump(JUMP))
+    client = ClientHome(tmp_path / "client", jump=operator_terminal.jump(JUMP))
     running = operator_setup.service(JUMP, client, placed(tmp_path), herdr_run(herdr), lambda: made)
     out, slept = io.StringIO(), []
 
@@ -223,10 +224,11 @@ def test_an_unchanged_pass_prints_nothing(tmp_path):
 
     from scripts.swarm_v2.herdr import operator_setup
     from scripts.swarm_v2.herdr.attach import ClientHome
+    from scripts.swarm_v2.kubernetes import operator_terminal
 
     made, herdr = store(), Herdr()
     publish(made, "hive-a", *worker(made, "hive-a"))
-    client = ClientHome(tmp_path / "client", jump=operator_setup.jump(JUMP))
+    client = ClientHome(tmp_path / "client", jump=operator_terminal.jump(JUMP))
     running = operator_setup.service(JUMP, client, placed(tmp_path), herdr_run(herdr), lambda: made)
     out = io.StringIO()
 

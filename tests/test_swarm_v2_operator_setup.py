@@ -17,6 +17,7 @@ from cryptography.hazmat.primitives.asymmetric.rsa import generate_private_key
 
 from scripts import cli_delegates, openbao_kv
 from scripts.gates.base import Who
+from scripts.swarm.store import SwarmError
 from scripts.swarm_v2.deployed import pod_policy
 from scripts.swarm_v2.herdr import operator_setup
 from scripts.swarm_v2.herdr.attach import ClientHome
@@ -300,6 +301,7 @@ def test_service_unit_runs_setup_outside_agent_sessions():
         "Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin:/bin\n"
         "EnvironmentFile=-%h/.agentihooks/.env\n"
         'ExecStart="/opt/bin/agentihooks" swarm-terminal setup\n'
+        "ExecStartPost=-systemctl --user try-restart agentihooks-swarm-terminal-sync.service\n"
     )
     assert operator_setup.timer() == (
         "[Unit]\nDescription=agentihooks operator terminal setup, refreshed\n\n"
@@ -378,7 +380,8 @@ def test_parser_names_the_command_and_its_subcommands():
     assert (sub.dest, sub.required) == ("command", True)
     assert [(choice.dest, choice.help) for choice in sub._choices_actions] == [
         ("setup", "Place the terminal user CA key and the Pod policy from their sources"),
-        ("install", "Write and enable the user timer that runs setup"),
+        ("install", "Write and enable the user timer that runs setup and the sync service"),
+        ("sync", "Keep every hive's published workers in the operator's herdr"),
     ]
     assert (antoncore.option_strings, antoncore.help) == (
         ["--antoncore"],
@@ -430,7 +433,9 @@ def test_install_refuses_when_systemctl_fails(tmp_path, error, named):
     with pytest.raises(SetupRefused) as refused:
         operator_setup.install("/opt/bin/agentihooks", tmp_path, Systemctl(error=error))
 
-    assert str(refused.value) == f"systemctl could not enable agentihooks-swarm-terminal.timer: {named}"
+    assert str(refused.value) == (
+        f"systemctl could not enable agentihooks-swarm-terminal.timer and agentihooks-swarm-terminal-sync.service: {named}"
+    )
 
 
 def test_install_command_refuses_without_the_executable(tmp_path, monkeypatch):
@@ -502,19 +507,51 @@ def test_the_jump_comes_from_the_environment():
     from scripts.swarm_v2.herdr.attach import Jump
 
     environ = {"AGENTIHOOKS_TERMINAL_JUMP": "swarm.example:2223", "AGENTIHOOKS_TERMINAL_JUMP_HOST_KEY": JUMP_KEY}
-    assert operator_setup.jump(environ) == Jump("swarm.example", 2223, JUMP_KEY)
-    assert operator_setup.jump({}) is None
+    assert operator_terminal.jump(environ) == Jump("swarm.example", 2223, JUMP_KEY)
+    assert operator_terminal.jump({}) is None
 
 
 @pytest.mark.parametrize(
     "value, key",
-    [("swarm.example", JUMP_KEY), (":2223", JUMP_KEY), ("swarm.example:ssh", JUMP_KEY), ("swarm.example:2223", "")],
+    [
+        ("swarm.example", JUMP_KEY),
+        (":2223", JUMP_KEY),
+        ("swarm.example:ssh", JUMP_KEY),
+        ("swarm.example:2223", ""),
+        ("swarm.example:0", JUMP_KEY),
+        ("swarm.example:65536", JUMP_KEY),
+        ("swarm.example\n  ProxyCommand x:2223", JUMP_KEY),
+    ],
 )
 def test_a_malformed_jump_is_refused(value, key):
     environ = {"AGENTIHOOKS_TERMINAL_JUMP": value, "AGENTIHOOKS_TERMINAL_JUMP_HOST_KEY": key}
-    with pytest.raises(SetupRefused) as refused:
-        operator_setup.jump(environ)
+    with pytest.raises(SwarmError) as refused:
+        operator_terminal.jump(environ)
     assert str(refused.value) == JUMP_REFUSED
+
+
+def test_the_highest_port_is_a_valid_jump():
+    environ = {"AGENTIHOOKS_TERMINAL_JUMP": "swarm.example:65535", "AGENTIHOOKS_TERMINAL_JUMP_HOST_KEY": JUMP_KEY}
+    assert operator_terminal.jump(environ).port == 65535
+
+
+def test_the_workstation_client_home_carries_the_jump(tmp_path, monkeypatch):
+    from scripts.swarm_v2.herdr.attach import Jump
+
+    monkeypatch.setattr(operator_setup.Path, "home", lambda: tmp_path)
+    environ = {"AGENTIHOOKS_TERMINAL_JUMP": "swarm.example:2223", "AGENTIHOOKS_TERMINAL_JUMP_HOST_KEY": JUMP_KEY}
+    assert operator_terminal.client_home(environ) == ClientHome(tmp_path, jump=Jump("swarm.example", 2223, JUMP_KEY))
+    assert operator_terminal.client_home({}) == ClientHome(tmp_path)
+
+
+def test_the_service_refuses_terminal_settings_it_cannot_open(tmp_path):
+    root = tmp_path / "home"
+    folder = root / "swarm-terminal"
+    folder.mkdir(parents=True)
+    (folder / "terminal.env").write_text(f"AGENTIHOOKS_TERMINAL_CA_KEY={folder / 'user_ca'}\n")
+    with pytest.raises(SetupRefused) as refused:
+        operator_setup.service({}, ClientHome(tmp_path / "client"), root)
+    assert str(refused.value) == "opening a worker terminal needs AGENTIHOOKS_POD_POLICY_FILE"
 
 
 def test_the_sync_unit_keeps_the_service_running():

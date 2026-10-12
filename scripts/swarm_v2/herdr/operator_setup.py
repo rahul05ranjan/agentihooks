@@ -23,7 +23,7 @@ from scripts.gates.base import Who
 from scripts.swarm.store import RedisStore, SwarmError
 from scripts.swarm_v2.deployed import POLICY_ENV, pod_policy
 from scripts.swarm_v2.herdr import publications
-from scripts.swarm_v2.herdr.attach import ClientHome, Jump, Run
+from scripts.swarm_v2.herdr.attach import ClientHome, Run
 from scripts.swarm_v2.herdr.capabilities import runner
 from scripts.swarm_v2.herdr.operator_service import Service
 from scripts.swarm_v2.herdr.upkeep import Upkeep
@@ -41,8 +41,6 @@ UNIT = "agentihooks-swarm-terminal.service"
 TIMER = "agentihooks-swarm-terminal.timer"
 SYNC = "agentihooks-swarm-terminal-sync.service"
 SYNC_SECONDS = 15
-JUMP_ENV = "AGENTIHOOKS_TERMINAL_JUMP"
-JUMP_KEY_ENV = "AGENTIHOOKS_TERMINAL_JUMP_HOST_KEY"
 
 
 class SetupRefused(SwarmError):
@@ -142,15 +140,6 @@ def place(home: Path, bao: openbao_kv.OpenBao, antoncore: Path) -> dict:
     }
 
 
-def jump(environ: Mapping[str, str]) -> Jump | None:
-    if not environ.get(JUMP_ENV):
-        return None
-    host, _, port = environ[JUMP_ENV].rpartition(":")
-    if not (host and port.isdigit() and environ.get(JUMP_KEY_ENV)):
-        raise SetupRefused(f"{JUMP_ENV} must be host:port with {JUMP_KEY_ENV} naming its host key")
-    return Jump(host, int(port), environ[JUMP_KEY_ENV])
-
-
 def service(
     environ: Mapping[str, str],
     client: ClientHome,
@@ -199,6 +188,7 @@ def unit(binary: str) -> str:
         "Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin:/bin\n"
         "EnvironmentFile=-%h/.agentihooks/.env\n"
         f'ExecStart="{binary}" swarm-terminal setup\n'
+        f"ExecStartPost=-systemctl --user try-restart {SYNC}\n"
     )
 
 
@@ -239,7 +229,7 @@ def install(binary: str | None = None, unit_dir: Path | None = None, run: Callab
             for name in (TIMER, SYNC)
         ]
     except (OSError, subprocess.SubprocessError) as error:
-        raise SetupRefused(f"systemctl could not enable {TIMER}: {type(error).__name__}") from None
+        raise SetupRefused(f"systemctl could not enable {TIMER} and {SYNC}: {type(error).__name__}") from None
     return all(result.returncode == 0 for result in results)
 
 
@@ -264,12 +254,12 @@ def main(
             return 0 if install() else 1
         root = home or Path(environ.get("AGENTIHOOKS_HOME") or Path.home() / ".agentihooks")
         if args.command == "sync":
-            return serve(service(environ, ClientHome(Path.home(), jump=jump(environ)), root))
+            return serve(service(environ, operator_terminal.client_home(environ), root))
         bao = openbao_kv.from_env(environ)
         if bao is None:
             raise SetupRefused(f"it needs {openbao_kv.URL_ENV} and {openbao_kv.TOKEN_ENV}")
         report = place(root, bao, antoncore_dir(environ, args.antoncore))
-    except SetupRefused as refused:
+    except SwarmError as refused:
         print(f"operator terminal {args.command} refused: {refused}", file=sys.stderr)
         return 1
     print(json.dumps(report))
