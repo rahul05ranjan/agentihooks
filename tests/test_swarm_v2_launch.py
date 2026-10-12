@@ -1165,7 +1165,7 @@ def test_hive_live_counts_refuse_a_launch_before_the_runtime(world):
     redis.set(f"{registry.key('hive')}:sessions", json.dumps({f"claude:{ACCOUNT}": 1}), ex=45)
     launch = world.launch(FIRST)
     assert launch.outcome.status is Status.UNAVAILABLE
-    assert launch.outcome.detail == ACCOUNT_FULL
+    assert launch.outcome.detail == launch_module.ACCOUNT_FULL
     assert world.runtime.requests == []
 
 
