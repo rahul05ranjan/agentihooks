@@ -31,6 +31,25 @@ def _deadline(value: object) -> float:
     return float(value)
 
 
+def _prompt(value: object) -> str:
+    if not isinstance(value, str) or not value or "\0" in value:
+        raise LaunchRefused("invalid prompt")
+    return value
+
+
+def _checkout(execution: filesystem.Execution, task: str) -> Path | None:
+    if not filesystem.SEGMENT.fullmatch(task):
+        return None
+    record = execution.path("spool") / "workspaces" / f"{task}.json"
+    if not record.is_file():
+        return None
+    root = execution.path("worktree").resolve()
+    tree = Path(json.loads(record.read_text())["path"]).resolve()
+    if not tree.is_relative_to(root) or tree == root or not tree.is_dir():
+        raise LaunchRefused("invalid checkout")
+    return tree
+
+
 def checked_authority(value: object) -> dict:
     if not isinstance(value, dict):
         raise LaunchRefused("invalid authority")
@@ -68,6 +87,8 @@ class Launch:
     exporter: tuple[str, ...] | None
     herdr: tuple[str, ...]
     budgets: Budgets
+    prompt: str = ""
+    checkout: Path | None = None
 
     @property
     def attempt(self) -> Path:
@@ -117,4 +138,6 @@ class Launch:
             _command(spec["exporter"]) if "exporter" in spec else None,
             _command(spec.get("herdr", ["herdr", "server"])),
             budgets,
+            _prompt(spec["prompt"]) if "prompt" in spec else "",
+            _checkout(execution, authority["task_id"]),
         )

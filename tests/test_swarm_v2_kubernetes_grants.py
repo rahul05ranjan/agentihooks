@@ -202,17 +202,24 @@ def test_the_checkout_names_the_project_the_pod_was_admitted_for():
     assert json.loads(api.created[0]["data"][LAUNCH_RECORD])["checkout"] == {"project": other, "agent": "engineer-1"}
 
 
-@pytest.mark.parametrize("project", ["github.com/someone/else", None])
+@pytest.mark.parametrize("project", ["github.com/someone/else", ""])
 def test_a_pod_project_the_grant_does_not_permit_takes_no_config_map_and_its_pod_is_removed(project):
-    found = pod(project=project)
-    if project is None:
-        del found["metadata"]["annotations"]
-    api = Api(found)
+    api = Api(pod(project=project))
 
     assert grants(api).hand(agent(), GRANT) == Hand(False, "project_unpermitted", True)
 
     assert api.created == []
     assert api.deleted == [("pods", POD, "uid-1")]
+
+
+def test_a_pod_without_a_project_is_handed_a_launch_record_without_a_checkout():
+    found = pod()
+    del found["metadata"]["annotations"]
+    api = Api(found)
+
+    assert grants(api).hand(agent(), GRANT) == Hand(True, "handed", False)
+
+    assert "checkout" not in json.loads(api.created[0]["data"][LAUNCH_RECORD])
 
 
 def test_a_set_exporter_is_copied_into_the_launch_record():

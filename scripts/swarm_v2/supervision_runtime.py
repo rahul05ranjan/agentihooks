@@ -1,4 +1,5 @@
 import fcntl
+import hashlib
 import json
 import os
 import shlex
@@ -17,6 +18,8 @@ from scripts.swarm_v2 import supervision_processes as trees
 from scripts.swarm_v2.supervision import Launch, LaunchRefused
 from scripts.swarm_v2.supervision_agent import native_command
 from scripts.swarm_v2.supervision_protocol import checkpoint, matches, read, write
+
+PROMPT = "prompt.md"
 
 
 class Supervisor:
@@ -120,17 +123,32 @@ class Supervisor:
         for role in roles:
             if not self.ready(role, deadline):
                 return "termination" if self.stop else f"{role}_startup_failure"
-        agent = native_command(self.launch.agent, self.launch.attempt, self.environment)
-        command = [sys.executable, "-m", "scripts.swarm_v2.supervision_agent", *agent]
+        directory = self.launch.checkout or self.launch.attempt
+        agent = native_command(self.launch.agent, directory, self.environment)
+        command = [sys.executable, "-m", "scripts.swarm_v2.supervision_agent", *self.opening(), *agent]
         self.phase = "workspace_create"
-        tab = self.herdr(["workspace", "create", "--cwd", str(self.launch.attempt), "--no-focus"])
+        tab = self.herdr(["workspace", "create", "--cwd", str(directory), "--no-focus"])
         pane = tab["result"]["root_pane"]["pane_id"]
         self.phase = "agent_launch"
         self.herdr(["pane", "run", pane, shlex.join(command)])
         if not self.ready("agent", deadline):
             return "termination" if self.stop else "agent_startup_failure"
+        if self.launch.prompt:
+            text = self.launch.prompt.encode()
+            delivered = {"bytes": len(text), "sha256": hashlib.sha256(text).hexdigest()}
+            print(
+                json.dumps({"supervisor": "prompt_delivered", "incarnation": self.root.name, **delivered}), flush=True
+            )
         write(self.root / "running.json", {**self.scope, "pane_id": pane, "status": "running"})
         return None
+
+    def opening(self) -> list[str]:
+        if not self.launch.prompt:
+            return []
+        path = self.root / PROMPT
+        with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as handle:
+            handle.write(self.launch.prompt)
+        return ["--prompt-file", str(path)]
 
     def running(self) -> str:
         while True:
