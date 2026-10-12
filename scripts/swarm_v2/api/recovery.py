@@ -41,7 +41,7 @@ class RecoveryAPI:
             if recovery is None:
                 raise GrantRefused("dependency_unavailable", "controller recovery is unavailable")
             with self.lock:
-                return 200, asdict(recovery.decide(subject[1], body["choice"]))
+                return 200, asdict(recovery.request(subject[1], body["choice"]))
         except GrantRefused as error:
             status = {"invalid_request": 400, "unauthenticated": 401, "forbidden_scope": 403}
             return status.get(error.error_class, 503), error.detail()

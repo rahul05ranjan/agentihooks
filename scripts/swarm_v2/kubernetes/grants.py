@@ -2,7 +2,7 @@
 
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Protocol
 
 from scripts.swarm.store import AgentRecord
@@ -32,6 +32,7 @@ class Supervision:
             "agent": [self.harness],
             "control_url": self.control_url,
             "profile": profile,
+            "registration": asdict(registration),
         }
         if self.exporter:
             record["exporter"] = list(self.exporter)
@@ -102,6 +103,11 @@ class PodGrants:
             return Hand(False, "pod_missing")
         if not _owned(pod, labels):
             return Hand(False, "pod_foreign")
+        containers = pod.get("spec", {}).get("containers", [])
+        if containers and "@" in containers[0].get("image", ""):
+            material = json.loads(record)
+            material["image_digest"] = containers[0]["image"].split("@", 1)[1]
+            record = json.dumps(material, sort_keys=True)
         try:
             self.api.create_config_map(_material(pod, labels, grant, record))
         except AlreadyExists:

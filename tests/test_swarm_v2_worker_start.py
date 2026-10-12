@@ -430,13 +430,13 @@ def test_a_fresh_restore_is_recorded_before_the_registration_record(tmp_path):
 def test_the_launch_restore_runs_after_bootstrap_with_the_launch_record(tmp_path, monkeypatch):
     seen = []
 
-    def restoring(spec):
+    def restoring(spec, attempt):
         seen.append((spec["restore"], (tmp_path / "attempts" / EXECUTION / "run").is_dir()))
         return restore.Restored("native", "ckpt-1", 41, "s-1", ("claude", "--resume", "s-1"))
 
     launch = material(tmp_path, {**RECORD, "restore": NATIVE_RESTORE})
     attempt = tmp_path / "attempts" / EXECUTION
-    monkeypatch.setattr(restore, "launched", restoring)
+    monkeypatch.setattr(start.checkpoint_runtime, "prepare", restoring)
     start.prepare(attempt, launch, Controller((200, ANSWER)).send, None, Boot(), shipped(tmp_path))
     assert seen == [(NATIVE_RESTORE, True)]
     recorded = json.loads((attempt / start.RESTORED).read_text())

@@ -9,8 +9,6 @@ pytestmark = pytest.mark.unit
 
 
 def test_the_production_store_uses_the_registered_attempt_scope(tmp_path):
-    fixture = cases.store(tmp_path / "fixture")
-    registration = fixture._registration if hasattr(fixture, "_registration") else None
     from scripts.swarm_v2.auth_context import Registration
 
     registration = Registration(
@@ -70,3 +68,44 @@ def test_replacement_restores_the_registered_checkpoint_before_returning_a_resum
     result = runtime.restoring(replacement, directive, paths)
     assert result.command == ("claude", "--resume", cases.SESSIONS["claude"])
     assert result.recovery == "native"
+
+
+def test_a_drain_requires_a_durable_verified_checkpoint(tmp_path, monkeypatch):
+    from scripts.swarm_v2 import supervision_runtime
+    from tests.test_swarm_v2_supervision_runtime import supervisor
+
+    owner = supervisor.__wrapped__(tmp_path, monkeypatch)
+    monkeypatch.setattr(owner, "quiesce", lambda: True)
+    monkeypatch.setattr(owner, "wait", lambda: pytest.fail("unbounded wait"))
+    monkeypatch.setattr(supervision_runtime, "checkpoint", lambda *args: "unverified")
+    monkeypatch.setattr(supervision_runtime.trees, "cleanup", lambda *args: None)
+    monkeypatch.setattr(runtime, "validate_export", lambda *args: False)
+    result = owner.drain("termination")
+    assert result["checkpoint_status"] == "incomplete"
+    assert result["checkpoint_id"] is None
+
+
+def test_a_supervisor_launch_uses_the_restored_native_command(tmp_path, monkeypatch):
+    import json
+
+    from scripts.swarm_v2 import supervision_runtime
+    from tests.test_swarm_v2_supervision_runtime import supervisor
+
+    owner = supervisor.__wrapped__(tmp_path, monkeypatch)
+    (tmp_path / "restore.json").write_text(
+        json.dumps({"recovery": "native", "command": ["codex", "resume", "session"]})
+    )
+    monkeypatch.setattr(owner, "spawn", lambda *args: None)
+    monkeypatch.setattr(owner, "ready", lambda *args: True)
+    commands = []
+    monkeypatch.setattr(
+        owner, "herdr", lambda words: commands.append(words) or {"result": {"root_pane": {"pane_id": "p"}}}
+    )
+    monkeypatch.setattr(supervision_runtime, "native_command", lambda command, *args: command)
+    assert owner.start() is None
+    assert "codex resume session" in commands[-1][-1]
+
+
+def test_malformed_directive_is_refused_before_loading_any_store(tmp_path):
+    with pytest.raises(restore.RestoreRefused):
+        runtime.prepare({"restore": None}, tmp_path, {})

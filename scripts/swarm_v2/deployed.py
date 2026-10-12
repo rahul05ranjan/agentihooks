@@ -55,6 +55,9 @@ RESERVATION_MS = 300_000
 HARNESS = "claude"
 
 
+from scripts.swarm_v2.checkpoints import runtime as checkpoint_runtime
+
+
 class WorkerSettingsRefused(SwarmError):
     pass
 
@@ -313,7 +316,10 @@ def recovery_pass(
 
     capacity = AccountCapacity(controller.store, slug, verify)
     releases = {"grant": GrantRelease(grants, slug), "account": AccountSlot(controller.store, slug, capacity)}
-    recovery = Recovery(controller.store, slug, controller, NoCheckpoints(), releases, workers.image_tag)
+    checkpoints = checkpoint_runtime.Checkpoints(
+        checkpoint_runtime.configured(environ or {}), partial(grants.registration, slug), workers.image_tag
+    )
+    recovery = Recovery(controller.store, slug, controller, checkpoints, releases, workers.image_tag)
     recovering = RecoveryPass(recovery, api, f"{OWNER_LABEL}={owner_for(slug)}")
     attach = AttachRelease(HostKeys(controller.store), slug)
     cleanup = Cleanup(controller.store, slug, api, controller.require, attach, releases["grant"])
