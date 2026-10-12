@@ -50,6 +50,27 @@ def test_controller_listing_reads_only_verified_newest_generation(tmp_path):
     assert listing.list("e1") == []
 
 
+def test_an_older_execution_cannot_offer_a_checkpoint_after_a_new_generation_promotes(tmp_path):
+    import json
+
+    from scripts.swarm_v2.auth_context import Registration
+
+    old = Registration(
+        "g", "s1", "e1", 2, "seat", "t1", "account", "brain", ["local:fixture"], "issuer", "worker", "key", ""
+    )
+    store = runtime.granted(tmp_path / "durable", old)
+    qualifier = native.Qualifier(model.Validator(store))
+    cwd = tmp_path / "repo"
+    home = cases.home_for("claude", tmp_path, cwd)
+    taken = qualifier.capture("claude", home, cases.SESSIONS["claude"], cwd, cases.VERSIONS["claude"], stopped=True)
+    assert cases.commit(qualifier, taken, "ckpt-1", "claude").authoritative
+    store.backend.write(
+        store.scope.key("pointers", "00000000000000000003", "00000000000000000001.json"),
+        json.dumps({"generation": 3, "checkpoint_id": "newer"}).encode(),
+    )
+    assert runtime.Checkpoints(tmp_path / "durable", lambda execution: old, "dev").list("e1") == []
+
+
 def test_replacement_restores_the_registered_checkpoint_before_returning_a_resume_command(tmp_path):
     from scripts.swarm_v2.auth_context import Registration
 

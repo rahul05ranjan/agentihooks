@@ -176,7 +176,10 @@ class Checkpoints:
             if verdict.authoritative:
                 doc = json.loads(store.get_range(store.recorded(identifier)))
                 documents.append(doc)
-        newest = max((doc["authority"]["task_generation"] for doc in documents), default=0)
+        generations = [doc["authority"]["task_generation"] for doc in documents]
+        for key in store.backend.keys(store.scope.key("pointers") + "/"):
+            generations.append(int(Path(key).parent.name))
+        newest = max(generations, default=0)
         return [
             {
                 "checkpoint_id": doc["checkpoint_id"],
