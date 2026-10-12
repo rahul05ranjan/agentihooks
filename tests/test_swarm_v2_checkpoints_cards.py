@@ -42,7 +42,7 @@ def test_a_real_attempt_failure_card_offers_its_verified_checkpoint(world, conti
     assert row["resume_available"] is True
     assert row["resume_label"] == label
     assert row["checkpoint"] == "ckp-verified"
-    [reported] = status_report(world.store, recovery.slug)["handoffs"]
+    [reported] = status_report(world.store, recovery.slug, {})["handoffs"]
     assert reported["checkpoint"] == "ckp-verified"
     assert reported["resume_label"] == label
     mode = "native resume" if continuation == "native" else "context continuation"
