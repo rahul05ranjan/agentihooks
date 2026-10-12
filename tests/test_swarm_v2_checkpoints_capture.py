@@ -40,6 +40,20 @@ def portable(tmp_path, monkeypatch):
     return attempt, scope, environ, newest
 
 
+def test_capture_normalizes_record_sequence_kind_and_missing_text(tmp_path, monkeypatch):
+    transcript = tmp_path / "conversation"
+    records = [{"kind": "user", "text": "Hello\u2028world"}, {"kind": "assistant"}]
+    calls = []
+    monkeypatch.setattr(capture, "iter_transcript_records", lambda path: calls.append(path) or iter(records))
+    raw, count = capture.transcript(transcript)
+    assert count == 2
+    assert (
+        raw
+        == b'{"seq": 1, "kind": "user", "text": "Hello\\xe2\\x80\\xa8world"}\n{"seq": 2, "kind": "assistant", "text": ""}\n'
+    )
+    assert calls == [transcript]
+
+
 def test_worker_capture_publishes_and_validates_native_and_source_material(portable):
     attempt, scope, environ, newest = portable
     acknowledgement = capture.publish(attempt, scope, environ, newest)
