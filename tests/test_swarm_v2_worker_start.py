@@ -478,12 +478,13 @@ def test_remote_restore_is_reported_before_receipt_and_registration(tmp_path, mo
 
 
 @pytest.mark.parametrize("status", [200, 201, 403])
-def test_restore_receipt_transport_is_authenticated_bounded_and_requires_success(monkeypatch, status):
+@pytest.mark.parametrize("suffix, base", [("/", CONTROL), ("/proxyX/", CONTROL + "/proxyX")])
+def test_restore_receipt_transport_is_authenticated_bounded_and_requires_success(monkeypatch, status, suffix, base):
     from contextlib import nullcontext
     from types import SimpleNamespace
 
     restored = restore.Restored("native", "ckp-one", 41, "session", ("claude", "--resume", "session"))
-    spec = {"execution_id": EXECUTION, "control_url": CONTROL + "/"}
+    spec = {"execution_id": EXECUTION, "control_url": CONTROL + suffix}
     calls = []
     monkeypatch.setattr(
         start.urllib.request,
@@ -497,7 +498,7 @@ def test_restore_receipt_transport_is_authenticated_bounded_and_requires_success
             start.report(spec, GRANT, restored)
         assert str(caught.value) == "restore outcome was not accepted"
     [(request, kwargs)] = calls
-    assert request.full_url == CONTROL + f"/v1/executions/{EXECUTION}/restore-outcome"
+    assert request.full_url == base + f"/v1/executions/{EXECUTION}/restore-outcome"
     assert request.get_method() == "POST"
     assert request.get_header("Authorization") == "Bearer " + GRANT
     assert request.get_header("Content-type") == "application/json"

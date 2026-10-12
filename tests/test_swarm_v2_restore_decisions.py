@@ -234,7 +234,12 @@ def test_a_delayed_restore_receipt_cannot_overwrite_a_newer_attempt(pending):
     api.worker = lambda token: SimpleNamespace(execution_id=successor.execution_id)
     path = f"/v1/executions/{successor.execution_id}/restore-outcome"
     before = pending.world.protected()
-    assert api.route("POST", path, "Bearer delayed fixture", body)[0] == 409
+    status, refused = api.route("POST", path, "Bearer delayed fixture", body)
+    assert (status, refused["error_class"], refused["message"]) == (
+        409,
+        "recovery_refused",
+        "restore outcome is for a superseded execution",
+    )
     assert pending.world.protected() == before
     assert pending.world.occupant().execution_id == newer.execution_id
     assert pending.recovery.outcome(successor.execution_id) is None
