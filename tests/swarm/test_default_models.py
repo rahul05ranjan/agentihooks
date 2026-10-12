@@ -93,6 +93,31 @@ def test_configured_model_is_used_in_auto_band_and_frontier(agent, model, monkey
     assert model_pick.frontier(agent, default_model=model).model == model
 
 
+@pytest.mark.parametrize("maximum", ["low", "medium", "high"])
+def test_auto_sonnet_refuses_a_range_below_extra_high(maximum):
+    picked = model_pick.ModelPick("sonnet", "xhigh", model_pick.BAND)
+    with pytest.raises(runtime.SpawnError, match="range must allow xhigh"):
+        runtime._model_args("claude", picked.__dict__, {}, ("low", maximum))
+
+
+def test_auto_sonnet_launches_at_extra_high_and_keeps_saved_or_explicit_efforts():
+    picked = model_pick.ModelPick("sonnet", "xhigh", model_pick.BAND)
+    assert runtime._model_args("claude", picked.__dict__, {}, ("medium", "xhigh")) == [
+        "--model",
+        "sonnet",
+        "--effort",
+        "xhigh",
+    ]
+    for source, preserve in ((model_pick.BAND, True), ("lane-default", False)):
+        picked = model_pick.ModelPick("sonnet", "high", source)
+        assert runtime._model_args("claude", picked.__dict__, {}, ("medium", "high"), preserve) == [
+            "--model",
+            "sonnet",
+            "--effort",
+            "high",
+        ]
+
+
 def test_launch_defaults_keep_explicit_choices(store):
     config = replace(store.config("sw"), claude_model="sonnet", codex_model="gpt-6-sol")
     for lane in ("eng", "ci", "plan", "master"):

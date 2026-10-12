@@ -68,10 +68,10 @@ def pick(
     difficulty = task.get("difficulty") if task.get("difficulty") in STARTS else "M"
     rank = task.get("rank") or "normal"
     fixed = default.model not in ("", AUTO)
-    if default.model == SONNET:
+    model = default.model if fixed else default_model or model_effort(harness, [], environ)[0]
+    if model == SONNET:
         return ModelPick(SONNET, SONNET_EFFORT, BAND)
     sonnet = not fixed and clamp(harness, SONNET_EFFORT, bounds) == SONNET_EFFORT
-    model = default.model if fixed else default_model or model_effort(harness, [], environ)[0]
     offered = [option for option in band(harness, difficulty, rank) if sonnet or option.model != SONNET]
     options = tuple(option if option.model == SONNET else replace(option, model=model) for option in offered)
     chosen = options[offered.index(floor(offered))]
