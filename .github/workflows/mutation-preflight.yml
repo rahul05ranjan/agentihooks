@@ -74,6 +74,7 @@ jobs:
       shards: ${{ steps.plan.outputs.shards }}
       stats_parts: ${{ steps.plan.outputs.stats_parts }}
       bases: ${{ steps.plan.outputs.bases }}
+      changed: ${{ steps.plan.outputs.changed }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -101,7 +102,7 @@ jobs:
   # Each leg queues on its run's lane under its own index, so a lane holds one leg per index at a time.
   stats:
     needs: [pull-request, plan]
-    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.changed != '0' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -179,7 +180,7 @@ jobs:
 
   mutation-shard:
     needs: [plan, stats]
-    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.stats.result == 'success' }}
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.changed != '0' && needs.stats.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -269,6 +270,7 @@ jobs:
           python-version: "3.12"
 
       - name: Download every mutation shard report
+        if: needs.plan.outputs.changed != '0'
         uses: actions/download-artifact@v4
         with:
           pattern: mutation-preflight-shard-*
@@ -281,7 +283,7 @@ jobs:
 
       - name: Merge the shard reports
         env:
-          SHARDS: ${{ needs.plan.outputs.shards }}
+          SHARDS: ${{ needs.plan.outputs.changed != '0' && needs.plan.outputs.shards || '[]' }}
         run: python -m scripts.ci_mutation.merge .mutation-shards --shards "$(jq length <<< "$SHARDS")" --output .mutation-gate
 
       - name: Upload complete mutation evidence
@@ -294,7 +296,7 @@ jobs:
           retention-days: 7
 
       - name: Fail when a shard did not finish
-        if: needs.mutation-shard.result != 'success'
+        if: needs.plan.outputs.changed != '0' && needs.mutation-shard.result != 'success'
         run: |
           echo "::error::A mutation shard ended ${{ needs.mutation-shard.result }}; the merged report is incomplete."
           exit 1

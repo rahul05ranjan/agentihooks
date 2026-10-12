@@ -70,7 +70,8 @@ def main() -> int:
     root = Path.cwd()
     bases = own_bases(root, args.base, args.head, graded_green)
     print(f"Mutation bases: {' '.join(bases)}")
-    seconds, mutants, tests = estimate(root, discover_changes(root, bases, args.head))
+    changes = discover_changes(root, bases, args.head)
+    seconds, mutants, tests = estimate(root, changes)
     count = shard_count(seconds, mutants, args.target, args.limit)
     parts, stats = stats_part_count(root, tests, args.stats_target, args.limit)
     print(
@@ -82,6 +83,7 @@ def main() -> int:
             stream.write(f"shards={json.dumps(list(range(count)))}\n")
             stream.write(f"stats_parts={json.dumps(list(range(parts)))}\n")
             stream.write(f"bases={','.join(bases)}\n")
+            stream.write(f"changed={len(changes)}\n")
     return 0
 
 

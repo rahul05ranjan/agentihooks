@@ -173,6 +173,7 @@ def test_preflight_merges_every_shard_into_the_one_report_its_readers_take():
     assert steps[0]["with"] == {"fetch-depth": 0}
     download = steps[names.index("Download every mutation shard report")]
     assert download["with"] == {"pattern": "mutation-preflight-shard-*", "path": ".mutation-shards"}
+    assert download["if"] == "needs.plan.outputs.changed != '0'"
     scope = steps[names.index("Record the revisions the report grades")]
     assert '"$(git merge-base "$BASE" HEAD)" "$(git rev-parse HEAD)" > .mutation-gate/scope.json' in scope["run"]
     merge = steps[names.index("Merge the shard reports")]
