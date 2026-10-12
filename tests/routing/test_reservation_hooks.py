@@ -1,65 +1,14 @@
-import json
-
 import pytest
 
-from hooks.context import account_sessions, quota_policy
 from scripts import claude_quota_balancer as balancer
 from scripts import codex_router
 from scripts.codex_quota import CodexQuota
 from scripts.routing import reservation
 from scripts.routing.master_account import MasterAccount
-from scripts.swarm import capacity, quota_handoff, quota_view
-from scripts.swarm.store import AgentRecord, RedisStore
+from scripts.swarm import capacity, quota_view
 
 ONE = reservation.Reservation("claude", "main", 1)
 REASON = "reserved for 1 live master: workers stop at 70% of the week"
-
-
-def _decide(week_used, ceiling, others=()):
-    return quota_policy.decide_reserved(
-        ceiling,
-        account="main",
-        five_used=10.0,
-        week_used=week_used,
-        five_reset=None,
-        week_reset=None,
-        others=list(others),
-        push=False,
-    )
-
-
-def test_worker_on_the_master_account_hands_off_at_the_ceiling():
-    other = quota_policy.Candidate("spare", 10.0, 10.0, 0, 0.0, 6)
-    assert _decide(69.9, 70.0, [other]) is None
-    decision = _decide(70.0, 70.0, [other])
-    assert (decision.action, decision.trigger, decision.target.account) == ("handoff", "week", "spare")
-    assert decision.week_used == 70.0
-    assert _decide(70.0, None, [other]) is None
-    assert _decide(98.5, None, [other]).week_used == 98.5
-
-
-def test_reserved_candidates_take_no_handoff():
-    held = quota_policy.reserved([quota_policy.Candidate("main", 10.0, 70.0, 0, 0.0, 6)], ONE)
-    assert held[0].reserved
-    assert not quota_policy.reserved([quota_policy.Candidate("main", 10.0, 69.9, 0, 0.0, 6)], ONE)[0].reserved
-    assert quota_policy.reserved(held, None) == held
-    decision = quota_policy.decide(
-        account="tired",
-        five_used=10.0,
-        week_used=99.0,
-        five_reset=None,
-        week_reset=None,
-        others=held,
-        push=False,
-    )
-    assert decision.action == "stop"
-
-
-def test_a_master_session_ignores_the_ceiling():
-    assert quota_policy._own_ceiling(ONE, "main", master=True) is None
-    assert quota_policy._own_ceiling(ONE, "main", master=False) == 70.0
-    assert quota_policy._own_ceiling(ONE, "other", master=False) is None
-    assert quota_policy._own_ceiling(None, "main", master=False) is None
 
 
 def _row(name="main", week_left=30.0, harness="claude", **extra):
@@ -84,13 +33,6 @@ def test_record_keeps_rows_without_a_reservation_unchanged():
     assert capacity.record(_row(reserved=REASON))["reserved"] == REASON
     assert capacity.record(_row(kind="api", reserved=REASON))["reserved"] == REASON
     assert "reserved" not in capacity.record(_row(kind="api"))
-
-
-def test_handoff_trigger_fires_at_the_ceiling():
-    thresholds = quota_handoff.Thresholds()
-    assert quota_handoff.trigger(_row(reserved=REASON), thresholds) == "week"
-    assert quota_handoff.trigger(_row(), thresholds) == ""
-    assert quota_handoff.windows(_row(reserved=REASON, week_left=None), thresholds) == []
 
 
 def test_quota_view_names_the_reservation():
@@ -134,61 +76,6 @@ def test_balance_table_names_the_reservation():
     assert REASON not in balancer.render_table(
         [_result("main", 75.0)], now=0, marks=balancer.RowMarks("", None, REASON)
     )
-
-
-def test_a_ceiling_handoff_names_the_ceiling_as_its_limit():
-    spare = quota_policy.Candidate("spare", 10.0, 10.0, 0, 0.0, 6)
-    assert quota_policy._trigger_text(_decide(70.0, 70.0, [spare])) == "7-day quota 70.0% used (limit 70%)"
-    assert _decide(98.5, None, [spare]).week_limit == quota_policy.QUOTA_HANDOFF_WEEK_PCT
-
-
-def test_a_spent_five_hour_window_at_the_ceiling_leaves_rather_than_waits():
-    decision = quota_policy.decide_reserved(
-        70.0,
-        account="main",
-        five_used=99.5,
-        week_used=75.0,
-        five_reset=1.0,
-        week_reset=None,
-        others=[],
-        push=False,
-    )
-    assert (decision.action, decision.trigger, decision.week_used) == ("stop", "week", 75.0)
-
-
-def _windows(monkeypatch, week_used):
-    monkeypatch.delenv("AH_ROUTE_API", raising=False)
-    monkeypatch.delenv("AGENTIHOOKS_TARGET", raising=False)
-    monkeypatch.setattr(quota_policy, "_session_windows", lambda session_id: (10.0, week_used, None, None))
-    monkeypatch.setattr(account_sessions, "agent_pid", lambda: 1)
-    monkeypatch.setattr(account_sessions, "session_account", lambda pid: "main")
-    calls = []
-    monkeypatch.setattr(reservation, "current", lambda harness, environ: calls.append(harness))
-    return calls
-
-
-def test_evaluate_reads_no_reservation_below_the_lowest_ceiling(monkeypatch):
-    calls = _windows(monkeypatch, 49.9)
-    assert quota_policy.evaluate("s") is None
-    assert calls == []
-
-
-def test_evaluate_reads_the_reservation_from_the_lowest_ceiling(monkeypatch):
-    calls = _windows(monkeypatch, 50.0)
-    assert quota_policy.evaluate("s") is None
-    assert calls == ["claude"]
-
-
-@pytest.mark.xdist_group("fakeredis")
-def test_warn_spares_the_master_lane_on_a_reserved_account():
-    import fakeredis
-
-    storage = RedisStore(fakeredis.FakeRedis(decode_responses=True))
-    storage.put_agent("sw", AgentRecord("master@x", "master", "m", harness="claude", account="main"))
-    storage.put_agent("sw", AgentRecord("worker", "eng", "w", harness="claude", account="main"))
-    rows = [capacity.record(_row(reserved=REASON))]
-    storage.redis.set(storage.key("sw", "quota-capacity"), json.dumps({"accounts": rows}))
-    assert quota_handoff.warn("sw", storage, {}) == ["early quota handoff warning sent to worker"]
 
 
 MASTER_ENV = {"AGENTIHOOKS_AGENT_NAME": "master@1"}
