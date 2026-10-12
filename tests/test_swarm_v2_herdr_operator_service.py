@@ -265,12 +265,22 @@ def test_the_service_reads_the_transport_from_its_environment(tmp_path):
     from scripts.swarm_v2.herdr.attach import ClientHome
     from scripts.swarm_v2.herdr.operator_service import TRANSPORT
 
+    class Journal(io.StringIO):
+        flushed = 0
+
+        def flush(self):
+            self.flushed += 1
+
+    def sleep(seconds):
+        raise AssertionError("a single pass never sleeps")
+
     herdr = Herdr()
     running = operator_setup.service({}, ClientHome(tmp_path / "client"), placed(tmp_path), herdr_run(herdr))
-    out = io.StringIO()
+    out = Journal()
 
-    operator_setup.serve(running, passes=1, sleep=lambda seconds: None, out=out)
+    assert operator_setup.serve(running, passes=1, sleep=sleep, out=out) == 0
 
+    assert out.flushed == 1
     assert json.loads(out.getvalue())["refused"] == {
         TRANSPORT: "the publication transport needs AGENTIHOOKS_HIVE_REDIS_URL or AGENTIHOOKS_SWARM_REDIS_URL"
     }
@@ -281,5 +291,6 @@ def test_the_service_refuses_before_setup_has_placed_its_files(tmp_path):
     from scripts.swarm_v2.herdr import operator_setup
     from scripts.swarm_v2.herdr.attach import ClientHome
 
-    with pytest.raises(operator_setup.SetupRefused, match="run agentihooks swarm-terminal setup first"):
+    with pytest.raises(operator_setup.SetupRefused) as refused:
         operator_setup.service({}, ClientHome(tmp_path / "client"), tmp_path / "agentihooks", herdr_run(Herdr()))
+    assert str(refused.value) == "the terminal files are not placed: run agentihooks swarm-terminal setup first"

@@ -548,9 +548,14 @@ def test_a_malformed_jump_is_refused(value, key):
     assert str(refused.value) == JUMP_REFUSED
 
 
-def test_the_highest_port_is_a_valid_jump():
-    environ = {"AGENTIHOOKS_TERMINAL_JUMP": "swarm.example:65535", "AGENTIHOOKS_TERMINAL_JUMP_HOST_KEY": JUMP_KEY}
-    assert operator_terminal.jump(environ).port == 65535
+@pytest.mark.parametrize(
+    "value, host, port", [("swarm.example:1", "swarm.example", 1), ("fd00::7:65535", "fd00::7", 65535)]
+)
+def test_the_jump_takes_the_port_after_the_last_colon(value, host, port):
+    from scripts.swarm_v2.herdr.attach import Jump
+
+    environ = {"AGENTIHOOKS_TERMINAL_JUMP": value, "AGENTIHOOKS_TERMINAL_JUMP_HOST_KEY": JUMP_KEY}
+    assert operator_terminal.jump(environ) == Jump(host, port, JUMP_KEY)
 
 
 def test_the_workstation_client_home_carries_the_jump(tmp_path, monkeypatch):
