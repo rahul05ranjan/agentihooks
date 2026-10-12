@@ -153,9 +153,9 @@ def check(workflows: dict[str, dict], actors: object = None) -> list[str]:
                 if Path(uses).name not in workflows:
                     problems.append(f"{file}/{name}: runner trust cannot resolve local workflow {uses}")
                 continue
-            if not uses and _hosted(job.get("runs-on")):
-                continue
-            if not uses and "pull_request_target" not in events and _routed(job, jobs):
+            if not uses and (
+                _hosted(job.get("runs-on")) or ("pull_request_target" not in events and _routed(job, jobs))
+            ):
                 continue
             if "pull_request_target" in events or not _guarded(job, jobs):
                 problems.append(
