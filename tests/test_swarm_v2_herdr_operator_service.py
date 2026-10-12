@@ -114,7 +114,7 @@ def test_only_kubernetes_workers_with_a_published_host_key_of_their_generation_a
     kept = worker(made, "hive-a")
     publish(made, "hive-a", *kept)
     worker(made, "hive-a")
-    local = worker(made, "hive-a", backend="herdr")
+    local = worker(made, "hive-a", backend="local")
     publish(made, "hive-a", *local)
     stale = worker(made, "hive-b")
     publish(made, "hive-b", stale[0], stale[1] + 1)
