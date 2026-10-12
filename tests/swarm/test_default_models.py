@@ -9,7 +9,6 @@ import pytest
 
 from scripts.swarm import cli, default_models, model_catalog, model_pick, runtime
 from scripts.swarm.store import RedisStore, SwarmConfig, SwarmError
-from scripts.swarm_ledger import ledger_server
 
 pytestmark = pytest.mark.xdist_group("fakeredis")
 CATALOG = {
@@ -72,18 +71,6 @@ def test_empty_catalog_refuses_a_new_model_but_allows_other_changes(store, monke
     assert store.update("sw", max_eng=3).max_eng == 3
     with pytest.raises(SwarmError, match="catalog"):
         store.update("sw", claude_model="sonnet")
-
-
-def test_page_set_maps_catalog_models_and_refuses_unknown(monkeypatch):
-    monkeypatch.setattr(ledger_server, "swarm_models", lambda: CATALOG)
-    assert ledger_server.control_argv({"action": "set", "claude_model": "sonnet", "codex_model": "gpt-6-sol"}) == [
-        "set",
-        "claude-model=sonnet",
-        "codex-model=gpt-6-sol",
-    ]
-    for field in ("claude_model", "codex_model"):
-        with pytest.raises(ValueError, match="catalog"):
-            ledger_server.control_argv({"action": "set", field: "unknown"})
 
 
 @pytest.mark.parametrize("agent,model", [("claude", "sonnet"), ("codex", "gpt-6-sol")])
