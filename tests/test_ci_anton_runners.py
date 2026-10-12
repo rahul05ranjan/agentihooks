@@ -20,11 +20,20 @@ def pool(label):
 
 
 MOVED = {
+    ("brain-smoke.yml", "smoke"): "anton-oss",
+    ("helm-kind.yml", "kind"): "anton-oss",
+    ("ledger-load.yml", "load"): "anton-oss",
     ("mutation-preflight.yml", "mutation"): "anton-oss-light",
     ("mutation-preflight.yml", "mutation-shard"): "anton-oss-batch",
     ("mutation-preflight.yml", "plan"): "anton-oss-light",
     ("mutation-preflight.yml", "pull-request"): "anton-oss-light",
     ("mutation-preflight.yml", "stats"): "anton-oss-batch",
+    ("swarm-node-smoke.yml", "worker-health"): "anton-oss",
+    ("swarm-node-smoke.yml", "worker-image"): "anton-oss",
+    ("swarm-smoke.yml", "compose-hive"): "anton-oss",
+    ("swarm-smoke.yml", "hive-join"): "anton-oss",
+    ("swarm-smoke.yml", "smoke"): "anton-oss",
+    ("swarm-smoke.yml", "terminal-clients"): "anton-oss",
     ("test.yml", "admission"): "anton-oss-light",
     ("test.yml", "coverage-baseline"): "anton-oss-light",
     ("test.yml", "coverage-ratchet"): "anton-oss",
