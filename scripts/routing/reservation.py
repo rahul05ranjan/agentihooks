@@ -116,10 +116,6 @@ def current(
         return Reservation(harness, declared.slug, masters_live(harness, declared.slug, store, proc))
     except (OSError, RedisError):
         return None
-        store = _store(environ) if store is ... else store
-        return Reservation(harness, declared.slug, masters_live(harness, declared.slug, store, proc))
-    except (OSError, RedisError):
-        return None
 
 
 def is_master_session(environ: Mapping[str, str]) -> bool:

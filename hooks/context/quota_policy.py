@@ -280,8 +280,7 @@ def evaluate(session_id: str) -> Decision | None:
 def decide_reserved(ceiling: float | None, *, week_used: float, **inputs) -> Decision | None:
     if ceiling is None or week_used < ceiling:
         return decide(week_used=week_used, **inputs)
-    raised = max(week_used, inputs.get("week_pct", QUOTA_HANDOFF_WEEK_PCT))
-    decision = decide(week_used=raised, **inputs)
+    decision = decide(week_used=max(week_used, QUOTA_HANDOFF_WEEK_PCT), **inputs)
     return decision and replace(decision, week_used=week_used, week_limit=ceiling)
 
 
