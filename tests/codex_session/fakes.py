@@ -9,8 +9,11 @@ SERVER_START = 77
 FIRST_PID = 4_190_001
 
 
-def hooks(trust="trusted", events=supervisor.REQUIRED_HOOKS):
-    return [{"eventName": event, "trustStatus": trust, "key": f"k:{event}", "currentHash": "h"} for event in events]
+def hooks(source, trust="trusted", events=supervisor.REQUIRED_HOOKS):
+    return [
+        {"eventName": event, "trustStatus": trust, "key": f"k:{event}", "currentHash": "h", "sourcePath": source}
+        for event in events
+    ]
 
 
 class Clock:
@@ -74,7 +77,8 @@ class Server:
     def __init__(self, codex_home):
         self.codex_home = codex_home
         self.reported_home = codex_home
-        self.hooks = hooks()
+        self.source = f"{codex_home}/hooks.json"
+        self.hooks = hooks(self.source)
         self.trust_to = "trusted"
         self.account = "chatgpt"
         self.answers = True
