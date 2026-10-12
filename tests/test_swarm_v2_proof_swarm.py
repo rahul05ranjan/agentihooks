@@ -293,17 +293,6 @@ def test_the_served_proof_swarm_chooses_fresh_for_every_pending_recovery_with_it
     ]
 
 
-@pytest.mark.parametrize(
-    ("environ", "slug"),
-    [
-        (SERVED, OTHER),
-        ({**CLEARED, "AGENTIHOOKS_CONTROL_SWARM": SLUG}, SLUG),
-        ({**SERVED, "AGENTIHOOKS_CONTROL_PROOF": "{"}, SLUG),
-        ({**ENV, "AGENTIHOOKS_CONTROL_SWARM": "rig-grade-swarm"}, "rig-grade-swarm"),
-        (ENV, SLUG),
-    ],
-    ids=["another-swarm", "proof-cleared", "proof-malformed", "not-a-proof-name", "nothing-served"],
-)
 @pytest.mark.parametrize("continuation", ["native", "context"])
 def test_proof_recovery_preserves_checkpoint_offers_for_an_explicit_restore(continuation):
     recovery = Recovery()
@@ -320,6 +309,17 @@ def test_proof_recovery_preserves_checkpoint_offers_for_an_explicit_restore(cont
     assert "exe-b" in lines[0]
 
 
+@pytest.mark.parametrize(
+    ("environ", "slug"),
+    [
+        (SERVED, OTHER),
+        ({**CLEARED, "AGENTIHOOKS_CONTROL_SWARM": SLUG}, SLUG),
+        ({**SERVED, "AGENTIHOOKS_CONTROL_PROOF": "{"}, SLUG),
+        ({**ENV, "AGENTIHOOKS_CONTROL_SWARM": "rig-grade-swarm"}, "rig-grade-swarm"),
+        (ENV, SLUG),
+    ],
+    ids=["another-swarm", "proof-cleared", "proof-malformed", "not-a-proof-name", "nothing-served"],
+)
 def test_no_swarm_but_the_served_proof_has_a_pending_recovery_decided(environ, slug):
     recovery = Recovery(slug)
 
