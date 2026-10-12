@@ -2,7 +2,6 @@ import json
 from dataclasses import replace
 from types import SimpleNamespace
 
-import fakeredis
 import pytest
 
 from scripts.swarm.runtime import HerdrRuntime
@@ -10,9 +9,13 @@ from scripts.swarm.store import AgentRecord, RedisStore
 from scripts.swarm.tick import Placed, placed_record
 from tests.swarm.test_runtime import _passed, _resuming, validated
 
+pytestmark = pytest.mark.xdist_group("fakeredis")
+
 
 @pytest.mark.parametrize("kind", ["subscription", "interactive", "api"])
 def test_route_kind_persists_and_legacy_records_default_to_subscription(kind):
+    import fakeredis
+
     store = RedisStore(fakeredis.FakeRedis(decode_responses=True))
     agent = AgentRecord("agent", "master", "master", route_kind=kind)
     store.put_agent("proof", agent)
