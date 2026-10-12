@@ -1,7 +1,8 @@
 import argparse
 import json
+import os
 from dataclasses import replace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import fakeredis
 import pytest
@@ -96,8 +97,12 @@ def test_configured_model_is_used_in_auto_band_and_frontier(agent, model, monkey
 @pytest.mark.parametrize("maximum", ["low", "medium", "high"])
 def test_auto_sonnet_refuses_a_range_below_extra_high(maximum):
     picked = model_pick.ModelPick("sonnet", "xhigh", model_pick.BAND)
-    with pytest.raises(runtime.SpawnError, match="range must allow xhigh"):
+    with pytest.raises(runtime.SpawnError) as caught:
         runtime._model_args("claude", picked.__dict__, {}, ("low", maximum))
+    assert (str(caught.value), caught.value.status) == (
+        "unsupported automatic Sonnet: the swarm range must allow xhigh",
+        "unsupported",
+    )
 
 
 def test_auto_sonnet_launches_at_extra_high_and_keeps_saved_or_explicit_efforts():
@@ -121,8 +126,8 @@ def test_auto_sonnet_launches_at_extra_high_and_keeps_saved_or_explicit_efforts(
 def test_launch_defaults_keep_explicit_choices(store):
     config = replace(store.config("sw"), claude_model="sonnet", codex_model="gpt-6-sol")
     for lane in ("eng", "ci", "plan", "master"):
-        picked = runtime._lane_default(lane, "claude", {}, config)
-        assert picked.model == "sonnet"
+        picked = runtime._lane_default(lane, "claude", {"effort": "medium"}, config)
+        assert (picked.model, picked.effort) == ("sonnet", "high" if lane == "master" else "medium")
     assert runtime._lane_default("plan", "claude", {"model": "opus"}, config).model == "opus"
 
 
@@ -145,3 +150,21 @@ def test_default_model_lookup_and_refusal_keep_harnesses_separate(store):
         default_models.refusal({"codex_model": "sonnet"}, CATALOG)
         == "codex_model must be a model listed in the codex catalog"
     )
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_a_missing_harness_catalog_refuses_its_model(harness):
+    field = default_models.FIELDS[harness]
+    assert default_models.refusal({field: "missing"}, {}) == f"{field} must be a model listed in the {harness} catalog"
+
+
+def test_model_validation_uses_the_store_cache_and_current_context(store):
+    with (
+        patch.object(model_catalog, "catalog", return_value=CATALOG) as load,
+        patch.object(runtime.time, "time", return_value=123456.0),
+    ):
+        store.update("sw", claude_model="sonnet")
+    environ, cache, now = load.call_args.args
+    context_matches = environ is os.environ
+    cache_matches = cache is store.redis
+    assert (context_matches, cache_matches, now) == (True, True, 123456.0)

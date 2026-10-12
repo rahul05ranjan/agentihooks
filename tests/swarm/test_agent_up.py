@@ -268,6 +268,12 @@ def test_the_operator_launch_starts_on_the_frontier_model_inside_the_swarm_effor
     assert seen["argv"][seen["argv"].index("--") + 1 :] == ["--model", "claude-top", "--effort", "medium"]
 
 
+def test_the_operator_launch_uses_the_configured_frontier_model(tmp_path, monkeypatch):
+    _, seen = _operator_launch(tmp_path, monkeypatch, claude_model="sonnet")
+    passed = seen["argv"][seen["argv"].index("--") + 1 :]
+    assert passed[:4] == ["--model", "sonnet", "--effort", "high"]
+
+
 @pytest.mark.parametrize(("lane", "slug"), [("operator", ""), ("plan", "sw"), ("", "sw")])
 def test_the_context_recycle_gate_skips_an_operator_launched_agent(lane, slug):
     environ = {"AGENTIHOOKS_AGENT_NAME": "planner@a1b2c3-0001", "AGENTIHOOKS_SWARM": "sw"}
