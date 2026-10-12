@@ -184,11 +184,30 @@ def test_the_lease_is_renewed_from_registration_and_handed_to_the_supervisor(tmp
     assert stat.S_IMODE(record.stat().st_mode) == 0o600
 
 
-def test_a_lease_lost_while_preparing_refuses_the_start(tmp_path, renewals):
+class LosingBoot(Boot):
+    def __init__(self, renewals: Renewals) -> None:
+        super().__init__()
+        self.renewals = renewals
+
+    def __call__(self, request: worker_home.Request) -> dict:
+        deadline = time.monotonic() + 5
+        while not self.renewals.calls:
+            assert time.monotonic() < deadline
+            time.sleep(0.001)
+        time.sleep(0.05)
+        return super().__call__(request)
+
+
+def test_a_lease_lost_while_preparing_refuses_the_start_before_the_restore(tmp_path, renewals, monkeypatch):
     renewals.answers.append((409, {}))
 
+    def restoring(*args):
+        raise AssertionError("restored after the lease was lost")
+
+    monkeypatch.setattr(start.checkpoint_runtime, "prepare", restoring)
+
     with pytest.raises(LaunchRefused) as refused:
-        prepare(tmp_path, material(tmp_path), Controller((200, ANSWER)))
+        prepare(tmp_path, material(tmp_path), Controller((200, ANSWER)), LosingBoot(renewals))
 
     assert str(refused.value) == "admission lease lost: heartbeat_refused_409"
     assert not (tmp_path / "attempts" / EXECUTION / "registration.json").exists()
@@ -884,7 +903,9 @@ def test_the_started_supervisor_loads_a_prepared_attempt_only_the_worker_can_rea
         assert stat.S_IMODE(path.stat().st_mode) == 0o600, path
     assert stat.S_IMODE(attempt.parent.stat().st_mode) == 0o700
     printed = {"worker_start": "prepared", "attempt": EXECUTION, "uid": os.getuid()}
-    assert capsys.readouterr().out == json.dumps(printed) + "\n"
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[-1] == json.dumps(printed)
+    assert [json.loads(line)["lease"] for line in lines[:-1]] == ["renewed"] * (len(lines) - 1)
 
 
 def test_the_start_prints_the_rendered_chain_when_bootstrap_names_one(monkeypatch, capsys):

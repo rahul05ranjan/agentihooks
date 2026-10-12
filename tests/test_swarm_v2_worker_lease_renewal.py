@@ -398,6 +398,23 @@ def test_a_kept_lease_waits_its_pause_between_ticks():
     assert lease_renewal.PAUSE_SECONDS == 1.0
 
 
+class Crashing(Ticking):
+    def tick(self) -> None:
+        super().tick()
+        raise OSError("disk full")
+
+
+def test_a_renewal_that_crashes_loses_the_lease_instead_of_dying_silently():
+    renewer = Crashing()
+
+    with lease_renewal.kept(renewer, pause=0.001):
+        eventually(lambda: renewer.lost is not None)
+        time.sleep(0.01)
+
+    assert renewer.lost == "renewal_crashed_OSError"
+    assert renewer.ticks == 1
+
+
 class Answer(io.BytesIO):
     status = 200
 

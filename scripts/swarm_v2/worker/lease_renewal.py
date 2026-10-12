@@ -168,7 +168,11 @@ def kept(renewer: Renewer, pause: float = PAUSE_SECONDS) -> Iterator[Renewer]:
 
     def renew() -> None:
         while renewer.lost is None:
-            renewer.tick()
+            try:
+                renewer.tick()
+            except Exception as error:
+                renewer.lost = f"renewal_crashed_{type(error).__name__}"
+                return
             if stop.wait(pause):
                 return
 

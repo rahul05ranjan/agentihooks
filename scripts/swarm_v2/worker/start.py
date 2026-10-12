@@ -6,7 +6,6 @@ import os
 import re
 import sys
 import time
-import urllib.error
 import urllib.request
 from collections.abc import Callable
 from dataclasses import asdict
@@ -37,10 +36,11 @@ Send = Callable[[str, str, dict], tuple[int, object]]
 
 
 from scripts.swarm_v2.worker import git_auth, lease_renewal
+from scripts.swarm_v2.worker.lease_renewal import send as transport
 
 
 def post(url: str, grant: str, body: dict) -> tuple[int, object]:
-    return lease_renewal.send("POST", url.rstrip("/") + REGISTER, grant, body)
+    return transport("POST", url.rstrip("/") + REGISTER, grant, body)
 
 
 def report(spec: dict, grant: str, restored: Restored) -> None:
@@ -175,6 +175,11 @@ def _private(path: Path, document: dict) -> None:
     staged.replace(path)
 
 
+def _held(renewer: lease_renewal.Renewer) -> None:
+    if renewer.lost is not None:
+        raise LaunchRefused(f"admission lease lost: {renewer.lost}")
+
+
 def _build(
     attempt: Path,
     spec: dict,
@@ -203,6 +208,7 @@ def _build(
         os.environ[checkpoint_runtime.REMOTE] = "true"
     _private(attempt / "launch.json", spec)
     worker_home.store_grant(attempt, renewer.grant)
+    _held(renewer)
     restored = checkpoint_runtime.prepare(spec, attempt)
     if restored is not None:
         if spec.get("checkpoint_remote") is True:
@@ -230,8 +236,7 @@ def prepare(
     renewer = lease_renewal.Renewer(lease, lease_renewal.send)
     with lease_renewal.kept(renewer):
         built = _build(attempt, spec, renewer, boot, templates, bundle)
-    if renewer.lost is not None:
-        raise LaunchRefused(f"admission lease lost: {renewer.lost}")
+    _held(renewer)
     worker_home.store_grant(attempt, renewer.grant)
     _private(attempt / lease_renewal.ADMISSION, renewer.record())
     _private(attempt / RECORD, spec["authority"])
