@@ -189,3 +189,34 @@ def test_warn_spares_the_master_lane_on_a_reserved_account():
     rows = [capacity.record(_row(reserved=REASON))]
     storage.redis.set(storage.key("sw", "quota-capacity"), json.dumps({"accounts": rows}))
     assert quota_handoff.warn("sw", storage, {}) == ["early quota handoff warning sent to worker"]
+
+
+MASTER_ENV = {"AGENTIHOOKS_AGENT_NAME": "master@1"}
+WORKER_ENV = {"AGENTIHOOKS_AGENT_NAME": "engineer@1"}
+
+
+def test_claude_routing_skips_the_master_account_for_workers_only(monkeypatch, tmp_path):
+    monkeypatch.setattr(reservation, "current", lambda harness, environ: reservation.Reservation(harness, "MAIN", 1))
+    monkeypatch.setattr(
+        balancer, "collect_results", lambda *a, **k: ([_result("MAIN", 75.0), _result("SPARE", 30.0)], "live")
+    )
+    tokens = {"AH_CC_TOKEN_MAIN": "main-secret", "AH_CC_TOKEN_SPARE": "spare-secret"}
+
+    def chosen(environ, sessions):
+        decision = balancer.select_credential(
+            {**tokens, **environ}, cache_file=tmp_path / "cache.json", sessions=sessions, now=0
+        )
+        return decision.credential.env_name
+
+    assert chosen(WORKER_ENV, {"MAIN": 0}) == "AH_CC_TOKEN_SPARE"
+    assert chosen(MASTER_ENV, {"SPARE": 6}) == "AH_CC_TOKEN_MAIN"
+
+
+def test_codex_routing_skips_the_master_account_for_workers_only(monkeypatch):
+    monkeypatch.setattr(reservation, "current", lambda harness, environ: reservation.Reservation(harness, "default", 1))
+    quotas = {"default": CodexQuota(0.0, "team", balancer.QuotaWindow(20.0), balancer.QuotaWindow(80.0))}
+    pool = [codex_router.CodexAccount("default")]
+    account, _, _ = codex_router.select(pool, quotas, {}, 0.0, environ=MASTER_ENV)
+    assert account.name == "default"
+    with pytest.raises(codex_router.RoutingError):
+        codex_router.select(pool, quotas, {}, 0.0, environ=WORKER_ENV)
