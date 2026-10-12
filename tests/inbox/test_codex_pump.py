@@ -1,5 +1,5 @@
 import json
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 import pytest
 
@@ -9,7 +9,7 @@ from scripts.inbox import codex
 from scripts.inbox.dispatch import Dispatcher
 from scripts.inbox.receipts import MISMATCH, RELEASED, DispatchError, Receipts
 from scripts.inbox.store import InboxStore
-from scripts.swarm.store import RedisStore, SwarmConfig
+from scripts.swarm.store import AgentRecord, RedisStore, SwarmConfig
 
 pytestmark = [pytest.mark.unit, pytest.mark.xdist_group("fakeredis")]
 
@@ -110,6 +110,8 @@ class Rig:
         swarm.create(SwarmConfig(SLUG, "agentihooks", 1, 0))
         self.bindings = BindingStore(swarm)
         self.bindings.reserve(SLUG, TransportRecord(EXECUTION, 1, f"eng-1@{SLUG}", ME, "task", "unix:///run/cx/s"))
+        execution = AgentRecord(ME, "eng", "task", seat=f"eng-1@{SLUG}", execution_id=EXECUTION, generation=1)
+        swarm.redis.hset(swarm.key(SLUG, "executions"), EXECUTION, json.dumps(asdict(execution)))
         self.clock = Clock()
         self.server = AppServer(self.clock)
         self.connection = protocol.Connection(self.server, 5, clock=self.clock)
@@ -552,6 +554,31 @@ def test_a_degraded_pump_reconnects_with_backoff_and_resumes_delivery(rig):
     assert rig.record().state == CONNECTED
     assert rig.store.get(item.id).state == "delivered"
     assert [d.state for d in deliveries(rig, item.id)] == ["accepted"]
+
+
+@pytest.mark.parametrize("reason", ["handoff", "quota"])
+def test_old_generation_mail_cannot_publish_or_ack_after_successor_admission(rig, reason):
+    rig.pump.start()
+    item = rig.store.send("alice", ME, reason)
+    delivery = rig.pump.dispatcher.reserve(ME, OWNER)[0]
+    rig.pump.receipts.submitting(delivery.id, OWNER)
+    swarm = rig.bindings.store
+    successor = swarm.start_execution(
+        SLUG,
+        AgentRecord(swarm.next_name(SLUG, "eng"), "eng", "task", seat=f"eng-1@{SLUG}"),
+        EXECUTION,
+    )
+    assert successor.generation == 2
+    sent = list(rig.server.sent)
+    with pytest.raises(DispatchError, match="execution is no longer current"):
+        rig.pump.step()
+    assert rig.server.sent == sent
+    with pytest.raises(DispatchError, match="execution is no longer current"):
+        rig.pump.receipts.accept(delivery.id, OWNER, delivery.digest)
+    assert rig.store.get(item.id).state == "pending"
+    assert rig.pump.receipts.get(delivery.id).committed is False
+    with pytest.raises(DispatchError, match="execution is no longer current"):
+        rig.pump.binding.transport.mark(state=CONNECTED)
 
 
 def test_a_stray_text_frame_is_refused_and_diagnostics_stay_off_the_socket(rig):

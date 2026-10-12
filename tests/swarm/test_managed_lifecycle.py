@@ -147,3 +147,36 @@ def test_managed_retirement_refuses_an_unknown_start_identity(rig):
     assert not rig.runner.retire(rig.agent)
     rig.runner.end.assert_not_called()
     assert rig.runner.refusal(rig.agent)["refusal"] == "managed server identity is unknown"
+
+
+def test_local_managed_retirement_does_not_need_a_live_launcher(rig):
+    from scripts.swarm import reaper
+    from scripts.swarm_v2.runtime.local import LocalHerdrRuntime
+
+    rig.runner.end = Mock(return_value=reaper.Outcome((123,)))
+    local = LocalHerdrRuntime(rig.runner, table=Mock(side_effect=AssertionError("launcher is unavailable")))
+    assert local.terminate(rig.agent).ok
+    rig.runner.end.assert_called_once_with(rig.agent.name, 123, [], 456)
+
+
+def test_an_unrelated_named_session_survives_managed_retirement(rig, monkeypatch):
+    import os
+    import subprocess
+    import sys
+
+    from hooks.observability.trace_flush import start_time
+
+    monkeypatch.setattr(supervisor, "start_time", start_time)
+    argv = [sys.executable, "-c", "import time; time.sleep(300)"]
+    env = {**os.environ, "AGENTIHOOKS_AGENT_NAME": rig.agent.name}
+    with subprocess.Popen(argv, env=env, start_new_session=True) as server:
+        with subprocess.Popen(argv, env=env, start_new_session=True) as unrelated:
+            try:
+                record = replace(rig.record, server_pid=server.pid, server_start_identity=start_time(server.pid))
+                rig.bindings.put(SLUG, record)
+                assert rig.runner.retire(rig.agent)
+                server.wait(timeout=5)
+                assert unrelated.poll() is None
+            finally:
+                server.terminate()
+                unrelated.terminate()
