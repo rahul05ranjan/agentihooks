@@ -16,7 +16,7 @@ def redis():
 
 
 def report(redis, hive, counts, observed, used=20):
-    registry.update(redis, hive, [])
+    registry.update(redis, hive, ["max-agents=8"])
     redis.hset(
         registry.key(hive),
         mapping={
