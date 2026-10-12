@@ -111,3 +111,128 @@ def is_master_session(environ: Mapping[str, str]) -> bool:
     if any(name.startswith(INTERACTIVE_PREFIX) for name in environ):
         return True
     return environ.get("AGENTIHOOKS_AGENT_NAME", "").startswith(MASTER_NAME)
+
+
+_LAUNCH = """
+local mode, slot, execution = ARGV[1], ARGV[2], ARGV[3]
+local raw = redis.call('GET', KEYS[2])
+local held = raw and cjson.decode(raw) or nil
+local now = redis.call('TIME')
+local millis = tonumber(now[1]) * 1000 + math.floor(tonumber(now[2]) / 1000)
+local reports, seen, used = {}, {}, 0
+for _, hive in ipairs(redis.call('SMEMBERS', KEYS[3])) do
+    local key = ARGV[6] .. ':hive:' .. hive
+    local heartbeat = tonumber(redis.call('HGET', key, 'heartbeat_at') or '0')
+    local sessions = redis.call('GET', key .. ':sessions')
+    if heartbeat > 0 and millis - heartbeat <= 90000 and sessions then
+        local report = cjson.decode(sessions)
+        reports[key] = report
+        used = used + (report[slot] or 0)
+        for _, id in ipairs((report._executions or {})[slot] or {}) do
+            seen[id] = true
+        end
+    end
+end
+if mode == 'release' then
+    if not held then return 0 end
+    for key, report in pairs(reports) do
+        local ids = (report._executions or {})[held.slot] or {}
+        for index, id in ipairs(ids) do
+            if id == execution then
+                table.remove(ids, index)
+                report[held.slot] = math.max(0, report[held.slot] - 1)
+                redis.call('SET', key .. ':sessions', cjson.encode(report), 'KEEPTTL')
+                break
+            end
+        end
+    end
+    redis.call('DEL', KEYS[2])
+    redis.call('SREM', KEYS[1], execution)
+    return 1
+end
+if mode == 'ack' then
+    if not held then return 0 end
+    if held.state == 'live' then return 1 end
+    held.state = 'live'
+    redis.call('SET', KEYS[2], cjson.encode(held), 'PX', ARGV[5])
+    return 1
+end
+if held then
+    if held.slot ~= slot then return 0 end
+    return 1
+end
+for _, id in ipairs(redis.call('SMEMBERS', KEYS[1])) do
+    local other = redis.call('GET', ARGV[6] .. ':launch-slot:' .. id)
+    if not other then
+        redis.call('SREM', KEYS[1], id)
+    elseif cjson.decode(other).slot == slot and not seen[id] then
+        used = used + 1
+    end
+end
+if used >= tonumber(ARGV[4]) then return 0 end
+redis.call('SET', KEYS[2], cjson.encode({slot=slot, state='reserved'}), 'PX', ARGV[5])
+redis.call('SADD', KEYS[1], execution)
+return 1
+"""
+
+
+@dataclass(frozen=True)
+class LaunchSlots:
+    redis: object
+
+    def _call(self, mode: str, slot: str, execution: str, cap: int, ttl_ms: int) -> bool:
+        from scripts.hive import registry
+        from scripts.swarm.keyspace import ROOT
+
+        return bool(
+            self.redis.eval(
+                _LAUNCH,
+                3,
+                f"{ROOT}:launch-slots",
+                f"{ROOT}:launch-slot:{execution}",
+                registry.INDEX,
+                mode,
+                slot,
+                execution,
+                cap,
+                ttl_ms,
+                ROOT,
+            )
+        )
+
+    def reserve(self, slot: str, execution: str, cap: int, ttl_ms: int) -> bool:
+        if type(cap) is not int or cap < 0 or type(ttl_ms) is not int or not 0 < ttl_ms <= 300000:
+            raise ValueError("invalid launch slot cap or lifetime")
+        return self._call("reserve", slot, execution, cap, ttl_ms)
+
+    def acknowledge(self, execution: str) -> bool:
+        return self._call("ack", "", execution, 0, 45000)
+
+    def release(self, execution: str) -> bool:
+        return self._call("release", "", execution, 0, 0)
+
+    def counts(self, seen: set[str] | None = None) -> dict[str, int]:
+        import json
+
+        from scripts.swarm.keyspace import ROOT
+
+        counts: dict[str, int] = {}
+        for execution in self.redis.smembers(f"{ROOT}:launch-slots"):
+            raw = self.redis.get(f"{ROOT}:launch-slot:{execution}")
+            if raw is None:
+                self.redis.srem(f"{ROOT}:launch-slots", execution)
+            elif execution not in (seen or set()):
+                slot = json.loads(raw)["slot"]
+                counts[slot] = counts.get(slot, 0) + 1
+        return counts
+
+    def refresh(self, executions: list[str]) -> None:
+        import json
+
+        from scripts.swarm.keyspace import ROOT
+
+        for execution in executions:
+            key = f"{ROOT}:launch-slot:{execution}"
+            raw = self.redis.get(key)
+            if raw is not None and json.loads(raw)["state"] == "live":
+                self.redis.pexpire(key, 45000)
