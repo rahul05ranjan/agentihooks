@@ -63,6 +63,7 @@ def test_no_workflow_reaches_an_anton_pool_except_through_the_trusted_expression
 
 def test_pull_request_target_workflows_stay_on_hosted_runners():
     for path in sorted(WORKFLOWS.glob("*.yml")):
-        text = path.read_text()
-        if "pull_request_target" in text:
-            assert "anton" not in text, path.name
+        workflow = yaml.safe_load(path.read_text())
+        events = workflow.get("on", workflow.get(True, {}))
+        if "pull_request_target" in ([events] if isinstance(events, str) else events):
+            assert "anton" not in path.read_text(), path.name
