@@ -644,6 +644,47 @@ def test_the_started_recovery_pass_hands_the_proof_chooser_the_controller_enviro
         service.stop()
 
 
+def test_deployed_checkpoint_reader_maps_historical_claim_and_execution_generations(tmp_path, monkeypatch):
+    from scripts.swarm_v2.auth_context import Registration
+
+    store = _store()
+    monkeypatch.setattr(deployed, "pod_api", lambda environ, namespace: Pods(namespace))
+    environ = _environ(tmp_path, store, **{"AGENTIHOOKS_CHECKPOINT_ROOT": str(tmp_path / "durable")})
+    service = _cs().host(environ, store, "hive-fixture")
+    registration = Registration(
+        "g", SLUG, "e1", 2, SEAT, "t1", ACCOUNT, "brain", ["local:fixture"], "issuer", "worker", "key", ""
+    )
+    calls = []
+
+    def registered(slug, execution):
+        calls.append(("registration", slug, execution))
+        return registration if slug == SLUG and execution == "e1" else None
+
+    def journal(task):
+        calls.append(("journal", task))
+        return [{"claim": {"execution_id": "e1", "execution_generation": 2, "generation": 9}}] if task == "t1" else []
+
+    try:
+        monkeypatch.setattr(service.grants, "registration", registered)
+        monkeypatch.setattr(service.tasks, "journal", journal)
+        reader = service.recover.recovery.checkpoints
+        assert reader.root == tmp_path / "durable"
+        assert reader.compatibility == "dev"
+        validator = reader.validator("e1")
+        assert validator.store.scope.generation == 9
+        assert validator.store.scope.execution_id == "e1"
+        assert validator.execution_generation == 2
+        assert reader.validator("unknown") is None
+        assert calls == [
+            ("registration", SLUG, "e1"),
+            ("journal", "t1"),
+            ("registration", SLUG, "e1"),
+            ("registration", SLUG, "unknown"),
+        ]
+    finally:
+        service.stop()
+
+
 def test_the_runtime_line_is_flushed_so_the_container_log_shows_it_at_once(tmp_path, monkeypatch):
     store, printed = _store(), []
     monkeypatch.setattr(deployed, "pod_api", lambda environ, namespace: Pods(namespace))

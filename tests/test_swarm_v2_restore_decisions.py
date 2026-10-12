@@ -213,6 +213,16 @@ def test_outcome_from_another_execution_is_refused_before_any_record(pending):
     assert pending.world.protected() == before
 
 
+def test_controller_recovery_authenticator_preserves_swarm_and_grant(pending, monkeypatch):
+    calls = []
+    registration = SimpleNamespace(execution_id=pending.old.execution_id)
+    monkeypatch.setattr(
+        pending.service.grants, "bound", lambda slug, token: calls.append((slug, token)) or registration
+    )
+    assert pending.service.recovery_api.worker("worker fixture") is registration
+    assert calls == [(pending.recovery.slug, "worker fixture")]
+
+
 def test_a_delayed_restore_receipt_cannot_overwrite_a_newer_attempt(pending):
     from dataclasses import replace
 
