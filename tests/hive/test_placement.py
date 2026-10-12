@@ -54,6 +54,13 @@ CASES = {
     "all off master": ("master", fleet("pc", "vm", "pods"), "subscription", REPO, NO_UI),
     "pods off eng": ("eng", fleet("pods"), "subscription", REPO, Wait("no live hive takes eng")),
     "all off eng": ("eng", fleet("pc", "vm", "pods"), "subscription", REPO, Wait("no live hive takes eng")),
+    "master beside the only live hive, a qa hive": (
+        "master",
+        fleet("pc", "pods", vm={"roles": ["qa", "frontend"]}),
+        "subscription",
+        REPO,
+        Wait("no live hive takes master"),
+    ),
     "vm off qa beside a live pc": ("qa", fleet("vm"), "subscription", REPO, Wait("no live hive takes qa")),
     "master beside a live qa hive": (
         "master",
