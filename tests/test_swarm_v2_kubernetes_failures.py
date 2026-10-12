@@ -1383,6 +1383,25 @@ def test_a_restore_receipt_requires_a_directive_and_accepts_zero_cursor(world):
     assert str(caught.value) == "no restore directive for this attempt"
 
 
+@pytest.mark.parametrize("first", ["verified", "superseded"])
+def test_replacement_receipts_continue_after_an_already_settled_attempt(world, first):
+    recovery, ledger, relaunch = world.recovery(world.live), _Ledger(), _Relaunch()
+    relaunch.recovery = recovery
+    other = world.launch(world.live, world.fx["second"], "eng-2")
+    decisions = [recovery.handle(agent.execution_id, "node_lost") for agent in [world.old, other]]
+    replacements = replacement.Replacements(recovery, relaunch, ledger)
+    replacements()
+    before, remaining = sorted(decisions, key=lambda decision: decision.execution_id)
+    world.store.redis.hdel(world.store.key(recovery.slug, "attempt-recovery-records"), remaining.execution_id)
+    if first == "superseded":
+        successor = world.store.execution(recovery.slug, before.replacement)
+        world.live.admit(replace(successor, **failures.NEW_ATTEMPT), successor.execution_id)
+    ledger.calls.clear()
+    replacements()
+    assert _recorded(ledger) == [recovery.outcome(remaining.replacement)]
+    assert len(relaunch.calls) == 2
+
+
 def test_a_repeated_restore_request_reuses_the_accepted_decision_without_a_second_replacement(world):
     recovery = world.recovery(world.live, automatic=False)
     recovery.handle(world.old.execution_id, "oom_killed")
