@@ -121,6 +121,26 @@ controller:
   terminalCa:
     secretName: ""
     key: ""
+  # SSH jump from the operator's machine to worker terminals: an sshd sidecar in the controller Pod, whose
+  # Pods the worker terminal policy already admits. address is the host:port the operator machine dials,
+  # recorded in Redis with the jump host key; publish that port with a LoadBalancer outside this chart.
+  jump:
+    enabled: false
+    address: ""
+    image:
+      repository: ghcr.io/the-cloud-clockwork/agentihooks-worker
+      tag: dev
+      pullPolicy: Always
+    # Peers admitted to the jump port, such as the operator LAN.
+    ingressFrom: []
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+        ephemeral-storage: 16Mi
+      limits:
+        memory: 128Mi
+        ephemeral-storage: 64Mi
   resources:
     requests:
       cpu: 50m

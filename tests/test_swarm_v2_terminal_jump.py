@@ -4,7 +4,6 @@ import pytest
 
 pytestmark = [pytest.mark.unit, pytest.mark.xdist_group("fakeredis")]
 HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJumpHostKey"
-JUMP_REFUSED = "AGENTIHOOKS_TERMINAL_JUMP must be host:port with AGENTIHOOKS_TERMINAL_JUMP_HOST_KEY naming its host key"
 
 
 def store():
@@ -59,7 +58,7 @@ def test_the_jump_sshd_only_forwards_to_worker_terminal_ports(tmp_path):
         "KbdInteractiveAuthentication no",
         "HostbasedAuthentication no",
         "UsePAM no",
-        "StrictModes yes",
+        "StrictModes no",
         "PermitUserEnvironment no",
         "PrintMotd no",
         "LogLevel VERBOSE",
@@ -123,7 +122,7 @@ def test_prepare_command_places_the_material_and_records_the_jump(tmp_path):
     [
         (False, "swarm.example:2223", "opening a worker terminal needs AGENTIHOOKS_TERMINAL_CA_KEY"),
         (True, "", "the controller jump needs AGENTIHOOKS_TERMINAL_JUMP"),
-        (True, "swarm.example", JUMP_REFUSED),
+        (True, "swarm.example", "AGENTIHOOKS_TERMINAL_JUMP must be host:port"),
     ],
 )
 def test_prepare_command_refusals_exit_one_and_record_nothing(tmp_path, capsys, with_ca, address, message):

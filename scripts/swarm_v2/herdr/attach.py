@@ -57,7 +57,7 @@ class Jump:
     host: str
     port: int
     host_public: str
-    user: str = "jump"
+    user: str = USER
 
 
 @dataclass(frozen=True)
@@ -76,6 +76,10 @@ class ClientHome:
     @property
     def jump_known_hosts(self) -> Path:
         return self.terminals / "known_hosts" / JUMP
+
+    @property
+    def jump_certificate(self) -> Path:
+        return self.terminals / "certificates" / f"{JUMP}-cert.pub"
 
     @property
     def config(self) -> Path:
@@ -161,6 +165,7 @@ def jump_block(home: ClientHome) -> str:
         "  BatchMode yes",
         "  IdentitiesOnly yes",
         f'  IdentityFile "{home.identity}"',
+        f'  CertificateFile "{home.jump_certificate}"',
         "  ForwardAgent no",
     ]
     return "\n".join(lines) + "\n"
@@ -218,6 +223,7 @@ class Terminal:
         address = endpoint.host if home.jump else route(endpoint, self.lookup)
         if home.jump:
             _write(home.jump_known_hosts, f"{home.jump.host} {home.jump.host_public}\n")
+            _write(home.jump_certificate, self.authority.issue_jump(self._client_key()))
             _write(home.jump_config, jump_block(home))
         _write(recorded, f"{scope.generation}\n")
         _write(home.certificate(endpoint), self.authority.issue(scope, self._client_key()))

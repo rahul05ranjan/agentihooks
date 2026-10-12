@@ -1,9 +1,11 @@
 from collections.abc import Callable
+from dataclasses import replace
 
 from scripts.swarm.store import RedisStore
 from scripts.swarm_v2.herdr.publications import TransportRefused
 from scripts.swarm_v2.herdr.reconcile import Report
 from scripts.swarm_v2.herdr.upkeep import Attempt, Upkeep
+from scripts.swarm_v2.kubernetes import jump
 from scripts.swarm_v2.kubernetes.terminal import HostKeys
 from scripts.swarm_v2.operator_auth import OPERATOR
 
@@ -28,4 +30,9 @@ class Service:
             store = self.connect()
         except TransportRefused as refused:
             return Report(refused={TRANSPORT: str(refused)})
+        terminal = self.upkeep.terminal
+        found = jump.recorded(store)
+        if found is not None and found != terminal.home.jump:
+            terminal.home = replace(terminal.home, jump=found)
+            self.upkeep.due = True
         return self.upkeep.change(attempts(store))
