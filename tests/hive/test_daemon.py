@@ -541,7 +541,7 @@ def test_beat_exit_between_samples_cannot_create_negative_capacity(redis, observ
     assert controller.acquire()
     agent = controller.admit(
         AgentRecord(
-            "agent",
+            store.next_name("swarm", "eng"),
             "eng",
             "task",
             seat="eng-1@swarm",
