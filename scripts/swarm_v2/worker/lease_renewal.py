@@ -106,6 +106,7 @@ class Renewer:
         ):
             self.lose("generation_changed")
             return
+        self.authority["controller_epoch"] = answer["controller_epoch"]
         self.deadline_ms = answer[DEADLINE]
         self.deadline = self._until(self.deadline_ms)
         self.due = now + INTERVAL_SECONDS
