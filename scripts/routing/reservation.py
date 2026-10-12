@@ -1,0 +1,113 @@
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
+
+from hooks.context import account_sessions
+from hooks.context.account_sessions import INTERACTIVE_PREFIX
+from scripts.routing import master_account
+
+CEILINGS = ((3, 50.0), (2, 60.0), (1, 70.0))
+MASTER_LANE = "master"
+MASTER_NAME = "master@"
+
+
+def ceiling(masters_live: int) -> float | None:
+    return next((limit for count, limit in CEILINGS if masters_live >= count), None)
+
+
+def reached(week_used: float | None, masters_live: int) -> bool:
+    limit = ceiling(masters_live)
+    return limit is not None and week_used is not None and week_used >= limit
+
+
+def cap(base: int | None, week_used: float | None, masters_live: int, master: bool = False) -> int | None:
+    return 0 if not master and reached(week_used, masters_live) else base
+
+
+def reason(masters_live: int) -> str:
+    limit = ceiling(masters_live)
+    if limit is None:
+        return ""
+    noun = "master" if masters_live == 1 else "masters"
+    return f"reserved for {masters_live} live {noun}: workers stop at {limit:g}% of the week"
+
+
+def _session(harness: str, pid: int, proc: Path) -> bool:
+    if harness == "codex":
+        return account_sessions._is_codex_session(pid, proc)
+    return account_sessions._is_interactive_claude(pid, proc)
+
+
+def interactive_sessions(harness: str, slug: str, proc: Path = account_sessions._PROC) -> int:
+    marker = f"{INTERACTIVE_PREFIX}{slug}"
+    try:
+        pids = [int(entry.name) for entry in proc.iterdir() if entry.name.isdigit()]
+    except OSError:
+        return 0
+    return sum(1 for pid in pids if _session(harness, pid, proc) and marker in account_sessions._env_names(pid, proc))
+
+
+def master_agents(store, harness: str, slug: str) -> int:
+    if store is None:
+        return 0
+    return sum(
+        1
+        for swarm in store.slugs()
+        for agent in store.agents(swarm)
+        if agent.lane == MASTER_LANE
+        and agent.state != "finished"
+        and agent.harness == harness
+        and agent.account == slug
+        and agent.route_kind != "interactive"
+    )
+
+
+def masters_live(harness: str, slug: str, store=None, proc: Path = account_sessions._PROC) -> int:
+    return interactive_sessions(harness, slug, proc) + master_agents(store, harness, slug)
+
+
+@dataclass(frozen=True)
+class Reservation:
+    harness: str
+    slug: str
+    masters: int
+
+    @property
+    def ceiling(self) -> float | None:
+        return ceiling(self.masters)
+
+    @property
+    def reason(self) -> str:
+        return reason(self.masters)
+
+    def closes(self, slug: str, week_used: float | None) -> bool:
+        return slug == self.slug and reached(week_used, self.masters)
+
+
+def _store(environ: Mapping[str, str]):
+    from scripts.routing import place
+    from scripts.swarm.store import RedisStore
+
+    client = place._client(environ)
+    return None if client is None else RedisStore(client)
+
+
+def current(
+    harness: str, environ: Mapping[str, str], store=..., proc: Path = account_sessions._PROC
+) -> Reservation | None:
+    from redis.exceptions import RedisError
+
+    try:
+        declared = master_account.load(environ).get(harness)
+        if declared is None:
+            return None
+        store = _store(environ) if store is ... else store
+        return Reservation(harness, declared.slug, masters_live(harness, declared.slug, store, proc))
+    except (OSError, RedisError):
+        return None
+
+
+def is_master_session(environ: Mapping[str, str]) -> bool:
+    if any(name.startswith(INTERACTIVE_PREFIX) for name in environ):
+        return True
+    return environ.get("AGENTIHOOKS_AGENT_NAME", "").startswith(MASTER_NAME)
