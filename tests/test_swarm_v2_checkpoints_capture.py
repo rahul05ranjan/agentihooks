@@ -252,6 +252,24 @@ def test_capture_revalidates_original_execution_generation_before_acknowledging(
     }
 
 
+def test_codex_capture_uses_its_native_home_and_rollout_session_suffix(portable, tmp_path, monkeypatch):
+    attempt, scope, environ, _ = portable
+    spec = json.loads((attempt / "launch.json").read_text())
+    spec["harness"] = "codex"
+    (attempt / "launch.json").write_text(json.dumps(spec))
+    home = native_cases.home_for("codex", tmp_path, attempt)
+    environ["CODEX_HOME"] = str(home)
+    monkeypatch.setattr(runtime, "version", lambda harness, environment: native_cases.VERSIONS[harness])
+    [newest] = list(home.rglob("*.jsonl"))
+    acknowledgment = capture.publish(attempt, scope, environ, newest)
+    assert acknowledgment["status"] == "complete"
+    store = runtime.worker_store(spec, attempt, environ)
+    manifest = json.loads(store.get_range(store.recorded("ckp-fixture")))
+    assert manifest["continuation"] == "native"
+    assert manifest["native_session_id"] == native_cases.SESSIONS["codex"]
+    assert manifest["reconstruction"]["harness"] == "codex"
+
+
 def test_unsupported_native_version_is_published_only_as_context(portable, monkeypatch):
     attempt, scope, environ, newest = portable
     monkeypatch.setattr(runtime, "version", lambda *args: "9.0.0")
