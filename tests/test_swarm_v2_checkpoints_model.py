@@ -355,6 +355,7 @@ def test_an_old_record_keeps_its_generation_compatibility(tmp_path, native):
     validator = model.Validator(target)
     assert "execution_generation" not in native["manifest"]["authority"]
     assert validator.commit(native["manifest"]).authoritative
+    assert model.Validator(target, execution_generation=9).verify(native["manifest"]["checkpoint_id"]).authoritative
 
 
 def test_another_task_cannot_see_the_checkpoint(native, tmp_path):

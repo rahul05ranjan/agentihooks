@@ -135,6 +135,7 @@ class Validator:
             return _refused(problem)
         if (
             doc["authority"]["execution_id"] == self.store.scope.execution_id
+            and "execution_generation" in doc["authority"]
             and self.execution_generation is not None
             and doc["authority"].get("execution_generation", doc["authority"]["task_generation"])
             != self.execution_generation
