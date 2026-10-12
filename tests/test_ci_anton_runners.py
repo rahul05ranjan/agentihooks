@@ -28,6 +28,7 @@ MOVED = {
     ("coverage-stability.yml", "compare"): BATCH,
     ("equivalence.yml", "ledger-equivalence"): STANDARD,
     ("gate-protected.yml", "grade"): LIGHT,
+    ("github-access-audit.yml", "read-back"): LIGHT,
     ("helm-kind.yml", "kind"): STANDARD,
     ("ledger-load.yml", "load"): STANDARD,
     ("mutation-preflight.yml", "mutation"): LIGHT,
