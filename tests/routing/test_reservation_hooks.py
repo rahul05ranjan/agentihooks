@@ -89,7 +89,7 @@ def test_handoff_trigger_fires_at_the_ceiling():
 
 
 def test_quota_view_names_the_reservation():
-    row = capacity.record(_row(state="CLOSED", reserved=REASON))
+    row = capacity.record(capacity.reserve([_row()], ONE)[0])
     line = quota_view._account_line(row, [row])
     assert line.endswith(f"routing 30% left, {REASON}  sessions 1")
     assert ", reserved" not in quota_view._account_line(capacity.record(_row()), [row])
