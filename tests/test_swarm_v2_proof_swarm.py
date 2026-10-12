@@ -267,6 +267,7 @@ def test_every_pass_line_is_flushed_for_the_pod_log(store, monkeypatch):
 class Recovery:
     def __init__(self, slug=SLUG, waiting=("exe-a", "exe-b")):
         self.slug, self.waiting, self.decided = slug, list(waiting), []
+        self.checkpoints = SimpleNamespace(list=lambda execution: [])
 
     def pending(self):
         return list(self.waiting)
@@ -302,6 +303,22 @@ def test_the_served_proof_swarm_chooses_fresh_for_every_pending_recovery_with_it
     ],
     ids=["another-swarm", "proof-cleared", "proof-malformed", "not-a-proof-name", "nothing-served"],
 )
+@pytest.mark.parametrize("continuation", ["native", "context"])
+def test_proof_recovery_preserves_checkpoint_offers_for_an_explicit_restore(continuation):
+    recovery = Recovery()
+    recovery.checkpoints = SimpleNamespace(
+        list=lambda execution: (
+            [{"checkpoint_id": "ckp-one", "status": "complete", "continuation": continuation}]
+            if execution == "exe-a"
+            else []
+        )
+    )
+    lines = proof_swarm.choose_fresh(SERVED, recovery)
+    assert recovery.decided == [("exe-b", "fresh")]
+    assert len(lines) == 1
+    assert "exe-b" in lines[0]
+
+
 def test_no_swarm_but_the_served_proof_has_a_pending_recovery_decided(environ, slug):
     recovery = Recovery(slug)
 
