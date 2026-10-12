@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from scripts.ci_mutation import merge
 
 
@@ -91,3 +93,30 @@ def test_main_fails_when_a_shard_report_failed(tmp_path):
     shards = tmp_path / "shards"
     _write(shards, 0, {"files": [], "not_mutated": [{"path": "scripts/a.py", "reason": "x"}], "failed": True})
     assert merge.main([str(shards), "--shards", "1", "--output", str(tmp_path / "gate")]) == 1
+
+
+def test_not_mutated_paths_from_different_files_are_all_kept():
+    reports = [
+        {"files": [], "not_mutated": [{"path": "scripts/a.py", "reason": "over budget"}], "failed": True},
+        {"files": [], "not_mutated": [{"path": "scripts/b.py", "reason": "over budget"}], "failed": True},
+    ]
+    assert [entry["path"] for entry in merge.merge_reports(reports)["not_mutated"]] == ["scripts/a.py", "scripts/b.py"]
+
+
+@pytest.mark.parametrize("dropped", ["--shards", "--output"])
+def test_main_refuses_to_merge_without_the_shard_count_or_the_output(tmp_path, dropped):
+    argv = {"--shards": "1", "--output": str(tmp_path / "gate")}
+    del argv[dropped]
+    with pytest.raises(SystemExit) as refused:
+        merge.main([str(tmp_path), *(item for pair in argv.items() for item in pair)])
+    assert refused.value.code == 2
+
+
+def test_main_writes_into_a_new_nested_folder_and_into_an_existing_one(tmp_path, capsys):
+    shards = tmp_path / "shards"
+    _write(shards, 1, {"files": [], "not_mutated": [], "failed": False})
+    nested = tmp_path / "new" / "gate"
+    assert merge.main([str(shards), "--shards", "3", "--output", str(nested)]) == 1
+    assert merge.main([str(shards), "--shards", "3", "--output", str(nested)]) == 1
+    assert json.loads((nested / "report.json").read_text())["failed"] is True
+    assert capsys.readouterr().out.count("Merged 1 of 3 mutation shard reports") == 2
