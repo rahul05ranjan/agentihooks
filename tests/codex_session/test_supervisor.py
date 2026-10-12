@@ -303,7 +303,10 @@ def test_hooks_that_stay_untrusted_are_refused(store, server, clock, root, tmp_p
     assert_failed_cleanly(store, server, "hooks_untrusted")
 
 
-def test_a_hook_from_outside_the_profile_home_is_never_trusted_or_counted(store, server, clock, root, tmp_path):
+def test_a_hook_from_outside_the_profile_home_is_never_trusted_or_counted(
+    store, server, clock, root, tmp_path, monkeypatch
+):
+    monkeypatch.chdir(server.codex_home)
     repo_hooks = hooks(str(tmp_path / ".codex" / "hooks.json"), trust="untrusted")
     unsourced = [{key: value for key, value in hook.items() if key != "sourcePath"} for hook in repo_hooks]
     server.hooks = hooks(server.source) + repo_hooks + unsourced

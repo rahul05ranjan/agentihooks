@@ -87,7 +87,7 @@ def trust(connection: Connection, untrusted: list[dict]) -> None:
 
 
 def account_type(connection: Connection) -> str:
-    return (connection.request("account/read", {}).get("account") or {}).get("type", "")
+    return (connection.request("account/read").get("account") or {}).get("type", "")
 
 
 def start_thread(connection: Connection, cwd: str) -> dict:

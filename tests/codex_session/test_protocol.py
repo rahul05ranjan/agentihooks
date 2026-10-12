@@ -58,7 +58,7 @@ def test_a_lost_connection_is_a_protocol_error():
     from websockets.exceptions import ConnectionClosedError
 
     ws = Socket(recv_error=ConnectionClosedError(None, None))
-    with pytest.raises(protocol.ProtocolError, match="hooks/list lost the connection"):
+    with pytest.raises(protocol.ProtocolError, match="^hooks/list lost the connection: ConnectionClosedError$"):
         protocol.Connection(ws, 5).request("hooks/list")
 
 
@@ -84,7 +84,7 @@ def test_connect_initializes_then_announces_initialized():
     assert opened == [("/run/cx/s", 3.0, None)]
     assert [message["method"] for message in ws.sent] == ["initialize", "initialized"]
     assert ws.sent[0]["params"] == {"clientInfo": {"name": protocol.CLIENT_NAME, "version": "1"}}
-    assert "id" not in ws.sent[1]
+    assert ws.sent[1] == {"jsonrpc": "2.0", "method": "initialized"}
     assert connection.ws is ws
 
 
@@ -126,8 +126,18 @@ def test_the_method_helpers_send_the_qualified_shapes():
     assert protocol.resume_thread(connection, "t2") == {"id": "t2"}
     assert protocol.start_turn(connection, "t2", "hello") == "u1"
     assert protocol.account_type(connection) == ""
+    assert [message["method"] for message in ws.sent] == [
+        "hooks/list",
+        "config/batchWrite",
+        "account/read",
+        "thread/start",
+        "thread/resume",
+        "turn/start",
+        "account/read",
+    ]
     params = [message["params"] for message in ws.sent]
     assert params[0] == {"cwds": ["/repo"]}
+    assert params[2] == {}
     assert params[1] == {
         "edits": [
             {"keyPath": 'hooks.state."/h/hooks.json:stop:0".trusted_hash', "value": "abc", "mergeStrategy": "replace"}
@@ -137,3 +147,40 @@ def test_the_method_helpers_send_the_qualified_shapes():
     assert params[3] == {"cwd": "/repo"}
     assert params[4] == {"threadId": "t2"}
     assert params[5] == {"threadId": "t2", "input": [{"type": "text", "text": "hello"}]}
+
+
+class Timed(Socket):
+    def __init__(self, replies=()):
+        super().__init__(replies)
+        self.timeouts = []
+
+    def recv(self, timeout):
+        self.timeouts.append(timeout)
+        return super().recv(timeout)
+
+
+def test_a_reply_inside_the_last_second_is_read_with_the_time_left():
+    now = iter([0.0, 4.5])
+    ws = Timed([{"id": 1, "result": {"ok": True}}])
+    assert protocol.Connection(ws, 5, clock=lambda: next(now)).request("account/read") == {"ok": True}
+    assert ws.timeouts == [0.5]
+
+
+def test_no_time_left_times_out_without_reading():
+    now = iter([0.0, 5.0])
+    ws = Timed([{"id": 1, "result": {}}])
+    with pytest.raises(TimeoutError, match="^no reply to account/read$"):
+        protocol.Connection(ws, 5, clock=lambda: next(now)).request("account/read")
+    assert ws.timeouts == []
+
+
+def test_an_error_reply_without_a_message_says_so():
+    ws = Socket([{"id": 1, "error": {"code": -32600}}])
+    with pytest.raises(protocol.ProtocolError) as refused:
+        protocol.Connection(ws, 5).request("thread/resume", {"threadId": "x"})
+    assert str(refused.value) == "thread/resume refused: no message"
+
+
+def test_a_turn_reply_without_an_id_has_an_empty_turn_id():
+    ws = Socket([{"id": 1, "result": {"turn": {}}}])
+    assert protocol.start_turn(protocol.Connection(ws, 5), "t", "hello") == ""

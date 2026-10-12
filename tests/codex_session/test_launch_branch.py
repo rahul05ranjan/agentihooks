@@ -1,4 +1,5 @@
 import argparse
+import json
 import shlex
 import sys
 
@@ -94,3 +95,65 @@ def test_the_parser_takes_the_transport_seat_and_predecessor():
     assert (args.codex_transport, args.seat, args.previous_execution) == ("app_server", "eng-1@sw", "exe-prev")
     with pytest.raises(SystemExit):
         init_agent._parser().parse_args(["--codex-transport", "pane"])
+
+
+def test_the_transport_flags_default_to_empty_and_take_legacy():
+    args = init_agent._parser().parse_args([])
+    assert (args.codex_transport, args.seat, args.previous_execution) == ("", "", "")
+    assert init_agent._parser().parse_args(["--codex-transport", "legacy"]).codex_transport == "legacy"
+
+
+def test_the_transport_refusals_name_the_flag_exactly():
+    with pytest.raises(ValueError) as refused:
+        init_agent._transport(namespace(), "claude")
+    assert str(refused.value) == "--codex-transport app_server runs only a Codex agent"
+    with pytest.raises(ValueError) as refused:
+        init_agent._transport(namespace(seat=""), "codex")
+    assert str(refused.value) == "--codex-transport app_server needs --seat and --profile"
+
+
+def test_the_app_server_command_passes_the_exclusion_trust_and_model_flags(tmp_path):
+    argv = init_agent._app_server_command(
+        app_server_spec(exclude="old"), tmp_path / "route", ["-c", "x=1"], {}, tmp_path, None
+    )
+    assert argv[argv.index("--exclude") : argv.index("--exclude") + 2] == ["--exclude", "old"]
+    assert argv[argv.index("--") + 1 :] == [
+        "-c",
+        f'projects={{{json.dumps(str(tmp_path))}={{trust_level="trusted"}}}}',
+        "-m",
+        "gpt-6.1-sol",
+        "-c",
+        'model_reasoning_effort="medium"',
+        "-c",
+        "x=1",
+    ]
+
+
+def test_main_hands_the_transport_seat_and_predecessor_to_the_launcher(tmp_path, monkeypatch, capsys):
+    built = []
+
+    def write_launcher(directory, name, prompt, claude_args, environ, spec):
+        built.append(spec)
+        raise ValueError("captured")
+
+    monkeypatch.setattr(init_agent, "_prepare_profile", lambda args, agent, flags, environ: flags)
+    monkeypatch.setattr(init_agent, "_write_launcher", write_launcher)
+    argv = [
+        "--dir",
+        str(tmp_path),
+        "--agent",
+        "codex",
+        "--profile",
+        "engineer",
+        "--codex-transport",
+        "app_server",
+        "--seat",
+        "eng-1@sw",
+        "--previous-execution",
+        "exe-prev",
+        "--dry-run",
+    ]
+    assert init_agent.main(argv, {"HOME": str(tmp_path), "XDG_RUNTIME_DIR": str(tmp_path / "rt")}) == 2
+    assert capsys.readouterr().err == "agentihooks init-agent: captured\n"
+    [spec] = built
+    assert (spec.transport, spec.seat, spec.previous_execution) == (init_agent.APP_SERVER, "eng-1@sw", "exe-prev")

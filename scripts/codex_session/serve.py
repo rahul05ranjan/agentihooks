@@ -19,18 +19,22 @@ from scripts.swarm.store import AgentRecord, SwarmError, connect
 IDENTITY_ENV = ("AGENTIHOOKS_SWARM", "AGENTIHOOKS_SWARM_LANE", "AGENTIHOOKS_SWARM_TASK", "AGENTIHOOKS_AGENT_NAME")
 KEPT_FLAGS = ("-c", "--enable", "--disable")
 INTERACTIVE = "interactive"
+ROUTE_FLAG = "--route"
+ROUTE_PREFIX = f"{ROUTE_FLAG}="
+EFFORT_PREFIX = "model_reasoning_effort="
+QUOTE = '"'
 
 
 def take_route(args: list[str]) -> tuple[str, list[str]]:
-    route, rest, index = "", [], 0
-    while index < len(args):
-        if args[index] == "--route" and index + 1 < len(args):
-            route, index = args[index + 1], index + 2
-        elif args[index].startswith("--route="):
-            route, index = args[index].split("=", 1)[1], index + 1
+    route, rest = "", []
+    remaining = iter(args)
+    for argument in remaining:
+        if argument == ROUTE_FLAG and (value := next(remaining, None)) is not None:
+            route = value
+        elif argument.startswith(ROUTE_PREFIX):
+            route = argument.removeprefix(ROUTE_PREFIX)
         else:
-            rest.append(args[index])
-            index += 1
+            rest.append(argument)
     return route, rest
 
 
@@ -46,7 +50,7 @@ def server_options(flags: list[str]) -> tuple[str, str, tuple]:
         elif argument not in KEPT_FLAGS:
             raise ValueError(f"app-server takes only -m, -c, --enable and --disable; got {argument}")
         else:
-            effort = value.split("=", 1)[1].strip('"') if value.startswith("model_reasoning_effort=") else effort
+            effort = value.removeprefix(EFFORT_PREFIX).strip(QUOTE) if value.startswith(EFFORT_PREFIX) else effort
             kept += [argument, value]
     return model, effort, (*(("-c", f"model={json.dumps(model)}") if model else ()), *kept)
 
@@ -126,7 +130,7 @@ def prepare(args: argparse.Namespace, agent_args: list[str], environ: dict[str, 
         server_args=(*provider_args(account), *server_args),
         previous_execution_id=args.previous_execution,
         resume_thread=args.resume,
-        opening=Path(args.prompt_file).read_text(encoding="utf-8") if args.prompt_file else "",
+        opening=Path(args.prompt_file).read_bytes().decode() if args.prompt_file else "",
         account_type=account_type(account, route),
         allowed_tokens=frozenset(name for name in (account.env_name, account.key_env) if name),
         bundle_revision=args.bundle_revision,

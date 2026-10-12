@@ -21,6 +21,14 @@ from scripts.swarm.store import RedisStore, SwarmConfig
 pytestmark = [pytest.mark.unit, pytest.mark.xdist_group("fakeredis")]
 
 SLUG = "fixture"
+EXACT = {
+    "unsupported transport record version": "^unsupported transport record version$",
+    "duplicate launch": "^duplicate launch: the execution already has a transport record$",
+    "endpoint already belongs to another execution": "^the endpoint already belongs to another execution$",
+    "concurrent launch": "^a concurrent launch changed the transport records; this launch was refused$",
+    "identity is immutable": "^transport record identity is immutable$",
+    "no transport record": "^no transport record for this execution$",
+}
 
 
 @pytest.fixture
@@ -48,13 +56,13 @@ def test_a_reserved_record_is_versioned_and_keyed_by_swarm_and_execution(binding
 
 
 def test_a_record_of_another_version_is_refused():
-    with pytest.raises(BindingError, match="unsupported transport record version"):
+    with pytest.raises(BindingError, match=EXACT["unsupported transport record version"]):
         decode(json.dumps({**asdict(record()), "schema_version": SCHEMA_VERSION + 1}))
 
 
 def test_a_second_launch_of_one_execution_is_refused(bindings):
     first = bindings.reserve(SLUG, record())
-    with pytest.raises(BindingError, match="duplicate launch"):
+    with pytest.raises(BindingError, match=EXACT["duplicate launch"]):
         bindings.reserve(SLUG, record(endpoint="unix:///run/cx/two/s"))
     assert bindings.get(SLUG, "exe-one") == first
     assert bindings.redis.hget(bindings.store.key(SLUG, ENDPOINTS), "unix:///run/cx/two/s") is None
@@ -62,7 +70,7 @@ def test_a_second_launch_of_one_execution_is_refused(bindings):
 
 def test_two_executions_cannot_share_one_endpoint(bindings):
     bindings.reserve(SLUG, record())
-    with pytest.raises(BindingError, match="endpoint already belongs to another execution"):
+    with pytest.raises(BindingError, match=EXACT["endpoint already belongs to another execution"]):
         bindings.reserve(SLUG, record(execution="exe-two"))
     assert bindings.get(SLUG, "exe-two") is None
 
@@ -74,8 +82,23 @@ def test_a_concurrent_change_refuses_the_reservation(bindings, monkeypatch):
         raise WatchError("changed")
 
     monkeypatch.setattr(type(bindings.redis.pipeline()), "execute", interrupted)
-    with pytest.raises(BindingError, match="concurrent launch"):
+    with pytest.raises(BindingError, match=EXACT["concurrent launch"]):
         bindings.reserve(SLUG, record())
+
+
+@pytest.mark.parametrize("watched", [RECORDS, ENDPOINTS])
+def test_a_change_to_either_watched_key_during_the_reservation_refuses_it(bindings, monkeypatch, watched):
+    pipeline = type(bindings.redis.pipeline())
+    checked = pipeline.hget
+
+    def changed_meanwhile(self, name, key):
+        bindings.redis.hset(bindings.store.key(SLUG, watched), "intruder", "exe-other")
+        return checked(self, name, key)
+
+    monkeypatch.setattr(pipeline, "hget", changed_meanwhile)
+    with pytest.raises(BindingError, match=EXACT["concurrent launch"]):
+        bindings.reserve(SLUG, record())
+    assert bindings.redis.hget(bindings.store.key(SLUG, RECORDS), "exe-one") is None
 
 
 def test_updates_keep_the_record_identity(bindings):
@@ -83,9 +106,9 @@ def test_updates_keep_the_record_identity(bindings):
     bindings.put(SLUG, record(state=CONNECTED, thread_id="thread-1"))
     assert bindings.get(SLUG, "exe-one").thread_id == "thread-1"
     for field, value in (("endpoint_ref", "unix:///other"), ("execution_generation", 2), ("seat", "eng-2@fixture")):
-        with pytest.raises(BindingError, match="identity is immutable"):
+        with pytest.raises(BindingError, match=EXACT["identity is immutable"]):
             bindings.put(SLUG, record(**{field: value}))
-    with pytest.raises(BindingError, match="no transport record"):
+    with pytest.raises(BindingError, match=EXACT["no transport record"]):
         bindings.put(SLUG, record(execution="exe-missing"))
 
 
