@@ -353,3 +353,64 @@ def test_without_a_jump_record_the_client_keeps_its_own_jump(tmp_path):
     running.run_pass()
 
     assert running.upkeep.terminal.home == client
+
+
+def test_a_pass_renews_the_saved_certificates_before_they_expire(tmp_path):
+    from scripts.swarm_v2.herdr.attach import ClientHome
+    from scripts.swarm_v2.herdr.endpoints import CERTIFICATE_SECONDS
+    from scripts.swarm_v2.herdr.operator_service import RENEW_SECONDS, Service
+    from scripts.swarm_v2.herdr.upkeep import Upkeep
+
+    assert RENEW_SECONDS == CERTIFICATE_SECONDS // 2
+    made, herdr, now = store(), Herdr(), [1000.0]
+    started = worker(made, "hive-a")
+    publish(made, "hive-a", *started)
+    terminal = cases.client_terminal(tmp_path / "client", herdr, FX["namespace"])
+    running = Service(Upkeep(terminal), lambda: made, lambda: now[0])
+    certificate = ClientHome(tmp_path / "client").certificate(
+        Endpoint(Scope("operator/operator", "hive-a", *started), FX["namespace"])
+    )
+    assert running.run_pass() is not None
+    first = certificate.read_text()
+
+    now[0] += RENEW_SECONDS - 1
+    assert running.run_pass() is None
+    assert certificate.read_text() == first
+
+    now[0] += 1
+    assert running.run_pass() is not None
+    assert certificate.read_text() != first
+    assert running.run_pass() is None
+
+
+def test_the_service_dials_the_placed_hive_redis_url(tmp_path, monkeypatch):
+    from scripts.swarm_v2.herdr import operator_setup, publications
+    from scripts.swarm_v2.herdr.attach import ClientHome
+
+    made, herdr, dialled = store(), Herdr(), []
+    root = placed(tmp_path)
+    url_file = root / "swarm-terminal" / "hive-redis.url"
+    url_file.write_text("rediss://placed.example:6379/0\n")
+    env = root / "swarm-terminal" / "terminal.env"
+    env.write_text(env.read_text() + f"AGENTIHOOKS_HIVE_REDIS_URL_FILE={url_file}\n")
+    monkeypatch.setattr(publications, "connect", lambda environ: dialled.append(dict(environ)) or made)
+
+    operator_setup.service({"A": "b"}, ClientHome(tmp_path / "client"), root, herdr_run(herdr)).run_pass()
+
+    assert dialled == [{"A": "b", "AGENTIHOOKS_HIVE_REDIS_URL": "rediss://placed.example:6379/0"}]
+
+
+def test_an_explicit_hive_redis_url_wins_over_the_placed_one(tmp_path, monkeypatch):
+    from scripts.swarm_v2.herdr import operator_setup, publications
+    from scripts.swarm_v2.herdr.attach import ClientHome
+
+    made, dialled = store(), []
+    root = placed(tmp_path)
+    env = root / "swarm-terminal" / "terminal.env"
+    env.write_text(env.read_text() + f"AGENTIHOOKS_HIVE_REDIS_URL_FILE={root / 'missing.url'}\n")
+    monkeypatch.setattr(publications, "connect", lambda environ: dialled.append(dict(environ)) or made)
+    environ = {"AGENTIHOOKS_HIVE_REDIS_URL": "rediss://own.example:6379/0"}
+
+    operator_setup.service(environ, ClientHome(tmp_path / "client"), root, herdr_run(Herdr())).run_pass()
+
+    assert dialled == [environ]
