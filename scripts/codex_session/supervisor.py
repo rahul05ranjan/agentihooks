@@ -16,11 +16,36 @@ from scripts.swarm.store import APP_SERVER_TRANSPORT, AgentRecord, RedisStore
 
 NO_DAEMON = "--no-daemon"
 REQUIRED_HOOKS = ("sessionStart", "userPromptSubmit", "preToolUse", "postToolUse", "stop")
+TRUSTED = "trusted"
 STARTUP_TIMEOUT_S = 30.0
 POLL_S = 0.25
+MAX_POLLS = 10_000
 STOP_WAIT_S = 5.0
 # Linux sun_path holds 108 bytes including the terminator; macOS holds 104.
 SOCKET_PATH_MAX = 100
+SOCKET_NAME = "s"
+UNIX = "unix://"
+EXECUTION_PREFIX = "exe-"
+ENDPOINT_ID_CHARS = 16
+PRIVATE_MODE = 0o700
+RUNTIME_DIR_ENV = "XDG_RUNTIME_DIR"
+RUNTIME_SUBDIR = "cx"
+HOME_SUBDIR = ".agentihooks"
+CODEX_HOME_KEY = "codexHome"
+
+LONG_SOCKET = f"socket path is longer than {SOCKET_PATH_MAX} bytes"
+DAEMON_REFUSED = "app-server takes no --no-daemon flag"
+FOREIGN_CREDENTIALS = "child environment carries other account credentials: {}"
+OTHER_TRANSPORT = "swarm {} runs the {} Codex inbox transport"
+EXITED_EARLY = "app-server exited with status {} before it answered"
+PID_TAKEN = "the server pid no longer belongs to the started process"
+NEVER_ANSWERED = "app-server started but never answered initialize in time"
+HOOKS_MISSING = "required profile hooks are missing: {}"
+HOOKS_UNTRUSTED = "required hooks stay untrusted: {}"
+OTHER_HOME = "the server runs from another Codex home than the rendered profile"
+OTHER_ACCOUNT = "the server is not signed in with a {} account"
+NO_THREAD = "the server returned no thread id"
+SPAWN_FAILED = "app-server could not start: {}"
 
 
 class LaunchFailure(RuntimeError):
@@ -70,26 +95,26 @@ class Started:
 
 
 def runtime_root(environ: Mapping[str, str]) -> Path:
-    runtime = environ.get("XDG_RUNTIME_DIR")
-    base = Path(runtime) if runtime else Path(environ.get("HOME", str(Path.home()))) / ".agentihooks"
-    return base / "cx"
+    runtime = environ.get(RUNTIME_DIR_ENV)
+    base = Path(runtime) if runtime else Path(environ.get("HOME") or Path.home()) / HOME_SUBDIR
+    return base / RUNTIME_SUBDIR
 
 
 def socket_path(root: Path, execution_id: str) -> Path:
-    directory = root / execution_id.removeprefix("exe-")[:16]
-    path = directory / "s"
+    directory = root / execution_id.removeprefix(EXECUTION_PREFIX)[:ENDPOINT_ID_CHARS]
+    path = directory / SOCKET_NAME
     if len(str(path).encode()) > SOCKET_PATH_MAX:
-        raise LaunchFailure("endpoint", f"socket path is longer than {SOCKET_PATH_MAX} bytes")
+        raise LaunchFailure("endpoint", LONG_SOCKET)
     for private in (root, directory):
-        private.mkdir(mode=0o700, parents=True, exist_ok=True)
-        private.chmod(0o700)
+        private.mkdir(parents=True, exist_ok=True)
+        private.chmod(PRIVATE_MODE)
     return path
 
 
 def server_command(codex_bin: str, path: Path, args: tuple) -> list[str]:
     if NO_DAEMON in args:
-        raise LaunchFailure("command", "app-server takes no --no-daemon flag")
-    return [codex_bin, "app-server", "--listen", f"unix://{path}", *args]
+        raise LaunchFailure("command", DAEMON_REFUSED)
+    return [codex_bin, "app-server", "--listen", f"{UNIX}{path}", *args]
 
 
 def owns(record: TransportRecord, start_identity: Callable[[int], int | None]) -> bool:
@@ -101,13 +126,13 @@ def owns(record: TransportRecord, start_identity: Callable[[int], int | None]) -
 def check_environment(environ: Mapping[str, str], allowed: frozenset) -> None:
     foreign = sorted(name for name in environ if name.startswith(envs.CODEX_TOKEN_PREFIX) and name not in allowed)
     if foreign:
-        raise LaunchFailure("wrong_account", f"child environment carries other account credentials: {foreign}")
+        raise LaunchFailure("wrong_account", FOREIGN_CREDENTIALS.format(foreign))
 
 
 def admit(store: RedisStore, launch: Launch, deps: Deps) -> AgentRecord:
     chosen = store.config(launch.slug).codex_inbox_transport
     if chosen != APP_SERVER_TRANSPORT:
-        raise LaunchFailure("transport", f"swarm {launch.slug} runs the {chosen} Codex inbox transport")
+        raise LaunchFailure("transport", OTHER_TRANSPORT.format(launch.slug, chosen))
     pid_start = deps.start_identity(os.getpid())
     target = {"pid": os.getpid(), "pid_start": pid_start} if pid_start else {}
     agent = replace(launch.agent, harness="codex", transport=chosen, runtime_target=target)
@@ -118,20 +143,21 @@ def wait_ready(
     path: Path, process: subprocess.Popen, record: TransportRecord, launch: Launch, deps: Deps
 ) -> tuple[protocol.Connection, dict]:
     deadline = deps.clock() + launch.startup_timeout_s
-    while (left := deadline - deps.clock()) > 0:
+    for _ in range(MAX_POLLS):
+        left = deadline - deps.clock()
+        if left <= 0:
+            break
         if process.poll() is not None:
-            raise LaunchFailure(
-                "server_exited", f"app-server exited with status {process.returncode} before it answered"
-            )
+            raise LaunchFailure("server_exited", EXITED_EARLY.format(process.returncode))
         if not owns(record, deps.start_identity):
-            raise LaunchFailure("server_identity", "the server pid no longer belongs to the started process")
+            raise LaunchFailure("server_identity", PID_TAKEN)
         if path.exists():
             try:
                 return deps.connect(str(path), left)
             except (OSError, TimeoutError, protocol.ProtocolError):
                 pass
         deps.sleep(POLL_S)
-    raise LaunchFailure("startup_timeout", "app-server started but never answered initialize in time")
+    raise LaunchFailure("startup_timeout", NEVER_ANSWERED)
 
 
 def profile_hooks(connection: protocol.Connection, cwd: str, codex_home: str) -> list[dict]:
@@ -144,25 +170,23 @@ def ensure_hooks(connection: protocol.Connection, cwd: str, codex_home: str) -> 
     owned = profile_hooks(connection, cwd, codex_home)
     missing = [event for event in REQUIRED_HOOKS if event not in {hook.get("eventName") for hook in owned}]
     if missing:
-        raise LaunchFailure("hooks_missing", f"required profile hooks are missing: {missing}")
-    untrusted = [hook for hook in owned if hook.get("trustStatus") != "trusted"]
+        raise LaunchFailure("hooks_missing", HOOKS_MISSING.format(missing))
+    untrusted = [hook for hook in owned if hook.get("trustStatus") != TRUSTED]
     if untrusted:
         protocol.trust(connection, untrusted)
-        still = {
-            hook.get("eventName")
-            for hook in profile_hooks(connection, cwd, codex_home)
-            if hook.get("trustStatus") != "trusted"
-        }
+        relisted = profile_hooks(connection, cwd, codex_home)
+        still = {hook.get("eventName") for hook in relisted if hook.get("trustStatus") != TRUSTED}
         if still & set(REQUIRED_HOOKS):
-            raise LaunchFailure("hooks_untrusted", f"required hooks stay untrusted: {sorted(still)}")
+            raise LaunchFailure("hooks_untrusted", HOOKS_UNTRUSTED.format(sorted(still)))
 
 
 def check_binding(connection: protocol.Connection, info: dict, launch: Launch) -> None:
-    if os.path.realpath(info.get("codexHome", "")) != os.path.realpath(launch.codex_home):
-        raise LaunchFailure("wrong_profile", "the server runs from another Codex home than the rendered profile")
+    home = info.get(CODEX_HOME_KEY)
+    if not home or os.path.realpath(home) != os.path.realpath(launch.codex_home):
+        raise LaunchFailure("wrong_profile", OTHER_HOME)
     ensure_hooks(connection, launch.cwd, launch.codex_home)
     if launch.account_type and protocol.account_type(connection) != launch.account_type:
-        raise LaunchFailure("wrong_account", f"the server is not signed in with a {launch.account_type} account")
+        raise LaunchFailure("wrong_account", OTHER_ACCOUNT.format(launch.account_type))
 
 
 def bind_thread(connection: protocol.Connection, launch: Launch) -> dict:
@@ -172,7 +196,7 @@ def bind_thread(connection: protocol.Connection, launch: Launch) -> dict:
         else protocol.start_thread(connection, launch.cwd)
     )
     if not thread.get("id"):
-        raise LaunchFailure("protocol", "the server returned no thread id")
+        raise LaunchFailure("protocol", NO_THREAD)
     return thread
 
 
@@ -195,7 +219,7 @@ def _record(launch: Launch, agent: AgentRecord, path: Path) -> TransportRecord:
         seat=agent.seat,
         agent_name=agent.name,
         task_id=agent.task,
-        endpoint_ref=f"unix://{path}",
+        endpoint_ref=f"{UNIX}{path}",
         host_id=host,
         account=agent.account,
         profile=agent.profile,
@@ -207,7 +231,7 @@ def _record(launch: Launch, agent: AgentRecord, path: Path) -> TransportRecord:
 
 
 def _connect_bound(store, bindings, launch, agent, record, process, deps) -> tuple[TransportRecord, AgentRecord]:
-    path = Path(record.endpoint_ref.removeprefix("unix://"))
+    path = Path(record.endpoint_ref.removeprefix(UNIX))
     connection, info = wait_ready(path, process, record, launch, deps)
     try:
         check_binding(connection, info, launch)
@@ -215,7 +239,7 @@ def _connect_bound(store, bindings, launch, agent, record, process, deps) -> tup
         record = replace(
             record,
             thread_id=thread["id"],
-            session_id=thread.get("sessionId", ""),
+            session_id=thread.get("sessionId") or "",
             state=CONNECTED,
             last_transport_activity=deps.now_ms(),
         )
@@ -242,7 +266,7 @@ def spawn(spec: Launch, deps: Deps, path: Path) -> subprocess.Popen:
             start_new_session=True,
         )
     except OSError as exc:
-        raise LaunchFailure("spawn", f"app-server could not start: {exc}") from exc
+        raise LaunchFailure("spawn", SPAWN_FAILED.format(exc)) from exc
 
 
 def launch(store: RedisStore, spec: Launch, deps: Deps) -> Started:
