@@ -30,7 +30,11 @@ def worker(made, slug: str, backend: str = "kubernetes") -> tuple[str, int]:
         "task",
         seat=f"eng-{seat}@{slug}",
         runtime_backend=backend,
-        runtime_target={"pod_namespace": FX["namespace"], "pod_name": "attempt"},
+        runtime_target=(
+            {"pod_namespace": FX["namespace"], "pod_name": "attempt"}
+            if backend == "kubernetes"
+            else {"server_id": "local", "pid": 1}
+        ),
     )
     admitted = made.start_execution(slug, agent)
     return admitted.execution_id, admitted.generation
