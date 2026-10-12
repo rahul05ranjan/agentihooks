@@ -438,9 +438,8 @@ def test_install_refuses_when_systemctl_fails(tmp_path, error, named):
     with pytest.raises(SetupRefused) as refused:
         operator_setup.install("/opt/bin/agentihooks", tmp_path, Systemctl(error=error))
 
-    assert str(refused.value) == (
-        f"systemctl could not enable agentihooks-swarm-terminal.timer and agentihooks-swarm-terminal-sync.service: {named}"
-    )
+    units = "agentihooks-swarm-terminal.timer and agentihooks-swarm-terminal-sync.service"
+    assert str(refused.value) == f"systemctl could not enable {units}: {named}"
 
 
 def test_install_command_refuses_without_the_executable(tmp_path, monkeypatch):
@@ -659,6 +658,30 @@ def test_place_without_an_address_places_no_hive_redis_url(tmp_path):
     assert len(bao.requests) == 1
 
 
+def test_place_without_an_address_keeps_the_hive_redis_url_already_placed(tmp_path):
+    bao = Bao({"user_ca": ssh_private(Ed25519PrivateKey.generate()), "redis_password": REDIS_PASSWORD})
+    home = tmp_path / "home"
+    operator_setup.place(home, bao.client(), antoncore(tmp_path), "swarm.example:6379")
+
+    report = operator_setup.place(home, bao.client(), antoncore(tmp_path))
+
+    url_file = home / "swarm-terminal" / "hive-redis.url"
+    assert operator_setup.settings(home)["AGENTIHOOKS_HIVE_REDIS_URL_FILE"] == str(url_file)
+    assert url_file.exists()
+    assert "hive_redis" not in report
+
+
+def test_a_missing_placed_hive_redis_url_is_a_refused_transport(tmp_path):
+    from scripts.swarm_v2.herdr.publications import TransportRefused
+
+    placed = {"AGENTIHOOKS_HIVE_REDIS_URL_FILE": str(tmp_path / "gone.url")}
+
+    with pytest.raises(TransportRefused) as refused:
+        operator_setup.transport({}, placed)
+
+    assert str(refused.value) == f"the placed hive Redis URL {tmp_path / 'gone.url'} is unreadable"
+
+
 def test_a_missing_redis_password_is_refused_by_key_name(tmp_path):
     bao = Bao({"user_ca": ssh_private(Ed25519PrivateKey.generate())})
     with pytest.raises(SetupRefused) as refused:
@@ -690,6 +713,22 @@ class Ledger:
 
     def followup(self, slug, text, needs_operator=False):
         self.followups.append((slug, text, needs_operator))
+        return True
+
+
+class Flaky(Ledger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failed = set()
+
+    def followup(self, slug, text, needs_operator=False):
+        super().followup(slug, text, needs_operator)
+        if slug in self.failed:
+            return True
+        self.failed.add(slug)
+        if slug == "hive-b":
+            raise SwarmError("the ledger server is gone")
+        return slug != "hive-a"
 
 
 def alarm_store(slugs):
@@ -738,6 +777,46 @@ def test_a_new_refusal_raises_again(tmp_path, monkeypatch):
     assert ledger.followups[1][1].startswith("operator terminal setup refused: the terminal user CA could not be read")
 
 
+@pytest.mark.xdist_group("fakeredis")
+def test_a_dropped_or_failed_notice_is_raised_again_and_a_delivered_one_is_not(tmp_path, monkeypatch):
+    from scripts.swarm_v2.herdr import publications
+
+    ledger = Flaky()
+    made = alarm_store(["hive-a", "hive-b", "hive-c"])
+    monkeypatch.setattr(publications, "connect", lambda environ: made)
+    monkeypatch.setattr(operator_setup, "LedgerClient", lambda: ledger)
+    environ = {"AGENTIHOOKS_HIVE_REDIS_URL": "rediss://own.example:6379/0"}
+
+    for _ in range(3):
+        assert run_main(["setup"], environ, Who(), tmp_path / "home")[0] == 1
+
+    assert [slug for slug, _, _ in ledger.followups] == ["hive-a", "hive-b", "hive-c", "hive-a", "hive-b"]
+
+
+@pytest.mark.xdist_group("fakeredis")
+def test_a_successful_setup_clears_the_alarm_so_a_recurring_refusal_raises_again(tmp_path, monkeypatch):
+    from scripts.swarm_v2.herdr import publications
+
+    ledger = Ledger()
+    monkeypatch.setattr(publications, "connect", lambda environ: alarm_store(["hive-a"]))
+    monkeypatch.setattr(operator_setup, "LedgerClient", lambda: ledger)
+    refused = {"AGENTIHOOKS_HIVE_REDIS_URL": "rediss://own.example:6379/0"}
+    bao = Bao({"user_ca": ssh_private(Ed25519PrivateKey.generate())})
+    monkeypatch.setattr(openbao_kv.urllib.request, "urlopen", bao)
+    placed = {
+        "OPENBAO_URL": BAO_URL,
+        "OPENBAO_TOKEN": "fixture-token",
+        "AGENTIHOOKS_ANTONCORE_DIR": str(antoncore(tmp_path)),
+    }
+
+    assert run_main(["setup"], refused, Who(), tmp_path / "home")[0] == 1
+    assert run_main(["setup"], placed, Who(), tmp_path / "home")[0] == 0
+    assert not (tmp_path / "home" / "swarm-terminal" / "alarm").exists()
+    assert run_main(["setup"], refused, Who(), tmp_path / "home")[0] == 1
+
+    assert [slug for slug, _, _ in ledger.followups] == ["hive-a", "hive-a"]
+
+
 def test_a_refused_setup_without_a_transport_only_reaches_the_journal(tmp_path, monkeypatch):
     def refuse():
         raise AssertionError("no ledger without a transport")
@@ -755,6 +834,42 @@ def test_install_writes_the_hive_redis_address_into_the_setup_unit(tmp_path):
     assert unit == operator_setup.unit("/opt/bin/agentihooks", "swarm.example:6379")
     assert "Environment=AGENTIHOOKS_HIVE_REDIS_ADDRESS=swarm.example:6379\n" in unit.splitlines(keepends=True)
     assert "AGENTIHOOKS_HIVE_REDIS_ADDRESS" not in operator_setup.unit("/opt/bin/agentihooks")
+
+
+def test_installed_holds_only_for_current_enabled_units_with_the_address(tmp_path):
+    address = "swarm.example:6379"
+    assert not operator_setup.installed("/opt/bin/agentihooks", tmp_path, Systemctl(), address)
+    operator_setup.install("/opt/bin/agentihooks", tmp_path, Systemctl(), address)
+
+    assert operator_setup.installed("/opt/bin/agentihooks", tmp_path, Systemctl(), address)
+    assert not operator_setup.installed("/opt/bin/agentihooks", tmp_path, Systemctl(), "other.example:6379")
+    assert not operator_setup.installed("/opt/bin/agentihooks", tmp_path, Systemctl(code=1), address)
+    (tmp_path / "agentihooks-swarm-terminal-sync.service").write_text("stale\n")
+    assert not operator_setup.installed("/opt/bin/agentihooks", tmp_path, Systemctl(), address)
+
+
+def test_installed_asks_systemctl_about_each_unit_on_its_own(tmp_path):
+    systemctl = Systemctl()
+    operator_setup.install("/opt/bin/agentihooks", tmp_path, Systemctl())
+
+    assert operator_setup.installed("/opt/bin/agentihooks", tmp_path, systemctl)
+
+    assert [command for command, _ in systemctl.calls] == [
+        ["systemctl", "--user", "is-enabled", "--quiet", "agentihooks-swarm-terminal.timer"],
+        ["systemctl", "--user", "is-enabled", "--quiet", "agentihooks-swarm-terminal-sync.service"],
+    ]
+
+
+def test_install_check_command_exits_by_the_installed_state_and_writes_nothing(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(operator_setup, "installed", lambda address: seen.append(address) or False)
+    monkeypatch.setattr(operator_setup, "install", lambda address: (_ for _ in ()).throw(AssertionError("wrote")))
+
+    code, out, err = run_main(["install", "--check", "--redis-address", "swarm.example:6379"], {}, Who(), tmp_path)
+    assert (code, out, err) == (1, "", "")
+    monkeypatch.setattr(operator_setup, "installed", lambda address: seen.append(address) or True)
+    assert run_main(["install", "--check"], {}, Who(), tmp_path)[0] == 0
+    assert seen == ["swarm.example:6379", ""]
 
 
 def test_install_command_passes_its_hive_redis_address(tmp_path, monkeypatch):
