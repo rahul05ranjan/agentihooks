@@ -174,6 +174,68 @@ def test_the_renewal_sequence_rises_even_when_the_wall_clock_stands_still(tmp_pa
     assert second == first + 1
 
 
+def test_the_first_renewal_sequence_is_one_at_the_wall_clock_origin(tmp_path):
+    clock = Clock()
+    clock.wall = 0.0
+    controller = Controller(clock, (200, acknowledged(clock)))
+    lease = lease_renewal.Renewer(
+        lease_renewal.Lease(tmp_path, CONTROL, {**ADMISSION, "lease_deadline_ms": 60_000}, GRANT),
+        controller,
+        clock.monotonic,
+        clock.time,
+    )
+
+    lease.tick()
+
+    assert heartbeats(controller)[0][3]["renewal_sequence"] == 1
+    assert heartbeats(controller)[0][3]["observed_at"] == "1970-01-01T00:00:00Z"
+
+
+def test_a_renewal_names_the_wall_clock_time_it_was_observed(tmp_path):
+    clock = Clock()
+    controller = Controller(clock)
+    lease = renewer(tmp_path, clock, controller)
+
+    lease.tick()
+
+    assert heartbeats(controller)[0][3]["observed_at"] == "2027-01-15T08:00:00Z"
+
+
+def test_a_successful_renewal_logs_its_sequence_and_deadline(tmp_path, capsys):
+    clock = Clock()
+    controller = Controller(clock)
+    lease = renewer(tmp_path, clock, controller)
+
+    lease.tick()
+
+    assert events(capsys) == [
+        {
+            "lease": "renewed",
+            "renewal_sequence": int(WALL * 1000),
+            "lease_deadline_ms": int(WALL * 1000) + 60_000,
+            "execution_id": EXECUTION,
+            "task_generation": 4,
+        }
+    ]
+
+
+def test_every_lease_event_is_flushed_at_once(tmp_path, monkeypatch):
+    printed = []
+    monkeypatch.setattr("builtins.print", lambda *args, **kwargs: printed.append(kwargs))
+    clock = Clock()
+    lease = renewer(tmp_path, clock, Controller(clock))
+
+    lease.tick()
+
+    assert printed == [{"flush": True}]
+
+
+def test_a_control_url_is_trimmed_of_its_trailing_slash_only():
+    lease = lease_renewal.Lease(Path("/attempt"), "http://controller.invalid/apiX/", ADMISSION, GRANT)
+
+    assert lease_renewal.Renewer(lease).url == "http://controller.invalid/apiX"
+
+
 def test_a_failed_renewal_is_logged_and_retried_on_the_short_interval(tmp_path, capsys):
     clock = Clock()
     controller = Controller(clock, (503, {}))
@@ -304,6 +366,26 @@ def test_the_launch_grant_is_renewed_before_it_expires_and_used_from_then_on(tmp
     assert controller.calls[-2][0] == "POST"
     assert controller.calls[-1][2] == "sv2.grant-renewed"
     assert grant_path(tmp_path / EXECUTION).read_text() == "sv2.grant-renewed"
+
+
+def test_a_renewed_grant_is_logged_and_not_renewed_again_until_its_interval(tmp_path, capsys):
+    clock = Clock()
+    controller = Controller(clock)
+    lease = renewer(tmp_path, clock, controller)
+    renew_until_the_credential_is_due(lease, clock)
+    capsys.readouterr()
+
+    lease.tick()
+    clock.advance(lease_renewal.INTERVAL_SECONDS)
+    lease.tick()
+
+    assert [call[0] for call in controller.calls[-3:]] == ["POST", "PUT", "PUT"]
+    assert events(capsys)[0] == {
+        "lease": "credential_renewed",
+        "expires_at": "x",
+        "execution_id": EXECUTION,
+        "task_generation": 4,
+    }
 
 
 @pytest.mark.parametrize("answer", [(503, {}), (200, {}), (200, {"credential": ""}), (200, [])])

@@ -535,6 +535,16 @@ def test_a_lost_lease_stops_the_running_worker(tmp_path, monkeypatch):
     assert supervisor.lease.ticks == 3
 
 
+def test_a_worker_without_a_lease_runs_until_its_agent_completes(tmp_path, monkeypatch):
+    attempt, path, _ = launch_files(tmp_path)
+    supervisor = Supervisor(Launch.load(attempt, path))
+    supervisor.exits["agent"] = 0
+    monkeypatch.setattr(supervisor, "wait", lambda: None)
+
+    assert supervisor.lease is None
+    assert supervisor.running() == "agent_completed"
+
+
 def test_a_drain_after_a_lost_lease_writes_no_checkpoint(tmp_path, monkeypatch):
     attempt, path, _ = launch_files(tmp_path)
     supervisor = Supervisor(Launch.load(attempt, path))

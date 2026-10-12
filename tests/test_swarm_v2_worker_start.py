@@ -62,7 +62,9 @@ class Renewals:
 
     def __call__(self, method: str, url: str, grant: str, body: dict) -> tuple[int, object]:
         self.calls.append((method, url, grant, body))
-        return self.answers.pop(0) if self.answers else (200, RENEWED)
+        if self.answers:
+            return self.answers.pop(0)
+        return (200, {"credential": "sv2.grant-renewed"}) if method == "POST" else (200, RENEWED)
 
 
 @pytest.fixture(autouse=True)
@@ -211,6 +213,23 @@ def test_a_lease_lost_while_preparing_refuses_the_start_before_the_restore(tmp_p
 
     assert str(refused.value) == "admission lease lost: heartbeat_refused_409"
     assert not (tmp_path / "attempts" / EXECUTION / "registration.json").exists()
+
+
+def test_a_grant_renewed_while_preparing_is_the_one_handed_to_the_supervisor(tmp_path, renewals, monkeypatch):
+    monkeypatch.setattr(lease_renewal, "CREDENTIAL_SECONDS", 0.0)
+
+    prepare(tmp_path, material(tmp_path), Controller((200, ANSWER)))
+
+    assert renewals.calls[0][:3] == ("POST", f"{CONTROL}/v2/executions/{EXECUTION}/credential", GRANT)
+    assert (tmp_path / "attempts" / EXECUTION / "run" / GRANT_NAME).read_text() == "sv2.grant-renewed"
+
+
+def test_post_registers_with_a_post_request(monkeypatch):
+    sent = []
+    monkeypatch.setattr(start, "transport", lambda *args: sent.append(args) or (200, {}))
+
+    assert start.post(CONTROL + "/", GRANT, {"a": 1}) == (200, {})
+    assert sent == [("POST", CONTROL + start.REGISTER, GRANT, {"a": 1}, start.TIMEOUT_SECONDS)]
 
 
 def test_an_engineer_launch_record_renders_the_engineer_profile_in_the_pod_home(tmp_path):
