@@ -101,6 +101,68 @@ def read(agent: AgentRecord, pid: int, proc: Path = Path("/proc")) -> dict:
         return {"process": False}
 
 
+def managed(agent: AgentRecord) -> bool:
+    from scripts.swarm.store import APP_SERVER_TRANSPORT
+
+    return agent.runtime_backend == "local" and agent.transport == APP_SERVER_TRANSPORT
+
+
+def transport(store: RedisStore, agent: AgentRecord):
+    from scripts.codex_session.binding import BindingStore
+
+    slug = store.names.slug_of(agent.name)
+    current = store.execution_occupants(slug).get(agent.seat)
+    if current is None or current.execution_id != agent.execution_id:
+        return None
+    record = BindingStore(store).get(slug, agent.execution_id)
+    if record is None or (record.execution_generation, record.agent_name, record.seat) != (
+        agent.generation,
+        agent.name,
+        agent.seat,
+    ):
+        return None
+    return record
+
+
+def server_alive(record) -> bool | None:
+    from scripts.codex_session import supervisor
+    from scripts.codex_session.binding import EXITED, FAILED
+
+    if record is None:
+        return None
+    if record.state in {EXITED, FAILED}:
+        return False
+    if not record.server_pid or not record.server_start_identity:
+        return None
+    return supervisor.owns(record, supervisor.start_time)
+
+
+def observe_managed(record):
+    from scripts.codex_session import protocol
+    from scripts.codex_session.binding import UNIX
+    from scripts.swarm.pane import PaneObservation
+
+    alive = server_alive(record)
+    if alive is False:
+        return PaneObservation("dead")
+    if alive is None or not record.thread_id:
+        return PaneObservation("unknown")
+    try:
+        connection, _ = protocol.connect(record.endpoint_ref.removeprefix(UNIX), 1.0)
+        try:
+            thread = protocol.read_thread(connection, record.thread_id)
+        finally:
+            connection.close()
+    except (OSError, TimeoutError, protocol.ProtocolError):
+        return PaneObservation("unknown")
+    if thread.get("id") != record.thread_id:
+        return PaneObservation("unknown")
+    turns = thread.get("turns") or [{}]
+    if record.pending_request:
+        return PaneObservation("waiting")
+    return PaneObservation("working" if turns[-1].get("status") == "inProgress" else "idle")
+
+
 def assignment(agent: AgentRecord) -> dict:
     validated = agent.profile_decision.get("validation", {})
     home = validated.get("home") or str(Path.home() / ".agentihooks" / "profiles" / agent.profile / agent.harness)

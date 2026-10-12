@@ -188,6 +188,7 @@ class HerdrRuntime:
         self.choose = choose or agent_choice.choose
         self.sleep = time.sleep
         self._binding_pids = {}
+        self._managed = {}
         self.refusals = {}
         self.end, self.reap = reaper.retire, reaper.reap
         self._quota_previous = {}
@@ -768,11 +769,37 @@ class HerdrRuntime:
     def live_names(self):
         from scripts.terminate_agent import sessions
 
-        return {s.name for s in sessions() if s.name}
+        ordinary = {s.name for s in sessions() if s.name}
+        managed = self._managed_agents()
+        return (ordinary - managed.keys()) | {
+            name
+            for name, agent in managed.items()
+            if live_binding.server_alive(self._managed_record(agent)) is not False
+        }
+
+    def _managed_agents(self):
+        from scripts.swarm.store import Unreachable
+
+        try:
+            store = connect()
+            self._managed = {
+                agent.name: agent
+                for slug in store.slugs()
+                for agent in store.agents(slug)
+                if live_binding.managed(agent)
+            }
+        except Unreachable:
+            pass
+        return self._managed
+
+    def _managed_record(self, agent):
+        return live_binding.transport(connect(), agent)
 
     def reported(self, agent: AgentRecord) -> bool:
         from scripts.terminate_agent import sessions
 
+        if live_binding.managed(agent):
+            return self.observe(agent).state not in {"dead", "unknown"}
         session = live_binding.bound_session(agent, sessions())
         return session is not None and session.status == "alive"
 
@@ -783,6 +810,12 @@ class HerdrRuntime:
         self._binding_pids = {}
         for agent in agents:
             if agent.runtime_backend != "local":
+                continue
+            if live_binding.managed(agent):
+                record = self._managed_record(agent)
+                alive = live_binding.server_alive(record)
+                facts[agent.name] = live_binding.read(agent, record.server_pid) if alive else {"process": alive}
+                self._binding_pids[agent.name] = str(record.server_pid) if alive else None
                 continue
             session = live_binding.bound_session(agent, items)
             validated = agent.profile_decision.get("validation", {}).get("pid")
@@ -880,6 +913,8 @@ class HerdrRuntime:
         return self.observe(agent).state
 
     def observe(self, agent: AgentRecord) -> PaneObservation:
+        if live_binding.managed(agent):
+            return live_binding.observe_managed(self._managed_record(agent))
         if agent.runtime_backend != "local":
             return PaneObservation("unknown")
         found = self._get(pane_target(agent))
