@@ -300,7 +300,13 @@ def test_initial_beat_creates_a_complete_registry_record(redis, monkeypatch):
     monkeypatch.setattr(
         daemon,
         "observe",
-        lambda: {"slots": [], "interactive": {"claude": "", "codex": ""}, "repos": [], "sessions": {}, "quota": {}},
+        lambda **kwargs: {
+            "slots": [],
+            "interactive": {"claude": "", "codex": ""},
+            "repos": [],
+            "sessions": {},
+            "quota": {},
+        },
     )
     daemon.beat(redis, "machine")
     assert registry.show(redis, "machine") == {
@@ -536,6 +542,7 @@ def test_beat_exit_between_samples_cannot_create_negative_capacity(redis, observ
             "agent",
             "eng",
             "task",
+            seat="eng-1@swarm",
             harness="claude",
             account="one",
             execution_id="first",
