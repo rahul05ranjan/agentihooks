@@ -503,10 +503,26 @@ def test_a_launched_worker_is_handed_its_own_grant(world):
     assert launch.outcome == Outcome("spawn", Status.OK, BACKEND, f"placed-{launch.agent.name}")
 
 
-def test_a_launched_worker_is_handed_the_opening_prompt_of_its_request(world):
+def test_a_launch_hands_the_worker_the_opening_it_was_given(world):
+    agent = AgentRecord(world.store.next_name(SLUG, "eng"), "eng", "task", seat=FIRST)
+    request = SpawnRequest(None, "eng", agent.name, {"id": "task"})
+
+    launch = world.launcher.spawn(request, agent, world.terms, "", "Your one task is task.")
+
+    assert world.homes.openings == [(launch.agent.name, "Your one task is task.")]
+
+
+def test_a_launch_without_an_opening_hands_the_worker_none(world):
     launch = world.launch(FIRST)
 
-    assert world.homes.openings == [(launch.agent.name, f"opening {launch.agent.name}")]
+    assert world.homes.openings == [(launch.agent.name, "")]
+
+
+def test_a_tick_spawn_hands_the_worker_the_opening_built_for_its_request(world):
+    world.tick(FIRST)
+
+    [(name, opening)] = world.homes.openings
+    assert opening == f"opening {name}"
 
 
 @pytest.mark.parametrize("lanes,role", [({}, ""), ({"eng": {"role": "a reviewer"}}, "a reviewer")])
@@ -1115,6 +1131,7 @@ def test_a_relaunch_places_the_admitted_replacement_on_its_own_account_without_a
     assert (sent.task["account"], sent.task["endpoints"]) == (ACCOUNT, {broadcast_bridge.API_URL: API})
     assert world.rows()[f"{SLUG}/{FIRST}"]["execution_id"] == admitted.execution_id
     assert world.homes.calls == [(admitted.execution_id, sent.task["launch_grant"])]
+    assert world.homes.openings == [(admitted.name, "")]
 
 
 def test_a_relaunch_on_a_full_account_keeps_its_replacement_for_the_next_pass(world):

@@ -131,15 +131,19 @@ class DistributedLaunch:
         self.planned: PlannedAccount | None = None
         self.opening: Callable[[SpawnRequest], str] = opening
 
-    def spawn(self, request: SpawnRequest, agent: AgentRecord, terms: LaunchTerms, previous: str) -> Launch:
+    def spawn(
+        self, request: SpawnRequest, agent: AgentRecord, terms: LaunchTerms, previous: str, opening: str = ""
+    ) -> Launch:
         admitted = self.controller.admit(replace(agent, account=terms.account), previous)
-        return self._place(request, admitted, terms, self.end_refused)
+        return self._place(request, admitted, terms, self.end_refused, opening)
 
     def relaunch(self, request: SpawnRequest, admitted: AgentRecord, terms: LaunchTerms) -> Launch:
         """A refused relaunch leaves its replacement unended, so the next recovery pass places it again."""
         return self._place(request, admitted, replace(terms, account=admitted.account), kept)
 
-    def _place(self, request: SpawnRequest, admitted: AgentRecord, terms: LaunchTerms, refused: Ending) -> Launch:
+    def _place(
+        self, request: SpawnRequest, admitted: AgentRecord, terms: LaunchTerms, refused: Ending, opening: str = ""
+    ) -> Launch:
         grant = self.grants.issue(
             self.slug,
             admitted.execution_id,
@@ -167,7 +171,7 @@ class DistributedLaunch:
         if outcome.status in NOT_LAUNCHED:
             self.exited(admitted)
             return Launch(admitted, grant, slot, outcome)
-        hand = self.homes.hand(admitted, grant, self.opening(request))
+        hand = self.homes.hand(admitted, grant, opening)
         store = self.controller.store
         store.redis.hset(store.key(self.slug, HANDS), admitted.execution_id, json.dumps(asdict(hand)))
         if hand.handed or outcome.status is Status.AMBIGUOUS:
@@ -208,7 +212,7 @@ class DistributedLaunch:
         occupant = store.execution_occupants(self.slug).get(agent.seat)
         refused = occupant and store.redis.hexists(store.key(self.slug, ENDINGS), occupant.execution_id)
         previous = occupant.execution_id if refused else ""
-        return self.spawn(request, agent, replace(terms, api_url=api_url), previous).outcome
+        return self.spawn(request, agent, replace(terms, api_url=api_url), previous, self.opening(request)).outcome
 
     def end_refused(self, agent: AgentRecord, reason: str) -> AgentRecord:
         store, ended = self.controller.store, replace(agent, state=ENDED)

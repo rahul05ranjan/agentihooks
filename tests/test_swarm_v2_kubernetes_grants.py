@@ -247,6 +247,10 @@ def test_the_supervisor_loads_the_handed_record_against_the_registered_authority
     PodGrants(api, SLUG, verify, Supervision("claude", None, CONTROL, budgets)).hand(agent(), GRANT)
     attempt = tmp_path / EXECUTION
     (attempt / "homes" / "claude").mkdir(parents=True)
+    tree = attempt / "worktrees" / "engineer-1"
+    tree.mkdir(parents=True)
+    (attempt / "spool" / "workspaces").mkdir(parents=True)
+    (attempt / "spool" / "workspaces" / "t1.json").write_text(json.dumps({"path": str(tree)}))
     (attempt / "execution.json").write_text(json.dumps({"attempt": EXECUTION, "homes": {"claude": "homes/claude"}}))
     (attempt / "registration.json").write_text(json.dumps(AUTHORITY))
     path = tmp_path / LAUNCH_RECORD
@@ -256,6 +260,7 @@ def test_the_supervisor_loads_the_handed_record_against_the_registered_authority
 
     assert (launch.authority, launch.harness, launch.agent, launch.exporter) == (AUTHORITY, "claude", ("claude",), None)
     assert launch.budgets == budgets
+    assert launch.checkout == tree.resolve()
 
 
 @pytest.mark.parametrize("budgets", [Budgets(), Budgets(3, 7, 11, 4)])
