@@ -108,7 +108,7 @@ def test_a_native_checkpoint_restores_the_expected_conversation_in_a_fresh_home(
     assert restored == Restored("native", checkpoint, WATERMARK, CLAUDE, command)
     assert spy.calls == []
     _, _, cwd = _paths(tmp_path)
-    restored_session = tmp_path / "fresh" / "projects" / native.encoded(cwd) / f"{CLAUDE}.jsonl"
+    restored_session = tmp_path / "fresh" / "home" / "projects" / native.encoded(cwd) / f"{CLAUDE}.jsonl"
     assert native_cases.CODEWORD in restored_session.read_text()
     assert restorer.metrics() == {"restore_outcomes_by_type": {"native": 1}}
     assert restorer.validator is restorer.qualifier.validator
