@@ -132,7 +132,7 @@ class DistributedLaunch:
         self.opening: Callable[[SpawnRequest], str] = opening
 
     def spawn(
-        self, request: SpawnRequest, agent: AgentRecord, terms: LaunchTerms, previous: str, opening: str = ""
+        self, request: SpawnRequest, agent: AgentRecord, terms: LaunchTerms, previous: str, opening: str
     ) -> Launch:
         admitted = self.controller.admit(replace(agent, account=terms.account), previous)
         return self._place(request, admitted, terms, self.end_refused, opening)

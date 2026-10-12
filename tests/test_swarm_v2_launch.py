@@ -91,7 +91,7 @@ class World:
     def launch(self, seat, previous=""):
         agent = AgentRecord(self.store.next_name(SLUG, "eng"), "eng", "task", seat=seat)
         request = SpawnRequest(None, "eng", agent.name, {"id": "task"})
-        return self.launcher.spawn(request, agent, self.terms, previous)
+        return self.launcher.spawn(request, agent, self.terms, previous, "")
 
     def session(self, launch):
         agent = launch.agent
