@@ -1,0 +1,32 @@
+name: GitHub access audit
+
+on:
+  push:
+    branches: [dev]
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-access-audit
+  cancel-in-progress: false
+
+jobs:
+  read-back:
+    if: github.ref == 'refs/heads/dev' || (github.event_name == 'schedule' && github.ref_name == github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Read effective access controls
+        env:
+          GH_TOKEN: ${{ secrets.ORG_GITHUB_TOKEN }}
+        run: |
+          [[ -n "$GH_TOKEN" ]] || { echo '::error::The organization audit token is unavailable'; exit 1; }
+          bash scripts/github_access.sh check

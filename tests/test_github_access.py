@@ -3,7 +3,6 @@ import os
 import subprocess
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -20,9 +19,7 @@ def test_read_back_accepts_the_operator_access_boundary(tmp_path):
             "name": "owner-and-apps-only-push",
             "target": "branch",
             "enforcement": "active",
-            "conditions": {
-                "ref_name": {"include": ["~ALL"], "exclude": ["refs/heads/gh-readonly-queue/**"]}
-            },
+            "conditions": {"ref_name": {"include": ["~ALL"], "exclude": ["refs/heads/gh-readonly-queue/**"]}},
             "rules": [{"type": "creation"}, {"type": "update"}],
             "bypass_actors": [
                 {"actor_type": "RepositoryRole", "actor_id": 5, "bypass_mode": "always"},
