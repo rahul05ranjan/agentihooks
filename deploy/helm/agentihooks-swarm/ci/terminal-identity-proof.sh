@@ -9,22 +9,24 @@ controller=("deployment/$release-controller" -c controller)
 
 master="$(kubectl exec "${controller[@]}" -- env SLUG="$slug" python -c '
 import os
-from scripts.swarm.store import AgentRecord, connect
-store, slug = connect(), os.environ["SLUG"]
-name = store.next_name(slug, "master")
-store.put_agent(slug, AgentRecord(name, "master", "master", seat=f"master@{slug}"))
-print(name)' | tail -1)"
-printf 'seated %s as the master of %s\n' "$master" "$slug"
+from scripts.swarm.store import connect
+print(connect().next_name(os.environ["SLUG"], "master"))' | tail -1)"
 
 run="$(cat <<'EOF'
-import os, sys
+import json, os, sys
 
 from scripts.swarm import cli
+from scripts.swarm.store import AgentRecord, connect
 from scripts.swarm_v2.kubernetes import operator_terminal
 from scripts.swarm_v2.operator_auth import OPERATOR
 
 if os.environ.get("PLANT") == "every caller is the operator":
     operator_terminal.principal = lambda *_: OPERATOR
+if seat := os.environ.get("SEAT"):
+    store = connect()
+    store.put_agent(sys.argv[1], AgentRecord(seat, "master", "master", seat=f"master@{sys.argv[1]}"))
+    seated = [(agent.lane, agent.state) for agent in store.agents(sys.argv[1]) if agent.name == seat]
+    print(f"seated {seat} as the master of {sys.argv[1]}: {json.dumps(seated)}", file=sys.stderr, flush=True)
 sys.exit(cli.main([sys.argv[1], "terminal", sys.argv[2]]))
 EOF
 )"
@@ -47,7 +49,7 @@ check() {
     return 1
   fi
   printf 'the operator identity attached to the worker terminal: %s\n' "$(tail -1 <<< "$out")"
-  if out="$(terminal "$fault" AGENTIHOOKS_AGENT_NAME="$master" AGENTIHOOKS_SWARM="$slug")"; then
+  if out="$(terminal "$fault" SEAT="$master" AGENTIHOOKS_AGENT_NAME="$master" AGENTIHOOKS_SWARM="$slug")"; then
     printf 'the master identity %s was not refused the worker terminal: %s\n' "$master" "$out"
     return 1
   fi
