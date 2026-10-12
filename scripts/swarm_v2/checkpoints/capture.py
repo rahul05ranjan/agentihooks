@@ -61,7 +61,7 @@ def publish(attempt: Path, scope: dict, environ: Mapping[str, str], newest: Path
     if "image_digest" not in spec:
         return {"status": "incomplete", "reason": "image_identity_absent"}
     store = runtime.worker_store(spec, attempt, environ)
-    qualifier = native.Qualifier(model.Validator(store))
+    qualifier = native.Qualifier(model.Validator(store, execution_generation=spec["registration"]["generation"]))
     record = json.loads((attempt / "execution.json").read_text())
     execution = filesystem.recorded(attempt.resolve(), record)
     worktree = execution.path("worktree")
@@ -72,7 +72,7 @@ def publish(attempt: Path, scope: dict, environ: Mapping[str, str], newest: Path
     checkpoint_id = f"ckp-{scope['incarnation']}"
     doc = document(spec, checkpoint_id, sequence, source)
     doc["authority"]["task_generation"] = store.scope.generation
-    doc["reconstruction"]["execution_generation"] = store.scope.generation
+    doc["authority"]["execution_generation"] = spec["registration"]["generation"]
     text, records = transcript(newest)
     doc["transcript_durable_cursor"] = {"sequence": records, "byte_offset": len(text)}
     harness = spec["harness"]

@@ -8,7 +8,7 @@ from scripts.swarm_v2 import filesystem
 from scripts.swarm_v2.artifacts.base import ArtifactRef, ArtifactStore, Backend
 from scripts.swarm_v2.artifacts.local import LocalBackend
 from scripts.swarm_v2.auth_context import Registration
-from scripts.swarm_v2.checkpoints import model, native, restore
+from scripts.swarm_v2.checkpoints import git_capture, model, native, restore
 
 ROOT = "AGENTIHOOKS_CHECKPOINT_ROOT"
 REMOTE = "AGENTIHOOKS_CHECKPOINT_REMOTE"
@@ -27,7 +27,7 @@ def granted(root: Path | Backend, registration: Registration) -> ArtifactStore:
 
 
 def configured(environ: Mapping[str, str]) -> Path | Backend | None:
-    if environ.get(REMOTE) == "true":
+    if environ.get("AGENTIHOOKS_CHECKPOINT_BUCKET"):
         from scripts.swarm_v2.artifacts.remote import controller_backend
 
         return controller_backend(environ)
@@ -73,6 +73,21 @@ def version(harness: str, environ: Mapping[str, str]) -> str:
     ).stdout.strip()
 
 
+def source(validator: model.Validator, checkpoint_id: str, target: Path) -> model.Verdict:
+    doc = json.loads(validator.store.get_range(validator.store.recorded(checkpoint_id)))
+    if not (target / ".git").exists():
+        project = doc["authority"]["project_id"]
+        if not project.startswith("github.com/"):
+            raise git_capture.SourceError("source checkout is unavailable")
+        subprocess.run(
+            ["git", "clone", "--no-checkout", f"https://{project}.git", str(target)],
+            capture_output=True,
+            timeout=120,
+            check=True,
+        )
+    return git_capture.restore(validator, checkpoint_id, target)
+
+
 def validate_export(attempt: Path, identifier: str, environ: Mapping[str, str]) -> bool:
     if not environ.get(ROOT) and environ.get(REMOTE) != "true":
         return False
@@ -81,7 +96,7 @@ def validate_export(attempt: Path, identifier: str, environ: Mapping[str, str]) 
 
 
 def restoring(store: ArtifactStore, directive: restore.Directive, paths: restore.Paths) -> restore.Restored:
-    restorer = restore.Restorer(native.Qualifier(model.Validator(store)))
+    restorer = restore.Restorer(native.Qualifier(model.Validator(store)), source)
     return restorer.restore(directive, paths.worktree, paths.home, paths.cwd, paths.version_text)
 
 
@@ -92,6 +107,13 @@ def prepare(spec: dict, attempt: Path, environ: Mapping[str, str] = os.environ) 
     if directive.recovery == restore.FRESH:
         return restore.launched(spec)
     store = worker_store(spec, attempt, environ)
+    validator = model.Validator(store)
+    verdict = validator.verify(directive.checkpoint_id)
+    if not verdict.authoritative:
+        raise restore.RestoreRefused(verdict.reason)
+    doc = json.loads(store.get_range(store.recorded(directive.checkpoint_id)))
+    if doc["authority"]["project_id"] not in spec["registration"]["project_ids"]:
+        raise restore.RestoreRefused("checkpoint project is not granted to this worker")
     record = json.loads((attempt / "execution.json").read_text())
     execution = filesystem.recorded(attempt.resolve(), record)
     harness = spec["harness"]
@@ -123,9 +145,14 @@ def command(attempt: Path, original: tuple[str, ...]) -> tuple[str, ...]:
 
 class Checkpoints:
     def __init__(
-        self, root: Path | Backend | None, registered: Callable[[str], Registration | None], compatibility: str
+        self,
+        root: Path | Backend | None,
+        registered: Callable[[str], Registration | None],
+        compatibility: str,
+        execution_generation: Callable[[str], int | None] = lambda execution_id: None,
     ) -> None:
         self.root, self.registered, self.compatibility = root, registered, compatibility
+        self.execution_generation = execution_generation
 
     def validator(self, execution_id: str) -> model.Validator | None:
         if self.root is None:
@@ -133,7 +160,9 @@ class Checkpoints:
         registration = self.registered(execution_id)
         if registration is None:
             return None
-        return model.Validator(granted(self.root, registration))
+        return model.Validator(
+            granted(self.root, registration), execution_generation=self.execution_generation(execution_id)
+        )
 
     def list(self, execution_id: str) -> list[dict]:
         validator = self.validator(execution_id)

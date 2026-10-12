@@ -39,7 +39,7 @@ def positive(root: Path) -> dict:
     with world.clocked():
         controller, _ = world.controller()
         assert controller.acquire()
-        old = world.launch(controller, world.fx["first"])
+        old = world.launch(controller, {**world.fx["first"], "native_session": native_cases.SESSIONS["claude"]})
         world.checkpoints.by_execution[old.execution_id] = [
             {
                 "checkpoint_id": "ckpt-1",
@@ -54,10 +54,17 @@ def positive(root: Path) -> dict:
         ledger, launch = _Ledger(), _Relaunch()
         replacements = Replacements(recovery, launch, ledger)
         replacements()
+        assert ledger.rows[0]["awaiting"] == "recovery_pending"
+        assert ledger.rows[0]["recovery"]["status"] == "accepted"
+        assert recovery.restore_outcomes_by_type()["native"] == 0
+        recovery.confirm(decision.replacement, asdict(result))
         replacements()
         assert len(launch.calls) == 1
         assert len(world.attempts()) == 2
-        assert ledger.rows[0]["recovery"] == recovery.restore(decision.replacement)
+        assert ledger.rows[0]["recovery"] == recovery.outcome(decision.replacement)
+        assert ledger.rows[0]["recovery"]["status"] == "verified"
+        assert ledger.rows[0]["recovery"]["watermark"] == 41
+        assert ledger.rows[0]["recovery"]["archive_watermark"] == 4096
         assert ledger.rows[0]["recovery"]["recovery"] == result.recovery
         assert recovery.fence(old.execution_id)["generation"] == old.generation
         return {

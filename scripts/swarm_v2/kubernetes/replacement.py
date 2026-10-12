@@ -78,7 +78,7 @@ class Replacements:
         for execution_id, successor in sorted(self.store.redis.hgetall(self._key(LAUNCHED)).items()):
             outcome = self.recovery.outcome(successor)
             recorded = self.store.redis.hget(self._key(RECORDED), execution_id)
-            if recorded == SUPERSEDED or recorded == "verified":
+            if recorded == SUPERSEDED or recorded == "verified" or (recorded == "accepted" and outcome is None):
                 continue
             directive = self.recovery.restore(successor)
             if directive is not None:

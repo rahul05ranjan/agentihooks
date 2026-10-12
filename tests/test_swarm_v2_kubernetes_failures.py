@@ -993,11 +993,15 @@ class _Stdout:
 
 class _Relaunch:
     def __init__(self, *statuses):
-        self.statuses, self.calls = list(statuses), []
+        self.statuses, self.calls, self.recovery = list(statuses), [], None
 
     def __call__(self, request, agent):
         self.calls.append((request, agent))
         status = self.statuses.pop(0) if self.statuses else Status.OK
+        if status == Status.OK and self.recovery is not None:
+            directive = self.recovery.restore(agent.execution_id)
+            if directive is not None:
+                self.recovery.confirm(agent.execution_id, {**directive, "command": []})
         return SimpleNamespace(outcome=Outcome("spawn", status, "kubernetes"))
 
 
@@ -1023,8 +1027,14 @@ def _directive(world, recovery="native", checkpoint="ckpt-one-2"):
     }
 
 
+def _outcome(world, recovery="native", checkpoint="ckpt-one-2"):
+    directive = _directive(world, recovery, checkpoint)
+    return {**directive, "command": [], "status": "verified", "archive_watermark": directive["watermark"]}
+
+
 def test_a_pending_recovery_marks_its_task_until_the_resumed_replacement_launches_from_its_checkpoint(world):
     recovery, ledger, relaunch = world.recovery(world.live, automatic=False), _Ledger(), _Relaunch()
+    relaunch.recovery = recovery
     replacements = replacement.Replacements(recovery, relaunch, ledger)
     world.show(world.old, "oom_killed")
     assert world.reconcile(recovery) == {world.old.execution_id: "fenced"}
@@ -1051,9 +1061,9 @@ def test_a_pending_recovery_marks_its_task_until_the_resumed_replacement_launche
     }
     assert ledger.calls[1:] == [
         (cases.SLUG, "task", {"awaiting": ""}, epoch),
-        (cases.SLUG, "task", {"recovery": _directive(world)}, epoch),
+        (cases.SLUG, "task", {"recovery": _outcome(world)}, epoch),
     ]
-    assert _hash(world, "attempt-recovery-records") == {world.old.execution_id: "native"}
+    assert _hash(world, "attempt-recovery-records") == {world.old.execution_id: "verified"}
     assert _hash(world, "recovery-pending-tasks") == {}
     assert _hash(world, "attempt-replacement-launches") == {world.old.execution_id: decision.replacement}
 
@@ -1063,6 +1073,7 @@ def test_a_pending_recovery_marks_its_task_until_the_resumed_replacement_launche
 
 def test_a_refused_replacement_launch_keeps_its_task_waiting_and_launches_on_a_later_pass(world):
     recovery, ledger, relaunch = world.recovery(world.live), _Ledger(), _Relaunch(Status.UNAVAILABLE)
+    relaunch.recovery = recovery
     replacements = replacement.Replacements(recovery, relaunch, ledger)
     world.show(world.old, "oom_killed")
     world.reconcile(recovery)
@@ -1081,6 +1092,7 @@ def test_a_fresh_replacement_launches_without_a_checkpoint_and_a_refused_mark_wa
     world, monkeypatch
 ):
     recovery, ledger, relaunch = world.recovery(world.live, automatic=False), _Ledger(refusals=1), _Relaunch()
+    relaunch.recovery = recovery
     replacements = replacement.Replacements(recovery, relaunch, ledger)
     world.show(world.old, "oom_killed")
     world.reconcile(recovery)
@@ -1108,6 +1120,7 @@ def test_a_fresh_replacement_launches_without_a_checkpoint_and_a_refused_mark_wa
 
 def test_a_stale_controller_records_no_launch_and_writes_no_mark(world):
     recovery, ledger, relaunch = world.recovery(world.live), _Ledger(), _Relaunch()
+    relaunch.recovery = recovery
     replacements = replacement.Replacements(recovery, relaunch, ledger)
     world.show(world.old, "oom_killed")
     world.reconcile(recovery)
@@ -1156,6 +1169,7 @@ def test_a_controller_that_loses_its_lease_during_the_launch_records_no_launch(w
 
 def test_an_ambiguous_replacement_launch_counts_as_launched_and_is_never_placed_twice(world):
     recovery, ledger, relaunch = world.recovery(world.live), _Ledger(), _Relaunch(Status.AMBIGUOUS)
+    relaunch.recovery = recovery
     replacements = replacement.Replacements(recovery, relaunch, ledger)
     world.show(world.old, "oom_killed")
     world.reconcile(recovery)
@@ -1171,6 +1185,7 @@ def test_an_ambiguous_replacement_launch_counts_as_launched_and_is_never_placed_
 
 def test_a_replacement_the_seat_has_moved_past_is_never_launched_and_its_task_stops_waiting(world):
     recovery, ledger, relaunch = world.recovery(world.live, automatic=False), _Ledger(), _Relaunch()
+    relaunch.recovery = recovery
     replacements = replacement.Replacements(recovery, relaunch, ledger)
     world.show(world.old, "oom_killed")
     world.reconcile(recovery)
@@ -1189,6 +1204,7 @@ def test_a_replacement_the_seat_has_moved_past_is_never_launched_and_its_task_st
 
 def test_a_fence_whose_decision_is_not_written_yet_waits_without_a_launch(world):
     recovery, ledger, relaunch = world.recovery(world.live), _Ledger(), _Relaunch()
+    relaunch.recovery = recovery
     replacements = replacement.Replacements(recovery, relaunch, ledger)
     fence = {"execution_id": world.old.execution_id, "reason": "oom_killed", "released": []}
     world.store.redis.hset(world.store.key(cases.SLUG, "attempt-fences"), world.old.execution_id, json.dumps(fence))
@@ -1266,7 +1282,7 @@ def test_a_context_only_checkpoint_waits_for_an_explicit_choice_and_restores_as_
     decision = recovery.decide(world.old.execution_id, "resume")
     assert (decision.mode, decision.checkpoint) == ("resume", "ckpt-context")
     assert recovery.restore(decision.replacement) == _directive(world, "reconstructed", "ckpt-context")
-    assert recovery.restore_outcomes_by_type() == {"native": 0, "reconstructed": 1, "fresh": 0}
+    assert recovery.restore_outcomes_by_type() == {"native": 0, "reconstructed": 0, "fresh": 0}
 
 
 def test_an_attempt_without_a_native_session_never_resumes_natively(world):
