@@ -1,0 +1,84 @@
+{
+  "task": "t360",
+  "issue": "https://github.com/the-cloud-clockwork/agentihooks/issues/2801",
+  "rehearsal_complete": false,
+  "status": "prepared; held until checkpoint and terminal attach proofs finish",
+  "rollback_source_revision": "48411b017f9d3cfb9024196598d6c31d0e7ed269",
+  "images": [
+    {
+      "source_revision": "5d7232e0ad5ad29abbc59f03a252d15a325df566",
+      "ci_run": "38218533807",
+      "ci_url": "https://github.com/the-cloud-clockwork/agentihooks/actions/runs/38218533807",
+      "qualified_manifest": "sha256:1cc07049e087a540463a5b7dcda50b96a4ee49b4427bedf40141ea8d0ba49097",
+      "qualified_config": "sha256:b3c61a03f8ad0696afc996585da4d6ddca66a74e0b2f5b03f56422f0953c5a6f",
+      "qualified_targets": 3,
+      "promotable": true,
+      "incompatible_fixture": {
+        "promotable": false,
+        "refusals": [
+          "herdr protocol is not 22",
+          "herdr server lacks health_check=True"
+        ]
+      },
+      "observed_remote_index": "sha256:b25cb35144275cb7ea39407a930b68c65a9c2264c9b248ee5669f478230f23ff"
+    },
+    {
+      "source_revision": "48411b017f9d3cfb9024196598d6c31d0e7ed269",
+      "ci_run": "38233286695",
+      "ci_url": "https://github.com/the-cloud-clockwork/agentihooks/actions/runs/38233286695",
+      "qualified_manifest": "sha256:96bcc3d4cb25ff08beebba33b786f462c7f6fefe53db3fb3b267d934d51700a5",
+      "qualified_config": "sha256:1d9a11f94c9cf9390ebc69b2b78d3a61ca5f685cf6850bfa88f815136928c202",
+      "qualified_targets": 3,
+      "promotable": true,
+      "incompatible_fixture": {
+        "promotable": false,
+        "refusals": [
+          "herdr protocol is not 22",
+          "herdr server lacks health_check=True"
+        ]
+      },
+      "observed_remote_index": "sha256:8a354562044754e32d66a18072a78fde7d81f107b8288ed819f87bdeb88317fd"
+    }
+  ],
+  "registry_checks": [
+    {
+      "command": "docker buildx imagetools inspect --raw ghcr.io/the-cloud-clockwork/agentihooks-worker@sha256:b25cb35144275cb7ea39407a930b68c65a9c2264c9b248ee5669f478230f23ff",
+      "output": {
+        "manifests": [
+          {
+            "digest": "sha256:1cc07049e087a540463a5b7dcda50b96a4ee49b4427bedf40141ea8d0ba49097",
+            "platform": {
+              "architecture": "amd64",
+              "os": "linux"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "command": "docker buildx imagetools inspect --raw ghcr.io/the-cloud-clockwork/agentihooks-worker@sha256:8a354562044754e32d66a18072a78fde7d81f107b8288ed819f87bdeb88317fd",
+      "output": {
+        "manifests": [
+          {
+            "digest": "sha256:96bcc3d4cb25ff08beebba33b786f462c7f6fefe53db3fb3b267d934d51700a5",
+            "platform": {
+              "architecture": "amd64",
+              "os": "linux"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "pending": [
+    "checkpoint proof completed",
+    "terminal attach proof completed",
+    "rollback review and CI",
+    "rollback merge",
+    "rollback floating tag publish",
+    "rollback rollout and deployed worker observation",
+    "incompatible attempt refusal during rehearsal",
+    "revert the rollback and verify CI plus deployed roll forward"
+  ],
+  "constraint": "Evidence digests identify observations only; deployment stays on floating dev, no image or values pins."
+}

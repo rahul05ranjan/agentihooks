@@ -22,19 +22,14 @@ JUMP_ENV = "AGENTIHOOKS_TERMINAL_JUMP"
 JUMP_KEY_ENV = "AGENTIHOOKS_TERMINAL_JUMP_HOST_KEY"
 
 
-def jump_address(value: str) -> tuple[str, int] | None:
-    host, _, port = value.rpartition(":")
-    valid = host and not any(char.isspace() for char in host) and port.isdigit() and 0 < int(port) < 65536
-    return (host, int(port)) if valid else None
-
-
 def jump(environ: Mapping[str, str]) -> Jump | None:
     if not environ.get(JUMP_ENV):
         return None
-    address = jump_address(environ[JUMP_ENV])
-    if not (address and environ.get(JUMP_KEY_ENV)):
+    host, _, port = environ[JUMP_ENV].rpartition(":")
+    valid = host and not any(char.isspace() for char in host) and port.isdigit() and 0 < int(port) < 65536
+    if not (valid and environ.get(JUMP_KEY_ENV)):
         raise SwarmError(f"{JUMP_ENV} must be host:port with {JUMP_KEY_ENV} naming its host key")
-    return Jump(*address, environ[JUMP_KEY_ENV])
+    return Jump(host, int(port), environ[JUMP_KEY_ENV])
 
 
 def client_home(environ: Mapping[str, str]) -> ClientHome:

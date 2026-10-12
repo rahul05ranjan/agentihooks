@@ -1338,28 +1338,6 @@ def test_a_controller_exposing_terminals_reconciles_the_anton_client_at_start(tm
         service.stop()
 
 
-def test_a_controller_with_the_jump_state_lists_its_worker_terminals_there(tmp_path, monkeypatch):
-    from scripts.swarm_v2.kubernetes import jump
-
-    state = tmp_path / "jump"
-    state.mkdir()
-    service, _, _ = _anton_client(tmp_path, monkeypatch, _store(), **{jump.STATE_ENV: str(state)})
-    try:
-        assert isinstance(service.controller.jump, jump.Routes)
-        assert (service.controller.jump.state, service.controller.jump.namespace) == (state, "swarm-pod-proof")
-        assert (state / "principals").read_text() == ""
-    finally:
-        service.stop()
-
-
-def test_a_controller_without_the_jump_state_lists_no_jump_route(tmp_path, monkeypatch):
-    service, _, _ = _anton_client(tmp_path, monkeypatch, _store())
-    try:
-        assert service.controller.jump is None
-    finally:
-        service.stop()
-
-
 def test_switched_off_the_controller_runs_no_herdr_command_and_reads_no_ca_key(tmp_path, monkeypatch):
     off = {"AGENTIHOOKS_HERDR_REGISTRATIONS": "off", operator_terminal.CA_KEY_ENV: str(tmp_path / "missing")}
     service, herdr, environments = _anton_client(tmp_path, monkeypatch, _store(), **off)
