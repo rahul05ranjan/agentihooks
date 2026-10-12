@@ -36,7 +36,6 @@ jobs:
     if: >-
       github.event_name != 'pull_request_target' &&
       (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) &&
-      contains(fromJSON(needs.runner-trust.outputs.actors), github.actor) &&
       contains(fromJSON(needs.runner-trust.outputs.actors), github.triggering_actor) &&
       (github.actor != fromJSON(needs.runner-trust.outputs.queue_actor) || github.event_name == 'merge_group' ||
       (github.event_name == 'push' && github.ref == 'refs/heads/dev')) &&
