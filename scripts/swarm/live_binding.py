@@ -9,7 +9,9 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from scripts.codex_session.binding import TransportRecord
 from scripts.swarm.health.findings import Finding
+from scripts.swarm.pane import PaneObservation
 from scripts.swarm.store import AgentRecord, RedisStore, SwarmConfig
 
 if TYPE_CHECKING:
@@ -107,7 +109,7 @@ def managed(agent: AgentRecord) -> bool:
     return agent.runtime_backend == "local" and getattr(agent, "transport", "") == APP_SERVER_TRANSPORT
 
 
-def transport(store: RedisStore, agent: AgentRecord):
+def transport(store: RedisStore, agent: AgentRecord) -> TransportRecord | None:
     from scripts.codex_session.binding import BindingStore
 
     slug = store.names.slug_of(agent.name)
@@ -124,7 +126,7 @@ def transport(store: RedisStore, agent: AgentRecord):
     return record
 
 
-def server_alive(record) -> bool | None:
+def server_alive(record: TransportRecord | None) -> bool | None:
     from scripts.codex_session import supervisor
     from scripts.codex_session.binding import EXITED, FAILED
 
@@ -137,10 +139,9 @@ def server_alive(record) -> bool | None:
     return supervisor.owns(record, supervisor.start_time)
 
 
-def observe_managed(record):
+def observe_managed(record: TransportRecord | None) -> PaneObservation:
     from scripts.codex_session import protocol
     from scripts.codex_session.supervisor import UNIX
-    from scripts.swarm.pane import PaneObservation
 
     alive = server_alive(record)
     if alive is False:

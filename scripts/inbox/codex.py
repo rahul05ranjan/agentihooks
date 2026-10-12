@@ -1,15 +1,21 @@
 """Codex push pump: deliver one recipient's inbox into its bound app-server thread, one submission at a time."""
 
+from __future__ import annotations
+
 import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING
 
 from scripts.codex_session import protocol
-from scripts.codex_session.binding import CONNECTED, DEGRADED, BindingStore
+from scripts.codex_session.binding import CONNECTED, DEGRADED, BindingStore, TransportRecord
 from scripts.inbox.dispatch import Dispatcher, digest
 from scripts.inbox.receipts import MISMATCH, RELEASED, Delivery, DispatchError
 from scripts.inbox.store import NOTIFY, InboxStore, Item, now_ms
+
+if TYPE_CHECKING:
+    from redis.client import Pipeline
 
 STOPPED = "stopped"
 UNOBSERVED = "an active turn that began before this pump connected"
@@ -97,7 +103,7 @@ class Transport:
 
         transact(self.bindings.redis, update)
 
-    def require(self, pipe=None):
+    def require(self, pipe: Pipeline | None = None) -> TransportRecord:
         from scripts.codex_session.binding import EXITED, FAILED
 
         store = self.bindings.store
