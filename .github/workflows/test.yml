@@ -67,6 +67,7 @@ jobs:
         with:
           python-version: "3.12"
 
+      # The Anton image carries PyYAML in the user site, which `python -I` below never reads.
       - name: Install metadata dependencies
         if: hashFiles('scripts/ci_reuse.py') != ''
         env:
