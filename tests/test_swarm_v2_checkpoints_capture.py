@@ -1,5 +1,6 @@
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
+from pathlib import Path
 
 import pytest
 
@@ -74,3 +75,16 @@ def test_unsupported_native_version_is_published_only_as_context(portable, monke
     verdict = model.Validator(store).verify("ckp-fixture")
     assert verdict.authoritative
     assert verdict.continuation == "context"
+
+
+def test_capture_keeps_execution_generation_when_the_task_generation_differs(portable, monkeypatch):
+    attempt, scope, environ, newest = portable
+    spec = json.loads((attempt / "launch.json").read_text())
+    store = runtime.granted(Path(environ[runtime.ROOT]), replace(Registration(**spec["registration"]), generation=7))
+    monkeypatch.setattr(runtime, "worker_store", lambda *args: store)
+    assert capture.publish(attempt, scope, environ, newest)["status"] == "complete"
+    doc = json.loads(store.get_range(store.recorded("ckp-fixture")))
+    assert doc["authority"]["task_generation"] == 7
+    assert doc["authority"]["execution_generation"] == 2
+    assert doc["reconstruction"]["execution_generation"] == 2
+    assert model.Validator(store, execution_generation=2).verify("ckp-fixture").authoritative

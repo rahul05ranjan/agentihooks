@@ -137,7 +137,7 @@ def run_case(case: str, root: Path) -> dict:
     first = functions[case](root / "first")
     second = functions[case](root / "second")
     assert first == second
-    return {
+    record = {
         "package": "SV2-CKP-05",
         "case": case,
         "mocked": True,
@@ -149,3 +149,4 @@ def run_case(case: str, root: Path) -> dict:
         "assertions": first,
         "status": "passed",
     }
+    return json.loads(json.dumps(record))

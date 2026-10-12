@@ -232,7 +232,12 @@ class Recovery:
         actual = (restored.get("recovery"), restored.get("checkpoint_id"), restored.get("session_id"))
         if actual != expected or type(restored.get("watermark")) is not int or restored["watermark"] < 0:
             raise SwarmError("restore outcome does not match the accepted directive")
-        outcome = {**restored, "status": "verified", "archive_watermark": directive["watermark"]}
+        outcome = {
+            **restored,
+            "command": list(restored["command"]),
+            "status": "verified",
+            "archive_watermark": directive["watermark"],
+        }
         known = self.outcome(replacement)
         if known is not None and known != outcome:
             raise SwarmError("restore outcome is already recorded")

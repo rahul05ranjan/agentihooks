@@ -128,6 +128,26 @@ def test_a_master_lists_verified_checkpoints_for_a_recovery(pending):
     assert answer["checkpoints"] == entries
 
 
+def test_the_controller_requires_a_bound_worker_before_confirming_recovery(pending):
+    decision = pending.recovery.request(pending.old.execution_id, "fresh")
+    path = f"/v1/executions/{decision.replacement}/restore-outcome"
+    api = pending.service.recovery_api
+    api.worker = lambda token: SimpleNamespace(execution_id=decision.replacement) if token == "worker fixture" else None
+    body = {"recovery": "fresh", "checkpoint_id": "", "watermark": 4096, "session_id": "", "command": []}
+    before = pending.world.protected()
+    assert api.route("POST", path, "Bearer unbound fixture", body)[0] == 403
+    assert pending.world.protected() == before
+    assert pending.recovery.outcome(decision.replacement) is None
+    status, confirmed = api.route("POST", path, "Bearer worker fixture", body)
+    assert status == 200
+    assert confirmed == {**body, "status": "verified", "archive_watermark": 4096}
+    assert pending.recovery.restore_outcomes_by_type() == {"native": 0, "reconstructed": 0, "fresh": 1}
+    assert api.route("POST", path, "Bearer worker fixture", body) == (200, confirmed)
+    refused = {**body, "recovery": "native", "session_id": "fresh-session"}
+    assert api.route("POST", path, "Bearer worker fixture", refused)[0] == 409
+    assert pending.recovery.outcome(decision.replacement) == confirmed
+
+
 @pytest.mark.parametrize("choice", ["fresh", "resume"])
 def test_restore_command_delivers_master_decision_to_anton(pending, monkeypatch, capsys, choice):
     from scripts.gates import Who
