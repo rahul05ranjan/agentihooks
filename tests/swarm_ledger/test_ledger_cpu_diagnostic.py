@@ -48,12 +48,17 @@ def document():
         "artifacts": [],
         "alerts": [],
     }
+    seed = copy.deepcopy(doc)
+    seed["tasks"] = seed["tasks"][:500]
+    seed["followups"] = seed["followups"][:500]
+    seed["notifications"] = seed["notifications"][:500]
+    seed["chat"] = seed["chat"][:100]
     doc["_meta"] = {
         "rev": 2,
         "created_at": 1,
         "updated_at": 2,
         "members": {},
-        "seeds": {"1": copy.deepcopy(doc), "2": copy.deepcopy(doc)},
+        "seeds": {"1": copy.deepcopy(seed), "2": copy.deepcopy(seed)},
         "events": [{"rev": n, "kind": "comment", "text": "j" * 200} for n in range(2000)],
     }
     return doc
@@ -93,11 +98,13 @@ def test_cpu_and_heap_replay(tmp_path, monkeypatch):
     report.append(profile("collection without stream", lambda: ledger_read(host, "diagnostic", "tasks", {})))
     report.append(profile("single task without stream", lambda: ledger_read(host, "diagnostic", "tasks/t1", {})))
     report.append(profile("export with seeds", lambda: repo.export_document("diagnostic")))
+    report.append(profile("write without stream", lambda: repo.apply_ops("diagnostic", ops=[])))
     hub = Hub()
     monkeypatch.setattr(server, "HUB", hub)
     host.repository = Publishing(repo, server.publish_ledger)
     hub.open("diagnostic", lambda: {"ledger": server.ledger_view(repo.get_document("diagnostic"))})
     report.append(profile("collection with stream", lambda: ledger_read(host, "diagnostic", "tasks", {})))
+    report.append(profile("write with stream", lambda: host.repository.apply_ops("diagnostic", ops=[])))
     gc.collect()
     tracemalloc.start()
     for _ in range(8):
