@@ -114,6 +114,24 @@ def _hosted(runner: object) -> bool:
     )
 
 
+def _selector(runner: object, policy: object) -> bool:
+    if not isinstance(runner, str) or not isinstance(policy, dict):
+        return False
+    members = json.dumps(policy["actors"], separators=(",", ":"))
+    queue = policy["queue_actor"]
+    condition = (
+        "(github.event_name != 'pull_request_target' && "
+        "(github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && "
+        f"contains(fromJSON('{members}'), github.actor) && contains(fromJSON('{members}'), github.triggering_actor) || "
+        "(github.event_name == 'merge_group' || github.event_name == 'push' && github.ref == 'refs/heads/dev') && "
+        f"github.actor == '{queue}' && github.triggering_actor == '{queue}')"
+    )
+    return any(
+        _compact(runner) == _compact("${{ " + condition + " && '" + pool + "' || 'ubuntu-latest' }}")
+        for pool in ("anton-oss", "anton-oss-light", "anton-oss-batch")
+    )
+
+
 def check(workflows: dict[str, dict], actors: object = None) -> list[str]:
     if actors is not None:
         validate_actors(actors)
@@ -137,7 +155,7 @@ def check(workflows: dict[str, dict], actors: object = None) -> list[str]:
                 if Path(uses).name not in workflows:
                     problems.append(f"{file}/{name}: runner trust cannot resolve local workflow {uses}")
                 continue
-            if not uses and _hosted(job.get("runs-on")):
+            if not uses and (_hosted(job.get("runs-on")) or _selector(job.get("runs-on"), actors)):
                 continue
             if "pull_request_target" in events or not _guarded(job, jobs):
                 problems.append(

@@ -280,6 +280,20 @@ def test_selector_is_graded_against_base_approvals_instead_of_head_literals():
     assert ci_runner_trust.check({"test.yml": {"jobs": {"test": {"runs-on": selector()}}}}, policy)
 
 
+def test_runner_cli_accepts_the_selector_only_with_protected_policy_metadata(tmp_path):
+    import json
+
+    import yaml
+
+    folder = tmp_path / ".github/workflows"
+    folder.mkdir(parents=True)
+    (folder / "trusted-actors.json").write_text(
+        json.dumps({"actors": ACTORS, "queue_actor": "github-merge-queue[bot]"})
+    )
+    (folder / "selected.yml").write_text(yaml.safe_dump({"jobs": {"test": {"runs-on": selector()}}}))
+    assert ci_runner_trust.main(["--root", str(tmp_path)]) == 0
+
+
 @pytest.mark.parametrize(
     "guard", ["${{ " + GUARD + " }}", "${{" + GUARD + "}}", GUARD + " && (true)", GUARD + " && ((true))"]
 )
