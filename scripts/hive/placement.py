@@ -8,7 +8,7 @@ from scripts.hive.registry import UI_ROLES, live
 
 MASTER = "master"
 INTERACTIVE = "interactive"
-EPHEMERAL = "yes"
+YES = "yes"
 NO_UI_HIVE = "no UI hive live"
 UNRANKED = math.inf
 
@@ -41,7 +41,7 @@ def _order(role: str) -> Callable[[dict], tuple]:
     return lambda hive: (
         hive["prefer"].get(role, UNRANKED),
         -_room(hive),
-        hive["ephemeral"] == EPHEMERAL,
+        hive["ephemeral"] == YES,
         hive["id"],
     )
 
@@ -49,10 +49,11 @@ def _order(role: str) -> Callable[[dict], tuple]:
 def place(role: str, harness: str, slot: str, route_kind: str, repo: str, hives: list[dict], now: int) -> str | Wait:
     alive = [hive for hive in hives if live(hive, now)]
     candidates = [hive for hive in alive if role in hive["roles"]]
+    ui_live = any(hive["ui"] == YES for hive in alive)
     if not candidates:
-        if role == MASTER and alive:
+        if role == MASTER and alive and not ui_live:
             candidates = alive
-        elif role in UI_ROLES:
+        elif role in UI_ROLES and not ui_live:
             return Wait(NO_UI_HIVE)
         else:
             return Wait(f"no live hive takes {role}")

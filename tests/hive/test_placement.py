@@ -53,6 +53,15 @@ CASES = {
     "both off eng": ("eng", fleet("pc", "vm"), "subscription", REPO, "pods"),
     "all off master": ("master", fleet("pc", "vm", "pods"), "subscription", REPO, NO_UI),
     "pods off eng": ("eng", fleet("pods"), "subscription", REPO, Wait("no live hive takes eng")),
+    "all off eng": ("eng", fleet("pc", "vm", "pods"), "subscription", REPO, Wait("no live hive takes eng")),
+    "vm off qa beside a live pc": ("qa", fleet("vm"), "subscription", REPO, Wait("no live hive takes qa")),
+    "master beside a live qa hive": (
+        "master",
+        fleet("pc", vm={"roles": ["qa", "frontend"]}),
+        "subscription",
+        REPO,
+        Wait("no live hive takes master"),
+    ),
     "full pc keeps the master": ("master", fleet(pc={"agents": 1}), "subscription", REPO, "pc"),
     "full vm qa": ("qa", fleet(vm={"agents": 2}), "subscription", REPO, Wait("no hive for qa has room")),
     "vm one short qa": ("qa", fleet(vm={"agents": 1}), "subscription", REPO, "vm"),
@@ -65,6 +74,13 @@ CASES = {
         "subscription",
         REPO,
         Wait("no hive for qa advertises the claude slot acct"),
+    ),
+    "slot among others": (
+        "qa",
+        fleet(vm={"slots": [{"harness": "claude", "account": "acct"}, {"harness": "codex", "account": "acct"}]}),
+        "subscription",
+        REPO,
+        "vm",
     ),
     "slot missing on pc": ("master", fleet(pc={"slots": []}), "subscription", REPO, "vm"),
     "login missing master": (
@@ -81,7 +97,7 @@ CASES = {
 
 
 @pytest.mark.parametrize(("role", "hives", "route_kind", "repo", "expected"), CASES.values(), ids=CASES.keys())
-def test_the_operator_example(role, hives, route_kind, repo, expected):
+def test_each_operator_example_case_places_or_waits(role, hives, route_kind, repo, expected):
     assert place(role, "claude", "acct", route_kind, repo, hives, NOW) == expected
 
 
