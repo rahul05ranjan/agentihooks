@@ -16,6 +16,18 @@ class KillMemory:
         killer = path.read_text() if path.is_file() else None
         return sorted(tests, key=lambda test: test != killer)
 
+    def prepare(self, mutant: str | None, tests: Iterable[str]) -> Iterable[str]:
+        self.mutant = mutant
+        return tests if mutant is None else self.order(mutant, tests)
+
+    def wrap(self, execute_pytest):
+        def execute_remembering_kills(runner, params, **kwargs):
+            if self.mutant is not None:
+                kwargs["plugins"] = [*kwargs.get("plugins", []), self]
+            return execute_pytest(runner, params, **kwargs)
+
+        return execute_remembering_kills
+
     def pytest_runtest_logreport(self, report) -> None:
         if not report.failed or self.mutant is None:
             return
