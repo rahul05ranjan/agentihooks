@@ -33,6 +33,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: cd17bb8d6f94debf8621b61b4c9047e9f1dac8ac
+          path: replay-base
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -41,14 +45,21 @@ jobs:
           version: '0.12.23'
           enable-cache: false
       - run: uv pip install --system --excludes .github/test-excludes.txt -e '.[dev,all]'
+        working-directory: replay-base
       - name: Replay the earlier tests from the failed worker
+        working-directory: replay-base
         run: |
           python - <<'PY'
           import json, subprocess, sys
           from pathlib import Path
-          nodes = json.loads(Path('tests/resource_sampling_replay.json').read_text())
+          target = Path('tests/test_swarm_v2_resource_sampling.py')
+          needle = 'assert [w for w in caught if issubclass(w.category, ResourceWarning)] == []'
+          assert target.read_text().count(needle) == 1
+          target.write_text(target.read_text().replace(needle, needle + ', [(str(w.message), w.filename, w.lineno) for w in caught]'))
+          nodes = json.loads(Path('../tests/resource_sampling_replay.json').read_text())
           nodes.append('tests/test_swarm_v2_resource_sampling.py::test_measure_reports_the_whole_tree_of_a_live_workload')
           for iteration in range(5):
               result = subprocess.run([sys.executable, '-m', 'pytest', *nodes, '-v', '-n', '0', '--tb=long'])
               print(f'NATURAL-REPLAY {iteration}: exit {result.returncode}', flush=True)
+              assert result.returncode in (0, 1)
           PY
