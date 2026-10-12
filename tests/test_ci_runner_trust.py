@@ -180,7 +180,8 @@ def test_loader_cannot_override_protected_actor_data(override):
         job["outputs"]["actors"] = '["stranger"]'
     else:
         loader["env"] = {"GITHUB_OUTPUT": "override"}
-    assert ci_runner_trust.check({"runner-trust.yml": loader}, ACTORS)
+    problems = ci_runner_trust.check({"runner-trust.yml": loader}, ACTORS)
+    assert any(isinstance(problem, str) and "runner-trust.yml" in problem.lower() for problem in problems)
 
 
 @pytest.mark.parametrize(
@@ -227,6 +228,25 @@ def test_valid_expression_wrappers_and_tighter_conditions_are_allowed(guard):
 )
 def test_changed_event_literals_and_invalid_additional_conditions_are_red(guard):
     assert ci_runner_trust.check({"build.yml": workflow(guard=guard)}, ACTORS)
+
+
+def test_unclosed_github_expression_wrapper_is_not_a_valid_actor_guard():
+    assert ci_runner_trust.check({"build.yml": workflow(guard="${{" + GUARD + "xx")}, ACTORS)
+
+
+def test_queue_actor_needs_event_constraints_for_both_identities():
+    core_guard = (
+        "github.event_name != 'pull_request_target' && "
+        "(github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && "
+        "contains(fromJSON(needs.runner-trust.outputs.actors), github.actor) && "
+        "contains(fromJSON(needs.runner-trust.outputs.actors), github.triggering_actor)"
+    )
+    assert ci_runner_trust.check({"build.yml": workflow(guard=core_guard)}, ACTORS)
+
+
+def test_policy_records_two_apps_and_the_separately_scoped_queue_actor():
+    policy = {"actors": ACTORS, "queue_actor": "github-merge-queue[bot]"}
+    assert ci_runner_trust.validate_actors(policy) == ACTORS + ["github-merge-queue[bot]"]
 
 
 @pytest.mark.parametrize("events", ["pull_request_target", {True: {"pull_request_target": {}}}])
