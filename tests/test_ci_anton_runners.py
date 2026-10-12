@@ -24,7 +24,7 @@ def pool(label):
 LIGHT, STANDARD, BATCH = "anton-oss-light", "anton-oss", "anton-oss-batch"
 
 MOVED = {
-    ("brain-smoke.yml", "smoke"): LIGHT,
+    ("brain-smoke.yml", "smoke"): STANDARD,
     ("coverage-stability.yml", "compare"): BATCH,
     ("equivalence.yml", "ledger-equivalence"): STANDARD,
     ("gate-protected.yml", "grade"): LIGHT,
@@ -158,6 +158,7 @@ UNTRUSTED_EVENTS = [
     event("pull_request_target", actor="stranger"),
     event("pull_request_target", triggering="stranger"),
     event("pull_request_target", head="stranger/agentihooks"),
+    event("pull_request_target", head=None),
     event("push", actor="github-merge-queue[bot]"),
     event("workflow_dispatch", actor="nestorcolt", triggering="stranger"),
 ]
@@ -196,6 +197,12 @@ def test_only_jobs_that_exchange_an_oidc_token_stay_hosted():
         assert permissions.get("id-token") == "write", f"{name}:{job}"
         assert jobs[(name, job)]["runs-on"] == "ubuntu-latest", f"{name}:{job}"
     assert set(jobs) == set(MOVED) | OIDC
+
+
+def test_jobs_with_service_or_job_containers_run_on_the_docker_pool():
+    for (name, job), spec in runner_jobs().items():
+        if "services" in spec or "container" in spec:
+            assert MOVED.get((name, job)) == STANDARD, f"{name}:{job}"
 
 
 def test_the_expression_reader_tells_trusted_from_untrusted_runs():
