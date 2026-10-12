@@ -226,6 +226,7 @@ class DistributedLaunch:
             runtime_backend=backend,
             runtime_target=target(request),
             profile=profile,
+            harness=request.task.get("harness", "claude"),
         )
         store = self.controller.store
         occupant = store.execution_occupants(self.slug).get(agent.seat)
