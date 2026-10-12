@@ -546,6 +546,8 @@ def test_a_drain_after_a_lost_lease_writes_no_checkpoint(tmp_path, monkeypatch):
         raise AssertionError("checkpoint read after the lease was lost")
 
     monkeypatch.setattr(supervision_runtime, "checkpoint", refused)
+    monkeypatch.setattr(supervision_runtime.trees, "living", lambda *args: {})
+    monkeypatch.setattr(supervision_runtime.trees, "cleanup", lambda *args: True)
 
     result = supervisor.drain("lease_lost")
 

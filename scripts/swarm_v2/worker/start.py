@@ -36,7 +36,7 @@ PROJECT = re.compile(r"github\.com/[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z
 Send = Callable[[str, str, dict], tuple[int, object]]
 
 
-from scripts.swarm_v2.worker import git_auth
+from scripts.swarm_v2.worker import git_auth, lease_renewal
 
 
 def post(url: str, grant: str, body: dict) -> tuple[int, object]:
@@ -176,7 +176,7 @@ def register(spec: dict, grant: str, send: Send, sleep: Callable[[float], None])
         raise LaunchRefused(f"registration refused with status {status}")
     if not isinstance(answer, dict) or any(answer.get(key) != authority[key] for key in CONFIRMED):
         raise LaunchRefused("registration answer does not match the launch authority")
-    return authority
+    return answer
 
 
 def _private(path: Path, document: dict) -> None:
@@ -201,7 +201,7 @@ def prepare(
     if attempt.name != spec["authority"]["execution_id"]:
         raise LaunchRefused("attempt folder does not name the launch execution")
     grant = _grant(launch.parent)
-    authority = register(spec, grant, send, sleep)
+    admission = register(spec, grant, send, sleep)
     attempt.parent.mkdir(mode=0o700, exist_ok=True)
     record = boot(
         worker_home.Request(
@@ -227,7 +227,8 @@ def prepare(
         if spec.get("checkpoint_remote") is True:
             report(spec, grant, restored)
         _private(attempt / RESTORED, asdict(restored))
-    _private(attempt / RECORD, authority)
+    _private(attempt / lease_renewal.ADMISSION, admission)
+    _private(attempt / RECORD, spec["authority"])
     return {**record, **prepared}
 
 
