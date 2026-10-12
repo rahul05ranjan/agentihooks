@@ -968,6 +968,7 @@ def test_a_kubernetes_launch_puts_its_grant_in_the_pod_launch_material_and_recor
         "checkpoint_seconds": 10,
         "kill_seconds": 2,
         "checkpoint_acknowledgement": {"status": "pending"},
+        "checkout": {"project": PROJECT, "agent": request.name},
     }
 
 

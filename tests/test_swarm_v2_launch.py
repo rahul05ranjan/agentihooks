@@ -1134,6 +1134,15 @@ def test_a_relaunch_places_the_admitted_replacement_on_its_own_account_without_a
     assert world.homes.openings == [(admitted.name, "")]
 
 
+def test_a_fresh_relaunch_opens_with_the_prompt_built_for_its_task(world):
+    admitted, request = _replacement(world)
+    fresh = replace(request, task={**request.task, "checkpoint": ""})
+
+    world.launcher.relaunch(fresh, admitted, world.terms)
+
+    assert world.homes.openings == [(admitted.name, f"opening {admitted.name}")]
+
+
 def test_a_relaunch_on_a_full_account_keeps_its_replacement_for_the_next_pass(world):
     held = world.launch(SECOND)
     admitted, request = _replacement(world)

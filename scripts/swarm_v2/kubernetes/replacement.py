@@ -63,11 +63,16 @@ class Replacements:
             "controller_epoch": self.controller.held.epoch,
             "checkpoint": decision.checkpoint,
         }
+        if not decision.checkpoint:
+            task = {**self._row(successor.task), **task}
         request = SpawnRequest(self.store.config(self.slug), successor.lane, successor.name, task)
         outcome = self.relaunch(request, successor).outcome
         if outcome.status in STARTED:
             self._launched(decision)
         return outcome.status.value
+
+    def _row(self, task: str) -> dict:
+        return next((row for row in self.ledger.state(self.slug)["tasks"] if row["id"] == task), {})
 
     def _launched(self, decision: Decision) -> None:
         self.controller.require()

@@ -1076,11 +1076,20 @@ def test_a_fresh_replacement_launches_without_a_checkpoint_and_a_refused_mark_wa
     replacements()
     assert _marks(ledger) == [{"awaiting": "recovery_pending"}]
 
-    recovery.decide(world.old.execution_id, "fresh")
+    decision = recovery.decide(world.old.execution_id, "fresh")
     ledger.refusals = 1
     assert replacements() == {world.old.execution_id: "ok"}
     [(request, _)] = relaunch.calls
-    assert request.task["checkpoint"] == ""
+    successor = world.store.execution(cases.SLUG, decision.replacement)
+    assert request.task == {
+        "id": "task",
+        "state": "claimed",
+        "awaiting": "recovery_pending",
+        "seat": successor.seat,
+        "profile": successor.profile,
+        "controller_epoch": world.live.held.epoch,
+        "checkpoint": "",
+    }
     assert _hash(world, "recovery-pending-tasks") == {"task": ""}
     assert replacements() == {}
     assert _marks(ledger) == [{"awaiting": "recovery_pending"}, {"awaiting": ""}]

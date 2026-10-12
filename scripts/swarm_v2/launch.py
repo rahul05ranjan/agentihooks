@@ -139,7 +139,8 @@ class DistributedLaunch:
 
     def relaunch(self, request: SpawnRequest, admitted: AgentRecord, terms: LaunchTerms) -> Launch:
         """A refused relaunch leaves its replacement unended, so the next recovery pass places it again."""
-        return self._place(request, admitted, replace(terms, account=admitted.account), kept)
+        opening = "" if request.task.get("checkpoint") else self.opening(request)
+        return self._place(request, admitted, replace(terms, account=admitted.account), kept, opening)
 
     def _place(
         self, request: SpawnRequest, admitted: AgentRecord, terms: LaunchTerms, refused: Ending, opening: str = ""
