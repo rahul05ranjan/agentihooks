@@ -124,8 +124,9 @@ def test_repository_workflows_are_graded():
 
 
 def test_protected_loader_reads_only_dev_approvals():
-    import yaml
     from pathlib import Path
+
+    import yaml
 
     root = Path(__file__).resolve().parents[1]
     workflow = yaml.safe_load((root / ".github/workflows/runner-trust.yml").read_text())
