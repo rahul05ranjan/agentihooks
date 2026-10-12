@@ -190,3 +190,44 @@ def test_final_artifact_deletion_is_refused_before_a_provider_takeover(storage, 
     assert request(api, "remove", key=key)[0] == 403
     provider.assert_not_called()
     assert backend.read(key, 0, len(stored)) == stored
+
+
+@pytest.mark.parametrize("operation", ["write", "read", "move"])
+def test_artifact_outcomes_log_only_authenticated_scope_and_status(storage, capsys, operation):
+    api, backend, authority = storage
+    key = "swarm/task/execution/gen-7/staging/object"
+    backend.write(key, b"private conversation bytes")
+    fields = {
+        "write": {"key": key, "data": encoded(b"private conversation bytes")},
+        "read": {"key": key, "start": 0, "length": 26},
+        "move": {"key": key, "target": "swarm/task/execution/gen-7/objects/object"},
+    }
+    status, _ = request(api, operation, **fields[operation])
+    assert status == 200
+    assert json.loads(capsys.readouterr().out) == {
+        "event": "checkpoint_storage",
+        "backend": "object-store",
+        "operation": operation,
+        "execution_id": "execution",
+        "generation": 7,
+        "status": 200,
+        "error_class": None,
+    }
+
+
+@pytest.mark.parametrize("error_class, status", [("unauthenticated", 401), ("stale_generation", 409)])
+def test_artifact_refusals_log_no_grant_or_provider_error_message(storage, capsys, error_class, status):
+    from scripts.swarm_v2.auth_context import GrantRefused
+
+    api, _, authority = storage
+    authority.authorize.side_effect = GrantRefused(error_class, "private provider response")
+    assert request(api, "write", key="not public", data="not public")[0] == status
+    assert json.loads(capsys.readouterr().out) == {
+        "event": "checkpoint_storage",
+        "backend": "object-store",
+        "operation": "write",
+        "execution_id": None,
+        "generation": None,
+        "status": status,
+        "error_class": error_class,
+    }

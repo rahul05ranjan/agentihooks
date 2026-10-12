@@ -523,6 +523,36 @@ def test_failed_restore_receipt_transport_refuses_start(monkeypatch, error):
     assert str(caught.value) == "restore outcome was not accepted"
 
 
+@pytest.mark.parametrize("status", [200, 403])
+@pytest.mark.parametrize(
+    "recovery, checkpoint_id", [("native", "ckp-one"), ("reconstructed", "ckp-two"), ("fresh", None)]
+)
+def test_only_confirmed_restore_outcomes_have_a_public_summary(monkeypatch, capsys, status, recovery, checkpoint_id):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    restored = restore.Restored(
+        recovery, checkpoint_id, 41, "private-session", ("claude", "--resume", "private-session")
+    )
+    monkeypatch.setattr(
+        start.urllib.request, "urlopen", lambda *args, **kwargs: nullcontext(SimpleNamespace(status=status))
+    )
+    spec = {"execution_id": EXECUTION, "control_url": CONTROL}
+    if status != 200:
+        with pytest.raises(start.LaunchRefused):
+            start.report(spec, GRANT, restored)
+        assert capsys.readouterr().out == ""
+        return
+    start.report(spec, GRANT, restored)
+    assert json.loads(capsys.readouterr().out) == {
+        "event": "restore_verified",
+        "execution_id": EXECUTION,
+        "recovery": recovery,
+        "checkpoint_id": checkpoint_id,
+        "watermark": 41,
+    }
+
+
 def test_a_checkpoint_restore_without_a_store_refuses_the_start_and_registers_nothing(tmp_path):
     launch = material(tmp_path, {**RECORD, "restore": NATIVE_RESTORE})
     with pytest.raises(restore.RestoreRefused) as refused:
