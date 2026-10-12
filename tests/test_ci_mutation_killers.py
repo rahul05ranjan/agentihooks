@@ -47,6 +47,43 @@ def test_a_report_outside_a_mutant_run_records_nothing(tmp_path):
     assert not (tmp_path / "killers").exists()
 
 
+def test_the_memory_folder_is_created_with_its_parents_and_reused(tmp_path):
+    folder = tmp_path / "evidence" / "work" / "killers"
+    for number in (1, 2):
+        memory = killers.KillMemory(folder)
+        memory.mutant = f"scripts.a.x_f__mutmut_{number}"
+        memory.pytest_runtest_logreport(_report(f"tests/test_a.py::t{number}"))
+    assert (folder / _digest("scripts.a.x_f")).read_text() == "tests/test_a.py::t2"
+
+
+def test_a_function_is_named_by_the_text_before_the_first_mutant_marker(tmp_path):
+    memory = killers.KillMemory(tmp_path / "killers")
+    memory.mutant = "scripts.a.x_f__mutmut_1__mutmut_2"
+    memory.pytest_runtest_logreport(_report("tests/test_c.py::slow"))
+    assert memory.order("scripts.a.x_f__mutmut_9", TESTS)[0] == "tests/test_c.py::slow"
+
+
+def test_wrapped_pytest_gets_the_same_runner_and_keeps_its_own_plugins_during_a_mutant_run(tmp_path):
+    calls = []
+
+    def execute(runner, params, **kwargs):
+        calls.append((runner, params, kwargs))
+        return 3
+
+    memory = killers.KillMemory(tmp_path / "killers")
+    wrapped = memory.wrap(execute)
+    runner, other = object(), object()
+    assert wrapped(runner, ["p"], plugins=[other]) == 3
+    memory.prepare("scripts.a.x_f__mutmut_1", TESTS)
+    assert wrapped(runner, ["q"], plugins=[other]) == 3
+    assert wrapped(runner, ["r"]) == 3
+    assert calls == [
+        (runner, ["p"], {"plugins": [other]}),
+        (runner, ["q"], {"plugins": [other, memory]}),
+        (runner, ["r"], {"plugins": [memory]}),
+    ]
+
+
 def test_the_selection_runner_orders_by_kills_and_records_them_only_for_mutants(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     selection_file = tmp_path / "selection.json"
