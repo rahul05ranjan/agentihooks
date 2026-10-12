@@ -2,8 +2,11 @@
 {{- $workers := .Values.controller.workers }}
 {{- $ca := .Values.controller.terminalCa | default dict }}
 {{- $jump := .Values.controller.jump | default dict }}
-{{- if and $jump.enabled (not (and $ca.secretName $jump.address)) }}
+{{- if and $jump.enabled (not (and $ca.secretName $ca.key $jump.address)) }}
 {{- fail "controller.jump needs controller.terminalCa and an address: the jump trusts the user CA and records the address the operator dials" }}
+{{- end }}
+{{- if and $jump.enabled (not $jump.ingressFrom) }}
+{{- fail "controller.jump needs ingressFrom: an empty peer list would admit every source to the jump port" }}
 {{- end }}
 {{- with $api.proof }}
 {{- if not $api.enabled }}

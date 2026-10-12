@@ -38,7 +38,7 @@ def test_the_jump_sshd_only_forwards_to_worker_terminal_ports(tmp_path):
         "Port 2222",
         "ListenAddress 0.0.0.0",
         f"HostKey {tmp_path}/host_key",
-        f"PidFile {tmp_path}/sshd.pid",
+        "PidFile none",
         "AuthorizedKeysFile none",
         f"TrustedUserCAKeys {tmp_path}/user_ca.pub",
         f"AuthorizedPrincipalsFile {tmp_path}/principals",
@@ -88,6 +88,7 @@ def test_prepare_writes_the_jump_material_privately_and_keeps_its_host_key(tmp_p
         "principals": 0o600,
         "sshd_config": 0o600,
     }
+    assert mode(state) == 0o700
     assert jump.prepare(state, user_ca) == host_public
 
 
@@ -144,3 +145,24 @@ def test_swarm_jump_is_a_delegated_command():
     from scripts.swarm_v2.kubernetes import jump
 
     assert cli_delegates.delegated_cli(["swarm-jump", "prepare"]) is jump.main
+
+
+def test_parser_names_the_command_and_its_subcommand():
+    import argparse
+    import io
+    from contextlib import redirect_stderr
+
+    from scripts.swarm_v2.kubernetes import jump
+
+    parser = jump._parser()
+    sub = next(action for action in parser._actions if isinstance(action, argparse._SubParsersAction))
+    state = next(action for action in sub.choices["prepare"]._actions if action.dest == "state")
+
+    assert (parser.prog, parser.description) == ("agentihooks swarm-jump", "Controller SSH jump to worker terminals")
+    assert (sub.dest, sub.required) == ("command", True)
+    assert [(choice.dest, choice.help) for choice in sub._choices_actions] == [
+        ("prepare", "Write the jump sshd material and record the jump for the operator")
+    ]
+    assert (state.option_strings, state.required, state.help) == (["--state"], True, "folder the jump sshd reads")
+    with pytest.raises(SystemExit), redirect_stderr(io.StringIO()):
+        parser.parse_args([])

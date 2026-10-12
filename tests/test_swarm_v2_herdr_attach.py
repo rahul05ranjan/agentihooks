@@ -602,7 +602,10 @@ def test_register_through_the_jump_signs_a_jump_only_certificate(tmp_path):
     certificate = serialization.load_ssh_public_identity(home.jump_certificate.read_bytes())
     client = serialization.load_ssh_private_key(home.identity.read_bytes(), None).public_key()
     assert certificate.valid_principals == [endpoints.JUMP_PRINCIPAL.encode()]
-    assert certificate.key_id == b"jump"
+    assert certificate.key_id == scope().actor.encode()
+    assert certificate.extensions == {b"permit-port-forwarding": b""}
+    endpoint_certificate = serialization.load_ssh_public_identity(home.certificate(endpoint()).read_bytes())
+    assert endpoint_certificate.extensions == {}
     assert (
         certificate.valid_before - certificate.valid_after
         == endpoints.CERTIFICATE_SECONDS + endpoints.CLOCK_SKEW_SECONDS

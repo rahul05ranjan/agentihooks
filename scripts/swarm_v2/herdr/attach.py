@@ -223,7 +223,7 @@ class Terminal:
         address = endpoint.host if home.jump else route(endpoint, self.lookup)
         if home.jump:
             _write(home.jump_known_hosts, f"{home.jump.host} {home.jump.host_public}\n")
-            _write(home.jump_certificate, self.authority.issue_jump(self._client_key()))
+            _write(home.jump_certificate, self.authority.issue_jump(scope.actor, self._client_key()))
             _write(home.jump_config, jump_block(home))
         _write(recorded, f"{scope.generation}\n")
         _write(home.certificate(endpoint), self.authority.issue(scope, self._client_key()))
