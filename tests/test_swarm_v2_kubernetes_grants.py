@@ -141,6 +141,20 @@ def test_the_grant_lands_in_the_launch_config_map_its_pod_owns():
     assert api.deleted == []
 
 
+@pytest.mark.parametrize("spec", [{}, {"containers": []}, {"containers": [{}]}])
+def test_missing_pod_image_keeps_launch_material_unchanged(spec):
+    api = Api({**pod(), "spec": spec})
+    assert grants(api).hand(agent(), GRANT) == Hand(True, "handed", False)
+    assert api.created == [material()]
+
+
+def test_launch_material_records_the_running_container_digest_in_canonical_json():
+    digest = "sha256:" + "c" * 64
+    api = Api({**pod(), "spec": {"containers": [{"image": "fixture/worker@" + digest}]}})
+    assert grants(api).hand(agent(), GRANT) == Hand(True, "handed", False)
+    assert api.created == [material(record={**RECORD, "image_digest": digest})]
+
+
 def test_the_config_map_is_the_one_the_pod_template_mounts_at_the_launch_folder():
     rendered = PodTemplate(cases.policy(), "agentihooks-swarm-fixture").render(cases.launch()).pod
     [volume] = [volume for volume in rendered["spec"]["volumes"] if volume["name"] == "launch"]
