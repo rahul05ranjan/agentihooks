@@ -231,7 +231,10 @@ def test_controller_listing_checks_original_execution_generation(published_attem
     attempt, environ = published_attempt
     spec = json.loads((attempt / "launch.json").read_text())
     registration = Registration(**spec["registration"])
-    lookup = lambda execution: registration if execution == registration.execution_id else None
+
+    def lookup(execution):
+        return registration if execution == registration.execution_id else None
+
     good = runtime.Checkpoints(
         runtime.configured(environ), lookup, "fixture", lambda execution: 2 if execution == "e1" else None
     )
