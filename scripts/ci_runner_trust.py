@@ -5,6 +5,7 @@ from pathlib import Path
 
 ACTORS = ".github/workflows/trusted-actors.json"
 LOADER = "the-cloud-clockwork/agentihooks/.github/workflows/runner-trust.yml@dev"
+ROUTED_LABELS = ("anton-oss-light", "anton-oss", "anton-oss-batch")
 GUARD = (
     "github.event_name != 'pull_request_target' && "
     "(github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && "
@@ -114,6 +115,21 @@ def _hosted(runner: object) -> bool:
     )
 
 
+def routed_runner(label: str) -> str:
+    return "${{ " + GUARD + " && '" + label + "' || 'ubuntu-latest' }}"
+
+
+def _routed(job: dict, jobs: dict) -> bool:
+    needs = job.get("needs", [])
+    needs = [needs] if isinstance(needs, str) else needs
+    if "runner-trust" not in needs or jobs.get("runner-trust") != {"uses": LOADER}:
+        return False
+    runner = job.get("runs-on")
+    return isinstance(runner, str) and any(
+        _compact(runner) == _compact(routed_runner(label)) for label in ROUTED_LABELS
+    )
+
+
 def check(workflows: dict[str, dict], actors: object = None) -> list[str]:
     if actors is not None:
         validate_actors(actors)
@@ -138,6 +154,8 @@ def check(workflows: dict[str, dict], actors: object = None) -> list[str]:
                     problems.append(f"{file}/{name}: runner trust cannot resolve local workflow {uses}")
                 continue
             if not uses and _hosted(job.get("runs-on")):
+                continue
+            if not uses and "pull_request_target" not in events and _routed(job, jobs):
                 continue
             if "pull_request_target" in events or not _guarded(job, jobs):
                 problems.append(
