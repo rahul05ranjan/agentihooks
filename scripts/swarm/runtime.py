@@ -844,10 +844,33 @@ class HerdrRuntime:
     def retire(self, agent, homes=()):
         """End the launch process recorded at spawn with its group and every process from the task's scratch homes,
         then close the pane; the agent's name alone never selects a process."""
+        if live_binding.managed(agent):
+            return self._retire_managed(agent)
         pid = agent.profile_decision.get("validation", {}).get("pid") or self._binding_pids.get(agent.name)
         return self.retire_process(agent, pid, homes)
 
+    def _retire_managed(self, agent):
+        from scripts.codex_session.binding import EXITED, BindingStore
+
+        store = connect()
+        record = live_binding.transport(store, agent)
+        if record is None or not record.server_pid or not record.server_start_identity:
+            self.refusals[agent.name] = {"process": 0, "refusal": "managed server identity is unknown"}
+            return False
+        outcome = self.end(agent.name, record.server_pid, [], record.server_start_identity)
+        if outcome.refusal:
+            self.refusals[agent.name] = {"process": outcome.process, "refusal": outcome.refusal}
+            return False
+        bindings = BindingStore(store)
+        slug = store.names.slug_of(agent.name)
+        bindings.put(slug, replace(record, state=EXITED, active_turn_id=""))
+        bindings.release(slug, record)
+        self.refusals.pop(agent.name, None)
+        return True
+
     def retire_process(self, agent, pid, homes=(), start=0):
+        if live_binding.managed(agent):
+            return self._retire_managed(agent)
         if agent.runtime_backend != "local":
             self.refusals[agent.name] = {"process": 0, "refusal": REMOTE_PANE}
             return False
@@ -970,15 +993,23 @@ class HerdrRuntime:
         None when herdr cannot answer."""
         from scripts.terminate_agent import sessions
 
+        managed = {}
+        for agent in self._managed_agents().values():
+            record = self._managed_record(agent)
+            if record is not None:
+                managed[agent.pane_id or agent.execution_id] = record.thread_id
         try:
             listed = self.herdr(["agent", "list"]).get("agents", [])
         except Exception:
-            return None
+            return managed or None
         registered = _registered_conversations(sessions())
         return {
-            row["pane_id"]: _conversation_id(row.get("agent_session")) or registered.get(row.get("name"), "")
-            for row in listed
-            if row.get("pane_id")
+            **{
+                row["pane_id"]: _conversation_id(row.get("agent_session")) or registered.get(row.get("name"), "")
+                for row in listed
+                if row.get("pane_id")
+            },
+            **managed,
         }
 
     def nudge(self, agent, text):
