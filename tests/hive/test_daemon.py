@@ -531,13 +531,15 @@ def test_beat_keeps_a_launch_counted_between_process_samples(redis, monkeypatch)
 def test_beat_exit_between_samples_cannot_create_negative_capacity(redis, observations, monkeypatch):
     from scripts.routing import aggregate, reservation
     from scripts.swarm.store import AgentRecord, RedisStore, SwarmConfig
+    from scripts.swarm_v2.controller import Controller
     from scripts.swarm_v2.registry import Scope, Session, encode
 
     monkeypatch.setattr("time.time", lambda: 100)
     store = RedisStore(redis)
     store.create(SwarmConfig("swarm", "repo", 1, 0))
-    store.put_agent(
-        "swarm",
+    controller = Controller(store, "swarm", [], lambda: True)
+    assert controller.acquire()
+    agent = controller.admit(
         AgentRecord(
             "agent",
             "eng",
@@ -545,8 +547,6 @@ def test_beat_exit_between_samples_cannot_create_negative_capacity(redis, observ
             seat="eng-1@swarm",
             harness="claude",
             account="one",
-            execution_id="first",
-            generation=1,
         ),
     )
     session = Session(
@@ -555,12 +555,12 @@ def test_beat_exit_between_samples_cannot_create_negative_capacity(redis, observ
     redis.hset(store.key("swarm", "fleet-sessions"), session.key(), encode(session))
     monkeypatch.setattr(daemon.account_sessions, "local_processes", lambda: {"claude": {4242: "one"}, "codex": {}})
     slots = reservation.LaunchSlots(redis)
-    assert slots.reserve("claude:one", "first", 1, 1000)
-    assert slots.acknowledge("first")
+    assert slots.reserve("claude:one", agent.execution_id, 1, 1000)
+    assert slots.acknowledge(agent.execution_id)
     original = daemon.observe
 
     def observe(**kwargs):
-        assert slots.release("first")
+        assert slots.release(agent.execution_id)
         return original(**kwargs)
 
     monkeypatch.setattr(daemon, "observe", observe)
