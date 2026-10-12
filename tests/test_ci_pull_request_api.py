@@ -15,8 +15,6 @@ BESIDE = re.compile(r"\$\(dirname \"\$0\"\)|\$\{?GITHUB_ACTION_PATH\}?")
 WORKSPACE = re.compile(r"\$\{?GITHUB_WORKSPACE\}?")
 # The documented local `--ci` download; the workflow passes `--samples` with `--ci 5`, so CI never calls these.
 LOCAL_ONLY = {ROOT / "tests/refresh_durations.py": {"_gh", "ci_run_ids", "ci_download"}}
-if (ROOT / "scripts/ci_access_audit.py").exists():
-    LOCAL_ONLY[ROOT / "scripts/ci_access_audit.py"] = {"_api"}
 TOKEN = re.compile(
     r"github\s*(\.\s*token|\[\s*['\"]token['\"]\s*\])"
     r"|secrets\s*(\.|\[\s*['\"])\s*(github|gh)(_\w*|\w*(token|pat)(?![a-z]))"
@@ -176,9 +174,8 @@ def test_no_script_a_step_runs_calls_the_api():
         "tests/shard_check.py",
         "scripts/ci_reuse.py",
     ]
-    expected.extend(
-        name for name in ("scripts/ci_access_audit.py", "scripts/ci_runner_trust.py") if (ROOT / name).exists()
-    )
+    if (ROOT / "scripts/ci_runner_trust.py").exists():
+        expected.extend(("scripts/ci_runner_trust.py", "scripts/gate_protected.py"))
     assert sorted(str(path.relative_to(ROOT)) for path in calls) == sorted(expected)
     assert {path: count for path, count in calls.items() if count} == {}
 
@@ -188,12 +185,6 @@ def test_each_local_only_exemption_names_a_function_that_calls_the_api():
         source = path.read_text()
         functions = {node.name: node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef)}
         assert all(API_CALL.search(ast.get_source_segment(source, functions[name])) for name in names)
-        if path == ROOT / "scripts/ci_access_audit.py":
-            expected = ast.parse(
-                'result = subprocess.run(["gh", "api", endpoint], check=True, capture_output=True)\n'
-                "return json.loads(result.stdout)"
-            ).body
-            assert [ast.dump(node) for node in functions["_api"].body] == [ast.dump(node) for node in expected]
 
 
 @pytest.mark.parametrize(
