@@ -500,6 +500,7 @@ input, textarea { caret-color: var(--accent-2); }
 .sw-num[aria-invalid="true"] { color: var(--destructive); }
 .sw-unit { font-size: var(--fs-meta); color: var(--muted); }
 .sw-select { text-align: left; cursor: pointer; }
+.sw-model .sw-select { max-width: 22ch; }
 .sw-select option { background: var(--panel); color: var(--text); }
 .sw-affinity-state:empty { display: none; }
 .sw-affinity-state.bad { color: var(--destructive); }
@@ -557,6 +558,7 @@ body.resizing-x { cursor: col-resize; user-select: none; }
   #agents-table td:has(> .sw-acts) { position: static; width: auto; padding: 6px 0; }
   .sw-acts { position: static; padding: 0; background: transparent; opacity: 1; pointer-events: auto; }
 }
+.sw-sub { display: block; font-size: var(--fs-meta); color: var(--muted); }
 .sw-id { display: inline-block; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 .sw-table .sw-empty td { white-space: normal; font-size: var(--fs-meta); color: var(--dim); }
 #health-table td:nth-child(3) { min-width: 20ch; white-space: normal; color: var(--text-2); }
@@ -617,6 +619,9 @@ body.resizing-x { cursor: col-resize; user-select: none; }
 #stats-column section { padding: 16px; margin: 0; }
 #stats { margin: 0; }
 #stats .stat { grid-template-columns: minmax(0, 1fr) auto; }
+#stats .top-bottleneck { grid-template-columns: 1fr; gap: 6px; padding-bottom: 12px; }
+#stats .top-bottleneck dd { text-align: left; min-width: 0; overflow-wrap: anywhere; }
+#stats .bottleneck-stage { font-weight: 600; }
 @media (max-width: 1023px) {
   .workspace { margin-left: 0; overflow-x: auto; }
   .workspace > .outline { flex-basis: 180px; }
