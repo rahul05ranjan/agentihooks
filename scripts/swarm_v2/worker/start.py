@@ -62,6 +62,18 @@ def report(spec: dict, grant: str, restored: Restored) -> None:
                 raise LaunchRefused("restore outcome was not accepted")
     except (OSError, HTTPException):
         raise LaunchRefused("restore outcome was not accepted") from None
+    print(
+        json.dumps(
+            {
+                "event": "restore_verified",
+                "execution_id": spec["execution_id"],
+                "recovery": restored.recovery,
+                "checkpoint_id": restored.checkpoint_id,
+                "watermark": restored.watermark,
+            }
+        ),
+        flush=True,
+    )
 
 
 def _launch(path: Path, templates: Path, bundle: Path | None) -> dict:
