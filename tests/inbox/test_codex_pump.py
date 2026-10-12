@@ -628,11 +628,11 @@ def test_a_stray_text_frame_is_refused_and_diagnostics_stay_off_the_socket(rig):
     assert rig.record().state == CONNECTED
     assert rig.logged == [f"codex pump for {ME} degraded: ProtocolError: the event stream got a frame that is not JSON"]
     assert all(message["jsonrpc"] == "2.0" for message in rig.server.sent)
-    assert (
-        rig.server.sent
-        == [{"jsonrpc": "2.0", "id": 1, "method": "thread/read", "params": {"threadId": THREAD, "includeTurns": True}}]
-        * 2
-    )
+    assert rig.server.sent == [
+        {"jsonrpc": "2.0", "id": 1, "method": "thread/read", "params": {"threadId": THREAD, "includeTurns": True}},
+        {"jsonrpc": "2.0", "id": 1, "method": "thread/read", "params": {"threadId": THREAD, "includeTurns": True}},
+        {"jsonrpc": "2.0", "id": 2, "method": "thread/read", "params": {"threadId": THREAD, "includeTurns": True}},
+    ]
 
 
 def test_losing_ownership_degrades_at_the_next_reconcile(rig):
