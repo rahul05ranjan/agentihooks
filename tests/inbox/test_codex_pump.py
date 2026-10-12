@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -523,6 +524,34 @@ def test_a_broken_event_stream_degrades_the_transport(rig):
     assert rig.logged == [
         f"codex pump for {ME} degraded: ProtocolError: thread/read lost the connection: ConnectionClosedError"
     ]
+
+
+def test_a_degraded_pump_reconnects_with_backoff_and_resumes_delivery(rig):
+    from websockets.exceptions import ConnectionClosedError
+
+    item = rig.store.send("alice", ME, "recovered")
+    rig.server.broken = ConnectionClosedError(None, None)
+    sleeps, attempts = [], []
+
+    def sleep(delay):
+        sleeps.append(delay)
+        rig.clock.now += delay
+
+    def reconnect():
+        attempts.append(rig.clock.now)
+        if len(attempts) == 1:
+            raise protocol.ProtocolError("server unavailable")
+        rig.server.broken = None
+        return protocol.Connection(rig.server, 5, clock=rig.clock)
+
+    rig.pump.binding = replace(rig.pump.binding, reconnect=reconnect)
+    rig.pump.timing = replace(rig.pump.timing, sleep=sleep)
+    assert rig.run(6) == codex.STOPPED
+    assert sleeps[:2] == [codex.BACKOFF_S, codex.BACKOFF_S * 2]
+    assert len(attempts) == 2
+    assert rig.record().state == CONNECTED
+    assert rig.store.get(item.id).state == "delivered"
+    assert [d.state for d in deliveries(rig, item.id)] == ["accepted"]
 
 
 def test_a_stray_text_frame_is_refused_and_diagnostics_stay_off_the_socket(rig):
