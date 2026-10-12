@@ -84,6 +84,21 @@ def test_wrapped_pytest_gets_the_same_runner_and_keeps_its_own_plugins_during_a_
     ]
 
 
+def test_collected_items_run_in_the_requested_order_after_the_conftest_sorts_paths(tmp_path):
+    memory = killers.KillMemory(tmp_path / "killers")
+    memory.mutant = "scripts.a.x_f__mutmut_1"
+    memory.pytest_runtest_logreport(_report("tests/test_c.py::slow"))
+    memory.prepare("scripts.a.x_f__mutmut_2", TESTS)
+    items = [SimpleNamespace(nodeid=nodeid) for nodeid in ["tests/test_x.py::other", *TESTS]]
+    memory.pytest_collection_modifyitems(items)
+    assert [item.nodeid for item in items] == [
+        "tests/test_c.py::slow",
+        "tests/test_a.py::fast",
+        "tests/test_b.py::middle",
+        "tests/test_x.py::other",
+    ]
+
+
 def test_the_selection_runner_orders_by_kills_and_records_them_only_for_mutants(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     selection_file = tmp_path / "selection.json"
