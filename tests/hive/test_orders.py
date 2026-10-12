@@ -122,6 +122,7 @@ def test_crashed_launch_is_ambiguous_and_never_relaunched(setup):
     with pytest.raises(KeyboardInterrupt):
         setup.consumer.poll()
     setup.runtime.spawn.side_effect = None
+    setup.redis.hset(setup.orders.receipt(setup.order), "started", "1")
     setup.consumer.poll()
     assert setup.orders.ack(setup.order).failure == "ambiguous"
     setup.runtime.spawn.assert_called_once()
