@@ -1314,6 +1314,27 @@ def test_a_fresh_choice_records_a_fresh_restore_at_the_archived_watermark(world)
     assert recovery.restore_outcomes_by_type() == {"native": 0, "reconstructed": 0, "fresh": 0}
 
 
+@pytest.mark.parametrize("command", [None, 123, "claude", {"word": "claude"}, [None], [123], [False]])
+def test_malformed_restore_commands_are_refused_without_recording_an_outcome(world, command):
+    recovery = world.recovery(world.live)
+    decision = recovery.handle(world.old.execution_id, "node_lost")
+    restored = {**recovery.restore(decision.replacement), "command": command}
+    with pytest.raises(SwarmError) as caught:
+        recovery.confirm(decision.replacement, restored)
+    assert str(caught.value) == "restore command must be a sequence of strings"
+    assert recovery.outcome(decision.replacement) is None
+
+
+@pytest.mark.parametrize("command", [[], ["claude", "--resume", "fixture"], ("claude", "--resume", "fixture")])
+def test_restore_command_sequences_are_recorded_as_json_lists(world, command):
+    recovery = world.recovery(world.live)
+    decision = recovery.handle(world.old.execution_id, "node_lost")
+    restored = {**recovery.restore(decision.replacement), "command": command}
+    outcome = recovery.confirm(decision.replacement, restored)
+    assert outcome["command"] == list(command)
+    assert recovery.confirm(decision.replacement, restored) == outcome
+
+
 def test_a_repeated_restore_request_reuses_the_accepted_decision_without_a_second_replacement(world):
     recovery = world.recovery(world.live, automatic=False)
     recovery.handle(world.old.execution_id, "oom_killed")

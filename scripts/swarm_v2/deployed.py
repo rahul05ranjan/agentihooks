@@ -184,7 +184,7 @@ class Workers:
         self, environ: Mapping[str, str], slug: str, verify: Callable[[str], Registration], store: RedisStore
     ) -> PodGrants:
         supervision = Supervision(
-            HARNESS, self.exporter, self.terms.api_url, checkpoint_runtime.configured(environ) is not None
+            HARNESS, self.exporter, self.terms.api_url, bool(environ.get("AGENTIHOOKS_CHECKPOINT_BUCKET"))
         )
         api = pod_api(environ, self.policy["namespace"])
         terminal = None if self.terminal is None else TerminalObjects(api, self.terminal, HostKeys(store))

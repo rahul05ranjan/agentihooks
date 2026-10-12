@@ -236,9 +236,12 @@ class Recovery:
         actual = (restored.get("recovery"), restored.get("checkpoint_id"), restored.get("session_id"))
         if actual != expected or type(restored.get("watermark")) is not int or restored["watermark"] < 0:
             raise SwarmError("restore outcome does not match the accepted directive")
+        command = restored["command"]
+        if not isinstance(command, (list, tuple)) or any(not isinstance(word, str) for word in command):
+            raise SwarmError("restore command must be a sequence of strings")
         outcome = {
             **restored,
-            "command": list(restored["command"]),
+            "command": list(command),
             "status": "verified",
             "archive_watermark": directive["watermark"],
         }

@@ -968,6 +968,25 @@ def test_a_kubernetes_launch_puts_its_grant_in_the_pod_launch_material_and_recor
     }
 
 
+@pytest.mark.parametrize(
+    ("storage", "remote"),
+    [
+        ({}, False),
+        ({"AGENTIHOOKS_CHECKPOINT_ROOT": "/fixture/checkpoints"}, False),
+        ({"AGENTIHOOKS_CHECKPOINT_BUCKET": "fixture-checkpoints"}, True),
+        ({"AGENTIHOOKS_CHECKPOINT_BUCKET": ""}, False),
+    ],
+)
+def test_worker_remote_transport_requires_the_controller_bucket(tmp_path, monkeypatch, storage, remote):
+    store = _store()
+    pods = Pods("swarm-pod-proof")
+    monkeypatch.setattr(deployed, "pod_api", lambda environ, namespace: pods)
+    environ = _workers(tmp_path, **storage)
+    workers = deployed.Workers.from_environ(environ, SLUG)
+    grants = workers.grants(environ, SLUG, lambda execution: None, store)
+    assert grants.supervision.checkpoint_remote is remote
+
+
 def test_the_exporter_worker_setting_reaches_the_launch_record(tmp_path, monkeypatch):
     store = _store()
     pods = Pods("swarm-pod-proof")
