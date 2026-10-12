@@ -223,6 +223,30 @@ def test_a_server_that_exits_before_it_answers_fails_without_waiting(store, serv
     assert only_record(store).state == FAILED
 
 
+def test_a_missing_codex_binary_fails_the_launch_and_frees_the_endpoint(store, server, clock, root, tmp_path):
+    def missing(command, **kwargs):
+        raise FileNotFoundError(command[0])
+
+    server.popen = missing
+    failed(store, server, clock, root, launch_spec(store, server, tmp_path), "spawn")
+    record = only_record(store)
+    assert (record.state, record.last_error_class, record.server_pid) == (FAILED, "spawn", 0)
+    assert store.redis.hgetall(store.key(SLUG, ENDPOINTS)) == {}
+
+
+def test_any_error_after_the_spawn_stops_the_server(store, server, clock, root, tmp_path, monkeypatch):
+    def refused(slug, agent):
+        raise SwarmError("agent registry kept changing; update was not committed")
+
+    monkeypatch.setattr(store, "put_agent", refused)
+    with pytest.raises(SwarmError, match="agent registry kept changing"):
+        supervisor.launch(store, launch_spec(store, server, tmp_path), deps(server, clock, root))
+    assert server.processes[0].stopped
+    record = only_record(store)
+    assert (record.state, record.last_error_class) == (FAILED, "SwarmError")
+    assert store.redis.hgetall(store.key(SLUG, ENDPOINTS)) == {}
+
+
 def test_a_reused_pid_is_not_mistaken_for_the_server(store, server, clock, root, tmp_path):
     started = supervisor.launch(store, launch_spec(store, server, tmp_path), deps(server, clock, root))
     assert supervisor.owns(started.record, server.start_identity)

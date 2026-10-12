@@ -5,7 +5,7 @@ import socket
 import subprocess
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from hooks.observability.trace_flush import start_time
@@ -46,6 +46,10 @@ class Launch:
     startup_timeout_s: float = STARTUP_TIMEOUT_S
 
 
+def time_ms() -> int:
+    return int(time.time() * 1000)
+
+
 @dataclass(frozen=True)
 class Deps:
     popen: Callable = subprocess.Popen
@@ -53,7 +57,7 @@ class Deps:
     start_identity: Callable[[int], int | None] = start_time
     clock: Callable[[], float] = time.monotonic
     sleep: Callable[[float], None] = time.sleep
-    now_ms: Callable[[], int] = field(default=lambda: int(time.time() * 1000))
+    now_ms: Callable[[], int] = time_ms
     codex_bin: str = "codex"
     runtime_root: Path | None = None
 
@@ -62,7 +66,7 @@ class Deps:
 class Started:
     record: TransportRecord
     agent: AgentRecord
-    process: object
+    process: subprocess.Popen
 
 
 def runtime_root(environ: Mapping[str, str]) -> Path:
@@ -107,7 +111,9 @@ def admit(store: RedisStore, launch: Launch, deps: Deps) -> AgentRecord:
     return store.start_execution(launch.slug, agent, launch.previous_execution_id)
 
 
-def wait_ready(path: Path, process, record: TransportRecord, launch: Launch, deps: Deps):
+def wait_ready(
+    path: Path, process: subprocess.Popen, record: TransportRecord, launch: Launch, deps: Deps
+) -> tuple[protocol.Connection, dict]:
     deadline = deps.clock() + launch.startup_timeout_s
     while (left := deadline - deps.clock()) > 0:
         if process.poll() is not None:
@@ -159,7 +165,7 @@ def bind_thread(connection: protocol.Connection, launch: Launch) -> dict:
     return thread
 
 
-def stop(process) -> None:
+def stop(process: subprocess.Popen) -> None:
     if process.poll() is not None:
         return
     process.terminate()
@@ -215,26 +221,36 @@ def _connect_bound(store, bindings, launch, agent, record, process, deps) -> tup
         connection.close()
 
 
+def spawn(spec: Launch, deps: Deps, path: Path) -> subprocess.Popen:
+    try:
+        return deps.popen(
+            server_command(deps.codex_bin, path, spec.server_args),
+            env=dict(spec.environ),
+            cwd=spec.cwd,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        raise LaunchFailure("spawn", f"app-server could not start: {exc}") from exc
+
+
 def launch(store: RedisStore, spec: Launch, deps: Deps) -> Started:
     check_environment(spec.environ, spec.allowed_tokens)
     agent = admit(store, spec, deps)
     bindings = BindingStore(store)
     path = socket_path(deps.runtime_root or runtime_root(spec.environ), agent.execution_id)
     record = bindings.reserve(spec.slug, _record(spec, agent, path))
-    process = deps.popen(
-        server_command(deps.codex_bin, path, spec.server_args),
-        env=dict(spec.environ),
-        cwd=spec.cwd,
-        stdin=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    record = replace(record, server_pid=process.pid, server_start_identity=deps.start_identity(process.pid) or 0)
-    bindings.put(spec.slug, record)
+    process = None
     try:
+        process = spawn(spec, deps, path)
+        record = replace(record, server_pid=process.pid, server_start_identity=deps.start_identity(process.pid) or 0)
+        bindings.put(spec.slug, record)
         record, agent = _connect_bound(store, bindings, spec, agent, record, process, deps)
-    except LaunchFailure as failure:
-        stop(process)
-        bindings.put(spec.slug, replace(record, state=FAILED, last_error_class=failure.error_class))
+    except BaseException as failure:
+        if process is not None:
+            stop(process)
+        error_class = getattr(failure, "error_class", type(failure).__name__)
+        bindings.put(spec.slug, replace(record, state=FAILED, last_error_class=error_class))
         bindings.release(spec.slug, record)
         raise
     return Started(record, agent, process)

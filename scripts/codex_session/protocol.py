@@ -1,8 +1,9 @@
-"""JSON-RPC client for the Codex app-server, which serves WebSocket over its Unix socket (CXCH-01)."""
+"""JSON-RPC client for the Codex app-server, which serves WebSocket over its Unix socket."""
 
 import json
 import time
 from collections.abc import Callable
+from typing import Any
 
 CLIENT_NAME = "agentihooks-codex-session"
 
@@ -12,7 +13,7 @@ class ProtocolError(RuntimeError):
 
 
 class Connection:
-    def __init__(self, ws, timeout_s: float, clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(self, ws: Any, timeout_s: float, clock: Callable[[], float] = time.monotonic) -> None:
         self.ws = ws
         self.timeout_s = timeout_s
         self.clock = clock
@@ -32,7 +33,10 @@ class Connection:
         self.ws.send(json.dumps({"jsonrpc": "2.0", "id": rid, "method": method, "params": params}))
         deadline = self.clock() + self.timeout_s
         while (left := deadline - self.clock()) > 0:
-            message = json.loads(self.ws.recv(timeout=left))
+            try:
+                message = json.loads(self.ws.recv(timeout=left))
+            except ValueError as exc:
+                raise ProtocolError(f"{method} got a frame that is not JSON") from exc
             if message.get("id") != rid or "method" in message:
                 continue
             if "error" in message:
