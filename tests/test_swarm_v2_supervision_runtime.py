@@ -290,6 +290,20 @@ def test_start_hands_the_opening_prompt_to_the_harness_and_logs_its_delivery(sup
     }
 
 
+def test_the_delivered_prompt_line_reaches_the_pod_log_at_once(supervisor, monkeypatch):
+    supervisor.launch = replace(supervisor.launch, prompt="Your one task is t1.")
+    written = SimpleNamespace(text="", flushes=0)
+    stream = SimpleNamespace(
+        write=lambda text: setattr(written, "text", written.text + text),
+        flush=lambda: setattr(written, "flushes", written.flushes + 1),
+    )
+    monkeypatch.setattr(sys, "stdout", stream)
+
+    supervisor.delivered()
+
+    assert (json.loads(written.text)["supervisor"], written.flushes) == ("prompt_delivered", 1)
+
+
 def test_a_harness_that_never_starts_logs_no_delivered_prompt(supervisor, monkeypatch, capsys):
     supervisor.launch = replace(supervisor.launch, prompt="Your one task is t1.")
 

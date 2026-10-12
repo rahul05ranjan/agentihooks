@@ -69,6 +69,8 @@ def _project(checkout: object) -> None:
     project = checkout.get("project") if isinstance(checkout, dict) else None
     if not isinstance(project, str) or not PROJECT.fullmatch(project):
         raise LaunchRefused("launch record names no permitted project")
+    if not isinstance(checkout.get("agent"), str):
+        raise LaunchRefused("launch record names no agent for its checkout")
 
 
 def checkout(attempt: Path, request: workspaces.Request) -> workspaces.Workspace:
@@ -81,7 +83,7 @@ def _checked_out(attempt: Path, spec: dict) -> dict:
     if wanted is None:
         return {}
     origin = f"https://{wanted['project']}.git"
-    request = workspaces.Request(origin, authority["task_id"], authority["generation"], wanted.get("agent", ""))
+    request = workspaces.Request(origin, authority["task_id"], authority["generation"], wanted["agent"])
     found = checkout(attempt, request)
     tree = {"project": wanted["project"], "branch": found.branch, "base": found.base, "base_commit": found.base_commit}
     return {"checkout": tree}

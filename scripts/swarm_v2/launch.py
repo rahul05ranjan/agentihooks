@@ -143,7 +143,7 @@ class DistributedLaunch:
         return self._place(request, admitted, replace(terms, account=admitted.account), kept, opening)
 
     def _place(
-        self, request: SpawnRequest, admitted: AgentRecord, terms: LaunchTerms, refused: Ending, opening: str = ""
+        self, request: SpawnRequest, admitted: AgentRecord, terms: LaunchTerms, refused: Ending, opening: str
     ) -> Launch:
         grant = self.grants.issue(
             self.slug,

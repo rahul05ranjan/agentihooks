@@ -759,6 +759,13 @@ def test_a_checkout_outside_a_plain_project_is_refused_before_anything_is_writte
     assert refusal(tmp_path, launch) == "launch record names no permitted project"
 
 
+@pytest.mark.parametrize("checkout", [{"project": PROJECT}, {"project": PROJECT, "agent": 7}])
+def test_a_checkout_that_names_no_agent_is_refused_before_anything_is_written(tmp_path, checkout):
+    launch = material(tmp_path, {**RECORD, "checkout": checkout})
+
+    assert refusal(tmp_path, launch) == "launch record names no agent for its checkout"
+
+
 def test_the_start_prints_the_prepared_checkout(monkeypatch, capsys):
     checkout = {"project": PROJECT, "branch": BRANCH, "base": "dev", "base_commit": BASE_COMMIT}
     monkeypatch.setattr(start, "prepare", lambda attempt, launch: {"checkout": checkout})

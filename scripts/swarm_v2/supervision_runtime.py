@@ -142,8 +142,8 @@ class Supervisor:
         if not self.launch.prompt:
             return []
         path = self.root / PROMPT
-        with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as handle:
-            handle.write(self.launch.prompt)
+        with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as handle:
+            handle.write(self.launch.prompt.encode())
         return ["--prompt-file", str(path)]
 
     def delivered(self) -> None:
