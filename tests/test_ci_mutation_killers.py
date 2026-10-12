@@ -53,7 +53,7 @@ def test_the_selection_runner_orders_by_kills_and_records_them_only_for_mutants(
             plugins = kwargs.get("plugins", [])
             runs.append((list(params), len(plugins)))
             for plugin in plugins:
-                plugin.pytest_runtest_logreport(_report(params[-1]))
+                plugin.pytest_runtest_logreport(_report("tests/test_c.py::slow"))
             return 1
 
         def run_tests(self, *, mutant_name, tests):
