@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from scripts.inbox.seats import SeatMemory, SeatRegistry, SwarmCulture, of_swarm
 from scripts.inbox.store import InboxStore
-from scripts.swarm import default_models, effort_range, model_catalog
+from scripts.swarm import default_models, effort_range
 from scripts.swarm.execution import ExecutionRegistry
 from scripts.swarm.keyspace import ROOT
 from scripts.swarm.naming import NameRegistry
@@ -134,6 +134,8 @@ class RedisStore:
         return sorted(self.redis.smembers(f"{PREFIX}:index"))
 
     def create(self, config):
+        from scripts.swarm import model_catalog
+
         changes = {
             field: default_models.model(config, harness)
             for harness, field in default_models.FIELDS.items()
@@ -185,6 +187,8 @@ class RedisStore:
         )
 
     def update(self, slug, **changes):
+        from scripts.swarm import model_catalog
+
         if changes.get("state", STATES[0]) not in STATES:
             raise SwarmError(f"state must be one of {STATES}")
         if changes.get("autonomy", DELEGATE) not in AUTONOMY:
