@@ -139,7 +139,7 @@ def test_only_the_first_shard_installs_the_pinned_codex_cli_and_requires_its_liv
     assert restore["with"] == {"path": "~/codex", "key": "codex-${{ runner.os }}-${{ env.CODEX_RELEASE }}"}
     assert install["if"] == "steps.codex.outcome == 'success' && steps.codex.outputs.cache-hit != 'true'"
     assert install["run"].startswith("set -o pipefail\n")
-    assert "releases/download/${CODEX_RELEASE}/codex-x86_64-unknown-linux-musl.zst" in install["run"]
+    assert "releases/download/${CODEX_RELEASE}/codex-x86_64-unknown-linux-musl.tar.gz" in install["run"]
     assert use["if"] == "steps.codex.outcome == 'success'"
     assert use["run"].strip().splitlines() == [
         'echo "$HOME/codex" >> "$GITHUB_PATH"',

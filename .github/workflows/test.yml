@@ -499,7 +499,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p ~/codex
-          curl -fsSL --retry 3 "https://github.com/openai/codex/releases/download/${CODEX_RELEASE}/codex-x86_64-unknown-linux-musl.zst" | zstd -dc > ~/codex/codex
+          curl -fsSL --retry 3 "https://github.com/openai/codex/releases/download/${CODEX_RELEASE}/codex-x86_64-unknown-linux-musl.tar.gz" | tar -xzO > ~/codex/codex
           chmod +x ~/codex/codex
 
       - name: Use the Codex CLI
