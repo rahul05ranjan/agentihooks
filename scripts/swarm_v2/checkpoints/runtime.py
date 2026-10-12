@@ -80,7 +80,7 @@ def source(validator: model.Validator, checkpoint_id: str, target: Path) -> mode
         if not project.startswith("github.com/"):
             raise git_capture.SourceError("source checkout is unavailable")
         subprocess.run(
-            ["git", "clone", "--no-checkout", f"https://{project}.git", str(target)],
+            ["git", "clone", f"https://{project}.git", str(target)],
             capture_output=True,
             timeout=120,
             check=True,

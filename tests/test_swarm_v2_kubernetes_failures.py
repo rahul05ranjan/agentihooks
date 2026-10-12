@@ -1112,7 +1112,7 @@ def test_a_fresh_replacement_launches_without_a_checkpoint_and_a_refused_mark_wa
     [(request, _)] = relaunch.calls
     assert request.task["checkpoint"] == ""
     assert _hash(world, "recovery-pending-tasks") == {"task": ""}
-    assert _recorded(ledger) == [_directive(world, "fresh", "")]
+    assert _recorded(ledger) == [_outcome(world, "fresh", "")]
     assert replacements() == {}
     assert _marks(ledger) == [{"awaiting": "recovery_pending"}, {"awaiting": ""}]
     assert _hash(world, "recovery-pending-tasks") == {}
@@ -1137,7 +1137,9 @@ def test_a_stale_controller_records_no_launch_and_writes_no_mark(world):
 
 def test_a_stale_controller_writes_no_pending_mark(world):
     recovery, ledger = world.recovery(world.live, automatic=False), _Ledger()
-    replacements = replacement.Replacements(recovery, _Relaunch(), ledger)
+    relaunch = _Relaunch()
+    relaunch.recovery = recovery
+    replacements = replacement.Replacements(recovery, relaunch, ledger)
     world.show(world.old, "oom_killed")
     world.reconcile(recovery)
 
@@ -1179,8 +1181,13 @@ def test_an_ambiguous_replacement_launch_counts_as_launched_and_is_never_placed_
     assert replacements() == {}
     assert len(relaunch.calls) == 1
     assert _hash(world, "attempt-replacement-launches") == {world.old.execution_id: successor}
-    assert _marks(ledger) == []
-    assert _recorded(ledger) == [_directive(world)]
+    assert _marks(ledger) == [{"awaiting": "recovery_pending"}]
+    assert _recorded(ledger) == [{**_directive(world), "status": "accepted"}]
+    assert recovery.restore_outcomes_by_type() == {"native": 0, "reconstructed": 0, "fresh": 0}
+    recovery.confirm(successor, {**_directive(world), "command": []})
+    assert replacements() == {}
+    assert len(relaunch.calls) == 1
+    assert _marks(ledger)[-1] == {"awaiting": ""}
 
 
 def test_a_replacement_the_seat_has_moved_past_is_never_launched_and_its_task_stops_waiting(world):
@@ -1225,7 +1232,9 @@ def test_a_fence_whose_decision_is_not_written_yet_waits_without_a_launch(world)
 )
 def test_a_cleared_recovery_mark_restores_the_awaiting_value_the_task_held_before(world, rows, restored):
     recovery, ledger = world.recovery(world.live, automatic=False), _Ledger(rows=rows)
-    replacements = replacement.Replacements(recovery, _Relaunch(), ledger)
+    relaunch = _Relaunch()
+    relaunch.recovery = recovery
+    replacements = replacement.Replacements(recovery, relaunch, ledger)
     world.show(world.old, "oom_killed")
     world.reconcile(recovery)
 
@@ -1243,6 +1252,7 @@ def test_the_deployed_pass_launches_a_decided_replacement_after_it_reconciles(wo
     service = SimpleNamespace(controller=world.live, grants=_Grants(), runtime=SimpleNamespace(relaunch=relaunch))
     recover = deployed.recovery_pass(service, SimpleNamespace(image_tag="dev"), _Cluster(world), ledger)
     passing = recover.replacements
+    relaunch.recovery = recover.recovery
     assert (passing.recovery, passing.relaunch, passing.ledger) == (recover.recovery, relaunch, ledger)
     assert recover() == {world.old.execution_id: "working"}
     assert ledger.calls == []
@@ -1269,7 +1279,7 @@ def test_an_automatic_replacement_comes_only_from_a_native_checkpoint(world):
     decision = recovery.handle(world.old.execution_id, "node_lost")
     assert (decision.mode, decision.checkpoint) == ("resume", "ckpt-one-2")
     assert recovery.restore(decision.replacement) == _directive(world)
-    assert recovery.restore_outcomes_by_type() == {"native": 1, "reconstructed": 0, "fresh": 0}
+    assert recovery.restore_outcomes_by_type() == {"native": 0, "reconstructed": 0, "fresh": 0}
 
 
 def test_a_context_only_checkpoint_waits_for_an_explicit_choice_and_restores_as_reconstructed(world):
@@ -1301,7 +1311,7 @@ def test_a_fresh_choice_records_a_fresh_restore_at_the_archived_watermark(world)
     recovery.handle(world.old.execution_id, "node_lost")
     decision = recovery.decide(world.old.execution_id, "fresh")
     assert recovery.restore(decision.replacement) == _directive(world, "fresh", "")
-    assert recovery.restore_outcomes_by_type() == {"native": 0, "reconstructed": 0, "fresh": 1}
+    assert recovery.restore_outcomes_by_type() == {"native": 0, "reconstructed": 0, "fresh": 0}
 
 
 def test_a_repeated_restore_request_reuses_the_accepted_decision_without_a_second_replacement(world):
