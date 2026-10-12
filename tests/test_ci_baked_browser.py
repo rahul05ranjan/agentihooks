@@ -43,7 +43,9 @@ def test_image_browser_is_used_only_after_a_successful_launch(tmp_path, present,
         "CALLS": str(calls),
         "USABLE": str(usable).lower(),
     }
-    result = subprocess.run(["bash", str(ACTION / "use-image.sh")], env=env, capture_output=True, text=True)
+    steps = yaml.safe_load((ACTION / "action.yml").read_text())["runs"]["steps"]
+    image = next(step for step in steps if step.get("id") == "image")
+    result = subprocess.run(["bash", "-euo", "pipefail", "-c", image["run"]], env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert output.read_text().strip() == f"ready={str(present and usable and not existing).lower()}"
     if present and not existing:
