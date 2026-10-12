@@ -221,6 +221,37 @@ def test_refused_publication_or_verification_never_reports_complete(portable, mo
     assert not (attempt / "checkpoints").exists()
 
 
+def test_capture_revalidates_original_execution_generation_before_acknowledging(portable, monkeypatch):
+    attempt, scope, environ, newest = portable
+    publish = capture.publisher.Publisher.publish
+
+    def altered(owner, doc, materials):
+        promoted = publish(owner, doc, materials)
+        from scripts.swarm_v2.artifacts.base import ArtifactRef
+
+        stored = json.loads(owner.store.get_range(owner.store.recorded(doc["checkpoint_id"])))
+        stored["authority"]["execution_generation"] += 1
+        raw = json.dumps(stored).encode()
+        ref = ArtifactRef.of(raw)
+        owner.store.backend.write(owner.store.scope.key("objects", ref.sha256), raw)
+        record = {
+            "sha256": ref.sha256,
+            "size": ref.size,
+            "execution_id": owner.store.scope.execution_id,
+            "generation": owner.store.scope.generation,
+        }
+        owner.store.backend.write(
+            owner.store.scope.key("artifacts", doc["checkpoint_id"] + ".json"), json.dumps(record).encode()
+        )
+        return promoted
+
+    monkeypatch.setattr(capture.publisher.Publisher, "publish", altered)
+    assert capture.publish(attempt, scope, environ, newest) == {
+        "status": "incomplete",
+        "reason": "checkpoint_validation_refused",
+    }
+
+
 def test_unsupported_native_version_is_published_only_as_context(portable, monkeypatch):
     attempt, scope, environ, newest = portable
     monkeypatch.setattr(runtime, "version", lambda *args: "9.0.0")
@@ -236,7 +267,12 @@ def test_capture_keeps_execution_generation_when_the_task_generation_differs(por
     attempt, scope, environ, newest = portable
     spec = json.loads((attempt / "launch.json").read_text())
     store = runtime.granted(Path(environ[runtime.ROOT]), replace(Registration(**spec["registration"]), generation=7))
-    monkeypatch.setattr(runtime, "worker_store", lambda *args: store)
+
+    def granted(actual, root, environment):
+        assert (actual, root, environment) == (spec, attempt, environ)
+        return store
+
+    monkeypatch.setattr(runtime, "worker_store", granted)
     assert capture.publish(attempt, scope, environ, newest)["status"] == "complete"
     doc = json.loads(store.get_range(store.recorded("ckp-fixture")))
     assert doc["authority"]["task_generation"] == 7
