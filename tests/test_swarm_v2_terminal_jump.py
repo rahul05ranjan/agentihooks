@@ -113,9 +113,10 @@ def test_prepare_command_places_the_material_and_records_the_jump(tmp_path):
 
     assert jump.main(["prepare", "--state", str(tmp_path / "jump")], environ, lambda: made) == 0
 
-    host_public = jump.prepare(tmp_path / "jump", operator_terminal.authority(environ).user_ca)
+    user_ca = (tmp_path / "jump" / "user_ca.pub").read_text()
+    assert user_ca == operator_terminal.authority(environ).user_ca + "\n"
+    host_public = jump.prepare(tmp_path / "jump", user_ca.strip())
     assert jump.recorded(made) == Jump("swarm.example", 2223, host_public)
-    assert (tmp_path / "jump" / "user_ca.pub").read_text() == operator_terminal.authority(environ).user_ca + "\n"
 
 
 @pytest.mark.parametrize(
