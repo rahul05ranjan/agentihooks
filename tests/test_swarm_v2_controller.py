@@ -994,6 +994,27 @@ def test_every_renewal_passes_the_attachable_attempts_for_change(fixture):
     assert keeper.calls == [("start", []), ("change", [wanted])]
 
 
+class Routes:
+    def __init__(self) -> None:
+        self.published = []
+
+    def publish(self, attempts):
+        self.published.append(list(attempts))
+
+
+def test_the_controller_lists_its_live_worker_terminals_for_the_jump(fixture):
+    store, _controllers, _transport, _clock, grant = fixture
+    routes = Routes()
+    controller = keeping(store, grant, None)
+    controller.jump = routes
+    assert controller.acquire()
+    wanted = attachable(store, controller.admit(agent(store)))
+
+    assert controller.renew()
+
+    assert routes.published == [[], [wanted]]
+
+
 def test_a_controller_that_lost_its_lease_reconciles_nothing(fixture):
     store, (first, _second), _transport, clock, grant = fixture
     keeper = Keeper()
