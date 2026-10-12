@@ -101,10 +101,12 @@ def test_place_replaces_an_earlier_key_in_place(tmp_path):
     operator_setup.place(home, Bao({"user_ca": ssh_private(Ed25519PrivateKey.generate())}).client(), source)
     rotated = Ed25519PrivateKey.generate()
 
-    report = operator_setup.place(home, Bao({"user_ca": ssh_private(rotated)}).client(), source)
+    secret = ssh_private(rotated)
+
+    report = operator_setup.place(home, Bao({"user_ca": secret}).client(), source)
 
     assert report["ca_fingerprint"] == fingerprint(rotated)
-    assert (home / "swarm-terminal" / "user_ca").read_text() == ssh_private(rotated)
+    assert (home / "swarm-terminal" / "user_ca").read_text() == secret
 
 
 @pytest.mark.parametrize(
@@ -231,7 +233,8 @@ def run_main(argv, environ, who, home):
 
 def test_setup_command_places_files_on_a_test_home_and_prints_no_value(tmp_path, monkeypatch):
     key = Ed25519PrivateKey.generate()
-    bao = Bao({"user_ca": ssh_private(key)})
+    secret = ssh_private(key)
+    bao = Bao({"user_ca": secret})
     monkeypatch.setattr(openbao_kv.urllib.request, "urlopen", bao)
     environ = {
         "OPENBAO_URL": BAO_URL,
@@ -245,8 +248,8 @@ def test_setup_command_places_files_on_a_test_home_and_prints_no_value(tmp_path,
     assert (code, err) == (0, "")
     report = json.loads(out)
     assert report["ca_fingerprint"] == fingerprint(key)
-    assert Path(report["ca_key"]).read_text() == ssh_private(key)
-    assert ssh_private(key) not in out
+    assert Path(report["ca_key"]).read_text() == secret
+    assert secret not in out
     assert "fixture-token" not in out
 
 
@@ -319,6 +322,7 @@ QUIET = {"capture_output": True, "text": True, "timeout": 30}
 
 def test_install_writes_and_enables_the_timer(tmp_path):
     systemctl = Systemctl()
+    tmp_path = tmp_path / "units"
 
     assert operator_setup.install("/opt/bin/agentihooks", tmp_path, systemctl) is True
     assert (tmp_path / "agentihooks-swarm-terminal.service").read_text() == operator_setup.unit("/opt/bin/agentihooks")
