@@ -71,7 +71,7 @@ def test_prepare_writes_the_jump_material_privately_and_keeps_its_host_key(tmp_p
     from scripts.swarm_v2.herdr.attach import USER
     from scripts.swarm_v2.kubernetes import jump
 
-    state = tmp_path / "jump"
+    state = tmp_path / "jump" / "state"
     user_ca = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIUserCa"
 
     host_public = jump.prepare(state, user_ca)

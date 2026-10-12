@@ -75,7 +75,7 @@ def _host_key(path: Path) -> Ed25519PrivateKey:
 
 
 def prepare(state: Path, user_ca: str) -> str:
-    state.mkdir(mode=0o700, exist_ok=True)
+    state.mkdir(mode=0o700, parents=True, exist_ok=True)
     key = _host_key(state / "host_key")
     _write(state / "user_ca.pub", f"{user_ca}\n".encode())
     _write(state / "principals", f"{PRINCIPAL}\n".encode())
