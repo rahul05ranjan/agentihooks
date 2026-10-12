@@ -39,13 +39,14 @@ class Ack:
 
 class Orders:
     def __init__(self, redis: "Redis") -> None:
+        self.store = RedisStore(redis)
         self.redis = redis
 
     def stream(self, hive: str) -> str:
         return f"{registry.key(hive)}:orders"
 
     def receipt(self, order: LaunchOrder) -> str:
-        return f"{RedisStore.key(order.slug, 'launch-orders')}:{order.execution_id}:{order.generation}"
+        return f"{self.store.key(order.slug, 'launch-orders')}:{order.execution_id}:{order.generation}"
 
     def send(self, hive: str, order: LaunchOrder) -> str:
         return self.redis.xadd(self.stream(hive), {"order": json.dumps(asdict(order))})

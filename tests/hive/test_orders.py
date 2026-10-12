@@ -270,6 +270,7 @@ def test_started_order_expires_at_its_deadline_without_relaunch(setup, monkeypat
     ack = setup.orders.ack(setup.order)
     assert ack.status == "failed"
     assert ack.failure == "expired"
+    assert ack.target == {}
     setup.runtime.spawn.assert_not_called()
 
 
@@ -416,12 +417,13 @@ def test_local_consumer_uses_the_selected_hive_and_runtime(setup, monkeypatch):
 
 def test_order_keys_isolate_hives_and_execution_receipts(setup):
     from scripts.hive import registry
-    from scripts.swarm.store import RedisStore
 
     assert setup.orders.stream("host") == f"{registry.key('host')}:orders"
     assert setup.orders.stream("other") != setup.orders.stream("host")
+    assert setup.orders.receipt(replace(setup.order, slug="other")) != setup.orders.receipt(setup.order)
+    assert setup.orders.store.redis is setup.redis
     assert setup.orders.receipt(setup.order) == (
-        f"{RedisStore.key('fixture', 'launch-orders')}:{setup.order.execution_id}:{setup.order.generation}"
+        f"{setup.store.key('fixture', 'launch-orders')}:{setup.order.execution_id}:{setup.order.generation}"
     )
 
 
