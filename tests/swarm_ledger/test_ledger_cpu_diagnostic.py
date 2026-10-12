@@ -46,6 +46,11 @@ def document():
         "questions": [],
         "priorities": [],
         "artifacts": [],
+        "artifact_trash": [],
+        "sources": [],
+        "plans": [],
+        "slices": [],
+        "freezes": [],
         "alerts": [],
     }
     seed = copy.deepcopy(doc)
