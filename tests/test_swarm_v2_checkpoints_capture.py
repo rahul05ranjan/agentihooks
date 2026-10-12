@@ -56,6 +56,88 @@ def test_capture_normalizes_record_sequence_kind_and_missing_text(tmp_path, monk
     assert calls == [transcript]
 
 
+@pytest.mark.parametrize(
+    "environ, expected",
+    [
+        ({}, False),
+        ({runtime.ROOT: ""}, False),
+        ({runtime.ROOT: "/fixture"}, True),
+        ({runtime.REMOTE: "true"}, True),
+        ({runtime.REMOTE: "TRUE"}, False),
+    ],
+)
+def test_portable_capture_activation(environ, expected):
+    assert capture.enabled(environ) is expected
+
+
+def test_capture_manifest_carries_reconstruction_and_source_authority():
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    spec = {
+        "registration": {
+            "execution_id": "e1",
+            "task_id": "t1",
+            "generation": 3,
+            "project_ids": ["github.com/fixture/project"],
+        },
+        "harness": "claude",
+        "image_digest": "sha256:" + "c" * 64,
+        "task_revision": 7,
+    }
+    source = SimpleNamespace(fields=lambda: {"base_commit": "base", "branch_name": "fixture"})
+    doc = capture.document(spec, "ckp-one", 5, source)
+    created = doc["created_at"]
+    assert created.endswith("Z")
+    assert datetime.fromisoformat(created).utcoffset().total_seconds() == 0
+    assert doc == {
+        "schema_version": "2.2",
+        "operation_id": "ckp-one",
+        "checkpoint_id": "ckp-one",
+        "checkpoint_sequence": 5,
+        "status": "complete",
+        "created_at": created,
+        "committed_at": created,
+        "authority": {
+            "execution_id": "e1",
+            "task_id": "t1",
+            "task_generation": 3,
+            "project_id": "github.com/fixture/project",
+        },
+        "continuation": "context",
+        "native_resume_capability": "unverified",
+        "quiescence_method": "stopped_process",
+        "transcript_durable_cursor": {"sequence": 0, "byte_offset": 0},
+        "reconstruction": {
+            "harness": "claude",
+            "image_digest": spec["image_digest"],
+            "task_revision": 7,
+            "execution_generation": 3,
+        },
+        "dependencies_manifest": {},
+        "restore_constraints": ["same qualified harness version"],
+        "base_commit": "base",
+        "branch_name": "fixture",
+    }
+    spec.pop("task_revision")
+    assert capture.document(spec, "ckp-two", 6, source)["reconstruction"]["task_revision"] == 0
+
+
+@pytest.mark.parametrize("missing", ["image", "source"])
+def test_capture_refuses_incomplete_launch_identity_or_source(portable, missing):
+    attempt, scope, environ, newest = portable
+    if missing == "image":
+        spec = json.loads((attempt / "launch.json").read_text())
+        del spec["image_digest"]
+        (attempt / "launch.json").write_text(json.dumps(spec))
+        reason = "image_identity_absent"
+    else:
+        (attempt / "worktrees/.git").rename(attempt / "missing-git")
+        reason = "source_checkout_absent"
+    assert capture.publish(attempt, scope, environ, newest) == {"status": "incomplete", "reason": reason}
+    assert not (attempt / "checkpoints").exists()
+
+
 def test_worker_capture_publishes_and_validates_native_and_source_material(portable):
     attempt, scope, environ, newest = portable
     acknowledgement = capture.publish(attempt, scope, environ, newest)

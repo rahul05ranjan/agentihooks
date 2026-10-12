@@ -283,6 +283,68 @@ def test_worker_prepare_restores_a_codex_checkpoint_into_its_isolated_home(tmp_p
     assert not (attempt / "homes/codex/.claude").exists()
 
 
+def test_historical_store_scope_selects_last_matching_task_claim():
+    from scripts.swarm_v2.auth_context import Registration
+
+    registration = Registration(
+        "g", "s1", "e1", 2, "seat", "t1", "account", "brain", ["local:fixture"], "issuer", "worker", "key", ""
+    )
+    journal = [
+        {},
+        {"claim": {"execution_id": "other", "execution_generation": 2, "generation": 99}},
+        {"claim": {"execution_id": "e1", "execution_generation": 1, "generation": 98}},
+        {"claim": {"execution_id": "e1", "execution_generation": 2, "generation": 7}},
+        {"claim": {"execution_id": "e1", "execution_generation": 2, "generation": 8}},
+    ]
+    assert runtime.historical(registration, journal) == replace(registration, generation=8)
+    assert runtime.historical(registration, []) is None
+    assert runtime.historical(None, journal) is None
+
+
+def test_controller_fetch_requires_a_verified_checkpoint(published_attempt):
+    from scripts.swarm_v2.auth_context import Registration
+
+    attempt, environ = published_attempt
+    spec = json.loads((attempt / "launch.json").read_text())
+    registration = Registration(**spec["registration"])
+    reader = runtime.Checkpoints(
+        runtime.configured(environ), lambda execution: registration if execution == "e1" else None, "fixture"
+    )
+    store = runtime.worker_store(spec, attempt, environ)
+    expected = json.loads(store.get_range(store.recorded("ckp-fixture")))
+    assert reader.fetch("e1", "ckp-fixture") == expected
+    with pytest.raises(restore.RestoreRefused) as caught:
+        reader.fetch("e1", "unverified")
+    assert str(caught.value) == "checkpoint is not verified for this execution"
+
+
+def test_source_restoration_clones_only_a_declared_github_project(tmp_path, monkeypatch):
+    from scripts.swarm_v2.checkpoints import git_capture
+
+    doc = {"authority": {"project_id": "github.com/fixture/project"}}
+    store = SimpleNamespace(recorded=lambda identifier: identifier, get_range=lambda ref: json.dumps(doc).encode())
+    validator = SimpleNamespace(store=store)
+    calls = []
+    monkeypatch.setattr(runtime.subprocess, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
+    monkeypatch.setattr(git_capture, "restore", lambda validator, identifier, target: (validator, identifier, target))
+    target = tmp_path / "worktree"
+    assert runtime.source(validator, "ckp-one", target) == (validator, "ckp-one", target)
+    assert calls == [
+        (
+            (["git", "clone", "https://github.com/fixture/project.git", str(target)],),
+            {"capture_output": True, "timeout": 120, "check": True},
+        )
+    ]
+    doc["authority"]["project_id"] = "local:fixture"
+    with pytest.raises(git_capture.SourceError) as caught:
+        runtime.source(validator, "ckp-one", target)
+    assert str(caught.value) == "source checkout is unavailable"
+    target.mkdir()
+    (target / ".git").mkdir()
+    assert runtime.source(validator, "ckp-one", target) == (validator, "ckp-one", target)
+    assert len(calls) == 1
+
+
 def test_worker_prepare_fresh_requires_no_store_and_preserves_archived_cursor(tmp_path):
     directive = {"checkpoint_id": "", "recovery": "fresh", "session_id": "", "watermark": 41}
     assert runtime.prepare({"restore": directive}, tmp_path, {}) == restore.Restored("fresh", "", 41)
