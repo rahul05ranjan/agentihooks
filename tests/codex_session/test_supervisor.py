@@ -501,6 +501,26 @@ def test_a_home_seed_failure_spawns_nothing_and_frees_the_endpoint(store, server
     assert not store.redis.hgetall(store.key(SLUG, ENDPOINTS))
 
 
+@pytest.mark.parametrize("stage", ["endpoint", "reservation"])
+def test_failure_before_transport_reservation_ends_admitted_execution(
+    store, server, clock, root, tmp_path, monkeypatch, stage
+):
+    spec = launch_spec(store, server, tmp_path)
+    failure = RuntimeError("reservation unavailable")
+
+    def refuse(*args):
+        raise failure
+
+    monkeypatch.setattr(supervisor, "socket_path" if stage == "endpoint" else "_record", refuse)
+    with pytest.raises(RuntimeError) as caught:
+        supervisor.launch(store, spec, deps(server, clock, root))
+    assert caught.value is failure
+    assert not server.spawns
+    assert not store.agents(SLUG)
+    assert store.execution_occupants(SLUG)[SEAT].state == "finished"
+    assert not store.redis.hgetall(store.key(SLUG, ENDPOINTS))
+
+
 def test_the_runtime_root_comes_from_the_launch_environment_when_deps_name_none(store, server, clock, tmp_path):
     runtime = Path(tempfile.mkdtemp(prefix="rt-"))
     try:
