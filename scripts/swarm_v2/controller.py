@@ -88,6 +88,7 @@ class Controller:
             return self._renew()
         except BaseException:
             self.ready = False
+            self._route([])
             raise
 
     def _renew(self) -> bool:
