@@ -370,6 +370,12 @@ def cmd_waker(store, args):
     waker.run(store, delivery.HerdrMessenger(), now_ms)
 
 
+def cmd_alerts(store, args):
+    from scripts.swarm import alert_intake
+
+    alert_intake.serve(store.redis, alert_intake.settings(os.environ), now_ms)
+
+
 def cmd_create(store, args):
     if not SLUG_RE.match(args.slug):
         raise SwarmError("a swarm id is lowercase letters, digits and dashes, starting with a letter, at most 48 long")
@@ -1645,7 +1651,7 @@ def build_parser():
 
 
 def main(argv):
-    if argv and argv[0] in ("list", "tick", "templates", "rename", "waker"):
+    if argv and argv[0] in ("list", "tick", "templates", "rename", "waker", "alerts"):
         handler, args = globals()[f"cmd_{argv[0]}"], argparse.Namespace()
     else:
         if len(argv) > 1 and argv[1].partition("=")[0] in (
