@@ -138,11 +138,35 @@ def test_capture_refuses_incomplete_launch_identity_or_source(portable, missing)
     assert not (attempt / "checkpoints").exists()
 
 
-def test_worker_capture_publishes_and_validates_native_and_source_material(portable):
+def test_worker_capture_publishes_and_validates_native_and_source_material(portable, monkeypatch):
     attempt, scope, environ, newest = portable
+    calls = []
+    original = native.Qualifier.capture
+
+    def qualified(reader, harness, home, session, cwd, version, stopped):
+        calls.append((harness, home, session, cwd, version, stopped))
+        return original(reader, harness, home, session, cwd, version, stopped)
+
+    def installed(harness, environment):
+        assert environment == environ
+        return native_cases.VERSIONS[harness]
+
+    monkeypatch.setattr(native.Qualifier, "capture", qualified)
+    monkeypatch.setattr(runtime, "version", installed)
     acknowledgement = capture.publish(attempt, scope, environ, newest)
     identifier = checkpoint(attempt, {**scope, **acknowledgement}, scope)
     assert identifier == "ckp-fixture"
+    assert acknowledgement["manifest"] == "checkpoints/fixture/manifest.json"
+    assert calls == [
+        (
+            "claude",
+            Path(environ["CLAUDE_CONFIG_DIR"]),
+            native_cases.SESSIONS["claude"],
+            attempt,
+            native_cases.VERSIONS["claude"],
+            True,
+        )
+    ]
     assert runtime.validate_export(attempt, identifier, environ)
     spec = json.loads((attempt / "launch.json").read_text())
     store = runtime.worker_store(spec, attempt, environ)
@@ -150,6 +174,8 @@ def test_worker_capture_publishes_and_validates_native_and_source_material(porta
     assert validator.verify(identifier).continuation == "native"
     manifest = json.loads(store.get_range(store.recorded(identifier)))
     assert manifest["transcript_durable_cursor"]["sequence"] == 2
+    assert manifest["checkpoint_sequence"] == 1
+    assert manifest["quiescence_method"] == "stopped_process"
     assert set(manifest["inventory"]) >= {"native_session", "normalized_transcript", "source_bundle"}
 
 
@@ -162,6 +188,38 @@ def test_corruption_after_export_is_refused_by_the_supervisor_validator(portable
     ref = manifest["inventory"][model.NATIVE_SESSION]
     store.backend.write(store.scope.key("objects", ref["sha256"]), b"corrupt")
     assert runtime.validate_export(attempt, "ckp-fixture", environ) is False
+
+
+def test_a_repeated_capture_reuses_the_private_acknowledgement_folder(portable):
+    attempt, scope, environ, newest = portable
+    first = capture.publish(attempt, scope, environ, newest)
+    (attempt / "checkpoints" / scope["incarnation"]).mkdir(exist_ok=True)
+    again = capture.publish(attempt, scope, environ, newest)
+    assert first == again
+    assert first["manifest"] == "checkpoints/fixture/manifest.json"
+
+
+@pytest.mark.parametrize("failure", ["promotion", "validation"])
+def test_refused_publication_or_verification_never_reports_complete(portable, monkeypatch, failure):
+    from types import SimpleNamespace
+
+    attempt, scope, environ, newest = portable
+    if failure == "promotion":
+        monkeypatch.setattr(capture.publisher.Publisher, "publish", lambda *args: SimpleNamespace(promoted=False))
+    else:
+        publish = capture.publisher.Publisher.publish
+
+        def corrupted(owner, doc, materials):
+            promoted = publish(owner, doc, materials)
+            monkeypatch.setattr(owner.validator, "verify", lambda checkpoint: SimpleNamespace(authoritative=False))
+            return promoted
+
+        monkeypatch.setattr(capture.publisher.Publisher, "publish", corrupted)
+    assert capture.publish(attempt, scope, environ, newest) == {
+        "status": "incomplete",
+        "reason": "checkpoint_validation_refused",
+    }
+    assert not (attempt / "checkpoints").exists()
 
 
 def test_unsupported_native_version_is_published_only_as_context(portable, monkeypatch):
