@@ -22,6 +22,7 @@ NAMESPACE = "swarm-pod-proof"
 GRANT = "sv2.grant-fixture"
 GRANT_ID = "lgr-" + "7" * 32
 CONTROL = "http://controller.swarm.invalid:8780"
+PROJECT = "github.com/the-cloud-clockwork/agentihooks"
 AUTHORITY = {
     "execution_id": EXECUTION,
     "generation": 3,
@@ -44,6 +45,7 @@ RECORD = {
     "checkpoint_seconds": 10,
     "kill_seconds": 2,
     "checkpoint_acknowledgement": {"status": "pending"},
+    "checkout": {"project": PROJECT, "agent": "engineer-1"},
 }
 LABELS = {
     "swarm.agentihooks.io/controller-owner": OWNER,
@@ -56,13 +58,14 @@ def agent(execution_id=EXECUTION, generation=3, profile="engineer") -> AgentReco
     return AgentRecord("engineer-1", "eng", "t1", execution_id=execution_id, generation=generation, profile=profile)
 
 
-def pod(labels=None, **metadata) -> dict:
+def pod(labels=None, project=PROJECT, **metadata) -> dict:
     return {
         "metadata": {
             "name": POD,
             "namespace": NAMESPACE,
             "uid": "uid-1",
             "labels": LABELS if labels is None else labels,
+            "annotations": {"swarm.agentihooks.io/project": project},
             **metadata,
         }
     }
@@ -98,7 +101,7 @@ def registration() -> Registration:
         **AUTHORITY,
         account="claude-fixture",
         brain_id="swarm",
-        project_ids=["github.com/the-cloud-clockwork/agentihooks"],
+        project_ids=[PROJECT],
         issuer="swarm",
         audience="workers",
         key_id="launch-1",
@@ -177,6 +180,39 @@ def test_the_launch_record_names_the_seat_profile_of_the_handed_agent():
     assert grants(api).hand(agent(profile="cicd"), GRANT) == Hand(True, "handed", False)
 
     assert api.created == [material({**RECORD, "profile": "cicd"})]
+
+
+def test_the_opening_prompt_rides_in_the_launch_record():
+    api = Api(pod())
+
+    assert grants(api).hand(agent(), GRANT, "You are engineer-1. Your one task is t1.") == Hand(True, "handed", False)
+
+    assert api.created == [material({**RECORD, "prompt": "You are engineer-1. Your one task is t1."})]
+
+
+def test_the_checkout_names_the_project_the_pod_was_admitted_for():
+    other = "github.com/the-cloud-clockwork/antoncore"
+    api = Api(pod(project=other))
+    permitted = Registration(**{**registration().__dict__, "project_ids": [other, PROJECT]})
+
+    assert PodGrants(api, SLUG, lambda token: permitted, Supervision("claude", None, CONTROL)).hand(
+        agent(), GRANT
+    ) == Hand(True, "handed", False)
+
+    assert json.loads(api.created[0]["data"][LAUNCH_RECORD])["checkout"] == {"project": other, "agent": "engineer-1"}
+
+
+@pytest.mark.parametrize("project", ["github.com/someone/else", None])
+def test_a_pod_project_the_grant_does_not_permit_takes_no_config_map_and_its_pod_is_removed(project):
+    found = pod(project=project)
+    if project is None:
+        del found["metadata"]["annotations"]
+    api = Api(found)
+
+    assert grants(api).hand(agent(), GRANT) == Hand(False, "project_unpermitted", True)
+
+    assert api.created == []
+    assert api.deleted == [("pods", POD, "uid-1")]
 
 
 def test_a_set_exporter_is_copied_into_the_launch_record():

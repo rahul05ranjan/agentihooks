@@ -52,10 +52,11 @@ class Remote:
 
 class Homes:
     def __init__(self, hand=HANDED):
-        self.hand_result, self.calls = hand, []
+        self.hand_result, self.calls, self.openings = hand, [], []
 
-    def hand(self, agent, grant):
+    def hand(self, agent, grant, opening):
         self.calls.append((agent.execution_id, grant))
+        self.openings.append((agent.name, opening))
         return self.hand_result
 
 
@@ -84,6 +85,7 @@ class World:
         self.launcher = DistributedLaunch(
             self.controller, self.grants, self.capacity, self.fleet, self.router, self.homes
         )
+        self.launcher.opening = lambda request: f"opening {request.name}"
         self.terms = LaunchTerms(ACCOUNT, cap, TTL, (PROJECT,), "swarm", API)
 
     def launch(self, seat, previous=""):
@@ -499,6 +501,34 @@ def test_a_launched_worker_is_handed_its_own_grant(world):
     assert world.homes.calls == [(launch.agent.execution_id, launch.grant)]
     assert launch.hand == HANDED
     assert launch.outcome == Outcome("spawn", Status.OK, BACKEND, f"placed-{launch.agent.name}")
+
+
+def test_a_launched_worker_is_handed_the_opening_prompt_of_its_request(world):
+    launch = world.launch(FIRST)
+
+    assert world.homes.openings == [(launch.agent.name, f"opening {launch.agent.name}")]
+
+
+@pytest.mark.parametrize("lanes,role", [({}, ""), ({"eng": {"role": "a reviewer"}}, "a reviewer")])
+def test_a_tick_spawn_opens_with_the_prompt_the_local_runtime_builds_for_its_task(world, monkeypatch, lanes, role):
+    built = []
+
+    def build(*args, **kwargs):
+        built.append((args, kwargs))
+        return "You are the engineer. Your one task is task."
+
+    monkeypatch.setattr(launch_module.prompt, "build", build)
+    world.launcher.opening = launch_module.opening
+    name = world.store.next_name(SLUG, "eng")
+    config = SwarmConfig(SLUG, "agentihooks", 2, 0, api_url=OTHER_API, lanes=lanes, autonomy="assist")
+    request = SpawnRequest(config, "eng", name, {"id": "task", "seat": FIRST})
+
+    assert world.launcher.from_tick(request, world.terms, pod_target).status is Status.OK
+
+    assert built == [
+        ((SLUG, "agentihooks", "eng", name, {"id": "task", "seat": FIRST}), {"role": role, "autonomy": "assist"})
+    ]
+    assert world.homes.openings == [(name, "You are the engineer. Your one task is task.")]
 
 
 def test_the_launch_reports_what_the_worker_home_answered(monkeypatch):

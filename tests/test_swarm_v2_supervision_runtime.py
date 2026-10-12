@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import shlex
@@ -238,6 +239,90 @@ def test_start_without_an_exporter_launches_the_agent_after_herdr_alone(supervis
 
     assert calls == [("spawn", "herdr", ("herdr", "server")), ("ready", "herdr", 2), ("ready", "agent", 2)]
     assert "exporter" not in supervisor.children
+
+
+def started(supervisor, monkeypatch, ready=True):
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: 0)
+    monkeypatch.setattr(supervisor, "spawn", lambda role, command: None)
+    monkeypatch.setattr(supervisor, "ready", lambda role, deadline: role != "agent" or ready)
+    native = Mock(return_value=supervisor.launch.agent)
+    monkeypatch.setattr(runtime, "native_command", native)
+    herdr = Mock(return_value={"result": {"root_pane": {"pane_id": "pane"}}})
+    monkeypatch.setattr(supervisor, "herdr", herdr)
+    return supervisor.start(), native, herdr
+
+
+def test_start_opens_the_harness_in_the_prepared_checkout(supervisor, monkeypatch, tmp_path):
+    tree = tmp_path / "worktrees" / "engineer-323133-1222"
+    supervisor.launch = replace(supervisor.launch, checkout=tree)
+
+    reason, native, herdr = started(supervisor, monkeypatch)
+
+    assert reason is None
+    assert herdr.call_args_list[0].args[0] == ["workspace", "create", "--cwd", str(tree), "--no-focus"]
+    native.assert_called_once_with(supervisor.launch.agent, tree, supervisor.environment)
+
+
+def test_start_hands_the_opening_prompt_to_the_harness_and_logs_its_delivery(supervisor, monkeypatch, capsys):
+    text = "You are engineer@323133-1222. Your one task is t1."
+    supervisor.launch = replace(supervisor.launch, prompt=text)
+
+    reason, _, herdr = started(supervisor, monkeypatch)
+
+    assert reason is None
+    held = supervisor.root / "prompt.md"
+    assert held.read_text() == text
+    assert oct(held.stat().st_mode & 0o777) == oct(0o600)
+    assert shlex.split(herdr.call_args_list[1].args[0][3]) == [
+        sys.executable,
+        "-m",
+        "scripts.swarm_v2.supervision_agent",
+        "--prompt-file",
+        str(held),
+        "tool",
+    ]
+    digest = hashlib.sha256(text.encode()).hexdigest()
+    assert json.loads(capsys.readouterr().out) == {
+        "supervisor": "prompt_delivered",
+        "incarnation": supervisor.root.name,
+        "bytes": len(text.encode()),
+        "sha256": digest,
+    }
+
+
+def test_a_harness_that_never_starts_logs_no_delivered_prompt(supervisor, monkeypatch, capsys):
+    supervisor.launch = replace(supervisor.launch, prompt="Your one task is t1.")
+
+    reason, _, _ = started(supervisor, monkeypatch, ready=False)
+
+    assert reason == "agent_startup_failure"
+    assert capsys.readouterr().out == ""
+
+
+def test_a_launch_without_a_prompt_starts_the_harness_bare_and_logs_nothing(supervisor, monkeypatch, capsys):
+    reason, _, herdr = started(supervisor, monkeypatch)
+
+    assert reason is None
+    assert not (supervisor.root / "prompt.md").exists()
+    assert shlex.split(herdr.call_args_list[1].args[0][3])[3:] == ["tool"]
+    assert capsys.readouterr().out == ""
+
+
+def test_the_agent_wrapper_hands_the_prompt_file_text_to_the_harness_as_its_last_argument(tmp_path, monkeypatch):
+    protocol.write(tmp_path / "context.json", {"incarnation": "current"})
+    monkeypatch.setenv("SWARM_SUPERVISION_DIR", str(tmp_path))
+    monkeypatch.setattr(agent.signal, "signal", lambda sig, handler: None)
+    held = tmp_path / "prompt.md"
+    held.write_text("Your one task is t1.\nRead steering first.")
+    child = Mock(pid=321)
+    child.wait.return_value = 0
+    spawn = Mock(return_value=child)
+    monkeypatch.setattr(agent.subprocess, "Popen", spawn)
+    monkeypatch.setattr(agent, "_process", Mock(return_value=SimpleNamespace(start_time=1)))
+
+    assert agent.main(["--prompt-file", str(held), "claude", "--name", "eng"]) == 0
+
+    spawn.assert_called_once_with(["claude", "--name", "eng", "Your one task is t1.\nRead steering first."], stdin=None)
 
 
 def test_drain_without_an_exporter_waits_for_no_checkpoint_and_reports_it_incomplete(supervisor, monkeypatch):

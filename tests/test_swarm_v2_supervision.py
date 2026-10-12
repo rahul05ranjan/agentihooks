@@ -92,6 +92,72 @@ def test_launch_refuses_home_escape(tmp_path):
         Launch.load(attempt, path)
 
 
+def test_a_launch_carries_the_opening_prompt_of_its_record(tmp_path):
+    attempt, path, spec = launch_files(tmp_path)
+    path.write_text(json.dumps({**spec, "prompt": "Your one task is fixture."}))
+
+    assert Launch.load(attempt, path).prompt == "Your one task is fixture."
+
+
+def test_a_launch_without_a_prompt_or_a_prepared_checkout_opens_bare_in_its_attempt(tmp_path):
+    attempt, path, _ = launch_files(tmp_path)
+
+    launch = Launch.load(attempt, path)
+
+    assert (launch.prompt, launch.checkout) == ("", None)
+
+
+@pytest.mark.parametrize("value", ["", 7, ["text"], "a\0b", None])
+def test_a_launch_with_a_malformed_prompt_is_refused(tmp_path, value):
+    attempt, path, spec = launch_files(tmp_path)
+    path.write_text(json.dumps({**spec, "prompt": value}))
+
+    with pytest.raises(LaunchRefused) as refused:
+        Launch.load(attempt, path)
+
+    assert str(refused.value) == "invalid prompt"
+
+
+def recorded_checkout(attempt, task, tree):
+    folder = attempt / "spool" / "workspaces"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / f"{task}.json").write_text(json.dumps({"path": str(tree)}))
+
+
+def test_a_launch_opens_in_the_worktree_its_task_recorded(tmp_path):
+    attempt, path, _ = launch_files(tmp_path)
+    tree = attempt / "worktrees" / "engineer-323133-1222"
+    tree.mkdir(parents=True)
+    recorded_checkout(attempt, "fixture", tree)
+
+    assert Launch.load(attempt, path).checkout == tree.resolve()
+
+
+@pytest.mark.parametrize("where", ["outside", "missing", "root"])
+def test_a_recorded_checkout_outside_the_worktree_root_is_refused(tmp_path, where):
+    attempt, path, _ = launch_files(tmp_path)
+    (attempt / "worktrees").mkdir()
+    trees = {"outside": tmp_path, "missing": attempt / "worktrees" / "gone", "root": attempt / "worktrees"}
+    recorded_checkout(attempt, "fixture", trees[where])
+
+    with pytest.raises(LaunchRefused) as refused:
+        Launch.load(attempt, path)
+
+    assert str(refused.value) == "invalid checkout"
+
+
+def test_a_task_id_that_names_no_workspace_record_opens_without_a_checkout(tmp_path):
+    attempt, path, spec = launch_files(tmp_path)
+    spec["authority"]["task_id"] = "Fixture"
+    (attempt / "registration.json").write_text(json.dumps(spec["authority"]))
+    path.write_text(json.dumps(spec))
+    tree = attempt / "worktrees" / "engineer-323133-1222"
+    tree.mkdir(parents=True)
+    recorded_checkout(attempt, "Fixture", tree)
+
+    assert Launch.load(attempt, path).checkout is None
+
+
 def wait_for(path, child):
     deadline = time.monotonic() + 8
     while time.monotonic() < deadline:
