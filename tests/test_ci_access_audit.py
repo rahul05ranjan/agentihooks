@@ -1,0 +1,96 @@
+import json
+from pathlib import Path
+
+import pytest
+
+from scripts import ci_access_audit
+
+pytestmark = pytest.mark.unit
+
+APPROVED = ["nestorcolt", "agenticore-app[bot]", "tcc-main-ci[bot]"]
+
+
+def test_unapproved_collaborator_and_installed_app_are_reported():
+    report = ci_access_audit.audit(
+        APPROVED,
+        [{"login": "nestorcolt"}, {"login": "stranger"}],
+        [{"app_slug": "agenticore-app"}, {"app_slug": "claude"}, {"app_slug": "tcc-main-ci"}],
+    )
+    assert report["unapproved"] == ["claude[bot]", "stranger"]
+    assert report["collaborators"] == ["nestorcolt", "stranger"]
+    assert report["apps"] == ["agenticore-app[bot]", "claude[bot]", "tcc-main-ci[bot]"]
+    assert report["approved"] == APPROVED
+
+
+def test_approved_inventory_has_no_alert():
+    report = ci_access_audit.audit(
+        APPROVED, [{"login": "nestorcolt"}], [{"app_slug": "agenticore-app"}, {"app_slug": "tcc-main-ci"}]
+    )
+    assert report["unapproved"] == []
+
+
+def test_inventory_paginates_every_collaborator_and_app():
+    calls = []
+
+    def api(endpoint):
+        calls.append(endpoint)
+        if "collaborators" in endpoint:
+            return [{"login": f"user{i}"} for i in range(100)] if "page=1&" in endpoint else [{"login": "last"}]
+        return {
+            "total_count": 101,
+            "installations": [{"app_slug": f"app{i}"} for i in range(100)]
+            if "page=1&" in endpoint
+            else [{"app_slug": "last-app"}],
+        }
+
+    collaborators, apps = ci_access_audit.inventory("owner/repo", api)
+    assert len(collaborators) == len(apps) == 101
+    assert collaborators[-1]["login"] == "last"
+    assert apps[-1]["app_slug"] == "last-app"
+    assert len(calls) == 4
+
+
+def test_incomplete_installation_inventory_is_red():
+    def api(endpoint):
+        return [] if "collaborators" in endpoint else {"total_count": 10, "installations": [{"app_slug": "one"}]}
+
+    with pytest.raises(ValueError, match="incomplete"):
+        ci_access_audit.inventory("owner/repo", api)
+
+
+def test_failed_inventory_writes_alert_without_credentials(tmp_path, monkeypatch):
+    policy = tmp_path / "actors.json"
+    policy.write_text(json.dumps(APPROVED))
+    report = tmp_path / "report.json"
+    alert = tmp_path / "alert.txt"
+
+    def unavailable(*args):
+        raise RuntimeError("inventory unavailable")
+
+    monkeypatch.setattr(ci_access_audit, "inventory", unavailable)
+    assert (
+        ci_access_audit.main(
+            ["--repo", "owner/repo", "--actors", str(policy), "--report", str(report), "--alert", str(alert)]
+        )
+        == 1
+    )
+    assert json.loads(report.read_text())["error"] == "Access inventory could not be completed"
+    assert "inventory could not be completed" in alert.read_text()
+
+
+def test_weekly_job_reads_dev_and_alerts_through_notifications():
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.safe_load((root / ".github/workflows/access-audit.yml").read_text())
+    events = workflow.get("on", workflow.get(True))
+    assert "schedule" in events and "workflow_dispatch" in events
+    job = workflow["jobs"]["audit"]
+    assert job["runs-on"] == "ubuntu-latest"
+    checkout = next(step for step in job["steps"] if step.get("uses", "").startswith("actions/checkout@"))
+    assert checkout["with"]["ref"] == "dev"
+    notification = next(step for step in job["steps"] if "ntfy.homeofanton.com/anton-alerts" in step.get("run", ""))
+    assert "always()" in notification["if"]
+    assert notification["env"]["NTFY_USER"] == "${{ secrets.NTFY_USER }}"
+    assert notification["env"]["NTFY_PASS"] == "${{ secrets.NTFY_PASS }}"
+    assert "--fail" in notification["run"]

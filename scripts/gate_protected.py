@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from scripts import ci_reuse, ci_wiring
+from scripts import ci_reuse, ci_runner_trust, ci_wiring
 
 GATE = ci_wiring.GATE
 WORKFLOWS = ".github/workflows"
@@ -66,7 +66,11 @@ def grade(
     problems = _aggregator_problems(base_gates[0], head_gates[0])
     file = base_gates[0][0]
     problems += _reuse_problems(base_workflows[file]["jobs"], (head_workflows.get(file) or {}).get("jobs") or {})
-    return problems + ci_wiring.check(head_workflows, _protected_config(base_config, head_config), today)
+    return (
+        problems
+        + ci_wiring.check(head_workflows, _protected_config(base_config, head_config), today)
+        + ci_runner_trust.check(head_workflows)
+    )
 
 
 def _git(root: Path, *args: str) -> str:
