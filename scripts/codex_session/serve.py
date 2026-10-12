@@ -148,6 +148,8 @@ def main(
         codex_router._report(args.report, status="failed", error=str(exc))
         return 2
     store = connect(active)
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(signum, _exit_on_signal)
     try:
         started = supervisor.launch(store, spec, deps or supervisor.Deps())
     except (supervisor.LaunchFailure, SwarmError, BindingError) as exc:
@@ -159,8 +161,6 @@ def main(
         f"endpoint={record.endpoint_ref} state={record.state}",
         flush=True,
     )
-    for signum in (signal.SIGTERM, signal.SIGHUP):
-        signal.signal(signum, _exit_on_signal)
     try:
         started.process.wait()
     finally:
