@@ -969,9 +969,13 @@ def test_configured_models_reach_each_launch_lane(tmp_path, monkeypatch, harness
         codex_model="gpt-6-sol",
     )
     passed = _passed(_spawn_seen(tmp_path, lanes, lane, config)["argv"])
-    assert passed[passed.index("--model") + 1] == model
+    model_flag = "-m" if harness == "codex" else "--model"
+    assert passed[passed.index(model_flag) + 1] == model
     effort = "high" if lane == "master" else "xhigh" if harness == "claude" and lane in ("eng", "ci") else "medium"
-    assert passed[passed.index("--effort") + 1] == effort
+    if harness == "codex":
+        assert f'model_reasoning_effort="{effort}"' in passed
+    else:
+        assert passed[passed.index("--effort") + 1] == effort
 
 
 def test_the_classifier_receives_the_launch_environment(tmp_path, monkeypatch):
@@ -998,10 +1002,11 @@ def test_an_empty_lane_model_uses_the_configured_default(tmp_path, monkeypatch):
 
 
 def test_an_unrecorded_resume_uses_the_configured_model(tmp_path):
+    from dataclasses import replace
+
     runtime, config, agent, seen = _resuming(tmp_path, "c0ffee")
     config.claude_model = "sonnet"
-    agent.model = ""
-    runtime.resume(config, agent)
+    runtime.resume(config, replace(agent, model=""))
     passed = _passed(seen["runs"][0])
     assert passed[passed.index("--model") + 1] == "sonnet"
 
