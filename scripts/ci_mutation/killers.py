@@ -1,3 +1,4 @@
+import hashlib
 import os
 from collections.abc import Iterable
 from pathlib import Path
@@ -9,7 +10,8 @@ class KillMemory:
         self.mutant: str | None = None
 
     def _path(self, mutant: str) -> Path:
-        return self.folder / mutant.partition("__mutmut_")[0]
+        # Upload refuses some characters mangled names may hold, so the file is named by a digest.
+        return self.folder / hashlib.sha256(mutant.partition("__mutmut_")[0].encode()).hexdigest()
 
     def order(self, mutant: str, tests: Iterable[str]) -> list[str]:
         path = self._path(mutant)

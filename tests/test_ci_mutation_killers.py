@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import sys
@@ -7,6 +8,10 @@ from types import SimpleNamespace
 from scripts.ci_mutation import killers, selection
 
 TESTS = ["tests/test_a.py::fast", "tests/test_b.py::middle", "tests/test_c.py::slow"]
+
+
+def _digest(function):
+    return hashlib.sha256(function.encode()).hexdigest()
 
 
 def _report(nodeid, failed=True):
@@ -33,7 +38,7 @@ def test_the_test_that_killed_a_mutant_runs_first_for_every_later_mutant_of_its_
     ]
     assert later.order("scripts.a.x_g__mutmut_1", TESTS) == TESTS
     assert later.order("scripts.a.x_f__mutmut_2", TESTS[:2]) == TESTS[:2]
-    assert sorted(path.name for path in (tmp_path / "killers").iterdir()) == ["scripts.a.x_f"]
+    assert sorted(path.name for path in (tmp_path / "killers").iterdir()) == [_digest("scripts.a.x_f")]
 
 
 def test_a_report_outside_a_mutant_run_records_nothing(tmp_path):
@@ -81,6 +86,6 @@ def test_the_selection_runner_orders_by_kills_and_records_them_only_for_mutants(
         (["tests/test_c.py::slow", "tests/test_a.py::fast", "tests/test_b.py::middle"], 1),
         (["tests/test_x.py::t"], 0),
     ]
-    assert (tmp_path / "killers" / "scripts.a.x_f").read_text() == "tests/test_c.py::slow"
+    assert (tmp_path / "killers" / _digest("scripts.a.x_f")).read_text() == "tests/test_c.py::slow"
     assert not list((tmp_path / "killers").glob(f"*.{os.getpid()}"))
     assert Path.cwd() == tmp_path
