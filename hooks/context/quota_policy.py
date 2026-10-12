@@ -93,11 +93,10 @@ def decide(
     min_left: float = QUOTA_HANDOFF_MIN_LEFT,
     wait_min_week_left: float = QUOTA_WAIT_MIN_WEEK_LEFT,
     reserve: frozenset[str] = QUOTA_RESERVE_ACCOUNTS,
-    ceiling: float | None = None,
 ) -> Decision | None:
     if account == "api":
         return None
-    week_hit = week_used >= (week_pct if ceiling is None else min(week_pct, ceiling))
+    week_hit = week_used >= week_pct
     five_hit = five_used >= five_pct
     if not (week_hit or five_hit):
         return None
@@ -262,7 +261,8 @@ def evaluate(session_id: str) -> Decision | None:
     subscriptions = (
         _codex_accounts() if harness == "codex" else _other_accounts(sessions, fleet_observations(os.environ))
     )
-    return decide(
+    return decide_reserved(
+        ceiling,
         account=account,
         five_used=five_used,
         week_used=week_used,
@@ -270,8 +270,14 @@ def evaluate(session_id: str) -> Decision | None:
         week_reset=week_reset,
         others=reserved(subscriptions, held) + _api_accounts(sessions),
         push=push_active(session_id),
-        ceiling=ceiling,
     )
+
+
+def decide_reserved(ceiling: float | None, *, week_used: float, **inputs) -> Decision | None:
+    week_pct = inputs.get("week_pct", QUOTA_HANDOFF_WEEK_PCT)
+    raised = max(week_used, week_pct) if ceiling is not None and week_used >= ceiling else week_used
+    decision = decide(week_used=raised, **inputs)
+    return decision and replace(decision, week_used=week_used)
 
 
 def _own_ceiling(held, account: str, master: bool) -> float | None:

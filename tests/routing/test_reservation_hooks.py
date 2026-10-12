@@ -11,7 +11,8 @@ REASON = "reserved for 1 live master: workers stop at 70% of the week"
 
 
 def _decide(week_used, ceiling, others=()):
-    return quota_policy.decide(
+    return quota_policy.decide_reserved(
+        ceiling,
         account="main",
         five_used=10.0,
         week_used=week_used,
@@ -19,7 +20,6 @@ def _decide(week_used, ceiling, others=()):
         week_reset=None,
         others=list(others),
         push=False,
-        ceiling=ceiling,
     )
 
 
@@ -28,7 +28,9 @@ def test_worker_on_the_master_account_hands_off_at_the_ceiling():
     assert _decide(69.9, 70.0, [other]) is None
     decision = _decide(70.0, 70.0, [other])
     assert (decision.action, decision.trigger, decision.target.account) == ("handoff", "week", "spare")
+    assert decision.week_used == 70.0
     assert _decide(70.0, None, [other]) is None
+    assert _decide(98.5, None, [other]).week_used == 98.5
 
 
 def test_reserved_candidates_take_no_handoff():
