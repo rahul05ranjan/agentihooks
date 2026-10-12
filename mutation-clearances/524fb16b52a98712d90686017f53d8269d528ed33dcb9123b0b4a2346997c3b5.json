@@ -1,0 +1,6 @@
+{
+  "scripts/ci_runner_trust.py:scripts.ci_runner_trust.x_main__mutmut_52:9ae11cb46ef427e397546bf81b9fc22fb22ecdab71011e6bb5fd6be7bd18d555": {
+    "reader": "standards_reader",
+    "reason": "Equivalent within runner CLI main: actors has already been validated immediately after JSON loading, and no intervening statement mutates it. Omitting the same validation in check changes neither workflow grading nor exceptions, output, or status; check does not otherwise use actors."
+  }
+}

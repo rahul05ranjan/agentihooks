@@ -181,3 +181,115 @@ def test_loader_cannot_override_protected_actor_data(override):
     else:
         loader["env"] = {"GITHUB_OUTPUT": "override"}
     assert ci_runner_trust.check({"runner-trust.yml": loader}, ACTORS)
+
+
+@pytest.mark.parametrize(
+    "actors",
+    [
+        tuple(ACTORS),
+        [],
+        ["operator", "app[bot]", "app[bot]"],
+        ["operator", "second", "app[bot]"],
+        ["invalid/name", "one[bot]", "two[bot]"],
+        [7, "one[bot]", "two[bot]"],
+    ],
+)
+def test_malformed_actor_approvals_fail_closed(actors):
+    with pytest.raises(ValueError, match="trusted actors"):
+        ci_runner_trust.validate_actors(actors)
+
+
+def test_approved_usernames_can_contain_uppercase():
+    assert ci_runner_trust.validate_actors(["Operator", "One[bot]", "Two[bot]"]) == ["Operator", "One[bot]", "Two[bot]"]
+
+
+@pytest.mark.parametrize("guard", ["${{ " + GUARD + " }}", GUARD + " && (true)", GUARD + " && ((true))"])
+def test_valid_expression_wrappers_and_tighter_conditions_are_allowed(guard):
+    candidate = workflow(guard=guard)
+    candidate["jobs"]["build"]["needs"] = "runner-trust"
+    assert ci_runner_trust.check({"build.yml": candidate}, ACTORS) == []
+
+
+@pytest.mark.parametrize(
+    "guard",
+    [
+        GUARD.replace("'pull_request_target'", "'workflow_dispatch'"),
+        GUARD.replace("'pull_request_target'", "' pull_request_target '"),
+        GUARD + " && ",
+        GUARD + " && true || true",
+        GUARD + " && )(",
+        GUARD + " && ((true)",
+        GUARD + " && true?",
+        GUARD + " && true}",
+        GUARD + " && true{",
+        GUARD + ' && "true"',
+    ],
+)
+def test_changed_event_literals_and_invalid_additional_conditions_are_red(guard):
+    assert ci_runner_trust.check({"build.yml": workflow(guard=guard)}, ACTORS)
+
+
+@pytest.mark.parametrize("events", ["pull_request_target", {True: {"pull_request_target": {}}}])
+def test_all_yaml_target_trigger_forms_are_rejected(events):
+    candidate = workflow()
+    if isinstance(events, dict):
+        del candidate["on"]
+        candidate.update(events)
+    else:
+        candidate["on"] = events
+    assert ci_runner_trust.check({"build.yml": candidate}, ACTORS)
+
+
+def test_every_job_after_a_hosted_or_reusable_job_is_checked():
+    candidate = {
+        "jobs": {
+            "hosted": {"runs-on": "ubuntu-latest"},
+            "call": {"uses": "./.github/workflows/other.yml"},
+            "private": {"runs-on": "anton"},
+        }
+    }
+    problems = ci_runner_trust.check(
+        {"build.yml": candidate, "other.yml": {"jobs": {"hosted": {"runs-on": "ubuntu-latest"}}}}, ACTORS
+    )
+    assert len(problems) == 1
+    assert "build.yml/private" in problems[0]
+
+
+def test_unknown_local_reusable_workflow_names_the_ungraded_job():
+    problems = ci_runner_trust.check(
+        {"build.yml": {"jobs": {"call": {"uses": "./.github/workflows/missing.yml"}}}}, ACTORS
+    )
+    assert len(problems) == 1
+    assert "build.yml/call" in problems[0] and "missing.yml" in problems[0]
+
+
+def test_loader_name_is_optional_and_does_not_change_admission():
+    from pathlib import Path
+
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    loader = yaml.safe_load((root / ".github/workflows/runner-trust.yml").read_text())
+    del loader["name"]
+    assert ci_runner_trust.check({"runner-trust.yml": loader, "empty.yaml": {}}, ACTORS) == []
+
+
+def test_runner_cli_discovers_both_yaml_suffixes_and_reports_full_counts(tmp_path, monkeypatch, capsys):
+    import json
+
+    import yaml
+
+    folder = tmp_path / ".github/workflows"
+    folder.mkdir(parents=True)
+    (folder / "trusted-actors.json").write_text(json.dumps(ACTORS))
+    (folder / "first.yml").write_text(
+        yaml.safe_dump({"jobs": {"hosted": {"runs-on": "ubuntu-latest"}, "private": {"runs-on": "anton"}}})
+    )
+    (folder / "second.yaml").write_text(yaml.safe_dump({"jobs": {"private": {"runs-on": ["self-hosted", "linux"]}}}))
+    (folder / "empty.yaml").write_text("")
+    monkeypatch.chdir(tmp_path)
+    assert ci_runner_trust.main([]) == 1
+    output = capsys.readouterr().out
+    assert "3 workflows, 3 jobs, 2 problems" in output
+    assert "::error::first.yml/private" in output
+    assert "::error::second.yaml/private" in output

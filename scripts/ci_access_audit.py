@@ -20,7 +20,7 @@ def audit(approved: list[str], collaborators: list[dict], installations: list[di
 
 
 def _api(endpoint: str) -> object:
-    result = subprocess.run(["gh", "api", endpoint], check=True, capture_output=True, text=True)
+    result = subprocess.run(["gh", "api", endpoint], check=True, capture_output=True)
     return json.loads(result.stdout)
 
 

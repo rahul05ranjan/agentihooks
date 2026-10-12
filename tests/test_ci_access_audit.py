@@ -31,23 +31,29 @@ def test_approved_inventory_has_no_alert():
 
 def test_inventory_paginates_every_collaborator_and_app():
     calls = []
+    responses = {
+        "repos/owner/repo/collaborators?page=1&per_page=100": [{"login": f"user{i}"} for i in range(100)],
+        "repos/owner/repo/collaborators?page=2&per_page=100": [{"login": "last"}],
+        "orgs/owner/installations?page=1&per_page=100": {
+            "total_count": 101,
+            "installations": [{"app_slug": f"app{i}"} for i in range(100)],
+        },
+        "orgs/owner/installations?page=2&per_page=100": {
+            "total_count": 101,
+            "installations": [{"app_slug": "last-app"}],
+        },
+    }
 
     def api(endpoint):
+        assert endpoint not in calls
         calls.append(endpoint)
-        if "collaborators" in endpoint:
-            return [{"login": f"user{i}"} for i in range(100)] if "page=1&" in endpoint else [{"login": "last"}]
-        return {
-            "total_count": 101,
-            "installations": [{"app_slug": f"app{i}"} for i in range(100)]
-            if "page=1&" in endpoint
-            else [{"app_slug": "last-app"}],
-        }
+        return responses[endpoint]
 
     collaborators, apps = ci_access_audit.inventory("owner/repo", api)
     assert len(collaborators) == len(apps) == 101
     assert collaborators[-1]["login"] == "last"
     assert apps[-1]["app_slug"] == "last-app"
-    assert len(calls) == 4
+    assert calls == list(responses)
 
 
 def test_incomplete_installation_inventory_is_red():
@@ -124,3 +130,61 @@ def test_weekly_job_reads_dev_and_alerts_through_notifications():
     assert notification["env"]["NTFY_USER"] == "${{ secrets.NTFY_USER }}"
     assert notification["env"]["NTFY_PASS"] == "${{ secrets.NTFY_PASS }}"
     assert "--fail" in notification["run"]
+
+
+@pytest.mark.parametrize("unapproved, denied", [(False, False), (True, False), (False, True)])
+def test_audit_cli_uses_real_transport_and_default_outputs(tmp_path, monkeypatch, capsys, unapproved, denied):
+    import sys
+
+    folder = tmp_path / ".github/workflows"
+    folder.mkdir(parents=True)
+    (folder / "trusted-actors.json").write_text(json.dumps(APPROVED))
+    collaborators = [{"login": "nestorcolt"}] + ([{"login": "stranger"}] if unapproved else [])
+    responses = {
+        "repos/owner/repo/collaborators?page=1&per_page=100": {"status": int(denied), "body": collaborators},
+        "orgs/owner/installations?page=1&per_page=100": {
+            "status": 0,
+            "body": {"total_count": 2, "installations": [{"app_slug": "agenticore-app"}, {"app_slug": "tcc-main-ci"}]},
+        },
+    }
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    cli = bin_dir / "gh"
+    cli.write_text(
+        f"#!{sys.executable}\n"
+        "import json\nimport sys\n"
+        "assert sys.argv[1] == 'api'\n"
+        f"responses = json.loads({json.dumps(responses)!r})\n"
+        "entry = responses[sys.argv[2]]\n"
+        "print(json.dumps(entry['body']))\n"
+        "sys.exit(entry['status'])\n"
+    )
+    cli.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    monkeypatch.chdir(tmp_path)
+    assert ci_access_audit.main(["--repo", "owner/repo"]) == int(unapproved or denied)
+    report = json.loads((tmp_path / "access-report.json").read_text())
+    assert json.loads(capsys.readouterr().out) == report
+    alert = (tmp_path / "access-alert.txt").read_text()
+    if denied:
+        assert report == {"error": "Access inventory could not be completed"}
+        assert "owner/repo" in alert and "could not be completed" in alert
+    else:
+        assert report == {
+            "approved": APPROVED,
+            "collaborators": [entry["login"] for entry in collaborators],
+            "apps": ["agenticore-app[bot]", "tcc-main-ci[bot]"],
+            "unapproved": ["stranger"] if unapproved else [],
+        }
+        assert alert == "Unapproved GitHub access: stranger\n" if unapproved else alert == ""
+
+
+def test_audit_cli_requires_a_repository():
+    with pytest.raises(SystemExit) as error:
+        ci_access_audit.main([])
+    assert error.value.code == 2
+
+
+def test_corrupt_collaborator_inventory_fails_closed():
+    with pytest.raises(ValueError):
+        ci_access_audit.inventory("owner/repo", lambda endpoint: {})
