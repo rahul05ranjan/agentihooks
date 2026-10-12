@@ -495,9 +495,14 @@ def test_observe_reports_host_counts_in_nonlocal_mode(observations, monkeypatch)
     monkeypatch.setattr(
         daemon.account_sessions, "sessions_by_account", lambda *, local=False: {"one": 2 if local else 99}
     )
-    monkeypatch.setattr(daemon.account_sessions, "codex_sessions_by_account", lambda *, local=False: {})
+    monkeypatch.setattr(
+        daemon.account_sessions,
+        "codex_sessions_by_account",
+        Mock(side_effect=lambda *, local=False: {} if local else {"two": 99}),
+    )
     report = daemon.observe()
     assert report["sessions"]["claude:one"] == 2
+    daemon.account_sessions.codex_sessions_by_account.assert_called_once_with(local=True)
 
 
 def test_beat_keeps_a_launch_counted_between_process_samples(redis, monkeypatch):
@@ -578,3 +583,70 @@ def test_beat_exit_between_samples_cannot_create_negative_capacity(
     assert aggregate.read(redis, 100)["claude:one"]["sessions"] == remaining
     assert slots.reserve("claude:one", "second", 1, 1000) is (remaining == 0)
     assert not slots.reserve("claude:one", "third", 1, 1000)
+
+
+def test_observe_reports_interactive_counts_with_their_harness_and_account(observations, monkeypatch):
+    from scripts.routing import reservation
+
+    monkeypatch.setattr(
+        daemon,
+        "_subscriptions",
+        lambda env, counts, now: ([{"harness": "codex", "account": "one", "kind": "subscription", "cap": 1}], {}),
+    )
+    monkeypatch.setattr(
+        reservation, "interactive_sessions", lambda harness, account: 2 if (harness, account) == ("codex", "one") else 0
+    )
+    assert daemon.observe({"claude": {}, "codex": {1000: "one"}})["sessions"] == {
+        "codex:one": 1,
+        "interactive:codex:one": 2,
+    }
+
+
+def test_execution_report_deduplicates_processes_and_skips_stale_records(redis, monkeypatch):
+    from scripts.swarm.store import AgentRecord, RedisStore, SwarmConfig
+    from scripts.swarm_v2.controller import Controller
+    from scripts.swarm_v2.registry import Scope, Session, encode
+
+    monkeypatch.setattr("time.time", lambda: 100)
+    store = RedisStore(redis)
+    store.create(SwarmConfig("swarm", "repo", 8, 0))
+    controller = Controller(store, "swarm", [], lambda: True)
+    assert controller.acquire()
+    agents = [
+        controller.admit(
+            AgentRecord(
+                store.next_name("swarm", "eng"),
+                "eng",
+                str(index),
+                hive="hive",
+                seat=f"eng-{index}@swarm",
+                harness="claude",
+                account="one",
+            )
+        )
+        for index in range(5)
+    ]
+    records = [
+        (agents[0], 10, 1, "claude"),
+        (agents[1], 20, 1, "claude"),
+        (agents[2], 20, 1, "claude"),
+        (agents[3], 30, 2, "claude"),
+        (agents[4], 40, 1, "unknown"),
+    ]
+    for index, (agent, pid, generation, harness) in enumerate(records):
+        session = Session(
+            f"session-{index}",
+            Scope("kubernetes", "hive", "worker"),
+            pid,
+            index,
+            harness,
+            execution_id=agent.execution_id,
+            generation=generation,
+        )
+        redis.hset(store.key("swarm", "fleet-sessions"), session.key(), encode(session))
+    processes = {"claude": {10: "other", 20: "one", 30: "one"}, "codex": {}}
+    assert daemon._executions(redis, "hive", processes) == {"claude:one": [agents[1].execution_id]}
+    processes["claude"][10] = "one"
+    assert daemon._executions(redis, "hive", processes) == {
+        "claude:one": [agents[0].execution_id, agents[1].execution_id]
+    }

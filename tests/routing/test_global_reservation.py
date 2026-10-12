@@ -84,3 +84,26 @@ def test_pending_refresh_and_cross_account_retry_do_not_take_new_room(redis, clo
     assert slots.reserve("codex:one", "second", 1, 300000)
     assert slots.reserve("claude:one", "third", 1, 1000)
     assert slots.counts() == {"codex:one": 1, "claude:one": 1}
+
+
+@pytest.mark.parametrize("reported", [None, {}, {"masters": 2}])
+def test_global_master_ceiling_combines_hive_and_durable_counts(monkeypatch, reported):
+    from types import SimpleNamespace
+
+    from scripts.routing import aggregate
+    from scripts.routing.master_account import MasterAccount
+
+    environ = {"AGENTIHOOKS_RUNTIME_BACKEND": "kubernetes"}
+    monkeypatch.setenv("AGENTIHOOKS_RUNTIME_BACKEND", "local")
+    monkeypatch.setattr("time.time", lambda: 100)
+    monkeypatch.setattr(reservation.master_account, "load", lambda env: {"codex": MasterAccount("codex", "one")})
+    agent = SimpleNamespace(lane="master", state="working", harness="codex", account="one", route_kind="subscription")
+    store = SimpleNamespace(slugs=lambda: ["swarm"], agents=lambda slug: [agent])
+
+    def observed(now):
+        assert now == 100
+        return {} if reported is None else {"codex:one": reported}
+
+    monkeypatch.setattr(aggregate, "current", observed)
+    held = reservation.current("codex", environ, store_of=lambda env: store)
+    assert held == reservation.Reservation("codex", "one", 3 if reported else 1)

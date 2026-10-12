@@ -1206,8 +1206,16 @@ def test_tick_launch_reserves_the_selected_harness(world, harness, live):
         assert outcome.status is Status.UNAVAILABLE
         assert world.runtime.requests == []
     else:
-        assert outcome.status is Status.LAUNCHED
+        assert outcome.status is Status.OK
         [sent] = world.runtime.requests
         admitted = world.store.execution(SLUG, sent.task["execution_id"])
         assert admitted.harness == harness
         assert world.launcher.launch_slots.counts() == {f"{harness}:{ACCOUNT}": 1}
+
+
+
+def test_registration_reports_a_missing_global_reservation(world, monkeypatch):
+    launch = world.launch(FIRST)
+    monkeypatch.setattr(type(world.launcher.launch_slots), "acknowledge", lambda self, execution: False)
+    with pytest.raises(SwarmError, match="^reservation_expired$"):
+        world.launcher.registered(world.session(launch), launch.grant)
