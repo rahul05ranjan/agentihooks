@@ -7,8 +7,7 @@ from pathlib import Path
 from scripts.ci_mutation.scope import discover_changes, graded_green, own_bases, select_tests
 from scripts.ci_mutation.selection import changed_mutations, file_seconds, part_files, stats_shards
 
-# Upper quartile of worker seconds per mutant over 39 pull request changes, Tests runs 38178855579 to 38197261059;
-# stored test timings did not predict the cost there.
+# Upper quartile of measured worker seconds per mutant; stored test timings did not predict the cost.
 MUTANT_SECONDS = 5.6
 WORKERS = 4
 

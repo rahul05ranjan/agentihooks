@@ -251,6 +251,7 @@ jobs:
           path: .mutation-gate/
           include-hidden-files: true
           retention-days: 7
+          overwrite: true
 
   # Readers take one report and the check named mutation, so every shard ends here.
   mutation:
@@ -294,6 +295,7 @@ jobs:
           path: .mutation-gate/
           include-hidden-files: true
           retention-days: 7
+          overwrite: true
 
       - name: Fail when a shard did not finish
         if: needs.plan.outputs.changed != '0' && needs.mutation-shard.result != 'success'

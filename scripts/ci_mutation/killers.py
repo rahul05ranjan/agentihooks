@@ -1,7 +1,9 @@
 import hashlib
 import os
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
+
+from pytest import TestReport
 
 
 class KillMemory:
@@ -22,7 +24,7 @@ class KillMemory:
         self.mutant = mutant
         return tests if mutant is None else self.order(mutant, tests)
 
-    def wrap(self, execute_pytest):
+    def wrap(self, execute_pytest: Callable[..., int]) -> Callable[..., int]:
         def execute_remembering_kills(runner, params, **kwargs):
             if self.mutant is not None:
                 kwargs["plugins"] = [*kwargs.get("plugins", []), self]
@@ -30,7 +32,7 @@ class KillMemory:
 
         return execute_remembering_kills
 
-    def pytest_runtest_logreport(self, report) -> None:
+    def pytest_runtest_logreport(self, report: TestReport) -> None:
         if not report.failed or self.mutant is None:
             return
         path = self._path(self.mutant)
