@@ -179,4 +179,4 @@ if [[ $machines != *"$execution"* ]]; then
 fi
 printf 'the controller saved the worker attempt as a herdr machine: %s\n' "$machines"
 agent="$(python3 -c 'import json, sys; print(json.loads(sys.argv[1])["agent"])' "$opened")"
-bash deploy/helm/agentihooks-swarm/ci/terminal-identity-proof.sh "$release" "$slug" "$execution" "$agent" "every caller is the operator"
+bash deploy/helm/agentihooks-swarm/ci/terminal-identity-proof.sh "$release" "$slug" "$execution" "$agent"

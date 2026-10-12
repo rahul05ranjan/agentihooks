@@ -5,7 +5,6 @@ release=$1
 slug=$2
 execution=$3
 agent=$4
-plant=${5:-}
 controller=("deployment/$release-controller" -c controller)
 
 master="$(kubectl exec "${controller[@]}" -- env SLUG="$slug" python -c '
@@ -68,6 +67,15 @@ check() {
   printf 'the agent identity was refused: %s\n' "$(tail -1 <<< "$out")"
 }
 
-if ! check "$plant"; then
+if ! check ""; then
   exit 1
 fi
+if planted="$(check "every caller is the operator")"; then
+  printf 'the identity check passed with every caller resolved to the operator: %s\n' "$planted" >&2
+  exit 1
+fi
+if [[ $planted != *"the master identity $master was not refused the worker terminal"* ]]; then
+  printf 'the identity check missed the planted operator fallback for the master: %s\n' "$planted" >&2
+  exit 1
+fi
+printf 'the identity check flagged the planted operator fallback: %s\n' "$(tail -1 <<< "$planted")"
