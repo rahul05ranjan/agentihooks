@@ -206,12 +206,10 @@ class Pump:
             self.subscription.close()
             self.subscription = None
         self.binding.connection.close()
+        record = self.binding.transport.require()
         if self.binding.reconnect is not None:
             connection = self.binding.reconnect()
         else:
-            record = self.binding.transport.bindings.get(
-                self.binding.transport.slug, self.binding.transport.execution_id
-            )
             connection, _ = protocol.connect(record.endpoint_ref.removeprefix(UNIX), 5.0)
         self.binding = replace(self.binding, connection=connection)
         self.state = ThreadState()
