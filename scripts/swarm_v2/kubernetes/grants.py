@@ -13,7 +13,7 @@ from scripts.swarm_v2.kubernetes.client import AlreadyExists, ApiRefused, PodApi
 from scripts.swarm_v2.kubernetes.runtime import GENERATION_LABEL
 from scripts.swarm_v2.kubernetes.spec import LAUNCH_RECORD, launch_name, pod_name
 from scripts.swarm_v2.kubernetes.watch import EXECUTION_LABEL, OWNER_LABEL, owner_for
-from scripts.swarm_v2.supervision import AUTHORITY, SCHEMA_VERSION
+from scripts.swarm_v2.supervision import AUTHORITY, SCHEMA_VERSION, Budgets
 
 
 @dataclass(frozen=True)
@@ -21,6 +21,7 @@ class Supervision:
     harness: str
     exporter: tuple[str, ...] | None
     control_url: str
+    budgets: Budgets = Budgets()
     checkpoint_remote: bool = False
 
     def record(self, registration: Registration, profile: str, restore: dict | None = None) -> str:
@@ -34,6 +35,8 @@ class Supervision:
             "control_url": self.control_url,
             "profile": profile,
             "registration": asdict(registration),
+            **self.budgets.record(),
+            "checkpoint_acknowledgement": {"status": "pending"},
         }
         if self.checkpoint_remote:
             record["checkpoint_remote"] = True

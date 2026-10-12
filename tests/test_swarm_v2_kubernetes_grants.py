@@ -10,7 +10,7 @@ from scripts.swarm_v2.hand import Hand
 from scripts.swarm_v2.kubernetes.client import AlreadyExists, ApiRefused, PreconditionFailed
 from scripts.swarm_v2.kubernetes.grants import PodGrants, Supervision
 from scripts.swarm_v2.kubernetes.spec import LAUNCH_DIR, LAUNCH_RECORD, PodTemplate, launch_name
-from scripts.swarm_v2.supervision import Launch
+from scripts.swarm_v2.supervision import Budgets, Launch
 from tests import sv2_kub02_cases as cases
 
 pytestmark = pytest.mark.unit
@@ -40,6 +40,11 @@ RECORD = {
     "agent": ["claude"],
     "control_url": CONTROL,
     "profile": "engineer",
+    "startup_seconds": 10,
+    "quiesce_seconds": 10,
+    "checkpoint_seconds": 10,
+    "kill_seconds": 2,
+    "checkpoint_acknowledgement": {"status": "pending"},
 }
 LABELS = {
     "swarm.agentihooks.io/controller-owner": OWNER,
@@ -221,9 +226,11 @@ def test_an_attempt_no_recovery_admitted_carries_no_restore():
     assert json.loads(Supervision("claude", None, CONTROL).record(registration(), "engineer", {}))["restore"] == {}
 
 
-def test_the_supervisor_loads_the_handed_record_against_the_registered_authority(tmp_path):
+@pytest.mark.parametrize("budgets", [Budgets(), Budgets(3, 7, 11, 4)])
+def test_the_supervisor_loads_the_handed_record_against_the_registered_authority(tmp_path, budgets):
+
     api = Api(pod())
-    grants(api).hand(agent(), GRANT)
+    PodGrants(api, SLUG, verify, Supervision("claude", None, CONTROL, budgets)).hand(agent(), GRANT)
     attempt = tmp_path / EXECUTION
     (attempt / "homes" / "claude").mkdir(parents=True)
     (attempt / "execution.json").write_text(json.dumps({"attempt": EXECUTION, "homes": {"claude": "homes/claude"}}))
@@ -234,6 +241,21 @@ def test_the_supervisor_loads_the_handed_record_against_the_registered_authority
     launch = Launch.load(attempt, path)
 
     assert (launch.authority, launch.harness, launch.agent, launch.exporter) == (AUTHORITY, "claude", ("claude",), None)
+    assert launch.budgets == budgets
+
+
+@pytest.mark.parametrize("budgets", [Budgets(), Budgets(3, 7, 11, 4)])
+def test_launch_records_publish_the_configured_supervisor_budgets(budgets):
+    record = json.loads(Supervision("claude", None, CONTROL, budgets).record(registration(), "engineer"))
+    assert {
+        key: record[key] for key in ("startup_seconds", "quiesce_seconds", "checkpoint_seconds", "kill_seconds")
+    } == {
+        "startup_seconds": budgets.startup,
+        "quiesce_seconds": budgets.quiesce,
+        "checkpoint_seconds": budgets.checkpoint,
+        "kill_seconds": budgets.kill,
+    }
+    assert record["checkpoint_acknowledgement"] == {"status": "pending"}
 
 
 def test_a_grant_the_controller_did_not_issue_takes_no_config_map():
