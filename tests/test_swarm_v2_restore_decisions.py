@@ -148,6 +148,23 @@ def test_the_controller_requires_a_bound_worker_before_confirming_recovery(pendi
     assert pending.recovery.outcome(decision.replacement) == confirmed
 
 
+def test_a_delayed_restore_receipt_cannot_overwrite_a_newer_attempt(pending):
+    from dataclasses import replace
+
+    decision = pending.recovery.request(pending.old.execution_id, "fresh")
+    successor = pending.world.store.execution(pending.recovery.slug, decision.replacement)
+    newer = pending.recovery.controller.admit(replace(successor, execution_id="", generation=0), successor.execution_id)
+    body = {"recovery": "fresh", "checkpoint_id": "", "watermark": 4096, "session_id": "", "command": []}
+    api = pending.service.recovery_api
+    api.worker = lambda token: SimpleNamespace(execution_id=successor.execution_id)
+    path = f"/v1/executions/{successor.execution_id}/restore-outcome"
+    before = pending.world.protected()
+    assert api.route("POST", path, "Bearer delayed fixture", body)[0] == 409
+    assert pending.world.protected() == before
+    assert pending.world.occupant().execution_id == newer.execution_id
+    assert pending.recovery.outcome(successor.execution_id) is None
+
+
 @pytest.mark.parametrize("choice", ["fresh", "resume"])
 def test_restore_command_delivers_master_decision_to_anton(pending, monkeypatch, capsys, choice):
     from scripts.gates import Who
