@@ -23,7 +23,7 @@ def run(slug: str, config, store, runtime, doc: dict, now_ms: int, limit: int | 
     actions = []
     for seat_name in empty:
         if refused := (
-            seat_spawn.placed_elsewhere(runtime, MASTER, {})
+            seat_spawn.placed_elsewhere(runtime, MASTER, {"id": seat_name})
             or seat_spawn.no_slot(config, runtime, MASTER)
             or seat_spawn.host_hold(slug, store, now_ms, MASTER)
         ):
@@ -50,7 +50,7 @@ def _place(slug, config, store, runtime, seat_name, now_ms, doc):
     except seat_spawn.SeatFailed as failed:
         store.drop_agent(slug, failed.record.name)
         return FAILED.format(seat=failed.record.seat, error=failed.error)
-    record = tick.placed_record(record, placed)
+    record = tick.placed_record(store.agent(slug, record.name), placed)
     store.put_agent(slug, record)
     launch_check.begin(store, slug, record, now_ms)
     store.clear_handoff(slug, seat_name)

@@ -57,8 +57,11 @@ class Placement:
     backend: str
     lanes: frozenset[str] = frozenset(("eng", "ci"))
     local_profiles: frozenset[str] = LOCAL_PROFILES
+    master_seats: frozenset[str] = frozenset()
 
     def backend_for(self, lane: str, task: dict) -> str:
+        if lane == "master":
+            return self.backend if task.get("id") in self.master_seats else LOCAL
         profile = (task.get("profile_decision") or {}).get("profile") or task.get("profile")
         placed = profile not in self.local_profiles and lane in self.lanes
         return self.backend if placed else LOCAL

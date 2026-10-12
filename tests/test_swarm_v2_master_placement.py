@@ -7,6 +7,8 @@ from scripts.swarm.store import AgentRecord
 from scripts.swarm_v2 import deployed, master_fill
 from scripts.swarm_v2.kubernetes import spec
 from scripts.swarm_v2.masters import MasterSeats
+from scripts.swarm_v2.runtime.base import LOCAL
+from scripts.swarm_v2.runtime.local import LocalHerdrRuntime
 from tests.swarm.test_tick import FakeRuntime
 from tests.test_swarm_v2_deployed_runtime import ACCOUNT, IMAGE, SLUG, Pods, _cs, _environ, _store
 
@@ -29,6 +31,7 @@ def world(tmp_path, monkeypatch):
         service = _cs().host(_environ(tmp_path, store), store, "anton")
         runtime = service.runtime
         runtime.herdr_runtime = local
+        runtime.router.runtimes[LOCAL] = LocalHerdrRuntime(local)
         runtime.launch.func.__self__.planned = lambda task: None
         return service, runtime
 
