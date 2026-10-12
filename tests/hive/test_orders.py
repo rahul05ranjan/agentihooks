@@ -52,7 +52,15 @@ def setup():
         held.epoch,
         lease.now_ms(store) + 60000,
     )
-    placed = Placed("pane", "codex", "account", profile="engineer", profile_decision={"validation": {"pid": 12}})
+    placed = Placed(
+        "pane",
+        "codex",
+        "account",
+        model="selected-model",
+        effort="high",
+        profile="engineer",
+        profile_decision={"validation": {"pid": 12}},
+    )
     runtime = Mock()
     runtime.spawn.return_value = Outcome("spawn", Status.OK, "local", placed)
     runtime.namespace.return_value = "namespace"
@@ -82,6 +90,10 @@ def test_order_ack_and_live_execution(setup):
     assert live.pane_id == "pane"
     assert live.state == "working"
     assert live.runtime_target == ack.target
+    placed = setup.runtime.spawn.return_value.value
+    assert live.model == placed.model
+    assert live.effort == placed.effort
+    assert live.profile_decision == placed.profile_decision
     request = setup.runtime.spawn.call_args.args[0]
     assert request.name == setup.agent.name
     assert request.lane == "eng"
@@ -89,6 +101,15 @@ def test_order_ack_and_live_execution(setup):
     assert request.task["controller_epoch"] == setup.held.epoch
     assert request.task["route_kind"] == "subscription"
     assert request.config.lanes["eng"]["agent"] == "codex"
+    assert request.config.lanes["eng"]["role"] == "engineer"
+    config = setup.store.config("fixture")
+    assert request.task["launch_assignment"] == {
+        "profile": "engineer",
+        "harness": "codex",
+        "account": "account",
+        "model": config.codex_model,
+        "effort": config.effort_min,
+    }
     assert not setup.redis.xrange(setup.orders.stream("host"))
 
 
@@ -114,6 +135,9 @@ def test_replay_returns_the_same_ack_without_another_launch(setup):
     setup.consumer.poll()
     assert setup.orders.ack(setup.order) == ack
     setup.runtime.spawn.assert_called_once()
+    setup.consumer.apply = Mock(side_effect=AssertionError("finished order was applied"))
+    setup.orders.send("host", setup.order)
+    setup.consumer.poll()
 
 
 def test_crashed_launch_is_ambiguous_and_never_relaunched(setup):
@@ -124,7 +148,9 @@ def test_crashed_launch_is_ambiguous_and_never_relaunched(setup):
     setup.runtime.spawn.side_effect = None
     setup.redis.hset(setup.orders.receipt(setup.order), "started", "1")
     setup.consumer.poll()
-    assert setup.orders.ack(setup.order).failure == "ambiguous"
+    ack = setup.orders.ack(setup.order)
+    assert ack.status == "failed"
+    assert ack.failure == "ambiguous"
     setup.runtime.spawn.assert_called_once()
 
 
@@ -143,14 +169,20 @@ def test_runtime_failure_is_typed(setup):
     setup.runtime.spawn.return_value = Outcome("spawn", Status.UNAVAILABLE, "local", detail="no launch slot")
     setup.orders.send("host", setup.order)
     setup.consumer.poll()
-    assert setup.orders.ack(setup.order).failure == "unavailable"
+    ack = setup.orders.ack(setup.order)
+    assert ack.status == "failed"
+    assert ack.target == {}
+    assert ack.failure == "unavailable"
 
 
 def test_missing_prompt_is_refused(setup):
     setup.redis.delete("prompt")
     setup.orders.send("host", setup.order)
     setup.consumer.poll()
-    assert setup.orders.ack(setup.order).failure == "prompt"
+    ack = setup.orders.ack(setup.order)
+    assert ack.status == "failed"
+    assert ack.target == {}
+    assert ack.failure == "prompt"
     setup.runtime.spawn.assert_not_called()
 
 
@@ -171,9 +203,11 @@ def test_daemon_consumes_orders_after_its_heartbeat(setup, monkeypatch):
     monkeypatch.setattr(
         daemon, "observe", lambda **kwargs: {"slots": {}, "interactive": {}, "repos": [], "sessions": {}, "quota": {}}
     )
-    monkeypatch.setattr(Consumer, "local", classmethod(lambda cls, redis, hive: setup.consumer))
+    local = Mock(return_value=setup.consumer)
+    monkeypatch.setattr(Consumer, "local", local)
     setup.orders.send("host", setup.order)
     daemon.beat(setup.redis, "host")
+    local.assert_called_once_with(setup.redis, "host")
     assert setup.orders.ack(setup.order).status == "live"
 
 
@@ -202,7 +236,10 @@ def test_unusable_prompt_is_refused(setup, raw):
     setup.redis.set("prompt", raw)
     setup.orders.send("host", setup.order)
     setup.consumer.poll()
-    assert setup.orders.ack(setup.order).failure == "prompt"
+    ack = setup.orders.ack(setup.order)
+    assert ack.status == "failed"
+    assert ack.target == {}
+    assert ack.failure == "prompt"
     setup.runtime.spawn.assert_not_called()
 
 
@@ -230,7 +267,9 @@ def test_started_order_expires_at_its_deadline_without_relaunch(setup, monkeypat
     setup.redis.hset(setup.orders.receipt(setup.order), "started", str(setup.order.expires_at - 60000))
     monkeypatch.setattr(lease, "now_ms", lambda store: setup.order.expires_at)
     setup.consumer.poll()
-    assert setup.orders.ack(setup.order).failure == "expired"
+    ack = setup.orders.ack(setup.order)
+    assert ack.status == "failed"
+    assert ack.failure == "expired"
     setup.runtime.spawn.assert_not_called()
 
 
@@ -256,7 +295,8 @@ def test_malformed_delivery_is_acknowledged_and_does_not_block_the_stream(setup,
     setup.orders.send("host", setup.order)
     setup.consumer.poll()
     ack = json.loads(setup.redis.hget(f"{setup.orders.stream('host')}:acks", item))
-    assert ack["failure"] == "invalid_order"
+    assert ack == {"status": "failed", "target": {}, "failure": "invalid_order"}
+    assert not setup.redis.xrange(setup.orders.stream("host"))
     assert setup.orders.ack(setup.order).status == "live"
 
 
@@ -275,6 +315,10 @@ def test_runtime_substitution_is_refused_and_terminated(setup, field, value):
     setup.orders.send("host", setup.order)
     setup.consumer.poll()
     assert setup.orders.ack(setup.order).failure == "identity"
+    stopped = setup.runtime.terminate.call_args.args[0]
+    assert stopped.execution_id == setup.agent.execution_id
+    assert stopped.runtime_target == setup.orders.ack(setup.order).target
+    assert setup.orders.ack(setup.order).status == "failed"
     setup.runtime.terminate.assert_called_once()
 
 
@@ -290,7 +334,13 @@ def test_launch_that_crosses_expiry_is_terminated(setup, monkeypatch):
     setup.runtime.spawn.side_effect = delayed
     setup.orders.send("host", setup.order)
     setup.consumer.poll()
-    assert setup.orders.ack(setup.order).failure == "expired"
+    ack = setup.orders.ack(setup.order)
+    assert ack.status == "failed"
+    assert ack.failure == "expired"
+    stopped = setup.runtime.terminate.call_args.args[0]
+    assert stopped.execution_id == setup.agent.execution_id
+    assert stopped.runtime_target == setup.orders.ack(setup.order).target
+    assert setup.orders.ack(setup.order).status == "failed"
     setup.runtime.terminate.assert_called_once()
 
 
@@ -308,6 +358,10 @@ def test_epoch_takeover_during_launch_refuses_live_admission(setup, monkeypatch)
     setup.orders.send("host", setup.order)
     setup.consumer.poll()
     assert setup.orders.ack(setup.order).failure == "refused"
+    stopped = setup.runtime.terminate.call_args.args[0]
+    assert stopped.execution_id == setup.agent.execution_id
+    assert stopped.runtime_target == setup.orders.ack(setup.order).target
+    assert setup.orders.ack(setup.order).status == "failed"
     setup.runtime.terminate.assert_called_once()
 
 
@@ -319,6 +373,7 @@ def test_unqualified_process_after_spawn_is_reported_ambiguous(setup, pid, table
     setup.orders.send("host", setup.order)
     setup.consumer.poll()
     ack = setup.orders.ack(setup.order)
+    assert ack.status == "failed"
     assert ack.failure == "ambiguous"
     assert ack.target == {"host_id": "host"}
     assert setup.store.execution("fixture", setup.agent.execution_id).state == "launching"
@@ -332,5 +387,138 @@ def test_failed_cleanup_is_reported_ambiguous(setup):
     setup.runtime.terminate.return_value = Outcome("terminate", Status.REFUSED, "local")
     setup.orders.send("host", setup.order)
     setup.consumer.poll()
-    assert setup.orders.ack(setup.order).failure == "ambiguous"
+    ack = setup.orders.ack(setup.order)
+    assert ack.status == "failed"
+    assert ack.failure == "ambiguous"
+    stopped = setup.runtime.terminate.call_args.args[0]
+    assert stopped.execution_id == setup.agent.execution_id
+    assert stopped.runtime_target == setup.orders.ack(setup.order).target
+    assert setup.orders.ack(setup.order).status == "failed"
     setup.runtime.terminate.assert_called_once()
+
+
+def test_local_consumer_uses_the_selected_hive_and_runtime(setup, monkeypatch):
+    from scripts.hive.orders import Consumer
+    from scripts.swarm import runtime
+    from scripts.swarm_v2.runtime import local
+
+    herdr = Mock()
+    adapter = Mock()
+    monkeypatch.setattr(runtime, "HerdrRuntime", Mock(return_value=herdr))
+    constructor = Mock(return_value=adapter)
+    monkeypatch.setattr(local, "LocalHerdrRuntime", constructor)
+    consumer = Consumer.local(setup.redis, "selected-host")
+    assert consumer.hive == "selected-host"
+    assert consumer.store.redis is setup.redis
+    assert consumer.runtime is adapter
+    constructor.assert_called_once_with(herdr)
+
+
+def test_order_keys_isolate_hives_and_execution_receipts(setup):
+    from scripts.hive import registry
+    from scripts.swarm.store import RedisStore
+
+    assert setup.orders.stream("host") == f"{registry.key('host')}:orders"
+    assert setup.orders.stream("other") != setup.orders.stream("host")
+    assert setup.orders.receipt(setup.order) == (
+        f"{RedisStore.key('fixture', 'launch-orders')}:{setup.order.execution_id}:{setup.order.generation}"
+    )
+
+
+def test_poll_consumes_only_a_bounded_batch(setup):
+    for _ in range(33):
+        setup.redis.xadd(setup.orders.stream("host"), {"order": "invalid"})
+    assert setup.consumer.poll() == 32
+    assert len(setup.redis.xrange(setup.orders.stream("host"))) == 1
+
+
+@pytest.mark.parametrize("elapsed,expected", [(299999, None), (300000, "ambiguous"), (300001, "ambiguous")])
+def test_interrupted_launch_waits_then_fails_at_the_deadline(setup, monkeypatch, elapsed, expected):
+    from scripts.hive.orders import Ack
+    from scripts.swarm import lease
+
+    setup.redis.hset(setup.orders.receipt(setup.order), "started", "1000000")
+    order = replace(setup.order, expires_at=2000000)
+    monkeypatch.setattr(lease, "now_ms", lambda store: 1000000 + elapsed)
+    ack = setup.consumer.apply(order)
+    assert ack == (None if expected is None else Ack("failed", {}, expected))
+    setup.runtime.spawn.assert_not_called()
+
+
+def test_new_order_expires_at_its_exact_deadline(setup, monkeypatch):
+    from scripts.hive.orders import Ack
+    from scripts.swarm import lease
+
+    monkeypatch.setattr(lease, "now_ms", lambda store: setup.order.expires_at)
+    assert setup.consumer.apply(setup.order) == Ack("failed", {}, "expired")
+    setup.runtime.spawn.assert_not_called()
+
+
+def test_launch_claim_retains_the_server_timestamp(setup, monkeypatch):
+    from scripts.swarm import lease
+
+    now = setup.order.expires_at - 10000
+    monkeypatch.setattr(lease, "now_ms", lambda store: now)
+    setup.consumer.apply(setup.order)
+    assert setup.redis.hget(setup.orders.receipt(setup.order), "started") == str(now)
+
+
+def test_launch_refusal_has_a_typed_empty_target(setup):
+    from scripts.hive.orders import Ack
+    from scripts.swarm.store import SwarmError
+
+    setup.runtime.spawn.side_effect = SwarmError("refused by runtime")
+    assert setup.consumer.apply(setup.order) == Ack("failed", {}, "refused")
+
+
+@pytest.mark.parametrize("occupant", [None, "replacement"])
+def test_replaced_execution_is_refused_before_spawn(setup, monkeypatch, occupant):
+    from scripts.swarm.store import SwarmError
+
+    current = {} if occupant is None else {setup.agent.seat: replace(setup.agent, execution_id=occupant)}
+    monkeypatch.setattr(setup.consumer.store.execution_registry, "occupants", lambda slug: current)
+    with pytest.raises(SwarmError, match="^launch order names a replaced execution$"):
+        setup.consumer.identity(setup.order, setup.agent)
+    setup.runtime.spawn.assert_not_called()
+
+
+def test_mismatched_admission_reports_the_identity_refusal(setup):
+    from scripts.swarm.store import SwarmError
+
+    with pytest.raises(SwarmError, match="^launch order does not match the admitted execution$"):
+        setup.consumer.identity(replace(setup.order, generation=9), setup.agent)
+
+
+@pytest.mark.parametrize(
+    "agent_model,agent_effort,lane_model,expected_model,expected_effort",
+    [
+        ("agent-model", "xhigh", "lane-model", "agent-model", "xhigh"),
+        ("", "", "lane-model", "lane-model", "medium"),
+    ],
+)
+def test_launch_keeps_lane_settings_and_selected_assignment(
+    setup, agent_model, agent_effort, lane_model, expected_model, expected_effort
+):
+    agent = replace(setup.agent, model=agent_model, effort=agent_effort)
+    setup.store.execution_registry.update("fixture", agent)
+    config = setup.store.config("fixture")
+    lane = {**config.lanes.get("eng", {}), "model": lane_model, "setting": "retained"}
+    setup.store.update("fixture", lanes={**config.lanes, "eng": lane})
+    setup.consumer.apply(setup.order)
+    request = setup.runtime.spawn.call_args.args[0]
+    assert request.config.lanes["eng"] == {**lane, "agent": "codex", "role": "engineer"}
+    assert request.task["launch_assignment"] == {
+        "profile": "engineer",
+        "harness": "codex",
+        "account": "account",
+        "model": expected_model,
+        "effort": expected_effort,
+    }
+
+
+def test_spawn_without_validation_is_reported_ambiguous(setup):
+    from scripts.hive.orders import Ack
+
+    placed = replace(setup.runtime.spawn.return_value.value, profile_decision={})
+    setup.runtime.spawn.return_value = replace(setup.runtime.spawn.return_value, value=placed)
+    assert setup.consumer.apply(setup.order) == Ack("failed", {"host_id": "host"}, "ambiguous")
