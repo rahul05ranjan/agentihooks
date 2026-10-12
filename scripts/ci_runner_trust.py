@@ -9,25 +9,36 @@ GUARD = (
     "github.event_name != 'pull_request_target' && "
     "(github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && "
     "contains(fromJSON(needs.runner-trust.outputs.actors), github.actor) && "
-    "contains(fromJSON(needs.runner-trust.outputs.actors), github.triggering_actor)"
+    "contains(fromJSON(needs.runner-trust.outputs.actors), github.triggering_actor) && "
+    "(github.actor != fromJSON(needs.runner-trust.outputs.queue_actor) || github.event_name == 'merge_group' || "
+    "(github.event_name == 'push' && github.ref == 'refs/heads/dev')) && "
+    "(github.triggering_actor != fromJSON(needs.runner-trust.outputs.queue_actor) || github.event_name == 'merge_group' || "
+    "(github.event_name == 'push' && github.ref == 'refs/heads/dev'))"
 )
 
 
 def loader_contract() -> dict:
     command = (
         "python3 -I -c 'import json; from pathlib import Path; "
-        'print("actors=" + json.dumps(json.loads(Path(".github/workflows/trusted-actors.json").read_text()), '
-        'separators=(",", ":")))'
+        'p=json.loads(Path(".github/workflows/trusted-actors.json").read_text()); '
+        'print("actors=" + json.dumps(p["actors"] + [p["queue_actor"]], separators=(",", ":"))); '
+        'print("queue_actor=" + json.dumps(p["queue_actor"]))'
         '\' >> "$GITHUB_OUTPUT"'
     )
     return {
-        "on": {"workflow_call": {"outputs": {"actors": {"value": "${{ jobs.actors.outputs.actors }}"}}}},
+        "on": {
+            "workflow_call": {
+                "outputs": {
+                    name: {"value": "${{ jobs.actors.outputs." + name + " }}"} for name in ("actors", "queue_actor")
+                }
+            }
+        },
         "permissions": {"contents": "read"},
         "jobs": {
             "actors": {
                 "runs-on": "ubuntu-latest",
                 "timeout-minutes": 2,
-                "outputs": {"actors": "${{ steps.actors.outputs.actors }}"},
+                "outputs": {name: "${{ steps.actors.outputs." + name + " }}" for name in ("actors", "queue_actor")},
                 "steps": [
                     {
                         "uses": "actions/checkout@v4",
@@ -45,6 +56,14 @@ def loader_contract() -> dict:
 
 
 def validate_actors(actors: object) -> list[str]:
+    if isinstance(actors, dict):
+        if set(actors) != {"actors", "queue_actor"}:
+            raise ValueError("trusted actors policy requires actors and queue_actor")
+        approved = validate_actors(actors["actors"])
+        queue = actors["queue_actor"]
+        if not isinstance(queue, str) or not re.fullmatch(r"[A-Za-z0-9-]+\[bot\]", queue) or queue in approved:
+            raise ValueError("trusted actors queue identity must be a distinct platform bot")
+        return approved + [queue]
     if (
         not isinstance(actors, list)
         or len(actors) != 3

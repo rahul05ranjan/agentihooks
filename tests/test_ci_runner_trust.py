@@ -9,7 +9,11 @@ GUARD = (
     "github.event_name != 'pull_request_target' && "
     "(github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && "
     "contains(fromJSON(needs.runner-trust.outputs.actors), github.actor) && "
-    "contains(fromJSON(needs.runner-trust.outputs.actors), github.triggering_actor)"
+    "contains(fromJSON(needs.runner-trust.outputs.actors), github.triggering_actor) && "
+    "(github.actor != fromJSON(needs.runner-trust.outputs.queue_actor) || github.event_name == 'merge_group' || "
+    "(github.event_name == 'push' && github.ref == 'refs/heads/dev')) && "
+    "(github.triggering_actor != fromJSON(needs.runner-trust.outputs.queue_actor) || github.event_name == 'merge_group' || "
+    "(github.event_name == 'push' && github.ref == 'refs/heads/dev'))"
 )
 
 
@@ -155,10 +159,12 @@ def test_actor_loader_cannot_import_checkout_modules(tmp_path):
     (tmp_path / "pathlib.py").write_text('raise RuntimeError("untrusted checkout module executed")')
     policy = tmp_path / ".github/workflows/trusted-actors.json"
     policy.parent.mkdir(parents=True)
-    policy.write_text(json.dumps(ACTORS))
+    policy.write_text(json.dumps({"actors": ACTORS, "queue_actor": "github-merge-queue[bot]"}))
     result = subprocess.run([sys.executable, *shlex.split(command)[1:]], cwd=tmp_path, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout.strip().removeprefix("actors=")) == ACTORS
+    outputs = dict(line.split("=", 1) for line in result.stdout.splitlines())
+    assert json.loads(outputs["actors"]) == ACTORS + ["github-merge-queue[bot]"]
+    assert json.loads(outputs["queue_actor"]) == "github-merge-queue[bot]"
 
 
 @pytest.mark.parametrize("override", ["extra-step", "replace-command", "change-ref", "change-output", "workflow-env"])
@@ -200,11 +206,18 @@ def test_malformed_actor_approvals_fail_closed(actors):
         ci_runner_trust.validate_actors(actors)
 
 
+def test_workflow_gate_validates_its_actor_input():
+    with pytest.raises(ValueError, match="trusted actors"):
+        ci_runner_trust.check({}, ACTORS + ["stranger"])
+
+
 def test_approved_usernames_can_contain_uppercase():
     assert ci_runner_trust.validate_actors(["Operator", "One[bot]", "Two[bot]"]) == ["Operator", "One[bot]", "Two[bot]"]
 
 
-@pytest.mark.parametrize("guard", ["${{ " + GUARD + " }}", GUARD + " && (true)", GUARD + " && ((true))"])
+@pytest.mark.parametrize(
+    "guard", ["${{ " + GUARD + " }}", "${{" + GUARD + "}}", GUARD + " && (true)", GUARD + " && ((true))"]
+)
 def test_valid_expression_wrappers_and_tighter_conditions_are_allowed(guard):
     candidate = workflow(guard=guard)
     candidate["jobs"]["build"]["needs"] = "runner-trust"
@@ -247,6 +260,48 @@ def test_queue_actor_needs_event_constraints_for_both_identities():
 def test_policy_records_two_apps_and_the_separately_scoped_queue_actor():
     policy = {"actors": ACTORS, "queue_actor": "github-merge-queue[bot]"}
     assert ci_runner_trust.validate_actors(policy) == ACTORS + ["github-merge-queue[bot]"]
+
+
+@pytest.mark.parametrize(
+    "queue", [None, "nestorcolt", "agenticore-app[bot]", "not/a/bot[bot]", "queue\nactors=[stranger]"]
+)
+def test_invalid_queue_identity_cannot_poison_protected_outputs(queue):
+    with pytest.raises(ValueError, match="trusted actors"):
+        ci_runner_trust.validate_actors({"actors": ACTORS, "queue_actor": queue})
+
+
+@pytest.mark.parametrize("identity", ["github.actor", "github.triggering_actor"])
+def test_queue_scope_guard_is_required_for_each_actor(identity):
+    clause = (
+        f"({identity} != fromJSON(needs.runner-trust.outputs.queue_actor) || github.event_name == 'merge_group' || "
+        "(github.event_name == 'push' && github.ref == 'refs/heads/dev'))"
+    )
+    guard = GUARD.replace(clause + " && ", "").removesuffix(" && " + clause)
+    assert ci_runner_trust.check({"build.yml": workflow(guard=guard)}, ACTORS)
+
+
+@pytest.mark.parametrize("replacement", ["'pull_request'", "'workflow_dispatch'"])
+def test_queue_actor_cannot_be_admitted_for_other_events(replacement):
+    guard = GUARD.replace("'merge_group'", replacement)
+    assert ci_runner_trust.check({"build.yml": workflow(guard=guard)}, ACTORS)
+
+
+def test_queue_actor_cannot_be_admitted_on_an_unprotected_push_ref():
+    guard = GUARD.replace("'refs/heads/dev'", "'refs/heads/other'")
+    assert ci_runner_trust.check({"build.yml": workflow(guard=guard)}, ACTORS)
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        {"actors": ACTORS},
+        {"queue_actor": "github-merge-queue[bot]"},
+        {"actors": ACTORS, "queue_actor": "github-merge-queue[bot]", "override": "stranger"},
+    ],
+)
+def test_incomplete_or_extended_policy_is_not_an_approval(policy):
+    with pytest.raises(ValueError, match="trusted actors"):
+        ci_runner_trust.validate_actors(policy)
 
 
 @pytest.mark.parametrize("events", ["pull_request_target", {True: {"pull_request_target": {}}}])
