@@ -622,6 +622,28 @@ def test_successor_admission_racing_a_receipt_commit_refuses_the_old_ack(rig, mo
     assert rig.pump.receipts.get(delivery.id).committed is False
 
 
+def test_retirement_racing_a_receipt_commit_refuses_the_old_ack(rig, monkeypatch):
+    rig.pump.start()
+    item = rig.store.send("alice", ME, "retire")
+    delivery = rig.pump.dispatcher.reserve(ME, OWNER)[0]
+    rig.pump.receipts.submitting(delivery.id, OWNER)
+    original = rig.store.stage_move
+    retired = []
+
+    def stage(*args, **kwargs):
+        if not retired:
+            retired.append(True)
+            rig.bindings.put(SLUG, replace(rig.record(), state="exited"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(rig.store, "stage_move", stage)
+    with pytest.raises(DispatchError, match="execution is no longer current"):
+        rig.pump.receipts.accept(delivery.id, OWNER, delivery.digest)
+    assert retired == [True]
+    assert rig.store.get(item.id).state == "pending"
+    assert rig.pump.receipts.get(delivery.id).committed is False
+
+
 def test_a_stray_text_frame_is_refused_and_diagnostics_stay_off_the_socket(rig):
     rig.server.frames.append("codex: warning written to the wrong stream")
     assert rig.run(3) == codex.STOPPED
