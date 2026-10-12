@@ -140,7 +140,14 @@ def test_tabs_get_ledger_and_swarm_changes_without_polling_the_document(browser,
         tab.wait_for_function("() => document.querySelector('#swarm-state').textContent === 'paused'", timeout=5000)
     time.sleep(3)
     reads = [(method, path) for method, path in requests if path.startswith("/api/") and path != "/api/layout"]
-    assert sorted(reads) == sorted([("GET", f"/api/v1/ledgers/{SLUG}/events"), ("GET", f"/api/v1/ledgers/{SLUG}")] * 2)
+    assert sorted(reads) == sorted(
+        [
+            ("GET", f"/api/v1/ledgers/{SLUG}/events"),
+            ("GET", f"/api/v1/ledgers/{SLUG}"),
+            ("GET", f"/api/swarm/{SLUG}/models"),
+        ]
+        * 2
+    )
     context.close()
     for _ in range(100):
         if not server.HUB.watched():
