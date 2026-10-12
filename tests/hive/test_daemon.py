@@ -550,7 +550,13 @@ def test_beat_exit_between_samples_cannot_create_negative_capacity(redis, observ
         ),
     )
     session = Session(
-        "session", Scope("kubernetes", "hive", "worker"), 4242, 1, "claude", execution_id="first", generation=1
+        "session",
+        Scope("kubernetes", "hive", "worker"),
+        4242,
+        1,
+        "claude",
+        execution_id=agent.execution_id,
+        generation=agent.generation,
     )
     redis.hset(store.key("swarm", "fleet-sessions"), session.key(), encode(session))
     monkeypatch.setattr(daemon.account_sessions, "local_processes", lambda: {"claude": {4242: "one"}, "codex": {}})
