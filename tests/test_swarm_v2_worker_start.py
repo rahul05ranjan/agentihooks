@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.swarm_v2 import filesystem, worker_home
+from scripts.swarm_v2 import filesystem, worker_home, workspaces
 from scripts.swarm_v2.broadcast_bridge import API_URL, GRANT_NAME
 from scripts.swarm_v2.checkpoints import restore
 from scripts.swarm_v2.supervision import Launch, LaunchRefused
@@ -866,3 +866,130 @@ def test_the_image_supervisor_entry_runs_the_start_step_as_a_script():
 
     assert (done.returncode, done.stdout) == (64, "")
     assert done.stderr == "ERROR worker start requires attempt directory and launch record\n"
+
+
+PROJECT = "github.com/the-cloud-clockwork/agentihooks"
+AGENT = "engineer@323133-1222"
+CHECKOUT = {"project": PROJECT, "agent": AGENT}
+BRANCH = "engineer-323133-1222"
+BASE_COMMIT = "a" * 40
+
+
+class Workspaces:
+    def __init__(self, failure: Exception | None = None) -> None:
+        self.failure, self.calls = failure, []
+
+    def __call__(self, attempt: Path, request: workspaces.Request) -> workspaces.Workspace:
+        self.calls.append((attempt, request, (attempt / "registration.json").exists()))
+        if self.failure is not None:
+            raise self.failure
+        mirror = attempt / "checkouts" / "agentihooks.git"
+        tree = attempt / "worktrees" / BRANCH
+        return workspaces.Workspace(tree, BRANCH, mirror, PROJECT, "dev", BASE_COMMIT, request.task, 3, 1.5)
+
+
+def checked_out(tmp_path, monkeypatch, prepared, record=None):
+    controller = Controller((200, ANSWER))
+    launch = material(tmp_path, record or {**RECORD, "checkout": CHECKOUT})
+    attempt = tmp_path / "attempts" / EXECUTION
+    monkeypatch.setattr(start, "checkout", prepared)
+    return start.prepare(attempt, launch, controller.send, controller.sleep, Boot(), shipped(tmp_path))
+
+
+def test_the_start_prepares_the_permitted_project_checkout_on_its_branch_before_the_registration_record(
+    tmp_path, monkeypatch
+):
+    prepared = Workspaces()
+
+    record = checked_out(tmp_path, monkeypatch, prepared)
+
+    origin = "https://github.com/the-cloud-clockwork/agentihooks.git"
+    attempt = tmp_path / "attempts" / EXECUTION
+    assert prepared.calls == [(attempt, workspaces.Request(origin, "t1", 3, AGENT), False)]
+    assert record == {"checkout": {"project": PROJECT, "branch": BRANCH, "base": "dev", "base_commit": BASE_COMMIT}}
+    assert json.loads((attempt / "registration.json").read_text()) == AUTHORITY
+
+
+def test_a_launch_record_without_a_checkout_prepares_none(tmp_path, monkeypatch):
+    prepared = Workspaces()
+
+    assert checked_out(tmp_path, monkeypatch, prepared, RECORD) == {}
+
+    assert prepared.calls == []
+
+
+def test_a_checkout_that_cannot_be_prepared_refuses_the_start_without_a_registration_record(tmp_path, monkeypatch):
+    prepared = Workspaces(workspaces.WorkspaceError("fetch of the project failed"))
+
+    with pytest.raises(workspaces.WorkspaceError) as refused:
+        checked_out(tmp_path, monkeypatch, prepared)
+
+    assert str(refused.value) == "fetch of the project failed"
+
+    assert not (tmp_path / "attempts" / EXECUTION / "registration.json").exists()
+
+
+@pytest.mark.parametrize(
+    "checkout",
+    [
+        {"project": "user:token@github.com/the-cloud-clockwork/agentihooks", "agent": AGENT},
+        {"project": "x-access-token@github.com/the-cloud-clockwork/agentihooks", "agent": AGENT},
+        {"project": "local:fixture", "agent": AGENT},
+        {"project": "github.com/the-cloud-clockwork/agentihooks/extra", "agent": AGENT},
+        {"project": "github.com/the-cloud-clockwork/..", "agent": AGENT},
+        {"project": "github.com/.hidden/agentihooks", "agent": AGENT},
+        {"project": "gitlab.com/the-cloud-clockwork/agentihooks", "agent": AGENT},
+        {"project": 7, "agent": AGENT},
+        {"agent": AGENT},
+        PROJECT,
+    ],
+)
+def test_a_checkout_outside_a_plain_project_is_refused_before_anything_is_written(tmp_path, checkout):
+    launch = material(tmp_path, {**RECORD, "checkout": checkout})
+
+    assert refusal(tmp_path, launch) == "launch record names no permitted project"
+
+
+@pytest.mark.parametrize("checkout", [{"project": PROJECT}, {"project": PROJECT, "agent": 7}])
+def test_a_checkout_that_names_no_agent_is_refused_before_anything_is_written(tmp_path, checkout):
+    launch = material(tmp_path, {**RECORD, "checkout": checkout})
+
+    assert refusal(tmp_path, launch) == "launch record names no agent for its checkout"
+
+
+def test_the_start_prints_the_prepared_checkout(monkeypatch, capsys):
+    checkout = {"project": PROJECT, "branch": BRANCH, "base": "dev", "base_commit": BASE_COMMIT}
+    monkeypatch.setattr(start, "prepare", lambda attempt, launch: {"checkout": checkout})
+    monkeypatch.setattr(start.supervision_runtime, "main", lambda argv: 70)
+
+    assert start.main(["/home/worker/attempts/a", "/var/run/swarm/launch/launch.json"]) == 70
+
+    printed = {"worker_start": "prepared", "attempt": "a", "uid": os.getuid(), "checkout": checkout}
+    assert capsys.readouterr().out == json.dumps(printed) + "\n"
+
+
+def git(*args: str, cwd: Path | None = None) -> str:
+    identity = ["-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid"]
+    done = subprocess.run(["git", *identity, *args], cwd=cwd, capture_output=True, text=True, check=True)
+    return done.stdout.strip()
+
+
+def test_the_checkout_clones_its_origin_into_the_attempt_and_names_the_branch_from_the_agent(tmp_path):
+    origin, seed = tmp_path / "origin.git", tmp_path / "seed"
+    git("init", "--bare", "--initial-branch", "dev", str(origin))
+    git("init", "--initial-branch", "dev", str(seed))
+    (seed / "README").write_text("fixture\n")
+    git("add", "README", cwd=seed)
+    git("commit", "-m", "seed", cwd=seed)
+    git("push", str(origin), "dev", cwd=seed)
+    layout = filesystem.load()
+    attempt = filesystem.allocate(tmp_path, EXECUTION, layout).root
+    (attempt / "execution.json").write_text(json.dumps({"attempt": EXECUTION, "layout": filesystem.mapping(layout)}))
+
+    found = start.checkout(attempt, workspaces.Request(f"file://{origin}", "t1", 3, AGENT))
+
+    assert (found.branch, found.base, found.base_commit) == (BRANCH, "dev", git("rev-parse", "HEAD", cwd=seed))
+    assert found.path == attempt / "worktrees" / BRANCH
+    assert (found.path / "README").read_text() == "fixture\n"
+    assert git("rev-parse", "--abbrev-ref", "HEAD", cwd=found.path) == BRANCH
+    assert git("--git-dir", str(found.mirror), "config", "remote.origin.url") == f"file://{origin}"

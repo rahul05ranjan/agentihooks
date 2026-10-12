@@ -1,4 +1,5 @@
 import fcntl
+import hashlib
 import json
 import os
 import shlex
@@ -18,6 +19,8 @@ from scripts.swarm_v2.checkpoints import runtime as checkpoint_runtime
 from scripts.swarm_v2.supervision import Launch, LaunchRefused
 from scripts.swarm_v2.supervision_agent import native_command
 from scripts.swarm_v2.supervision_protocol import checkpoint, matches, read, write
+
+PROMPT = "prompt.md"
 
 
 class Supervisor:
@@ -121,19 +124,35 @@ class Supervisor:
         for role in roles:
             if not self.ready(role, deadline):
                 return "termination" if self.stop else f"{role}_startup_failure"
+        directory = self.launch.checkout or self.launch.attempt
         agent = native_command(
-            checkpoint_runtime.command(self.launch.attempt, self.launch.agent), self.launch.attempt, self.environment
+            checkpoint_runtime.command(self.launch.attempt, self.launch.agent), directory, self.environment
         )
-        command = [sys.executable, "-m", "scripts.swarm_v2.supervision_agent", *agent]
+        command = [sys.executable, "-m", "scripts.swarm_v2.supervision_agent", *self.opening(), *agent]
         self.phase = "workspace_create"
-        tab = self.herdr(["workspace", "create", "--cwd", str(self.launch.attempt), "--no-focus"])
+        tab = self.herdr(["workspace", "create", "--cwd", str(directory), "--no-focus"])
         pane = tab["result"]["root_pane"]["pane_id"]
         self.phase = "agent_launch"
         self.herdr(["pane", "run", pane, shlex.join(command)])
         if not self.ready("agent", deadline):
             return "termination" if self.stop else "agent_startup_failure"
+        if self.launch.prompt:
+            self.delivered()
         write(self.root / "running.json", {**self.scope, "pane_id": pane, "status": "running"})
         return None
+
+    def opening(self) -> list[str]:
+        if not self.launch.prompt:
+            return []
+        path = self.root / PROMPT
+        with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as handle:
+            handle.write(self.launch.prompt.encode())
+        return ["--prompt-file", str(path)]
+
+    def delivered(self) -> None:
+        text = self.launch.prompt.encode()
+        digest = {"bytes": len(text), "sha256": hashlib.sha256(text).hexdigest()}
+        print(json.dumps({"supervisor": "prompt_delivered", "incarnation": self.root.name, **digest}), flush=True)
 
     def running(self) -> str:
         while True:

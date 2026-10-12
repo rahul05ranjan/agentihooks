@@ -19,6 +19,7 @@ RECOVERY = "recovery"
 RECORDED = "attempt-recovery-records"
 CLEARED = ""
 SUPERSEDED = "superseded"
+DEFERRED = "deferred"
 STARTED = (Status.OK, Status.AMBIGUOUS)
 
 
@@ -68,11 +69,20 @@ class Replacements:
             "controller_epoch": self.controller.held.epoch,
             "checkpoint": decision.checkpoint,
         }
+        if not decision.checkpoint:
+            try:
+                task = {**self._row(successor.task), **task}
+            except SwarmError as error:
+                print(f"controller: the ledger refused the read of task {successor.task}: {error}", flush=True)
+                return DEFERRED
         request = SpawnRequest(self.store.config(self.slug), successor.lane, successor.name, task)
         outcome = self.relaunch(request, successor).outcome
         if outcome.status in STARTED:
             self._launched(decision)
         return outcome.status.value
+
+    def _row(self, task: str) -> dict:
+        return next((row for row in self.ledger.state(self.slug)["tasks"] if row["id"] == task), {})
 
     def _record(self) -> None:
         for execution_id, successor in sorted(self.store.redis.hgetall(self._key(LAUNCHED)).items()):

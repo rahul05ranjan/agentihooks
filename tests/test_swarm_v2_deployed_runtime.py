@@ -174,7 +174,7 @@ def test_the_controller_start_hands_the_tick_the_kubernetes_runtime_and_the_dist
     def tick(given, runtimes):
         service = hosted[0]
         runtime = runtimes[SLUG]
-        task = {"id": "t1", "seat": SEAT, "controller_epoch": service.controller.held.epoch}
+        task = {"id": "t1", "title": "Fixture", "seat": SEAT, "controller_epoch": service.controller.held.epoch}
         task["profile_decision"] = {
             "profile": profile,
             "source": "classifier",
@@ -305,7 +305,7 @@ def test_a_tick_launch_with_no_key_in_the_shared_secret_is_refused_before_any_po
     monkeypatch.setattr(deployed, "pod_api", lambda environ, namespace: pods)
     service = _cs().host(_environ(tmp_path, store), store, "hive-fixture")
     try:
-        task = {"id": "t1", "seat": SEAT, "controller_epoch": service.controller.held.epoch}
+        task = {"id": "t1", "title": "Fixture", "seat": SEAT, "controller_epoch": service.controller.held.epoch}
         with pytest.raises(SpawnError) as refused:
             service.runtime.spawn(store.config(SLUG), "eng", store.next_name(SLUG, "eng"), task)
     finally:
@@ -326,7 +326,7 @@ def test_a_tick_launch_skips_an_approved_key_whose_fleet_slots_are_full(tmp_path
         store.redis.hset(account_key(ACCOUNT), seat, encode(held))
     service = _cs().host(_environ(tmp_path, store), store, "hive-fixture")
     try:
-        task = {"id": "t1", "seat": SEAT, "controller_epoch": service.controller.held.epoch}
+        task = {"id": "t1", "title": "Fixture", "seat": SEAT, "controller_epoch": service.controller.held.epoch}
         service.runtime.spawn(store.config(SLUG), "eng", store.next_name(SLUG, "eng"), task)
     finally:
         service.stop()
@@ -344,7 +344,7 @@ def test_a_tick_launch_takes_the_account_the_capacity_plan_placed_its_task_on(tm
     try:
         herdr = service.runtime.herdr_runtime
         herdr._quota_tasks, herdr._quota_task_accounts = {"t1": "claude"}, {"t1": other}
-        task = {"id": "t1", "seat": SEAT, "controller_epoch": service.controller.held.epoch}
+        task = {"id": "t1", "title": "Fixture", "seat": SEAT, "controller_epoch": service.controller.held.epoch}
         service.runtime.spawn(store.config(SLUG), "eng", store.next_name(SLUG, "eng"), task)
     finally:
         service.stop()
@@ -362,7 +362,7 @@ def test_a_tick_launch_skips_an_approved_key_whose_newest_fleet_quota_is_rejecte
     store.redis.hset(quota.latest_key("claude"), ACCOUNT, quota.encode(seen))
     service = _cs().host(_environ(tmp_path, store), store, "hive-fixture")
     try:
-        task = {"id": "t1", "seat": SEAT, "controller_epoch": service.controller.held.epoch}
+        task = {"id": "t1", "title": "Fixture", "seat": SEAT, "controller_epoch": service.controller.held.epoch}
         service.runtime.spawn(store.config(SLUG), "eng", store.next_name(SLUG, "eng"), task)
     finally:
         service.stop()
@@ -953,13 +953,13 @@ def test_a_kubernetes_launch_puts_its_grant_in_the_pod_launch_material_and_recor
     try:
         runtime = service.runtime
         launcher = runtime.launch.func.__self__
-        task = {"id": "t1", "seat": SEAT, "controller_epoch": service.controller.held.epoch}
+        task = {"id": "t1", "title": "Fixture", "seat": SEAT, "controller_epoch": service.controller.held.epoch}
         request = SpawnRequest(store.config(SLUG), "eng", store.next_name(SLUG, "eng"), task)
         target = runtime.launch.keywords["target"](request)
         agent = AgentRecord(
             request.name, "eng", "t1", seat=SEAT, runtime_backend=BACKEND, runtime_target=target, profile="engineer"
         )
-        launch = launcher.spawn(request, agent, replace(runtime.launch.keywords["terms"], account=ACCOUNT), "")
+        launch = launcher.spawn(request, agent, replace(runtime.launch.keywords["terms"], account=ACCOUNT), "", "")
         claims = service.grants.verify(SLUG, pods.maps[0]["data"]["launch-grant"])
     finally:
         service.stop()
@@ -1011,6 +1011,7 @@ def test_a_kubernetes_launch_puts_its_grant_in_the_pod_launch_material_and_recor
         "checkpoint_seconds": 10,
         "kill_seconds": 2,
         "checkpoint_acknowledgement": {"status": "pending"},
+        "checkout": {"project": PROJECT, "agent": request.name},
     }
 
 
@@ -1042,11 +1043,11 @@ def test_the_exporter_worker_setting_reaches_the_launch_record(tmp_path, monkeyp
     try:
         runtime = service.runtime
         launcher = runtime.launch.func.__self__
-        task = {"id": "t1", "seat": SEAT, "controller_epoch": service.controller.held.epoch}
+        task = {"id": "t1", "title": "Fixture", "seat": SEAT, "controller_epoch": service.controller.held.epoch}
         request = SpawnRequest(store.config(SLUG), "eng", store.next_name(SLUG, "eng"), task)
         target = runtime.launch.keywords["target"](request)
         agent = AgentRecord(request.name, "eng", "t1", seat=SEAT, runtime_backend=BACKEND, runtime_target=target)
-        launch = launcher.spawn(request, agent, replace(runtime.launch.keywords["terms"], account=ACCOUNT), "")
+        launch = launcher.spawn(request, agent, replace(runtime.launch.keywords["terms"], account=ACCOUNT), "", "")
     finally:
         service.stop()
 
@@ -1092,11 +1093,11 @@ def _spawn(tmp_path, monkeypatch, **changes):
     try:
         runtime = service.runtime
         launcher = runtime.launch.func.__self__
-        task = {"id": "t1", "seat": SEAT, "controller_epoch": service.controller.held.epoch}
+        task = {"id": "t1", "title": "Fixture", "seat": SEAT, "controller_epoch": service.controller.held.epoch}
         request = SpawnRequest(store.config(SLUG), "eng", store.next_name(SLUG, "eng"), task)
         target = runtime.launch.keywords["target"](request)
         agent = AgentRecord(request.name, "eng", "t1", seat=SEAT, runtime_backend=BACKEND, runtime_target=target)
-        launch = launcher.spawn(request, agent, replace(runtime.launch.keywords["terms"], account=ACCOUNT), "")
+        launch = launcher.spawn(request, agent, replace(runtime.launch.keywords["terms"], account=ACCOUNT), "", "")
         claims = service.grants.verify(SLUG, pods.maps[0]["data"]["launch-grant"])
     finally:
         service.stop()
@@ -1221,7 +1222,7 @@ def test_a_tick_launch_records_whether_its_grant_reached_the_pod(tmp_path, monke
     monkeypatch.setattr(deployed, "pod_api", lambda environ, namespace: pods)
     service = _cs().host(_environ(tmp_path, store), store, "hive-fixture")
     try:
-        task = {"id": "t1", "seat": SEAT, "controller_epoch": service.controller.held.epoch}
+        task = {"id": "t1", "title": "Fixture", "seat": SEAT, "controller_epoch": service.controller.held.epoch}
         name = store.next_name(SLUG, "eng")
         try:
             placed, failure = service.runtime.spawn(store.config(SLUG), "eng", name, task), None

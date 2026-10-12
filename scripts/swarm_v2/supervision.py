@@ -31,6 +31,30 @@ def _deadline(value: object) -> float:
     return float(value)
 
 
+def _prompt(value: object) -> str:
+    if not isinstance(value, str) or not value or "\0" in value:
+        raise LaunchRefused("invalid prompt")
+    return value
+
+
+def _checkout(execution: filesystem.Execution, task: str) -> Path:
+    refused = LaunchRefused("invalid checkout")
+    if not filesystem.SEGMENT.fullmatch(task):
+        raise refused
+    record = execution.path("spool") / "workspaces" / f"{task}.json"
+    try:
+        held = json.loads(record.read_text())["path"]
+        tree = Path(held).resolve() if held else None
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError):
+        raise refused from None
+    if tree is None:
+        raise refused
+    root = execution.path("worktree").resolve()
+    if not tree.is_relative_to(root) or tree == root or not tree.is_dir():
+        raise refused
+    return tree
+
+
 def checked_authority(value: object) -> dict:
     if not isinstance(value, dict):
         raise LaunchRefused("invalid authority")
@@ -68,6 +92,8 @@ class Launch:
     exporter: tuple[str, ...] | None
     herdr: tuple[str, ...]
     budgets: Budgets
+    prompt: str = ""
+    checkout: Path | None = None
 
     @property
     def attempt(self) -> Path:
@@ -117,4 +143,6 @@ class Launch:
             _command(spec["exporter"]) if "exporter" in spec else None,
             _command(spec.get("herdr", ["herdr", "server"])),
             budgets,
+            _prompt(spec["prompt"]) if "prompt" in spec else "",
+            _checkout(execution, authority["task_id"]) if "checkout" in spec else None,
         )

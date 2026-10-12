@@ -1106,11 +1106,33 @@ def test_a_fresh_replacement_launches_without_a_checkpoint_and_a_refused_mark_wa
     replacements()
     assert _marks(ledger) == [{"awaiting": "recovery_pending"}]
 
-    recovery.decide(world.old.execution_id, "fresh")
+    decision = recovery.decide(world.old.execution_id, "fresh")
     ledger.refusals = 1
+    assert replacements() == {world.old.execution_id: "deferred"}
+    assert relaunch.calls == []
+    assert stdout.text.endswith("controller: the ledger refused the read of task task: ledger fixture refused\n")
+    assert stdout.flushes == 2
+    release = ledger.update_task
+
+    def refused_once(*args):
+        ledger.update_task = release
+        raise SwarmError("ledger fixture refused")
+
+    ledger.update_task = refused_once
+    reads = len(ledger.reads)
     assert replacements() == {world.old.execution_id: "ok"}
+    assert ledger.reads[reads:] == [cases.SLUG]
     [(request, _)] = relaunch.calls
-    assert request.task["checkpoint"] == ""
+    successor = world.store.execution(cases.SLUG, decision.replacement)
+    assert request.task == {
+        "id": "task",
+        "state": "claimed",
+        "awaiting": "recovery_pending",
+        "seat": successor.seat,
+        "profile": successor.profile,
+        "controller_epoch": world.live.held.epoch,
+        "checkpoint": "",
+    }
     assert _hash(world, "recovery-pending-tasks") == {"task": ""}
     assert _recorded(ledger) == [_outcome(world, "fresh", "")]
     assert replacements() == {}
