@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from scripts.inbox.seats import is_seat
 
-IMMUTABLE = ("execution_id", "generation", "name", "lane", "task", "seat", "started_at", "runtime_backend")
+IMMUTABLE = ("execution_id", "generation", "name", "lane", "task", "seat", "started_at", "runtime_backend", "transport")
 WRITE_ATTEMPTS = 5
 EXECUTION_FIELDS = ("execution_id", "generation", "runtime_backend", "runtime_target")
 PROJECTION_OMITTED = (*EXECUTION_FIELDS, "hive")
