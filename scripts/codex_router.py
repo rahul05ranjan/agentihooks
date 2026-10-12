@@ -559,6 +559,7 @@ def main(
     except RoutingError as exc:
         print(f"agentihooks codex: {exc}", file=sys.stderr)
         _report(report, status="failed", error=str(exc))
+        lock.close()
         return 3
     _report(report, status="routed", account=account.name, placement=placement)
     print(f"[agentihooks codex] account={account.name} sessions={live}/{cap} placement={placement}", flush=True)
@@ -569,4 +570,5 @@ def main(
         else child_environment(account, active)
     )
     execvpe(codex_bin, command(account, codex_bin, args), child)
+    lock.close()
     return 0
