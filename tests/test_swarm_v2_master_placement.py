@@ -166,5 +166,6 @@ def test_the_shipped_master_profile_materializes_as_a_master_worker_home(tmp_pat
     home = root / "master-proof" / record["homes"]["claude"]
     persona = (home / ".claude" / "CLAUDE.md").read_text()
     assert "Swarm Master" in persona
-    assert "You claim no task" in persona
+    assert "never edit code or config files" in persona
+    assert "claim a task: work that needs a repository change goes to a lane as a task" in persona
     assert "Role: Swarm Engineer" not in persona
