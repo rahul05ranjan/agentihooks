@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import stat
+import subprocess
 import urllib.error
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -15,12 +16,15 @@ from cryptography.hazmat.primitives.asymmetric.rsa import generate_private_key
 
 from scripts import cli_delegates, openbao_kv
 from scripts.gates.base import Who
+from scripts.swarm_v2.deployed import pod_policy
 from scripts.swarm_v2.herdr import operator_setup
 from scripts.swarm_v2.herdr.operator_setup import SetupRefused
+from scripts.swarm_v2.kubernetes import operator_terminal
 
 pytestmark = pytest.mark.unit
 FIXTURES = Path(__file__).parent / "fixtures" / "swarm_v2"
 BAO_URL = "https://bao.test"
+POLICY = {**json.loads((FIXTURES / "pod-policy.json").read_text()), "provider_accounts": []}
 
 
 def ssh_private(key) -> str:
@@ -51,7 +55,7 @@ class Bao:
 
 
 def antoncore(root: Path, policy_text: str | None = None, data_key: str = "pod-policy.json") -> Path:
-    text = (FIXTURES / "pod-policy.json").read_text() if policy_text is None else policy_text
+    text = json.dumps(POLICY) if policy_text is None else policy_text
     manifest = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "swarm-pod-policy"}}
     manifest["data"] = {data_key: text}
     path = root / "antoncore" / "k8s" / "manifests" / "swarm" / "policy" / "pod-policy.yaml"
@@ -81,9 +85,7 @@ def test_place_writes_both_files_privately_and_reports_no_value(tmp_path):
         "env_file": str(folder / "terminal.env"),
     }
     assert (folder / "user_ca").read_text() == secret
-    assert json.loads((folder / "pod-policy.json").read_text()) == json.loads(
-        (FIXTURES / "pod-policy.json").read_text()
-    )
+    assert json.loads((folder / "pod-policy.json").read_text()) == POLICY
     assert (folder / "terminal.env").read_text() == (
         f"AGENTIHOOKS_TERMINAL_CA_KEY={folder / 'user_ca'}\nAGENTIHOOKS_POD_POLICY_FILE={folder / 'pod-policy.json'}\n"
     )
@@ -302,14 +304,17 @@ def test_service_unit_runs_setup_outside_agent_sessions():
 
 
 class Systemctl:
-    def __init__(self, code=0) -> None:
-        self.code, self.calls = code, []
+    def __init__(self, code=0, error=None) -> None:
+        self.code, self.error, self.calls = code, error, []
 
     def __call__(self, command, **kwargs):
-        self.calls.append(command)
-        import subprocess
-
+        self.calls.append((command, kwargs))
+        if self.error is not None:
+            raise self.error
         return subprocess.CompletedProcess(command, self.code, "", "")
+
+
+QUIET = {"capture_output": True, "text": True, "timeout": 30}
 
 
 def test_install_writes_and_enables_the_timer(tmp_path):
@@ -318,17 +323,94 @@ def test_install_writes_and_enables_the_timer(tmp_path):
     assert operator_setup.install("/opt/bin/agentihooks", tmp_path, systemctl) is True
     assert (tmp_path / "agentihooks-swarm-terminal.service").read_text() == operator_setup.unit("/opt/bin/agentihooks")
     assert (tmp_path / "agentihooks-swarm-terminal.timer").read_text() == operator_setup.timer()
+    assert sorted(path.name for path in tmp_path.iterdir()) == [
+        "agentihooks-swarm-terminal.service",
+        "agentihooks-swarm-terminal.timer",
+    ]
     assert systemctl.calls == [
-        ["systemctl", "--user", "daemon-reload"],
-        ["systemctl", "--user", "enable", "--now", "agentihooks-swarm-terminal.timer"],
+        (["systemctl", "--user", "daemon-reload"], {**QUIET, "check": True}),
+        (["systemctl", "--user", "enable", "--now", "agentihooks-swarm-terminal.timer"], QUIET),
     ]
 
     assert operator_setup.install("/opt/bin/agentihooks", tmp_path, systemctl) is True
-    assert systemctl.calls[2:] == [["systemctl", "--user", "enable", "--now", "agentihooks-swarm-terminal.timer"]]
+    assert systemctl.calls[2:] == [
+        (["systemctl", "--user", "enable", "--now", "agentihooks-swarm-terminal.timer"], QUIET)
+    ]
 
 
 def test_install_reports_a_failed_enable(tmp_path):
     assert operator_setup.install("/opt/bin/agentihooks", tmp_path, Systemctl(code=1)) is False
+
+
+@pytest.mark.parametrize(
+    "error, named",
+    [
+        (subprocess.TimeoutExpired(["systemctl"], 30), "TimeoutExpired"),
+        (subprocess.CalledProcessError(1, ["systemctl"]), "CalledProcessError"),
+        (FileNotFoundError("systemctl"), "FileNotFoundError"),
+    ],
+)
+def test_install_refuses_when_systemctl_fails(tmp_path, error, named):
+    with pytest.raises(SetupRefused) as refused:
+        operator_setup.install("/opt/bin/agentihooks", tmp_path, Systemctl(error=error))
+
+    assert str(refused.value) == f"systemctl could not enable agentihooks-swarm-terminal.timer: {named}"
+
+
+def test_install_command_refuses_without_the_executable(tmp_path, monkeypatch):
+    monkeypatch.setattr(operator_setup.shutil, "which", lambda name: None)
+
+    code, out, err = run_main(["install"], {}, Who(), tmp_path / "home")
+
+    assert (code, out, err) == (1, "", "operator terminal install refused: the agentihooks executable is not on PATH\n")
+
+
+def test_install_command_refuses_inside_an_agent_session(tmp_path, monkeypatch):
+    monkeypatch.setattr(operator_setup, "install", lambda: pytest.fail("installed inside an agent session"))
+
+    code, out, err = run_main(["install"], {}, Who(name="engineer@abc-1"), tmp_path / "home")
+
+    assert (code, out) == (1, "")
+    assert err == (
+        "operator terminal install refused: the operator terminal setup runs only outside agent sessions, "
+        "and engineer@abc-1 is one\n"
+    )
+
+
+@pytest.mark.parametrize("enabled, code", [(True, 0), (False, 1)])
+def test_install_command_exit_follows_the_enable(tmp_path, monkeypatch, enabled, code):
+    monkeypatch.setattr(operator_setup, "install", lambda: enabled)
+
+    assert run_main(["install"], {}, Who(), tmp_path / "home") == (code, "", "")
+
+
+def test_placed_settings_open_the_terminal_command_inputs(tmp_path):
+    key = Ed25519PrivateKey.generate()
+    home = tmp_path / "home"
+    operator_setup.place(home, Bao({"user_ca": ssh_private(key)}).client(), antoncore(tmp_path))
+
+    placed = operator_setup.settings(home)
+
+    folder = home / "swarm-terminal"
+    assert placed == {
+        "AGENTIHOOKS_TERMINAL_CA_KEY": str(folder / "user_ca"),
+        "AGENTIHOOKS_POD_POLICY_FILE": str(folder / "pod-policy.json"),
+    }
+    assert fingerprint(key) == operator_setup._fingerprint(operator_terminal.authority(placed).user_ca)
+    assert pod_policy(placed["AGENTIHOOKS_POD_POLICY_FILE"])["namespace"] == "swarm-pod-proof"
+
+
+def test_a_manifest_that_is_not_utf8_is_refused(tmp_path):
+    source = antoncore(tmp_path)
+    manifest = source / "k8s" / "manifests" / "swarm" / "policy" / "pod-policy.yaml"
+    manifest.write_bytes(b"\xff\xfe data")
+
+    with pytest.raises(SetupRefused) as refused:
+        operator_setup.place(
+            tmp_path / "home", Bao({"user_ca": ssh_private(Ed25519PrivateKey.generate())}).client(), source
+        )
+
+    assert str(refused.value) == f"the Pod policy in {manifest} is not a YAML ConfigMap"
 
 
 def test_swarm_terminal_is_a_delegated_command():
