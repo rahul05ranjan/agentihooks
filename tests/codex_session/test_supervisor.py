@@ -219,6 +219,42 @@ def test_a_resume_binds_the_existing_thread_without_starting_one(store, server, 
     assert server.params("thread/resume") == [{"threadId": "thread-kept"}]
 
 
+@pytest.mark.parametrize("account", ["default", "quota-successor"])
+def test_handoff_and_quota_successors_admit_a_new_server_and_resume_the_thread(
+    store, server, clock, root, tmp_path, account
+):
+    from scripts.inbox.codex import StaleExecution, Transport
+
+    first = supervisor.launch(store, launch_spec(store, server, tmp_path), deps(server, clock, root))
+    next_spec = launch_spec(
+        store,
+        server,
+        tmp_path,
+        resume_thread=first.record.thread_id,
+        previous_execution_id=first.agent.execution_id,
+    )
+    next_spec = replace(next_spec, agent=replace(next_spec.agent, account=account))
+    successor = supervisor.launch(store, next_spec, deps(server, clock, root))
+    assert successor.agent.generation == first.agent.generation + 1
+    assert successor.record.server_pid != first.record.server_pid
+    assert successor.record.thread_id == first.record.thread_id
+    assert successor.record.account == account
+    assert store.execution_occupants(SLUG)[SEAT].execution_id == successor.agent.execution_id
+    assert server.params("thread/resume") == [{"threadId": first.record.thread_id}]
+    with pytest.raises(StaleExecution):
+        Transport(BindingStore(store), SLUG, first.agent.execution_id).require()
+    supervisor.finish(store, SLUG, first, 2000)
+    assert store.execution_occupants(SLUG)[SEAT].execution_id == successor.agent.execution_id
+
+
+def test_finish_clears_a_dead_bridges_abandoned_publication(store, server, clock, root, tmp_path):
+    started = supervisor.launch(store, launch_spec(store, server, tmp_path), deps(server, clock, root))
+    key = store.key(SLUG, "execution-publishing")
+    store.redis.hset(key, SEAT, started.agent.execution_id)
+    supervisor.finish(store, SLUG, started, 2000)
+    assert not store.redis.hgetall(key)
+
+
 def test_a_thread_without_an_id_fails_as_a_protocol_error(store, server, clock, root, tmp_path):
     server.thread = {"sessionId": "session-only"}
     failure = failed(store, server, clock, root, launch_spec(store, server, tmp_path), "protocol")

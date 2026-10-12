@@ -382,10 +382,15 @@ def test_a_fresh_pump_delivers_from_clock_zero(rig):
     assert rig.store.get(item.id).state == "delivered"
 
 
-def test_an_unchanged_empty_request_set_writes_no_pending_mark(rig):
+def test_an_unchanged_empty_request_set_writes_no_pending_mark(rig, monkeypatch):
     marks = []
-    original = rig.bindings.put
-    rig.bindings.put = lambda slug, record: marks.append(record.pending_request) or original(slug, record)
+    original = codex.Transport.mark
+
+    def mark(self, **changes):
+        original(self, **changes)
+        marks.append(rig.record().pending_request)
+
+    monkeypatch.setattr(codex.Transport, "mark", mark)
     rig.pump.start()
     rig.pump.step()
     rig.pump.step()
@@ -503,7 +508,7 @@ def test_items_go_one_at_a_time_in_inbox_order(rig, recovery_deadline):
 def test_a_lost_acknowledgement_stays_unknown_and_is_never_replayed(rig, recovery_deadline):
     rig.server.silent.add("turn/start")
     item = rig.store.send("alice", ME, "maybe")
-    assert rig.run(1) == DEGRADED
+    assert rig.run(1) == codex.STOPPED
     [delivery] = deliveries(rig, item.id)
     assert delivery.state == "unknown"
     assert (rig.record().state, rig.record().last_error_class) == (DEGRADED, "TimeoutError")
@@ -642,6 +647,37 @@ def test_retirement_racing_a_receipt_commit_refuses_the_old_ack(rig, monkeypatch
     assert retired == [True]
     assert rig.store.get(item.id).state == "pending"
     assert rig.pump.receipts.get(delivery.id).committed is False
+
+
+@pytest.mark.parametrize("busy", [False, True])
+def test_successor_admission_cannot_overtake_an_inbox_publication(rig, monkeypatch, busy):
+    from scripts.swarm.store import SwarmError
+
+    rig.pump.start()
+    if busy:
+        rig.server.begin_elsewhere()
+        rig.pump.step()
+    item = rig.store.send("alice", ME, "publication")
+    swarm = rig.bindings.store
+    candidate = AgentRecord(swarm.next_name(SLUG, "eng"), "eng", "task", seat=f"eng-1@{SLUG}")
+    name = "steer_turn" if busy else "start_turn"
+    original = getattr(protocol, name)
+    refused = []
+
+    def publish(*args):
+        with pytest.raises(SwarmError, match="publication is in flight"):
+            swarm.start_execution(SLUG, candidate, EXECUTION)
+        refused.append(True)
+        return original(*args)
+
+    monkeypatch.setattr(protocol, name, publish)
+    rig.pump.step()
+    assert refused == [True]
+    assert rig.store.get(item.id).state == "delivered"
+    successor = swarm.start_execution(SLUG, candidate, EXECUTION)
+    assert successor.generation == 2
+    with pytest.raises(DispatchError, match="execution is no longer current"):
+        rig.pump._send("old mail")
 
 
 def test_a_stray_text_frame_is_refused_and_diagnostics_stay_off_the_socket(rig):
