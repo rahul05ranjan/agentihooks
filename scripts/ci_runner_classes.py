@@ -2,11 +2,12 @@ import argparse
 import json
 from pathlib import Path
 
-from scripts.ci_runner_trust import _compact, routed_runner
+from scripts.ci_runner_trust import ACTORS, _compact, routed_runner
 
 TABLE = ".github/runner-classes.json"
 LABELS = {"light": "anton-oss-light", "standard": "anton-oss", "batch": "anton-oss-batch"}
-CLASSES = ("hosted", *LABELS)
+UNROUTED = ("hosted", "dind")
+CLASSES = (*UNROUTED, *LABELS)
 PINNED_HOSTED = frozenset(
     {
         "gate-protected.yml/grade",
@@ -22,17 +23,17 @@ PINNED_HOSTED = frozenset(
 )
 
 
-def _runner_problem(key: str, cls: str, runner: object) -> str | None:
+def _runner_problem(key: str, cls: str, runner: object, policy: dict) -> str | None:
     if runner == "ubuntu-latest":
         return None
-    if cls == "hosted":
-        return f"{key}: runs-on must be ubuntu-latest for a hosted job"
-    if not isinstance(runner, str) or _compact(runner) != _compact(routed_runner(LABELS[cls])):
+    if cls in UNROUTED:
+        return f"{key}: runs-on must be ubuntu-latest for a {cls} job"
+    if not isinstance(runner, str) or _compact(runner) != _compact(routed_runner(LABELS[cls], policy)):
         return f"{key}: runs-on must be ubuntu-latest or the routed {cls} runner"
     return None
 
 
-def check(workflows: dict[str, dict], table: dict[str, str]) -> list[str]:
+def check(workflows: dict[str, dict], table: dict[str, str], policy: dict) -> list[str]:
     problems = []
     jobs = {
         f"{file}/{name}": job
@@ -48,7 +49,7 @@ def check(workflows: dict[str, dict], table: dict[str, str]) -> list[str]:
             problems.append(f"{key}: runner class {cls} is not one of {', '.join(CLASSES)}")
         elif key in PINNED_HOSTED and cls != "hosted":
             problems.append(f"{key}: runner class must be hosted")
-        elif problem := _runner_problem(key, cls, job.get("runs-on")):
+        elif problem := _runner_problem(key, cls, job.get("runs-on"), policy):
             problems.append(problem)
     problems += [f"{key}: runner class names no job" for key in table if key not in jobs]
     return problems
@@ -65,7 +66,8 @@ def main(argv: list[str] | None = None) -> int:
         for path in sorted((args.root / ".github/workflows").iterdir())
         if path.suffix in (".yml", ".yaml")
     }
-    problems = check(workflows, json.loads((args.root / TABLE).read_text()))
+    policy = json.loads((args.root / ACTORS).read_text())
+    problems = check(workflows, json.loads((args.root / TABLE).read_text()), policy)
     jobs = sum(len(workflow.get("jobs") or {}) for workflow in workflows.values())
     print(f"Runner classes: {len(workflows)} workflows, {jobs} jobs, {len(problems)} problems")
     for problem in problems:
