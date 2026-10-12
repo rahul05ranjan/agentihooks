@@ -23,7 +23,7 @@ env:
 jobs:
   grade:
     name: Gate — Protected
-    runs-on: ubuntu-latest
+    runs-on: ${{ ((!startsWith(github.event_name, 'pull_request') || github.event.pull_request.head.repo.full_name == github.repository) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.actor) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.triggering_actor) || (github.event_name == 'merge_group' || github.event_name == 'push' && github.ref == 'refs/heads/dev') && github.actor == 'github-merge-queue[bot]' && github.triggering_actor == 'github-merge-queue[bot]') && 'anton-oss-light' || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       # A required context named by both a check run and a commit status needs both, so this status binds the pull request's own aggregator.

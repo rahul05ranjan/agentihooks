@@ -43,7 +43,6 @@ MOVED = {
     ("semgrep.yml", "scan"): LIGHT,
     ("startup-stages.yml", "measure"): STANDARD,
     ("swarm-image.yml", "publish"): STANDARD,
-    ("swarm-image.yml", "tags"): LIGHT,
     ("swarm-node-base.yml", "copy"): STANDARD,
     ("swarm-node-image.yml", "image"): STANDARD,
     ("swarm-node-smoke.yml", "worker-health"): STANDARD,
