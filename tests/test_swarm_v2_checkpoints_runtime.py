@@ -327,6 +327,76 @@ def test_production_restorer_clones_the_declared_source_before_applying_checkpoi
     assert (target / "draft.md").read_text() == "allowed untracked draft\n"
 
 
+@pytest.fixture
+def artifact_endpoint(tmp_path):
+    from tests.test_swarm_v2_artifacts_api import storage
+    from tests.test_swarm_v2_artifacts_transport import endpoint
+
+    held = storage.__wrapped__()
+    serving = endpoint.__wrapped__(held, tmp_path)
+    value = next(serving)
+    try:
+        yield value
+    finally:
+        with pytest.raises(StopIteration):
+            next(serving)
+
+
+@pytest.mark.parametrize("recovery", ["native", "reconstructed"])
+def test_scoped_http_store_publishes_and_restores_a_real_checkpoint(artifact_endpoint, tmp_path, monkeypatch, recovery):
+    from scripts.swarm_v2 import filesystem
+    from scripts.swarm_v2.artifacts.base import ArtifactError
+    from scripts.swarm_v2.auth_context import Registration
+    from scripts.swarm_v2.broadcast_bridge import grant_path
+    from scripts.swarm_v2.checkpoints import capture
+    from tests import sv2_ckp02_cases as sources
+    from tests.test_swarm_v2_checkpoints_capture import portable
+
+    endpoint, _, _, authority = artifact_endpoint
+    attempt, scope, environ, newest = portable.__wrapped__(tmp_path, monkeypatch)
+    spec = json.loads((attempt / "launch.json").read_text())
+    spec["control_url"] = endpoint["control_url"]
+    registration = Registration(**spec["registration"])
+    authority.authorize.return_value = registration
+    authority.current.return_value.execution_id = registration.execution_id
+    grant_path(attempt).parent.mkdir(exist_ok=True)
+    grant_path(attempt).write_text("grant")
+    (attempt / "launch.json").write_text(json.dumps(spec))
+    environ[runtime.REMOTE] = "true"
+    assert capture.publish(attempt, scope, environ, newest)["status"] == "complete"
+    exported = runtime.worker_store(spec, attempt, environ)
+    manifest = json.loads(exported.get_range(exported.recorded("ckp-fixture")))
+    assert manifest["authority"]["task_generation"] == 7
+    assert manifest["authority"]["execution_generation"] == 2
+
+    replacement = tmp_path / "e2"
+    replacement.mkdir()
+    record = {"attempt": "e2", "layout": filesystem.mapping(filesystem.load()), "homes": {"claude": "homes/claude"}}
+    (replacement / "execution.json").write_text(json.dumps(record))
+    sources.git(tmp_path, "clone", "-q", "-b", "dev", str(tmp_path / "remote.git"), str(replacement / "worktrees"))
+    grant_path(replacement).parent.mkdir(exist_ok=True)
+    grant_path(replacement).write_text("grant")
+    registration = replace(registration, execution_id="e2", generation=3)
+    authority.authorize.return_value = registration
+    claim = authority.current.return_value
+    claim.execution_id, claim.execution_generation, claim.generation = "e2", 3, 8
+    spec.update(registration=asdict(registration), authority={"execution_id": "e2", "generation": 3})
+    spec["restore"] = {
+        "checkpoint_id": "ckp-fixture",
+        "recovery": recovery,
+        "session_id": cases.SESSIONS["claude"] if recovery == "native" else "",
+        "watermark": 41,
+    }
+    restored = runtime.prepare(spec, replacement, environ)
+    assert restored.recovery == recovery
+    assert restored.watermark == 2
+    assert (replacement / "worktrees/app.py").read_text() == "print('committed locally')\n"
+    resumed = runtime.worker_store(spec, replacement, environ)
+    with pytest.raises(ArtifactError) as caught:
+        resumed.backend.write(resumed.scope.key("pointers", "7", "latest.json"), b"{}")
+    assert "forbidden_scope" in str(caught.value)
+
+
 def test_historical_store_scope_selects_last_matching_task_claim():
     from scripts.swarm_v2.auth_context import Registration
 
