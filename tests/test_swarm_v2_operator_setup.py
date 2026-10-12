@@ -731,15 +731,11 @@ def test_a_new_refusal_raises_again(tmp_path, monkeypatch):
     environ = {"AGENTIHOOKS_HIVE_REDIS_URL": "rediss://own.example:6379/0"}
     run_main(["setup"], environ, Who(), tmp_path / "home")
 
-    run_main(
-        ["setup"],
-        {**environ, "OPENBAO_URL": BAO_URL, "OPENBAO_TOKEN": "t", "AGENTIHOOKS_ANTONCORE_DIR": str(tmp_path / "none")},
-        Who(),
-        tmp_path / "home",
-    )
+    monkeypatch.setattr(openbao_kv.urllib.request, "urlopen", Bao(status=500))
+    run_main(["setup"], {**environ, "OPENBAO_URL": BAO_URL, "OPENBAO_TOKEN": "fixture-token"}, Who(), tmp_path / "home")
 
     assert len(ledger.followups) == 2
-    assert "Pod policy manifest" in ledger.followups[1][1]
+    assert ledger.followups[1][1].startswith("operator terminal setup refused: the terminal user CA could not be read")
 
 
 def test_a_refused_setup_without_a_transport_only_reaches_the_journal(tmp_path, monkeypatch):
