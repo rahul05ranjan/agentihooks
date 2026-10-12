@@ -247,6 +247,19 @@ def test_a_checkpoint_launch_without_a_store_refuses_to_start(given, tmp_path):
     assert str(raised.value) == restore.STORE_MISSING
 
 
+def test_checkpoint_launch_passes_isolated_source_home_and_cwd_to_the_restorer(tmp_path):
+    from types import SimpleNamespace
+
+    calls = []
+    expected = restore.Restored("native", "ckp-one", 41, CLAUDE, ("claude", "--resume", CLAUDE))
+    restorer = SimpleNamespace(restore=lambda *args: calls.append(args) or expected)
+    worktree, home, cwd = _paths(tmp_path)
+    directive = restore.Directive("ckp-one", "native", CLAUDE, 41)
+    spec = {"restore": {"checkpoint_id": "ckp-one", "recovery": "native", "session_id": CLAUDE, "watermark": 41}}
+    assert restore.launched(spec, restorer, restore.Paths(worktree, home, cwd, VERSION)) == expected
+    assert calls == [(directive, worktree, home, cwd, VERSION)]
+
+
 def test_a_checkpoint_launch_restores_through_the_given_restorer(tmp_path):
     checkpoint = _native(tmp_path)
     restorer = restore.Restorer(_reader(tmp_path), SourceSpy())
