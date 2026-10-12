@@ -16,6 +16,7 @@ LAUNCHED = "attempt-replacement-launches"
 MARKED = "recovery-pending-tasks"
 CLEARED = ""
 SUPERSEDED = "superseded"
+DEFERRED = "deferred"
 STARTED = (Status.OK, Status.AMBIGUOUS)
 
 
@@ -64,7 +65,11 @@ class Replacements:
             "checkpoint": decision.checkpoint,
         }
         if not decision.checkpoint:
-            task = {**self._row(successor.task), **task}
+            try:
+                task = {**self._row(successor.task), **task}
+            except SwarmError as error:
+                print(f"controller: the ledger refused the read of task {successor.task}: {error}", flush=True)
+                return DEFERRED
         request = SpawnRequest(self.store.config(self.slug), successor.lane, successor.name, task)
         outcome = self.relaunch(request, successor).outcome
         if outcome.status in STARTED:

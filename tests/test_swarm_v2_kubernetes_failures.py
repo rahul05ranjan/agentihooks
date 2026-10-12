@@ -1078,6 +1078,16 @@ def test_a_fresh_replacement_launches_without_a_checkpoint_and_a_refused_mark_wa
 
     decision = recovery.decide(world.old.execution_id, "fresh")
     ledger.refusals = 1
+    assert replacements() == {world.old.execution_id: "deferred"}
+    assert relaunch.calls == []
+    assert stdout.text.endswith("controller: the ledger refused the read of task task: ledger fixture refused\n")
+    release = ledger.update_task
+
+    def refused_once(*args):
+        ledger.update_task = release
+        raise SwarmError("ledger fixture refused")
+
+    ledger.update_task = refused_once
     assert replacements() == {world.old.execution_id: "ok"}
     [(request, _)] = relaunch.calls
     successor = world.store.execution(cases.SLUG, decision.replacement)
