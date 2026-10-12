@@ -99,3 +99,22 @@ def test_a_master_owning_another_hive_stays_off_this_controllers_pods(world):
         assert runtime.router.placed_backend("master", {"id": "master-2"}) == "kubernetes"
     finally:
         service.stop()
+
+
+def test_running_controller_resolves_current_master_hive_ownership(world):
+    store, pods, local, start = world
+    service, runtime = start()
+    seats = MasterSeats(store.redis)
+    task = {"id": "master-2"}
+    try:
+        assert runtime.router.placed_backend("master", task) == "local"
+        seats.own_hive(SLUG, "anton", f"master-2@{SLUG}")
+        assert runtime.router.placed_backend("master", task) == "kubernetes"
+        seats.own_hive(SLUG, "anton", f"master@{SLUG}")
+        assert runtime.router.placed_backend("master", task) == "local"
+        assert runtime.router.placed_backend("master", {"id": "master"}) == "kubernetes"
+        seats.own_hive(SLUG, "anton", f"master-2@{SLUG}")
+        seats.set_count(SLUG, 1)
+        assert runtime.router.placed_backend("master", task) == "local"
+    finally:
+        service.stop()

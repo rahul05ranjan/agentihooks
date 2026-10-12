@@ -50,7 +50,7 @@ def _place(slug, config, store, runtime, seat_name, now_ms, doc):
     except seat_spawn.SeatFailed as failed:
         store.drop_agent(slug, failed.record.name)
         return FAILED.format(seat=failed.record.seat, error=failed.error)
-    record = tick.placed_record(store.agent(slug, record.name), placed)
+    record = tick.placed_record(store.execution_occupants(slug).get(record.seat, record), placed)
     store.put_agent(slug, record)
     launch_check.begin(store, slug, record, now_ms)
     store.clear_handoff(slug, seat_name)
