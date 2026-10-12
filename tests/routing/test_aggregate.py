@@ -102,6 +102,8 @@ def test_aggregate_includes_reservations_once_and_exit_releases(redis, monkeypat
     )
     assert aggregate.read(redis, 100)["claude:one"]["sessions"] == 1
     assert not slots.reserve("claude:one", "second", 1, 1000)
+    before = redis.get(f"{registry.key('a')}:sessions")
     assert slots.release("first")
+    assert redis.get(f"{registry.key('a')}:sessions") == before
     assert aggregate.read(redis, 100)["claude:one"]["sessions"] == 0
     assert slots.reserve("claude:one", "second", 1, 1000)

@@ -482,3 +482,13 @@ def test_api_fields_empty_login_and_zero_sessions(observations, monkeypatch):
         {"harness": "claude", "account": "api", "kind": "api", "cap": 0, "provider": "anthropic"}
     ]
     assert calls == [(daemon.os.environ, 122)]
+
+
+def test_observe_reports_host_counts_in_nonlocal_mode(observations, monkeypatch):
+    monkeypatch.setenv("AGENTIHOOKS_RUNTIME_BACKEND", "kubernetes")
+    monkeypatch.setattr(
+        daemon.account_sessions, "sessions_by_account", lambda *, local=False: {"one": 2 if local else 99}
+    )
+    monkeypatch.setattr(daemon.account_sessions, "codex_sessions_by_account", lambda *, local=False: {})
+    report = daemon.observe()
+    assert report["sessions"]["claude:one"] == 2

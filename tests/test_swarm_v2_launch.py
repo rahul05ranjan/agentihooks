@@ -1154,3 +1154,34 @@ def test_a_relaunch_on_a_full_account_keeps_its_replacement_for_the_next_pass(wo
     assert world.endings() == {}
     assert world.store.execution(SLUG, admitted.execution_id) == admitted
     assert [request.name for request in world.runtime.requests] == [held.agent.name]
+
+
+def test_hive_live_counts_refuse_a_launch_before_the_runtime(world):
+    from scripts.hive import registry
+
+    redis = world.store.redis
+    registry.update(redis, "hive", ["max-agents=4"])
+    redis.hset(registry.key("hive"), "heartbeat_at", world.clock[0])
+    redis.set(f"{registry.key('hive')}:sessions", json.dumps({f"claude:{ACCOUNT}": 1}), ex=45)
+    launch = world.launch(FIRST)
+    assert launch.outcome.status is Status.UNAVAILABLE
+    assert launch.outcome.detail == ACCOUNT_FULL
+    assert world.runtime.requests == []
+
+
+def test_hive_launch_registration_and_exit_keep_one_global_slot(world):
+    from scripts.hive import registry
+    from scripts.routing import reservation
+
+    redis = world.store.redis
+    registry.update(redis, "hive", ["max-agents=4"])
+    redis.hset(registry.key("hive"), "heartbeat_at", world.clock[0])
+    redis.set(f"{registry.key('hive')}:sessions", "{}", ex=45)
+    launch = world.launch(FIRST)
+    slots = reservation.LaunchSlots(redis)
+    assert slots.counts() == {f"claude:{ACCOUNT}": 1}
+    world.launcher.registered(world.session(launch), launch.grant)
+    world.clock[0] += TTL + 1
+    assert slots.counts() == {f"claude:{ACCOUNT}": 1}
+    world.launcher.exited(launch.agent)
+    assert slots.counts() == {}
