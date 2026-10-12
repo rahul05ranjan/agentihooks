@@ -89,7 +89,7 @@ def test_page_set_maps_catalog_models_and_refuses_unknown(monkeypatch):
 def test_configured_model_is_used_in_auto_band_and_frontier(agent, model, monkeypatch):
     monkeypatch.setattr(model_pick.runner, "run", Mock(side_effect=model_pick.ClassifierUnavailable("offline")))
     picked = model_pick.pick(agent, {"effort": "auto"}, {"difficulty": "S", "rank": "normal"}, {}, default_model=model)
-    assert (picked.model, picked.effort) == (model, "medium")
+    assert (picked.model, picked.effort) == (model, "xhigh" if model == "sonnet" else "medium")
     assert model_pick.frontier(agent, default_model=model).model == model
 
 
