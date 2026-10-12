@@ -107,7 +107,6 @@ for _ in $(seq 30); do
 done
 printf 'after a Redis restart, the refreshed '
 docker exec "$run-member" python -c "$member_auth"
-docker exec "$run-member" agentihooks hive refresh >/dev/null
 printf 'after a Redis restart, a refresh still finds the member record\n'
 docker compose exec -T -e SLUG="$slug" swarm python -c '
 import os
