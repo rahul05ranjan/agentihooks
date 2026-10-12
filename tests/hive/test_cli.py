@@ -159,18 +159,22 @@ def _head_and_body(port, request):
 
 
 @pytest.mark.parametrize(
-    ("request_line", "body"),
+    ("request_line", "body", "expected"),
     [
-        (b"POST /hive/join HTTP/1.0", b'{"code": "unknown"}'),
-        (b"POST /elsewhere HTTP/1.0", b"{}"),
-        (b"POST /hive/join HTTP/1.0", b"[]"),
+        (
+            b"POST /hive/join HTTP/1.0",
+            b'{"code": "unknown"}',
+            {"error": "invite code is invalid, expired or already used"},
+        ),
+        (b"POST /elsewhere HTTP/1.0", b"{}", {"error": "not found"}),
+        (b"POST /hive/join HTTP/1.0", b"[]", {"error": server.BAD_BODY}),
     ],
 )
-def test_every_answer_carries_its_length(hive, request_line, body):
+def test_every_answer_carries_its_length(hive, request_line, body, expected):
     head, answer = _head_and_body(hive, request_line + b"\r\nContent-Length: %d\r\n\r\n%s" % (len(body), body))
 
     assert f"Content-Length: {len(answer)}" in head
-    assert json.loads(answer)
+    assert json.loads(answer) == expected
 
 
 @pytest.fixture
@@ -228,20 +232,34 @@ def _process_one(httpd, client):
     httpd.process_request_thread(request, address)
 
 
-def test_a_connection_dropped_before_the_tls_handshake_logs_nothing(admin, cert, capsys):
+def _half_hello(conn):
+    conn.sendall(b"\x16\x03\x01\x02\x00\x01\x00")
+    conn.close()
+
+
+@pytest.mark.parametrize("drop", [socket.socket.close, _half_hello])
+def test_a_connection_dropped_before_or_during_the_tls_handshake_logs_nothing(admin, cert, monkeypatch, capsys, drop):
     httpd = server.make_server(admin, PUBLIC, "localhost", 0, cert)
+    errors = []
+    monkeypatch.setattr(
+        httpd, "handle_error", lambda *args: errors.append(sys.exc_info()[1]) or type(httpd).handle_error(httpd, *args)
+    )
     probe = socket.create_connection(("localhost", httpd.server_address[1]), timeout=5)
     try:
-        _process_one(httpd, probe.close)
+        _process_one(httpd, lambda: drop(probe))
     finally:
+        probe.close()
         httpd.server_close()
 
+    assert [type(e) for e in errors] == [server.Dropped]
+    assert isinstance(errors[0].__cause__, ssl.SSLError)
     assert capsys.readouterr().err == ""
 
 
-def test_an_unexpected_handler_error_is_still_logged(admin, monkeypatch, capsys):
+@pytest.mark.parametrize("error", [RuntimeError, ConnectionError])
+def test_an_unexpected_handler_error_is_still_logged(admin, monkeypatch, capsys, error):
     def broken(*_):
-        raise RuntimeError("exchange broke")
+        raise error("exchange broke")
 
     monkeypatch.setattr(auth, "exchange", broken)
     httpd = server.make_server(admin, PUBLIC, "127.0.0.1", 0)
@@ -255,7 +273,7 @@ def test_an_unexpected_handler_error_is_still_logged(admin, monkeypatch, capsys)
         httpd.server_close()
 
     err = capsys.readouterr().err
-    assert "RuntimeError: exchange broke" in err
+    assert f"{error.__name__}: exchange broke" in err
 
 
 def test_join_posts_the_code_to_the_join_path_with_the_request_timeout(tmp_path, monkeypatch, capsys):

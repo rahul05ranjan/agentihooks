@@ -19,25 +19,35 @@ REQUEST_TIMEOUT_S = 10
 BAD_BODY = "the body must be a JSON object with a string code"
 
 
-class _ClosesTLS(BaseHTTPRequestHandler):
+class Dropped(Exception):
+    pass
+
+
+class _TLSHandler(BaseHTTPRequestHandler):
+    tls: ssl.SSLContext | None = None
+
+    def setup(self):
+        if self.tls is not None:
+            self.request.settimeout(self.timeout)
+            try:
+                self.request = self.tls.wrap_socket(self.request, server_side=True)
+            except OSError as exc:
+                raise Dropped from exc
+        super().setup()
+
     def finish(self):
         super().finish()
         if isinstance(self.request, ssl.SSLSocket):
             try:
                 self.request.unwrap()
-            except (ssl.SSLError, OSError):
-                pass
+            except OSError as exc:
+                raise Dropped from exc
 
 
 def _handler(redis: "Redis", redis_url: str, context: ssl.SSLContext | None) -> type[BaseHTTPRequestHandler]:
-    class Join(_ClosesTLS):
+    class Join(_TLSHandler):
         timeout = REQUEST_TIMEOUT_S
-
-        def setup(self):
-            if context is not None:
-                self.request.settimeout(self.timeout)
-                self.request = context.wrap_socket(self.request, server_side=True)
-            super().setup()
+        tls = context
 
         def do_POST(self):
             if self.path != JOIN_PATH:
@@ -75,7 +85,7 @@ def _handler(redis: "Redis", redis_url: str, context: ssl.SSLContext | None) -> 
 
 class JoinServer(ThreadingHTTPServer):
     def handle_error(self, request, client_address):
-        if not isinstance(sys.exc_info()[1], (ssl.SSLError, ConnectionError, TimeoutError)):
+        if not isinstance(sys.exc_info()[1], Dropped):
             super().handle_error(request, client_address)
 
 
