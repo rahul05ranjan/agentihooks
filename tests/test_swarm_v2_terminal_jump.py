@@ -80,7 +80,7 @@ def test_prepare_writes_the_jump_material_privately_and_keeps_its_host_key(tmp_p
     shown = key.public_key().public_bytes(serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH)
     assert host_public == shown.decode()
     assert (state / "user_ca.pub").read_text() == f"{user_ca}\n"
-    assert (state / "principals").read_text() == f"{jump.PRINCIPAL}\n"
+    assert (state / "principals").read_text() == ""
     assert (state / "sshd_config").read_text() == jump.sshd_config(state, USER)
     assert {name: mode(state / name) for name in ("host_key", "user_ca.pub", "principals", "sshd_config")} == {
         "host_key": 0o600,
@@ -90,6 +90,48 @@ def test_prepare_writes_the_jump_material_privately_and_keeps_its_host_key(tmp_p
     }
     assert mode(state) == 0o700
     assert jump.prepare(state, user_ca) == host_public
+
+
+def live(execution_id: str):
+    from scripts.swarm_v2.herdr.endpoints import Scope
+    from scripts.swarm_v2.herdr.upkeep import Attempt
+
+    return Attempt(Scope("operator/operator", "fixture", execution_id, 1), HOST_KEY)
+
+
+def test_the_jump_forwards_only_to_the_live_worker_terminals_it_is_given(tmp_path):
+    from scripts.swarm_v2.herdr.endpoints import Endpoint
+    from scripts.swarm_v2.kubernetes import jump
+
+    one, two = live("exec-a"), live("exec-b")
+    jump.Routes(tmp_path, "workers").publish([two, one])
+
+    hosts = [Endpoint(attempt.scope, "workers").host for attempt in (one, two)]
+    assert (tmp_path / "principals").read_text() == (
+        f'restrict,port-forwarding,permitopen="{hosts[0]}:2222",permitopen="{hosts[1]}:2222" {jump.PRINCIPAL}\n'
+    )
+    assert "exec-c" not in (tmp_path / "principals").read_text()
+    assert mode(tmp_path / "principals") == 0o600
+
+
+def test_with_no_live_worker_the_jump_admits_nobody(tmp_path):
+    from scripts.swarm_v2.kubernetes import jump
+
+    routes = jump.Routes(tmp_path, "workers")
+    routes.publish([live("exec-a")])
+    routes.publish([])
+
+    assert (tmp_path / "principals").read_text() == ""
+
+
+def test_routes_are_built_only_when_the_jump_state_is_set(tmp_path):
+    from scripts.swarm_v2.kubernetes import jump
+
+    assert jump.STATE_ENV == "AGENTIHOOKS_TERMINAL_JUMP_STATE"
+    assert jump.routes({}, "workers") is None
+    assert jump.routes({jump.STATE_ENV: ""}, "workers") is None
+    built = jump.routes({jump.STATE_ENV: str(tmp_path)}, "workers")
+    assert (built.state, built.namespace) == (tmp_path, "workers")
 
 
 def test_the_controller_records_the_jump_for_the_operator():

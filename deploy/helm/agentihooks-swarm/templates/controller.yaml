@@ -275,6 +275,10 @@ spec:
             - name: AGENTIHOOKS_TERMINAL_CA_KEY
               value: /run/secrets/terminal-ca/{{ $ca.key }}
             {{- end }}
+            {{- if $jump.enabled }}
+            - name: AGENTIHOOKS_TERMINAL_JUMP_STATE
+              value: /run/jump/state
+            {{- end }}
             {{- include "swarm.controllerSecretEnv" . | nindent 12 }}
             {{- include "swarm.extraEnv" .Values.controller.env | nindent 12 }}
           {{- include "swarm.envFrom" . | nindent 10 }}
@@ -297,6 +301,10 @@ spec:
             - name: terminal-ca
               mountPath: /run/secrets/terminal-ca
               readOnly: true
+            {{- end }}
+            {{- if $jump.enabled }}
+            - name: jump
+              mountPath: /run/jump
             {{- end }}
       volumes:
         - name: home
