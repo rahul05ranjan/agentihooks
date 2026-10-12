@@ -104,7 +104,7 @@ def read(agent: AgentRecord, pid: int, proc: Path = Path("/proc")) -> dict:
 def managed(agent: AgentRecord) -> bool:
     from scripts.swarm.store import APP_SERVER_TRANSPORT
 
-    return agent.runtime_backend == "local" and agent.transport == APP_SERVER_TRANSPORT
+    return agent.runtime_backend == "local" and getattr(agent, "transport", "") == APP_SERVER_TRANSPORT
 
 
 def transport(store: RedisStore, agent: AgentRecord):
@@ -139,7 +139,7 @@ def server_alive(record) -> bool | None:
 
 def observe_managed(record):
     from scripts.codex_session import protocol
-    from scripts.codex_session.binding import UNIX
+    from scripts.codex_session.supervisor import UNIX
     from scripts.swarm.pane import PaneObservation
 
     alive = server_alive(record)
