@@ -1,16 +1,21 @@
 import json
+import os
+import sys
+from pathlib import Path
 
 import pytest
 
+from hooks.context.profile_chain import PACKAGE_ROLES
 from scripts.swarm import controller
 from scripts.swarm.store import AgentRecord
-from scripts.swarm_v2 import deployed, master_fill
+from scripts.swarm_v2 import deployed, master_fill, worker_home
 from scripts.swarm_v2.kubernetes import spec
 from scripts.swarm_v2.masters import MasterSeats
 from scripts.swarm_v2.runtime.base import LOCAL
 from scripts.swarm_v2.runtime.local import LocalHerdrRuntime
 from tests.swarm.test_tick import FakeRuntime
 from tests.test_swarm_v2_deployed_runtime import ACCOUNT, IMAGE, SLUG, Pods, _cs, _environ, _store
+from tests.test_worker_home import inprocess as inprocess
 
 pytestmark = pytest.mark.unit
 
@@ -118,3 +123,48 @@ def test_running_controller_resolves_current_master_hive_ownership(world):
         assert runtime.router.placed_backend("master", task) == "local"
     finally:
         service.stop()
+
+
+def test_a_local_extra_master_seat_does_not_prevent_a_later_anton_seat(world):
+    store, pods, local, start = world
+    MasterSeats(store.redis).set_count(SLUG, 3)
+    service, inner = start("master-3")
+    runtime = controller.FencedRuntime(store, SLUG, service.controller.held, inner, "distributed")
+    lead = store.next_name(SLUG, "master")
+    local.live.add(lead)
+    store.put_agent(SLUG, AgentRecord(lead, "master", "master", seat=f"master@{SLUG}"))
+    try:
+        actions = master_fill.run(SLUG, store.config(SLUG), store, runtime, {}, 100)
+        assert len(actions) == 2
+        assert actions[0] == "the workstation hive spawns master work"
+        assert "spawned" in actions[1]
+        assert local.masters == []
+        [pod] = pods.created
+        execution = store.execution(SLUG, pod["metadata"]["labels"][spec.EXECUTION_LABEL])
+        assert (execution.lane, execution.task, execution.profile) == ("master", "master-3", "master")
+    finally:
+        service.stop()
+
+
+def test_the_shipped_master_profile_materializes_as_a_master_worker_home(tmp_path):
+    root = tmp_path / "attempts"
+    root.mkdir(mode=0o700)
+    record = worker_home.bootstrap(
+        worker_home.Request(
+            root,
+            "master-proof",
+            PACKAGE_ROLES,
+            {"claude": "master"},
+            Path(sys.executable),
+            {},
+            {},
+            os.getuid(),
+            os.getgid(),
+        )
+    )
+    assert record["profiles"] == {"claude": "master"}
+    home = root / "master-proof" / record["homes"]["claude"]
+    persona = (home / ".claude" / "CLAUDE.md").read_text()
+    assert "Swarm Master" in persona
+    assert "You claim no task" in persona
+    assert "Role: Swarm Engineer" not in persona

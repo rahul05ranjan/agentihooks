@@ -22,10 +22,11 @@ def run(slug: str, config, store, runtime, doc: dict, now_ms: int, limit: int | 
     empty = [masters.seat(i) for i in range(2, count + 1) if seat_address(slug, masters.seat(i)) not in taken]
     actions = []
     for seat_name in empty:
+        if refused := seat_spawn.placed_elsewhere(runtime, MASTER, {"id": seat_name}):
+            actions.append(refused)
+            continue
         if refused := (
-            seat_spawn.placed_elsewhere(runtime, MASTER, {"id": seat_name})
-            or seat_spawn.no_slot(config, runtime, MASTER)
-            or seat_spawn.host_hold(slug, store, now_ms, MASTER)
+            seat_spawn.no_slot(config, runtime, MASTER) or seat_spawn.host_hold(slug, store, now_ms, MASTER)
         ):
             return [*actions, refused]
         actions.append(_place(slug, config, store, runtime, seat_name, now_ms, doc))
