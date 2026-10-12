@@ -225,6 +225,61 @@ def test_worker_prepare_refuses_unverified_checkpoint_before_materialization(pub
     assert str(caught.value) == verdict.reason
 
 
+def test_controller_listing_checks_original_execution_generation(published_attempt):
+    from scripts.swarm_v2.auth_context import Registration
+
+    attempt, environ = published_attempt
+    spec = json.loads((attempt / "launch.json").read_text())
+    registration = Registration(**spec["registration"])
+    lookup = lambda execution: registration if execution == registration.execution_id else None
+    good = runtime.Checkpoints(
+        runtime.configured(environ), lookup, "fixture", lambda execution: 2 if execution == "e1" else None
+    )
+    assert good.list("e1")[0]["checkpoint_id"] == "ckp-fixture"
+    assert good.list("unknown") == []
+    bad = runtime.Checkpoints(runtime.configured(environ), lookup, "fixture", lambda execution: 3)
+    assert bad.list("e1") == []
+    assert runtime.Checkpoints(None, lookup, "fixture").list("e1") == []
+
+
+def test_worker_prepare_restores_a_codex_checkpoint_into_its_isolated_home(tmp_path, monkeypatch):
+    from scripts.swarm_v2 import filesystem
+    from scripts.swarm_v2.auth_context import Registration
+
+    registration = Registration(
+        "g", "s1", "e1", 2, "seat", "t1", "account", "brain", ["local:fixture"], "issuer", "worker", "key", ""
+    )
+    store = runtime.granted(tmp_path / "durable", registration)
+    qualifier = native.Qualifier(model.Validator(store))
+    home = cases.home_for("codex", tmp_path, tmp_path)
+    captured = qualifier.capture(
+        "codex", home, cases.SESSIONS["codex"], tmp_path, cases.VERSIONS["codex"], stopped=True
+    )
+    assert cases.commit(qualifier, captured, "ckpt-1", "codex").authoritative
+    attempt = tmp_path / "e2"
+    attempt.mkdir()
+    record = {"attempt": "e2", "layout": filesystem.mapping(filesystem.load()), "homes": {"codex": "homes/codex"}}
+    (attempt / "execution.json").write_text(json.dumps(record))
+    spec = {
+        "harness": "codex",
+        "registration": asdict(replace(registration, execution_id="e2", generation=3)),
+        "authority": {"execution_id": "e2", "generation": 3},
+        "restore": {
+            "checkpoint_id": "ckpt-1",
+            "recovery": "native",
+            "session_id": cases.SESSIONS["codex"],
+            "watermark": 41,
+        },
+    }
+    monkeypatch.setattr(runtime, "version", lambda harness, environ: cases.VERSIONS[harness])
+    result = runtime.prepare(spec, attempt, {runtime.ROOT: str(tmp_path / "durable")})
+    assert result.recovery == "native"
+    assert result.command == ("codex", "resume", cases.SESSIONS["codex"])
+    codex_home = attempt / "homes/codex/.codex"
+    assert len(list(codex_home.rglob("*.jsonl"))) == 1
+    assert not (attempt / "homes/codex/.claude").exists()
+
+
 def test_worker_prepare_fresh_requires_no_store_and_preserves_archived_cursor(tmp_path):
     directive = {"checkpoint_id": "", "recovery": "fresh", "session_id": "", "watermark": 41}
     assert runtime.prepare({"restore": directive}, tmp_path, {}) == restore.Restored("fresh", "", 41)
