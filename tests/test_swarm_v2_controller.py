@@ -1072,6 +1072,20 @@ def test_a_controller_whose_epoch_moved_withdraws_every_jump_route(fixture):
     assert [len(published) for published in routes.published] == [0, 1, 0]
 
 
+def test_a_controller_whose_grant_was_revoked_withdraws_every_jump_route(fixture):
+    store, _controllers, _transport, _clock, grant = fixture
+    controller, routes = jumping(store, grant)
+    assert controller.acquire()
+    attachable(store, controller.admit(agent(store)))
+    assert controller.renew()
+    grant["allowed"] = False
+
+    with pytest.raises(SwarmError):
+        controller.renew()
+
+    assert [len(published) for published in routes.published] == [0, 1, 0]
+
+
 def test_a_controller_that_lost_its_lease_reconciles_nothing(fixture):
     store, (first, _second), _transport, clock, grant = fixture
     keeper = Keeper()
