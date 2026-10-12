@@ -64,6 +64,26 @@ def test_spawn_preserves_explicit_interactive_route_kind(tmp_path, harness):
     assert placed.route_kind == "interactive"
 
 
+@pytest.mark.parametrize("account,kind", [("api", "api"), ("slug", "subscription")])
+def test_spawn_records_the_api_route_kind_from_the_launch_report(tmp_path, account, kind):
+    def run(argv, **kwargs):
+        output = f"status=started\nroute_status=routed\naccount={account}\n"
+        return SimpleNamespace(returncode=0, stdout=validated(argv, output), stderr="")
+
+    runtime = HerdrRuntime(home=tmp_path, run=run, choose=lambda *_: ("claude", "requested"))
+    config = SimpleNamespace(
+        slug="proof",
+        repo=str(tmp_path),
+        code="a1b2c3",
+        compact_limit=0,
+        lanes={"master": {"agent": "claude"}},
+        autonomy="delegate",
+    )
+    placed = runtime.spawn(config, "master", "agent", {"id": "master", "title": "proof"})
+    assert placed.account == account
+    assert placed.route_kind == kind
+
+
 @pytest.mark.parametrize("has_quota", [False, True])
 @pytest.mark.parametrize("kind", ["interactive", "subscription", "api"])
 def test_only_interactive_spawn_skips_subscription_quota(tmp_path, has_quota, kind):

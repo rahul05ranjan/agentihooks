@@ -17,6 +17,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from hooks.context.account_sessions import (
     API_ACCOUNT,
@@ -29,6 +30,9 @@ from scripts import codex_quota, codex_sessions, codex_usage, operator_env, sess
 from scripts.codex_quota import CodexQuota
 from scripts.routing import codex_api, envs, place
 from scripts.routing.slots import API, INTERACTIVE, SUBSCRIPTION, Slot
+
+if TYPE_CHECKING:
+    from scripts.routing.reservation import Reservation
 
 TOKEN_ENV = envs.CODEX_TOKEN_ENV
 PROBE_ARGS = ["exec", "--json", "--skip-git-repo-check", "Reply with the single word ok."]
@@ -318,7 +322,7 @@ class CodexAccountSource:
     run: Callable | None = None
     sessions: Mapping[str, int] = field(default_factory=dict)
     refresh: bool = True
-    held: object = None
+    held: "Reservation | None" = None
 
     def _run(self) -> tuple[Callable, ...]:
         return () if self.run is None else (self.run,)
@@ -391,7 +395,7 @@ def select(
     pool_live = sum(sessions.get(account.name, 0) for account in pool)
     from scripts.routing import reservation
 
-    held = reservation.current("codex", environ or {})
+    held = reservation.for_worker("codex", environ or {})
     seat = place.place(
         api, CodexAccountSource(sessions=sessions, held=held).offer(pool, quotas, now), weight, pool_live
     )
@@ -555,6 +559,7 @@ def main(
     except RoutingError as exc:
         print(f"agentihooks codex: {exc}", file=sys.stderr)
         _report(report, status="failed", error=str(exc))
+        lock.close()
         return 3
     _report(report, status="routed", account=account.name, placement=placement)
     print(f"[agentihooks codex] account={account.name} sessions={live}/{cap} placement={placement}", flush=True)
@@ -565,4 +570,5 @@ def main(
         else child_environment(account, active)
     )
     execvpe(codex_bin, command(account, codex_bin, args), child)
+    lock.close()
     return 0

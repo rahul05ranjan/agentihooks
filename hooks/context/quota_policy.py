@@ -35,6 +35,7 @@ from hooks.config import (
 
 if TYPE_CHECKING:
     from scripts.claude_quota_balancer import ProbeResult
+    from scripts.routing.reservation import Reservation
 
 MIN_ROUTING_LEFT = 5.0
 PUSH_SIGNALS = ["keep pushing", "push to 100", "push until 100", "burn it to 100"]
@@ -71,6 +72,7 @@ class Decision:
     week_reset: float | None
     target: Candidate | None
     others: tuple[Candidate, ...]
+    week_limit: float = QUOTA_HANDOFF_WEEK_PCT
 
 
 def _effective(used: float | None, resets_at: float | None, now: float) -> float | None:
@@ -250,6 +252,8 @@ def evaluate(session_id: str) -> Decision | None:
     if windows is None:
         return None
     five_used, week_used, five_reset, week_reset = windows
+    if five_used < QUOTA_HANDOFF_5H_PCT and week_used < min(QUOTA_HANDOFF_WEEK_PCT, reservation.LOWEST):
+        return None
     harness = "codex" if os.environ.get("AGENTIHOOKS_TARGET") == "codex" else "claude"
     held = reservation.current(harness, os.environ)
     account = session_account(agent_pid())
@@ -274,17 +278,17 @@ def evaluate(session_id: str) -> Decision | None:
 
 
 def decide_reserved(ceiling: float | None, *, week_used: float, **inputs) -> Decision | None:
-    week_pct = inputs.get("week_pct", QUOTA_HANDOFF_WEEK_PCT)
-    raised = max(week_used, week_pct) if ceiling is not None and week_used >= ceiling else week_used
-    decision = decide(week_used=raised, **inputs)
-    return decision and replace(decision, week_used=week_used)
+    if ceiling is None or week_used < ceiling:
+        return decide(week_used=week_used, **inputs)
+    decision = decide(week_used=max(week_used, QUOTA_HANDOFF_WEEK_PCT), **inputs)
+    return decision and replace(decision, week_used=week_used, week_limit=ceiling)
 
 
-def _own_ceiling(held, account: str, master: bool) -> float | None:
+def _own_ceiling(held: "Reservation | None", account: str, master: bool) -> float | None:
     return None if held is None or master or account != held.slug else held.ceiling
 
 
-def reserved(candidates: list[Candidate], held) -> list[Candidate]:
+def reserved(candidates: list[Candidate], held: "Reservation | None") -> list[Candidate]:
     if held is None:
         return candidates
     return [replace(c, reserved=True) if held.closes(c.account, c.week_used) else c for c in candidates]
@@ -340,7 +344,7 @@ def reset_when(epoch: float | None) -> str:
 
 def _trigger_text(d: Decision) -> str:
     if d.trigger == "week":
-        return f"7-day quota {d.week_used:.1f}% used (limit {QUOTA_HANDOFF_WEEK_PCT:g}%)"
+        return f"7-day quota {d.week_used:.1f}% used (limit {d.week_limit:g}%)"
     return f"5-hour quota {d.five_used:.1f}% used (limit {QUOTA_HANDOFF_5H_PCT:g}%)"
 
 

@@ -495,13 +495,17 @@ class HerdrRuntime:
             agent, reason = self._saved_choice(saved, profile, quota_transfer, environ)
         else:
             agent, reason = self._rotation(requested, environ, profile_choice.preferred(profile))
-        route_kind = saved.get("route_kind", task.get("route_kind", "subscription"))
+        route_kind = task.get("route_kind", "subscription")
         if reason == agent_choice.ALL_FULL and not hasattr(self, "_quota_accounts") and route_kind != "interactive":
             raise SpawnError(reason, "unavailable")
         planned = getattr(self, "_quota_tasks", {}).get(task["id"])
         if planned and not (requested or saved or want):
             agent, reason = planned, "fallthrough: quota reservation"
-        agent, reason = self._quota_choice(agent, reason, bool(requested or saved or want), lane, route_kind)
+        agent, reason = (
+            (agent, reason)
+            if route_kind == "interactive"
+            else self._quota_choice(agent, reason, bool(requested or saved or want), lane)
+        )
         if saved and agent != saved["harness"]:
             raise SpawnError("unsupported handoff: router substituted the original harness", "unsupported")
         task = {**task, "harness": agent}

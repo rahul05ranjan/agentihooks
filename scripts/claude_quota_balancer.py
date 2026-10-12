@@ -26,6 +26,7 @@ from scripts.routing.slots import API, API_UNBOUNDED, INTERACTIVE, SUBSCRIPTION,
 
 if TYPE_CHECKING:
     from scripts.routing.master_account import MasterAccount
+    from scripts.routing.reservation import Reservation
 
 TOKEN_PREFIX = "AH_CC_TOKEN_"
 HARNESS = "claude"
@@ -691,7 +692,7 @@ class ClaudeTokenSource:
     options: Mapping[str, Any] = field(default_factory=dict)
     sessions: Mapping[str, int] = field(default_factory=dict)
     exclude: frozenset[str] = frozenset()
-    held: Any = None
+    held: "Reservation | None" = None
 
     def results(self, environ: Mapping[str, str], now: float | None = None) -> tuple[list[ProbeResult], str]:
         credentials = discover_credentials(environ)
@@ -750,7 +751,7 @@ def select_credential(
     }
     from scripts.routing import reservation
 
-    tokens = ClaudeTokenSource(options, live, frozenset(excluded), reservation.current(HARNESS, active_env))
+    tokens = ClaudeTokenSource(options, live, frozenset(excluded), reservation.for_worker(HARNESS, active_env))
     results, source = tokens.results(active_env)
     seats = tokens.offer(results, timestamp)
     reserve = {
