@@ -99,7 +99,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python -m scripts.ci_mutation.plan --base "$BASE"
 
-  # Each leg queues on its run's lane under its own index, so a lane holds one leg per index at a time.
+  # Each leg queues on its run's lane under its kind and index, so a lane holds one stats and one shard leg per index.
   stats:
     needs: [pull-request, plan]
     if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.changed != '0' }}
