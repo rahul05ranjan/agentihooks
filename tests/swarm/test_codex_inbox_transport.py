@@ -47,3 +47,13 @@ def test_an_admitted_execution_keeps_its_transport_after_the_setting_changes(env
     with pytest.raises(SwarmError, match="stale or changed execution identity"):
         store.put_agent("sw", replace(admitted, transport=LEGACY_TRANSPORT))
     assert store.execution("sw", admitted.execution_id).transport == APP_SERVER_TRANSPORT
+
+
+def test_the_transport_stays_off_the_agent_projection_and_comes_back_from_the_execution(env):  # noqa: F811
+    store, _, _ = env
+    run("sw", "create", "--repo", "/repo")
+    agent = AgentRecord(store.next_name("sw", "eng"), "eng", "task", seat="eng-1@sw", transport=APP_SERVER_TRANSPORT)
+    admitted = store.start_execution("sw", agent)
+    raw = json.loads(store.redis.hget(store.key("sw", "agents"), admitted.name))
+    assert "transport" not in raw
+    assert [found.transport for found in store.agents("sw")] == [APP_SERVER_TRANSPORT]
