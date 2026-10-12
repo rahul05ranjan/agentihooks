@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 CEILINGS = ((3, 50.0), (2, 60.0), (1, 70.0))
 LOWEST = min(limit for _, limit in CEILINGS)
 MASTER_NAME = "master@"
+AGENT_NAME = "AGENTIHOOKS_AGENT_NAME"
 
 
 def ceiling(masters_live: int) -> float | None:
@@ -121,7 +122,7 @@ def current(
 def is_master_session(environ: Mapping[str, str]) -> bool:
     if any(name.startswith(INTERACTIVE_PREFIX) for name in environ):
         return True
-    return environ.get("AGENTIHOOKS_AGENT_NAME", "").startswith(MASTER_NAME)
+    return AGENT_NAME in environ and environ[AGENT_NAME].startswith(MASTER_NAME)
 
 
 def for_worker(harness: str, environ: Mapping[str, str]) -> Reservation | None:
