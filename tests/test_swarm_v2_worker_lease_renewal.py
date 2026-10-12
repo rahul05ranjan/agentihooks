@@ -352,6 +352,9 @@ class Ticking:
     def __init__(self, lose_at: int = 0) -> None:
         self.lost, self.ticks, self.lose_at = None, 0, lose_at
 
+    def lose(self, reason: str) -> None:
+        self.lost = reason
+
     def tick(self) -> None:
         self.ticks += 1
         if self.ticks == self.lose_at:
@@ -411,8 +414,27 @@ def test_a_renewal_that_crashes_loses_the_lease_instead_of_dying_silently():
         eventually(lambda: renewer.lost is not None)
         time.sleep(0.01)
 
-    assert renewer.lost == "renewal_crashed_OSError"
+    assert renewer.lost == "renewal_crashed_OSError: disk full"
     assert renewer.ticks == 1
+
+
+def test_a_crashed_renewal_is_logged_as_a_lost_lease(tmp_path, capsys):
+    def crashing(*args):
+        raise OSError("disk full")
+
+    renewer = lease_renewal.load(attempt_folder(tmp_path), crashing)
+
+    with lease_renewal.kept(renewer, pause=0.001):
+        eventually(lambda: renewer.lost is not None)
+
+    assert events(capsys) == [
+        {
+            "lease": "lost",
+            "reason": "renewal_crashed_OSError: disk full",
+            "execution_id": EXECUTION,
+            "task_generation": 4,
+        }
+    ]
 
 
 class Answer(io.BytesIO):

@@ -91,7 +91,7 @@ class Renewer:
         if self.lost is not None:
             return
         if now >= self.deadline:
-            self._lose("lease_expired")
+            self.lose("lease_expired")
             return
         if now < self.due:
             return
@@ -104,7 +104,7 @@ class Renewer:
             self.authority["execution_id"],
             self.authority["task_generation"],
         ):
-            self._lose("generation_changed")
+            self.lose("generation_changed")
             return
         self.deadline_ms = answer[DEADLINE]
         self.deadline = self._until(self.deadline_ms)
@@ -127,7 +127,7 @@ class Renewer:
         url = self.url + path.format(self.authority["execution_id"])
         status, answer = self.send(method, url, self.grant, body)
         if status in REFUSED:
-            self._lose(f"{call}_refused_{status}")
+            self.lose(f"{call}_refused_{status}")
             return None
         key, kind = EXPECTED[call]
         if status != 200 or not isinstance(answer, dict) or type(answer.get(key)) is not kind or not answer[key]:
@@ -150,7 +150,7 @@ class Renewer:
     def _until(self, deadline_ms: int) -> float:
         return self.clock() + deadline_ms / 1000 - self.wall()
 
-    def _lose(self, reason: str) -> None:
+    def lose(self, reason: str) -> None:
         self.lost = reason
         self._log("lost", reason=reason)
 
@@ -171,7 +171,7 @@ def kept(renewer: Renewer, pause: float = PAUSE_SECONDS) -> Iterator[Renewer]:
             try:
                 renewer.tick()
             except Exception as error:
-                renewer.lost = f"renewal_crashed_{type(error).__name__}"
+                renewer.lose(f"renewal_crashed_{type(error).__name__}: {error}")
                 return
             if stop.wait(pause):
                 return

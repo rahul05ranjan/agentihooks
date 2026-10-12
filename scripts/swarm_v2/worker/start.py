@@ -211,6 +211,7 @@ def _build(
     _held(renewer)
     restored = checkpoint_runtime.prepare(spec, attempt)
     if restored is not None:
+        _held(renewer)
         if spec.get("checkpoint_remote") is True:
             report(spec, renewer.grant, restored)
         _private(attempt / RESTORED, asdict(restored))
