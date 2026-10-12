@@ -47,6 +47,9 @@ LABELS = {
 }
 
 
+from dataclasses import asdict
+
+
 def agent(execution_id=EXECUTION, generation=3, profile="engineer") -> AgentRecord:
     return AgentRecord("engineer-1", "eng", "t1", execution_id=execution_id, generation=generation, profile=profile)
 
@@ -99,6 +102,9 @@ def registration() -> Registration:
         key_id="launch-1",
         registered_at="",
     )
+
+
+RECORD["registration"] = asdict(registration())
 
 
 def verify(token: str) -> Registration:

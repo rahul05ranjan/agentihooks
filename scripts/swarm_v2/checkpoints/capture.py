@@ -88,6 +88,7 @@ def publish(attempt: Path, scope: dict, environ: Mapping[str, str], newest: Path
     if not promoted.promoted or not qualifier.validator.verify(checkpoint_id).authoritative:
         return {"status": "incomplete", "reason": "checkpoint_validation_refused"}
     manifest = Path("checkpoints") / scope["incarnation"] / "manifest.json"
+    (attempt / manifest).parent.mkdir(parents=True, exist_ok=True)
     write(attempt / manifest, {**scope, "status": "complete", "checkpoint_id": checkpoint_id})
     digest = hashlib.sha256((attempt / manifest).read_bytes()).hexdigest()
     return {"status": "complete", "manifest": str(manifest), "sha256": digest}

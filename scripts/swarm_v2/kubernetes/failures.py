@@ -215,8 +215,32 @@ class Recovery:
     def restore(self, replacement: str) -> dict | None:
         return restore_directive(self.store, self.slug, replacement)
 
+    def outcome(self, replacement: str) -> dict | None:
+        raw = self.store.redis.hget(self._key("attempt-restore-outcomes"), replacement)
+        return json.loads(raw) if raw else None
+
+    def confirm(self, replacement: str, restored: dict) -> dict:
+        self.controller.require()
+        directive = self.restore(replacement)
+        if (
+            directive is None
+            or not isinstance(restored, dict)
+            or set(restored) != set(restoring.Restored.__dataclass_fields__)
+        ):
+            raise SwarmError("no restore directive for this attempt")
+        expected = (directive["recovery"], directive["checkpoint_id"], directive["session_id"])
+        actual = (restored.get("recovery"), restored.get("checkpoint_id"), restored.get("session_id"))
+        if actual != expected or type(restored.get("watermark")) is not int or restored["watermark"] < 0:
+            raise SwarmError("restore outcome does not match the accepted directive")
+        outcome = {**restored, "status": "verified", "archive_watermark": directive["watermark"]}
+        known = self.outcome(replacement)
+        if known is not None and known != outcome:
+            raise SwarmError("restore outcome is already recorded")
+        self.store.redis.hsetnx(self._key("attempt-restore-outcomes"), replacement, json.dumps(outcome))
+        return self.outcome(replacement)
+
     def restore_outcomes_by_type(self) -> dict[str, int]:
-        kinds = [json.loads(raw)["recovery"] for raw in self.store.redis.hvals(self._key(RESTORES))]
+        kinds = [json.loads(raw)["recovery"] for raw in self.store.redis.hvals(self._key("attempt-restore-outcomes"))]
         return {kind: kinds.count(kind) for kind in restoring.TYPES}
 
     def _direct(self, decision: Decision, recovery: str) -> None:

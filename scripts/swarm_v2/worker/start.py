@@ -51,6 +51,20 @@ def post(url: str, grant: str, body: dict) -> tuple[int, object]:
         return status, {}
 
 
+def report(spec: dict, grant: str, restored: restore.Restored) -> None:
+    path = f"/v1/executions/{spec['execution_id']}/restore-outcome"
+    headers = {**JSON_HEADERS, AUTHORIZATION: f"Bearer {grant}"}
+    request = urllib.request.Request(
+        spec["control_url"].rstrip("/") + path, json.dumps(asdict(restored)).encode(), headers
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as answer:
+            if answer.status != 200:
+                raise LaunchRefused("restore outcome was not accepted")
+    except (OSError, HTTPException):
+        raise LaunchRefused("restore outcome was not accepted") from None
+
+
 def _launch(path: Path, templates: Path, bundle: Path | None) -> dict:
     try:
         spec = json.loads(path.read_text())
@@ -165,6 +179,8 @@ def prepare(
     worker_home.store_grant(attempt, grant)
     restored = checkpoint_runtime.prepare(spec, attempt)
     if restored is not None:
+        if spec.get("checkpoint_remote") is True:
+            report(spec, grant, restored)
         _private(attempt / RESTORED, asdict(restored))
     _private(attempt / RECORD, authority)
     return record

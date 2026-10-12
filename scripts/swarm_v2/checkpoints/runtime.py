@@ -128,8 +128,10 @@ class Checkpoints:
         self.root, self.registered, self.compatibility = root, registered, compatibility
 
     def validator(self, execution_id: str) -> model.Validator | None:
+        if self.root is None:
+            return None
         registration = self.registered(execution_id)
-        if self.root is None or registration is None:
+        if registration is None:
             return None
         return model.Validator(granted(self.root, registration))
 

@@ -75,6 +75,7 @@ def test_a_drain_requires_a_durable_verified_checkpoint(tmp_path, monkeypatch):
     from tests.test_swarm_v2_supervision_runtime import supervisor
 
     owner = supervisor.__wrapped__(tmp_path, monkeypatch)
+    owner.environment[runtime.ROOT] = str(tmp_path / "durable")
     monkeypatch.setattr(owner, "quiesce", lambda: True)
     monkeypatch.setattr(owner, "wait", lambda: pytest.fail("unbounded wait"))
     monkeypatch.setattr(supervision_runtime, "checkpoint", lambda *args: "unverified")

@@ -1,6 +1,6 @@
 import json
 import socket
-from dataclasses import replace
+from dataclasses import asdict, replace
 from functools import partial
 from pathlib import Path
 
@@ -958,6 +958,8 @@ def test_a_kubernetes_launch_puts_its_grant_in_the_pod_launch_material_and_recor
             "swarm_id": SLUG,
             "grant_id": claims.grant_id,
         },
+        "registration": asdict(claims),
+        "image_digest": pod["spec"]["containers"][0]["image"].split("@", 1)[1],
         "harness": "claude",
         "agent": ["claude"],
         "exporter": ["python", "-m", "scripts.swarm_v2.session_export"],

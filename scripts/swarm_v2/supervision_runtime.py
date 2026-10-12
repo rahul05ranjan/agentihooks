@@ -170,7 +170,13 @@ class Supervisor:
         while clean and self.launch.exporter and time.monotonic() < deadline:
             identifier = checkpoint(self.launch.attempt, read(self.root / "exporter.checkpoint.json"), self.scope)
             if identifier:
-                if not checkpoint_runtime.validate_export(self.launch.attempt, identifier, self.environment):
+                portable = (
+                    self.environment.get(checkpoint_runtime.ROOT)
+                    or self.environment.get(checkpoint_runtime.REMOTE) == "true"
+                )
+                if portable and not checkpoint_runtime.validate_export(
+                    self.launch.attempt, identifier, self.environment
+                ):
                     identifier = None
                 break
             if "exporter" in self.exits:
