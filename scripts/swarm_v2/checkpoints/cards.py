@@ -8,7 +8,8 @@ def rows(store: RedisStore, slug: str) -> dict[str, dict]:
     for execution_id, raw in store.redis.hgetall(store.key(slug, "attempt-recoveries")).items():
         decision = json.loads(raw)
         fence = json.loads(store.redis.hget(store.key(slug, "attempt-fences"), execution_id))
-        checkpoint = fence.get("checkpoint", {})
+        offered = store.redis.hget(store.key(slug, "attempt-checkpoint-options"), execution_id)
+        checkpoint = json.loads(offered) if offered else {}
         outcome = store.redis.hget(store.key(slug, "attempt-restore-outcomes"), decision["replacement"])
         restored = json.loads(outcome) if outcome else None
         if fence["seat"] in found and found[fence["seat"]]["generation"] > decision["generation"]:
