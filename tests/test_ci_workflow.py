@@ -277,7 +277,11 @@ def test_mutation_browser_dependencies_use_the_responsive_mirror():
     mirror = next(step for step in setup if step.get("name") == "Use the Ubuntu archive for browser dependencies")
     install = _browser_install(setup)
     assert setup.index(mirror) < setup.index(install)
-    assert mirror["if"] in ("steps.selection.outputs.browser == 'true'", "steps.launch.outputs.ready != 'true'")
+    assert mirror["if"] in (
+        "steps.selection.outputs.browser == 'true'",
+        "steps.launch.outputs.ready != 'true'",
+        "steps.launch.outputs.ready != 'true' && runner.environment == 'github-hosted'",
+    )
     assert mirror["run"] in (
         r"sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt",
         r"timeout 60s sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt",
