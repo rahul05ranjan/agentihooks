@@ -75,6 +75,7 @@ def test_interactive_login_presence_and_missing_login(tmp_path, monkeypatch, har
             capture_output=True,
             timeout=30,
         )
+        assert not any(key in run.call_args.kwargs["env"] for key in CODEX_DROP)
     credentials.unlink()
     run.return_value.returncode = 1
     error = ClaudeError if harness == "claude" else CodexError
@@ -178,14 +179,14 @@ def test_init_agent_explicit_interactive_auth_routes_the_selected_harness(tmp_pa
     assert command[command.index("--route") + 1] == "interactive"
 
 
-def test_init_agent_auth_option_accepts_only_interactive(capsys):
+def test_init_agent_auth_option_accepts_only_interactive():
     from scripts import init_agent
 
     parser = init_agent._parser()
     assert parser.parse_args([]).auth == ""
     with pytest.raises(SystemExit):
         parser.parse_args(["--auth", "token"])
-    assert "Use the declared interactive login" in " ".join(parser.format_help().split())
+    assert "{interactive} Use the declared interactive login --profile" in " ".join(parser.format_help().split())
 
 
 @pytest.mark.parametrize("harness", ["claude", "codex"])
