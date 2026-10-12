@@ -1,12 +1,16 @@
 """A Pod worker holds its task lease only while it renews it: the controller admits with a short lease and refuses
-every scoped write once it lapses. The launch grant that authenticates each renewal expires too and is renewed here."""
+every scoped write once it lapses. The launch grant that authenticates each renewal expires too and is renewed here.
+The start renews from registration through its slow preparation, then hands the lease to the supervisor on disk."""
 
 import json
+import threading
 import time
 import urllib.error
 import urllib.request
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from http.client import HTTPException
 from pathlib import Path
 
@@ -20,11 +24,13 @@ CREDENTIAL = "/v2/executions/{}/credential"
 INTERVAL_SECONDS = 15.0
 RETRY_SECONDS = 2.0
 CREDENTIAL_SECONDS = 120.0
+PAUSE_SECONDS = 1.0
 TIMEOUT_SECONDS = 5
 UNREACHABLE = 503
-REFUSED = (401, 403, 409)
+REFUSED = (400, 401, 403, 404, 409)
 AUTHORITY = ("execution_id", "task_id", "task_generation", "controller_epoch", "owner_identity")
-EXPECTED = {"heartbeat": ("lease_deadline_ms", int), "credential": ("credential", str)}
+DEADLINE = "lease_deadline_ms"
+EXPECTED = {"heartbeat": (DEADLINE, int), "credential": ("credential", str)}
 
 Send = Callable[[str, str, str, dict], tuple[int, object]]
 
@@ -49,27 +55,45 @@ def _timestamp(seconds: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(seconds))
 
 
+@dataclass(frozen=True)
+class Lease:
+    attempt: Path
+    control_url: str
+    admission: dict
+    grant: str
+
+
 class Renewer:
-    def __init__(self, attempt: Path, send: Send, clock: Callable[[], float], wall: Callable[[], float]) -> None:
-        admission = json.loads((attempt / ADMISSION).read_text())
-        launch = json.loads((attempt / "launch.json").read_text())
-        self.attempt, self.send, self.clock, self.wall = attempt, send, clock, wall
-        self.url = launch["control_url"].rstrip("/")
-        self.grant = broadcast_bridge.grant_path(attempt).read_text().strip()
-        self.authority = {key: admission[key] for key in AUTHORITY}
+    def __init__(
+        self,
+        lease: Lease,
+        send: Send = send,
+        clock: Callable[[], float] = time.monotonic,
+        wall: Callable[[], float] = time.time,
+    ) -> None:
+        self.attempt, self.send, self.clock, self.wall = lease.attempt, send, clock, wall
+        self.url = lease.control_url.rstrip("/")
+        self.grant = lease.grant
+        self.authority = {key: lease.admission[key] for key in AUTHORITY}
         now = clock()
-        self.deadline = self._until(admission["lease_deadline_ms"])
+        self.deadline_ms = lease.admission[DEADLINE]
+        self.deadline = self._until(self.deadline_ms)
         self.due = now
         self.credential_due = now + CREDENTIAL_SECONDS
         self.sequence = 0
         self.lost: str | None = None
 
+    def record(self) -> dict:
+        return {**self.authority, DEADLINE: self.deadline_ms}
+
     def tick(self) -> None:
         now = self.clock()
-        if self.lost is not None or now < self.due:
+        if self.lost is not None:
             return
         if now >= self.deadline:
             self._lose("lease_expired")
+            return
+        if now < self.due:
             return
         if now >= self.credential_due and not self._credential(now):
             return
@@ -82,16 +106,19 @@ class Renewer:
         ):
             self._lose("generation_changed")
             return
-        self.deadline = self._until(answer["lease_deadline_ms"])
+        self.deadline_ms = answer[DEADLINE]
+        self.deadline = self._until(self.deadline_ms)
         self.due = now + INTERVAL_SECONDS
-        self._log("renewed", renewal_sequence=self.sequence, lease_deadline_ms=answer["lease_deadline_ms"])
+        self._log("renewed", renewal_sequence=self.sequence, lease_deadline_ms=self.deadline_ms)
 
     def _credential(self, now: float) -> bool:
         answer = self._call("credential", "POST", CREDENTIAL, {})
         if answer is None:
             return False
         self.grant = answer["credential"]
-        broadcast_bridge.store_grant(broadcast_bridge.grant_path(self.attempt), self.grant)
+        path = broadcast_bridge.grant_path(self.attempt)
+        if path.parent.is_dir():
+            broadcast_bridge.store_grant(path, self.grant)
         self.credential_due = now + CREDENTIAL_SECONDS
         self._log("credential_renewed", expires_at=answer.get("expires_at"))
         return True
@@ -135,9 +162,31 @@ class Renewer:
         print(json.dumps({"lease": event, **fields, **identity}), flush=True)
 
 
+@contextmanager
+def kept(renewer: Renewer, pause: float = PAUSE_SECONDS) -> Iterator[Renewer]:
+    stop = threading.Event()
+
+    def renew() -> None:
+        while renewer.lost is None:
+            renewer.tick()
+            if stop.wait(pause):
+                return
+
+    thread = threading.Thread(target=renew, name="lease-renewal", daemon=True)
+    thread.start()
+    try:
+        yield renewer
+    finally:
+        stop.set()
+        thread.join()
+
+
 def load(
     attempt: Path, send: Send = send, clock: Callable[[], float] = time.monotonic, wall: Callable[[], float] = time.time
 ) -> Renewer | None:
     if not (attempt / ADMISSION).exists():
         return None
-    return Renewer(attempt, send, clock, wall)
+    admission = json.loads((attempt / ADMISSION).read_text())
+    control_url = json.loads((attempt / "launch.json").read_text())["control_url"]
+    grant = broadcast_bridge.grant_path(attempt).read_text().strip()
+    return Renewer(Lease(attempt, control_url, admission, grant), send, clock, wall)

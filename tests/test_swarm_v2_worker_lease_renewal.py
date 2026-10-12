@@ -1,5 +1,6 @@
 import io
 import json
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -89,10 +90,19 @@ def events(capsys) -> list[dict]:
     return [json.loads(line) for line in capsys.readouterr().out.splitlines()]
 
 
+def renew_until_the_credential_is_due(lease: lease_renewal.Renewer, clock: Clock) -> None:
+    while clock.now < 100.0 + lease_renewal.CREDENTIAL_SECONDS:
+        lease.tick()
+        clock.advance(lease_renewal.INTERVAL_SECONDS)
+    assert [lease.lost, clock.now] == [None, 100.0 + lease_renewal.CREDENTIAL_SECONDS]
+
+
 def test_the_interval_sits_well_inside_the_admission_lease():
-    assert lease_renewal.INTERVAL_SECONDS * 4 <= 60
-    assert lease_renewal.RETRY_SECONDS < lease_renewal.INTERVAL_SECONDS
-    assert lease_renewal.CREDENTIAL_SECONDS * 2 <= 300
+    assert (lease_renewal.INTERVAL_SECONDS, lease_renewal.RETRY_SECONDS, lease_renewal.CREDENTIAL_SECONDS) == (
+        15.0,
+        2.0,
+        120.0,
+    )
 
 
 def test_the_first_tick_renews_at_once_and_then_on_the_fixed_interval(tmp_path):
@@ -192,7 +202,7 @@ def test_a_failed_renewal_is_logged_and_retried_on_the_short_interval(tmp_path, 
     assert renewed["task_generation"] == 4
 
 
-@pytest.mark.parametrize("status", [401, 403, 409])
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 409])
 def test_a_refused_renewal_loses_the_lease_and_stops_every_further_call(tmp_path, capsys, status):
     clock = Clock()
     controller = Controller(clock, (status, {}))
@@ -268,9 +278,7 @@ def test_the_launch_grant_is_renewed_before_it_expires_and_used_from_then_on(tmp
     controller = Controller(clock)
     lease = renewer(tmp_path, clock, controller)
 
-    while clock.now < 100.0 + lease_renewal.CREDENTIAL_SECONDS:
-        lease.tick()
-        clock.advance(lease_renewal.INTERVAL_SECONDS)
+    renew_until_the_credential_is_due(lease, clock)
     lease.tick()
 
     credentials = [call for call in controller.calls if call[0] == "POST"]
@@ -285,8 +293,7 @@ def test_a_failed_credential_renewal_is_retried_and_keeps_the_grant(tmp_path, an
     clock = Clock()
     controller = Controller(clock)
     lease = renewer(tmp_path, clock, controller)
-    lease.tick()
-    clock.advance(lease_renewal.CREDENTIAL_SECONDS)
+    renew_until_the_credential_is_due(lease, clock)
     controller.answers.append(answer)
 
     lease.tick()
@@ -303,8 +310,7 @@ def test_a_refused_credential_renewal_loses_the_lease(tmp_path):
     clock = Clock()
     controller = Controller(clock)
     lease = renewer(tmp_path, clock, controller)
-    lease.tick()
-    clock.advance(lease_renewal.CREDENTIAL_SECONDS)
+    renew_until_the_credential_is_due(lease, clock)
     controller.answers.append((401, {}))
 
     lease.tick()
@@ -318,6 +324,78 @@ def test_an_attempt_without_an_admission_has_no_lease_to_renew(tmp_path):
     attempt = attempt_folder(tmp_path, admission=None)
 
     assert lease_renewal.load(attempt, Controller(clock), clock.monotonic, clock.time) is None
+
+
+def test_a_renewed_grant_waits_in_memory_until_the_run_folder_exists(tmp_path):
+    clock = Clock()
+    controller = Controller(clock)
+    attempt = tmp_path / EXECUTION
+    lease = lease_renewal.Lease(attempt, CONTROL, ADMISSION, GRANT)
+    renewer = lease_renewal.Renewer(lease, controller, clock.monotonic, clock.time)
+
+    renew_until_the_credential_is_due(renewer, clock)
+    renewer.tick()
+
+    assert renewer.grant == "sv2.grant-renewed"
+    assert not attempt.exists()
+    assert renewer.record() == {
+        "execution_id": EXECUTION,
+        "task_id": "t1",
+        "task_generation": 4,
+        "controller_epoch": 7,
+        "owner_identity": "engineer@fixture-1",
+        "lease_deadline_ms": int(clock.wall * 1000) + 60_000,
+    }
+
+
+class Ticking:
+    def __init__(self, lose_at: int = 0) -> None:
+        self.lost, self.ticks, self.lose_at = None, 0, lose_at
+
+    def tick(self) -> None:
+        self.ticks += 1
+        if self.ticks == self.lose_at:
+            self.lost = "lease_expired"
+
+
+def eventually(condition) -> None:
+    deadline = time.monotonic() + 5
+    while not condition():
+        assert time.monotonic() < deadline
+        time.sleep(0.001)
+
+
+def test_a_kept_lease_ticks_until_the_block_ends():
+    renewer = Ticking()
+
+    with lease_renewal.kept(renewer, pause=0.001) as held:
+        assert held is renewer
+        eventually(lambda: renewer.ticks >= 3)
+    ticks = renewer.ticks
+    time.sleep(0.01)
+
+    assert renewer.ticks == ticks
+
+
+def test_a_kept_lease_stops_ticking_once_it_is_lost():
+    renewer = Ticking(lose_at=2)
+
+    with lease_renewal.kept(renewer, pause=0.001):
+        eventually(lambda: renewer.lost is not None)
+        time.sleep(0.01)
+
+    assert renewer.ticks == 2
+
+
+def test_a_kept_lease_waits_its_pause_between_ticks():
+    renewer = Ticking()
+
+    with lease_renewal.kept(renewer, pause=60):
+        eventually(lambda: renewer.ticks == 1)
+        time.sleep(0.01)
+
+    assert renewer.ticks == 1
+    assert lease_renewal.PAUSE_SECONDS == 1.0
 
 
 class Answer(io.BytesIO):

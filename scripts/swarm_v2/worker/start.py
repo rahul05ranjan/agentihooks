@@ -40,19 +40,7 @@ from scripts.swarm_v2.worker import git_auth, lease_renewal
 
 
 def post(url: str, grant: str, body: dict) -> tuple[int, object]:
-    headers = {**JSON_HEADERS, AUTHORIZATION: f"Bearer {grant}"}
-    request = urllib.request.Request(url.rstrip("/") + REGISTER, json.dumps(body).encode(), headers)
-    try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as answer:
-            status, text = answer.status, answer.read()
-    except urllib.error.HTTPError as error:
-        return error.code, {}
-    except (OSError, HTTPException):
-        return BUSY, {}
-    try:
-        return status, json.loads(text)
-    except ValueError:
-        return status, {}
+    return lease_renewal.send("POST", url.rstrip("/") + REGISTER, grant, body)
 
 
 def report(spec: dict, grant: str, restored: Restored) -> None:
@@ -187,21 +175,14 @@ def _private(path: Path, document: dict) -> None:
     staged.replace(path)
 
 
-def prepare(
+def _build(
     attempt: Path,
-    launch: Path,
-    send: Send = post,
-    sleep: Callable[[float], None] = time.sleep,
-    boot: Callable[[worker_home.Request], dict] = worker_home.bootstrap,
-    templates: Path = TEMPLATES,
-    bundle: Path = BUNDLE,
+    spec: dict,
+    renewer: lease_renewal.Renewer,
+    boot: Callable[[worker_home.Request], dict],
+    templates: Path,
+    bundle: Path | None,
 ) -> dict:
-    bundle = delivered(bundle)
-    spec = _launch(launch, templates, bundle)
-    if attempt.name != spec["authority"]["execution_id"]:
-        raise LaunchRefused("attempt folder does not name the launch execution")
-    grant = _grant(launch.parent)
-    admission = register(spec, grant, send, sleep)
     attempt.parent.mkdir(mode=0o700, exist_ok=True)
     record = boot(
         worker_home.Request(
@@ -221,15 +202,40 @@ def prepare(
     if spec.get("checkpoint_remote") is True:
         os.environ[checkpoint_runtime.REMOTE] = "true"
     _private(attempt / "launch.json", spec)
-    worker_home.store_grant(attempt, grant)
+    worker_home.store_grant(attempt, renewer.grant)
     restored = checkpoint_runtime.prepare(spec, attempt)
     if restored is not None:
         if spec.get("checkpoint_remote") is True:
-            report(spec, grant, restored)
+            report(spec, renewer.grant, restored)
         _private(attempt / RESTORED, asdict(restored))
-    _private(attempt / lease_renewal.ADMISSION, admission)
-    _private(attempt / RECORD, spec["authority"])
     return {**record, **prepared}
+
+
+def prepare(
+    attempt: Path,
+    launch: Path,
+    send: Send = post,
+    sleep: Callable[[float], None] = time.sleep,
+    boot: Callable[[worker_home.Request], dict] = worker_home.bootstrap,
+    templates: Path = TEMPLATES,
+    bundle: Path = BUNDLE,
+) -> dict:
+    bundle = delivered(bundle)
+    spec = _launch(launch, templates, bundle)
+    if attempt.name != spec["authority"]["execution_id"]:
+        raise LaunchRefused("attempt folder does not name the launch execution")
+    grant = _grant(launch.parent)
+    admission = register(spec, grant, send, sleep)
+    lease = lease_renewal.Lease(attempt, spec["control_url"], admission, grant)
+    renewer = lease_renewal.Renewer(lease, lease_renewal.send)
+    with lease_renewal.kept(renewer):
+        built = _build(attempt, spec, renewer, boot, templates, bundle)
+    if renewer.lost is not None:
+        raise LaunchRefused(f"admission lease lost: {renewer.lost}")
+    worker_home.store_grant(attempt, renewer.grant)
+    _private(attempt / lease_renewal.ADMISSION, renewer.record())
+    _private(attempt / RECORD, spec["authority"])
+    return built
 
 
 def main(argv: list[str] | None = None) -> int:

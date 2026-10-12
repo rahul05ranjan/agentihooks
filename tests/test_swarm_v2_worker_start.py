@@ -8,6 +8,7 @@ import stat
 import subprocess
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -46,9 +47,29 @@ ANSWER = {
     "execution_id": EXECUTION,
     "task_id": "t1",
     "task_generation": 1,
+    "controller_epoch": 2,
+    "owner_identity": "engineer@fixture",
+    "lease_deadline_ms": int(time.time() * 1000) + 600_000,
     "grant_id": AUTHORITY["grant_id"],
     "registered_at": "2026-10-11T00:00:00Z",
 }
+RENEWED = {**ANSWER, "lease_deadline_ms": ANSWER["lease_deadline_ms"] + 1_000}
+
+
+class Renewals:
+    def __init__(self, *answers: tuple[int, object]) -> None:
+        self.answers, self.calls = list(answers), []
+
+    def __call__(self, method: str, url: str, grant: str, body: dict) -> tuple[int, object]:
+        self.calls.append((method, url, grant, body))
+        return self.answers.pop(0) if self.answers else (200, RENEWED)
+
+
+@pytest.fixture(autouse=True)
+def renewals(monkeypatch) -> Renewals:
+    found = Renewals()
+    monkeypatch.setattr(lease_renewal, "send", found)
+    return found
 
 
 def material(tmp_path: Path, record: object = RECORD, grant: str | None = GRANT) -> Path:
@@ -144,13 +165,33 @@ def test_a_prepared_attempt_holds_the_registration_record_only_the_worker_can_re
     ]
 
 
-def test_a_prepared_attempt_keeps_the_admission_answer_its_lease_renews_from(tmp_path):
-    admitted = {**ANSWER, "controller_epoch": 2, "owner_identity": "engineer@fixture", "lease_deadline_ms": 9}
-    prepare(tmp_path, material(tmp_path), Controller((200, admitted)))
+def test_the_lease_is_renewed_from_registration_and_handed_to_the_supervisor(tmp_path, renewals):
+    prepare(tmp_path, material(tmp_path), Controller((200, ANSWER)))
 
-    record = tmp_path / "attempts" / EXECUTION / lease_renewal.ADMISSION
-    assert json.loads(record.read_text()) == admitted
+    attempt = tmp_path / "attempts" / EXECUTION
+    method, url, grant, body = renewals.calls[0]
+    assert (method, url, grant) == ("PUT", f"{CONTROL}/v2/executions/{EXECUTION}/heartbeat", GRANT)
+    assert body["authority"]["task_generation"] == 1
+    record = attempt / lease_renewal.ADMISSION
+    assert json.loads(record.read_text()) == {
+        "execution_id": EXECUTION,
+        "task_id": "t1",
+        "task_generation": 1,
+        "controller_epoch": 2,
+        "owner_identity": "engineer@fixture",
+        "lease_deadline_ms": RENEWED["lease_deadline_ms"],
+    }
     assert stat.S_IMODE(record.stat().st_mode) == 0o600
+
+
+def test_a_lease_lost_while_preparing_refuses_the_start(tmp_path, renewals):
+    renewals.answers.append((409, {}))
+
+    with pytest.raises(LaunchRefused) as refused:
+        prepare(tmp_path, material(tmp_path), Controller((200, ANSWER)))
+
+    assert str(refused.value) == "admission lease lost: heartbeat_refused_409"
+    assert not (tmp_path / "attempts" / EXECUTION / "registration.json").exists()
 
 
 def test_an_engineer_launch_record_renders_the_engineer_profile_in_the_pod_home(tmp_path):
