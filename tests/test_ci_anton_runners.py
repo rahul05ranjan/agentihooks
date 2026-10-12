@@ -8,8 +8,8 @@ import yaml
 WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "workflows"
 
 TRUSTED = (
-    "(github.event_name != 'pull_request_target'"
-    " && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)"
+    "((!startsWith(github.event_name, 'pull_request')"
+    " || github.event.pull_request.head.repo.full_name == github.repository)"
     ' && contains(fromJSON(\'["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]\'), github.actor)'
     ' && contains(fromJSON(\'["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]\'), github.triggering_actor)'
     " || (github.event_name == 'merge_group' || github.event_name == 'push' && github.ref == 'refs/heads/dev')"
