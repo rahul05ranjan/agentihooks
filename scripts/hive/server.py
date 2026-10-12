@@ -4,6 +4,7 @@ import ipaddress
 import json
 import socket
 import ssl
+import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING
 
@@ -18,8 +19,18 @@ REQUEST_TIMEOUT_S = 10
 BAD_BODY = "the body must be a JSON object with a string code"
 
 
+class _ClosesTLS(BaseHTTPRequestHandler):
+    def finish(self):
+        super().finish()
+        if isinstance(self.request, ssl.SSLSocket):
+            try:
+                self.request.unwrap()
+            except (ssl.SSLError, OSError):
+                pass
+
+
 def _handler(redis: "Redis", redis_url: str, context: ssl.SSLContext | None) -> type[BaseHTTPRequestHandler]:
-    class Join(BaseHTTPRequestHandler):
+    class Join(_ClosesTLS):
         timeout = REQUEST_TIMEOUT_S
 
         def setup(self):
@@ -50,14 +61,22 @@ def _handler(redis: "Redis", redis_url: str, context: ssl.SSLContext | None) -> 
             return code if isinstance(code, str) else None
 
         def _answer(self, status, body):
+            payload = json.dumps(body).encode()
             self.send_response(status)
+            self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
-            self.wfile.write(json.dumps(body).encode())
+            self.wfile.write(payload)
 
         def log_message(self, format, *args):
             pass
 
     return Join
+
+
+class JoinServer(ThreadingHTTPServer):
+    def handle_error(self, request, client_address):
+        if not isinstance(sys.exc_info()[1], (ssl.SSLError, ConnectionError, TimeoutError)):
+            super().handle_error(request, client_address)
 
 
 def is_loopback(host: str | None) -> bool:
@@ -79,4 +98,4 @@ def make_server(
             context.load_cert_chain(*tls)
         except (OSError, ssl.SSLError) as exc:
             raise auth.HiveError(f"the TLS certificate or key cannot be loaded ({exc})") from exc
-    return ThreadingHTTPServer((host, port), _handler(redis, redis_url, context))
+    return JoinServer((host, port), _handler(redis, redis_url, context))
