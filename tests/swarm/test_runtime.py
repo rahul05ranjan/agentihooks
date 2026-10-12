@@ -1006,7 +1006,7 @@ def test_an_unrecorded_resume_uses_the_configured_model(tmp_path):
 
     runtime, config, agent, seen = _resuming(tmp_path, "c0ffee")
     config.claude_model = "sonnet"
-    runtime.resume(config, replace(agent, model=""))
+    runtime.resume(config, replace(agent, model=""), "resume")
     passed = _passed(seen["runs"][0])
     assert passed[passed.index("--model") + 1] == "sonnet"
 
