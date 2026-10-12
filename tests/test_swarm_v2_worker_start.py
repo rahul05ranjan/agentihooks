@@ -17,7 +17,7 @@ from scripts.swarm_v2 import filesystem, worker_home, workspaces
 from scripts.swarm_v2.broadcast_bridge import API_URL, GRANT_NAME
 from scripts.swarm_v2.checkpoints import restore
 from scripts.swarm_v2.supervision import Launch, LaunchRefused
-from scripts.swarm_v2.worker import start
+from scripts.swarm_v2.worker import lease_renewal, start
 
 pytestmark = pytest.mark.unit
 
@@ -142,6 +142,15 @@ def test_a_prepared_attempt_holds_the_registration_record_only_the_worker_can_re
             os.getgid(),
         )
     ]
+
+
+def test_a_prepared_attempt_keeps_the_admission_answer_its_lease_renews_from(tmp_path):
+    admitted = {**ANSWER, "controller_epoch": 2, "owner_identity": "engineer@fixture", "lease_deadline_ms": 9}
+    prepare(tmp_path, material(tmp_path), Controller((200, admitted)))
+
+    record = tmp_path / "attempts" / EXECUTION / lease_renewal.ADMISSION
+    assert json.loads(record.read_text()) == admitted
+    assert stat.S_IMODE(record.stat().st_mode) == 0o600
 
 
 def test_an_engineer_launch_record_renders_the_engineer_profile_in_the_pod_home(tmp_path):

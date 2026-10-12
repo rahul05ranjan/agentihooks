@@ -1,0 +1,366 @@
+import io
+import json
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+import pytest
+
+from scripts.swarm_v2 import contracts
+from scripts.swarm_v2.broadcast_bridge import grant_path
+from scripts.swarm_v2.worker import lease_renewal
+
+pytestmark = pytest.mark.unit
+
+EXECUTION = "exe-" + "c" * 32
+CONTROL = "http://controller.swarm.invalid:8780"
+GRANT = "sv2.grant-fixture"
+WALL = 1_800_000_000.0
+ADMISSION = {
+    "schema_version": "2.1",
+    "execution_id": EXECUTION,
+    "task_id": "t1",
+    "task_generation": 4,
+    "controller_epoch": 7,
+    "owner_identity": "engineer@fixture-1",
+    "lease_deadline_ms": int(WALL * 1000) + 60_000,
+    "lease_deadline": "2027-01-15T08:01:00.000Z",
+    "command_watermark": 0,
+    "archive_watermark": 0,
+    "grant_id": "lgr-" + "d" * 32,
+    "registered_at": "2027-01-15T08:00:00Z",
+}
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = 100.0
+        self.wall = WALL
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def time(self) -> float:
+        return self.wall
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+        self.wall += seconds
+
+
+class Controller:
+    def __init__(self, clock: Clock, *answers: tuple[int, object]) -> None:
+        self.clock, self.answers, self.calls = clock, list(answers), []
+
+    def __call__(self, method: str, url: str, grant: str, body: dict) -> tuple[int, object]:
+        self.calls.append((method, url, grant, body))
+        if self.answers:
+            return self.answers.pop(0)
+        if method == "POST":
+            return 200, {"execution_id": EXECUTION, "credential": "sv2.grant-renewed", "expires_at": "x"}
+        return 200, acknowledged(self.clock)
+
+
+def acknowledged(clock: Clock, **changes) -> dict:
+    return {**ADMISSION, "lease_deadline_ms": int(clock.wall * 1000) + 60_000, **changes}
+
+
+def attempt_folder(tmp_path: Path, admission: dict | None = ADMISSION) -> Path:
+    attempt = tmp_path / EXECUTION
+    (attempt / "run").mkdir(parents=True)
+    grant_path(attempt).write_text(GRANT)
+    (attempt / "launch.json").write_text(json.dumps({"control_url": CONTROL + "/"}))
+    if admission is not None:
+        (attempt / lease_renewal.ADMISSION).write_text(json.dumps(admission))
+    return attempt
+
+
+def renewer(tmp_path: Path, clock: Clock, controller: Controller) -> lease_renewal.Renewer:
+    found = lease_renewal.load(attempt_folder(tmp_path), controller, clock.monotonic, clock.time)
+    assert found is not None
+    return found
+
+
+def heartbeats(controller: Controller) -> list[tuple]:
+    return [call for call in controller.calls if call[0] == "PUT"]
+
+
+def events(capsys) -> list[dict]:
+    return [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+
+
+def test_the_interval_sits_well_inside_the_admission_lease():
+    assert lease_renewal.INTERVAL_SECONDS * 4 <= 60
+    assert lease_renewal.RETRY_SECONDS < lease_renewal.INTERVAL_SECONDS
+    assert lease_renewal.CREDENTIAL_SECONDS * 2 <= 300
+
+
+def test_the_first_tick_renews_at_once_and_then_on_the_fixed_interval(tmp_path):
+    clock = Clock()
+    controller = Controller(clock)
+    lease = renewer(tmp_path, clock, controller)
+
+    lease.tick()
+    clock.advance(lease_renewal.INTERVAL_SECONDS - 0.1)
+    lease.tick()
+    assert len(heartbeats(controller)) == 1
+    clock.advance(0.1)
+    lease.tick()
+
+    assert len(heartbeats(controller)) == 2
+    assert lease.lost is None
+
+
+def test_a_worker_keeps_its_lease_past_five_minutes(tmp_path):
+    clock = Clock()
+    controller = Controller(clock)
+    lease = renewer(tmp_path, clock, controller)
+
+    for _ in range(int(360 / lease_renewal.INTERVAL_SECONDS) + 1):
+        lease.tick()
+        clock.advance(lease_renewal.INTERVAL_SECONDS)
+
+    assert lease.lost is None
+    assert len(heartbeats(controller)) == int(360 / lease_renewal.INTERVAL_SECONDS) + 1
+
+
+def test_the_renewal_carries_the_admitted_execution_and_task_generation_in_a_contract_body(tmp_path):
+    clock = Clock()
+    controller = Controller(clock)
+    lease = renewer(tmp_path, clock, controller)
+
+    lease.tick()
+    clock.advance(lease_renewal.INTERVAL_SECONDS)
+    lease.tick()
+
+    first, second = heartbeats(controller)
+    method, url, grant, body = first
+    assert (method, url, grant) == ("PUT", f"{CONTROL}/v2/executions/{EXECUTION}/heartbeat", GRANT)
+    assert body["authority"] == {
+        "execution_id": EXECUTION,
+        "task_id": "t1",
+        "task_generation": 4,
+        "controller_epoch": 7,
+        "owner_identity": "engineer@fixture-1",
+    }
+    assert body["state"] == "working"
+    assert contracts.check(contracts.load(), "heartbeat", body) is None
+    assert second[3]["authority"] == body["authority"]
+    assert second[3]["renewal_sequence"] > body["renewal_sequence"]
+    assert second[3]["operation_id"] != body["operation_id"]
+
+
+def test_the_renewal_sequence_rises_even_when_the_wall_clock_stands_still(tmp_path):
+    clock = Clock()
+    controller = Controller(clock)
+    lease = renewer(tmp_path, clock, controller)
+
+    lease.tick()
+    clock.now += lease_renewal.INTERVAL_SECONDS
+    lease.tick()
+
+    first, second = (call[3]["renewal_sequence"] for call in heartbeats(controller))
+    assert first == int(WALL * 1000)
+    assert second == first + 1
+
+
+def test_a_failed_renewal_is_logged_and_retried_on_the_short_interval(tmp_path, capsys):
+    clock = Clock()
+    controller = Controller(clock, (503, {}))
+    lease = renewer(tmp_path, clock, controller)
+
+    lease.tick()
+    clock.advance(lease_renewal.RETRY_SECONDS - 0.1)
+    lease.tick()
+    assert len(heartbeats(controller)) == 1
+    clock.advance(0.1)
+    lease.tick()
+
+    assert len(heartbeats(controller)) == 2
+    assert lease.lost is None
+    failed, renewed = events(capsys)
+    assert failed == {
+        "lease": "renewal_failed",
+        "call": "heartbeat",
+        "status": 503,
+        "execution_id": EXECUTION,
+        "task_generation": 4,
+        "retry_seconds": lease_renewal.RETRY_SECONDS,
+    }
+    assert renewed["lease"] == "renewed"
+    assert renewed["execution_id"] == EXECUTION
+    assert renewed["task_generation"] == 4
+
+
+@pytest.mark.parametrize("status", [401, 403, 409])
+def test_a_refused_renewal_loses_the_lease_and_stops_every_further_call(tmp_path, capsys, status):
+    clock = Clock()
+    controller = Controller(clock, (status, {}))
+    lease = renewer(tmp_path, clock, controller)
+
+    lease.tick()
+    clock.advance(lease_renewal.INTERVAL_SECONDS * 3)
+    lease.tick()
+
+    assert lease.lost == f"heartbeat_refused_{status}"
+    assert len(controller.calls) == 1
+    assert events(capsys) == [
+        {"lease": "lost", "reason": f"heartbeat_refused_{status}", "execution_id": EXECUTION, "task_generation": 4}
+    ]
+
+
+def test_a_lease_that_lapses_through_failures_is_lost_without_another_call(tmp_path):
+    clock = Clock()
+    controller = Controller(clock, *[(503, {})] * 100)
+    lease = renewer(tmp_path, clock, controller)
+
+    while clock.now < 100.0 + 60 - lease_renewal.RETRY_SECONDS:
+        lease.tick()
+        clock.advance(lease_renewal.RETRY_SECONDS)
+    calls = len(controller.calls)
+    clock.advance(lease_renewal.RETRY_SECONDS)
+    lease.tick()
+
+    assert lease.lost == "lease_expired"
+    assert len(controller.calls) == calls
+
+
+def test_a_lease_deadline_comes_from_the_last_acknowledgement(tmp_path):
+    clock = Clock()
+    controller = Controller(clock, (200, acknowledged(clock)), *[(503, {})] * 100)
+    lease = renewer(tmp_path, clock, controller)
+
+    lease.tick()
+    clock.advance(59.0)
+    lease.tick()
+    assert lease.lost is None
+    clock.advance(1.0)
+    lease.tick()
+
+    assert lease.lost == "lease_expired"
+
+
+def test_an_acknowledgement_for_another_task_generation_loses_the_lease(tmp_path):
+    clock = Clock()
+    controller = Controller(clock, (200, acknowledged(clock, task_generation=5)))
+    lease = renewer(tmp_path, clock, controller)
+
+    lease.tick()
+
+    assert lease.lost == "generation_changed"
+
+
+def test_an_acknowledgement_without_a_deadline_is_retried(tmp_path):
+    clock = Clock()
+    controller = Controller(clock, (200, {}))
+    lease = renewer(tmp_path, clock, controller)
+
+    lease.tick()
+    clock.advance(lease_renewal.RETRY_SECONDS)
+    lease.tick()
+
+    assert len(heartbeats(controller)) == 2
+    assert lease.lost is None
+
+
+def test_the_launch_grant_is_renewed_before_it_expires_and_used_from_then_on(tmp_path):
+    clock = Clock()
+    controller = Controller(clock)
+    lease = renewer(tmp_path, clock, controller)
+
+    while clock.now < 100.0 + lease_renewal.CREDENTIAL_SECONDS:
+        lease.tick()
+        clock.advance(lease_renewal.INTERVAL_SECONDS)
+    lease.tick()
+
+    credentials = [call for call in controller.calls if call[0] == "POST"]
+    assert credentials == [("POST", f"{CONTROL}/v2/executions/{EXECUTION}/credential", GRANT, {})]
+    assert controller.calls[-2][0] == "POST"
+    assert controller.calls[-1][2] == "sv2.grant-renewed"
+    assert grant_path(tmp_path / EXECUTION).read_text() == "sv2.grant-renewed"
+
+
+@pytest.mark.parametrize("answer", [(503, {}), (200, {}), (200, {"credential": ""}), (200, [])])
+def test_a_failed_credential_renewal_is_retried_and_keeps_the_grant(tmp_path, answer):
+    clock = Clock()
+    controller = Controller(clock)
+    lease = renewer(tmp_path, clock, controller)
+    lease.tick()
+    clock.advance(lease_renewal.CREDENTIAL_SECONDS)
+    controller.answers.append(answer)
+
+    lease.tick()
+    clock.advance(lease_renewal.RETRY_SECONDS)
+    lease.tick()
+
+    posts = [call for call in controller.calls if call[0] == "POST"]
+    assert len(posts) == 2
+    assert lease.lost is None
+    assert grant_path(tmp_path / EXECUTION).read_text() == "sv2.grant-renewed"
+
+
+def test_a_refused_credential_renewal_loses_the_lease(tmp_path):
+    clock = Clock()
+    controller = Controller(clock)
+    lease = renewer(tmp_path, clock, controller)
+    lease.tick()
+    clock.advance(lease_renewal.CREDENTIAL_SECONDS)
+    controller.answers.append((401, {}))
+
+    lease.tick()
+
+    assert lease.lost == "credential_refused_401"
+    assert grant_path(tmp_path / EXECUTION).read_text() == GRANT
+
+
+def test_an_attempt_without_an_admission_has_no_lease_to_renew(tmp_path):
+    clock = Clock()
+    attempt = attempt_folder(tmp_path, admission=None)
+
+    assert lease_renewal.load(attempt, Controller(clock), clock.monotonic, clock.time) is None
+
+
+class Answer(io.BytesIO):
+    status = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_send_puts_json_with_the_grant_as_bearer(monkeypatch):
+    seen = []
+
+    def opened(request, timeout):
+        seen.append((request, timeout))
+        return Answer(b'{"ok": 1}')
+
+    monkeypatch.setattr(urllib.request, "urlopen", opened)
+
+    assert lease_renewal.send("PUT", CONTROL + "/v2/x", GRANT, {"a": 1}) == (200, {"ok": 1})
+    request, timeout = seen[0]
+    assert request.get_method() == "PUT"
+    assert request.full_url == CONTROL + "/v2/x"
+    assert request.get_header("Authorization") == f"Bearer {GRANT}"
+    assert request.get_header("Content-type") == "application/json"
+    assert json.loads(request.data) == {"a": 1}
+    assert timeout == lease_renewal.TIMEOUT_SECONDS
+
+
+def test_send_reports_refusals_and_unreachable_controllers(monkeypatch):
+    def refused(request, timeout):
+        raise urllib.error.HTTPError(request.full_url, 409, "conflict", {}, None)
+
+    monkeypatch.setattr(urllib.request, "urlopen", refused)
+    assert lease_renewal.send("PUT", CONTROL, GRANT, {}) == (409, {})
+
+    def unreachable(request, timeout):
+        raise OSError("refused")
+
+    monkeypatch.setattr(urllib.request, "urlopen", unreachable)
+    assert lease_renewal.send("PUT", CONTROL, GRANT, {}) == (lease_renewal.UNREACHABLE, {})
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda request, timeout: Answer(b"not json"))
+    assert lease_renewal.send("PUT", CONTROL, GRANT, {}) == (200, {})
