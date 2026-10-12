@@ -78,6 +78,36 @@ def test_failed_inventory_writes_alert_without_credentials(tmp_path, monkeypatch
     assert "inventory could not be completed" in alert.read_text()
 
 
+def test_audit_cli_reports_complete_inventory_and_unapproved_access(tmp_path, monkeypatch, capsys):
+    policy = tmp_path / "actors.json"
+    policy.write_text(json.dumps(APPROVED))
+    report = tmp_path / "report.json"
+    alert = tmp_path / "alert.txt"
+    monkeypatch.setattr(
+        ci_access_audit,
+        "inventory",
+        lambda repo: (
+            [{"login": "nestorcolt"}, {"login": "stranger"}],
+            [{"app_slug": "agenticore-app"}, {"app_slug": "tcc-main-ci"}, {"app_slug": "claude"}],
+        ),
+    )
+    assert (
+        ci_access_audit.main(
+            ["--repo", "owner/repo", "--actors", str(policy), "--report", str(report), "--alert", str(alert)]
+        )
+        == 1
+    )
+    expected = {
+        "approved": APPROVED,
+        "collaborators": ["nestorcolt", "stranger"],
+        "apps": ["agenticore-app[bot]", "claude[bot]", "tcc-main-ci[bot]"],
+        "unapproved": ["claude[bot]", "stranger"],
+    }
+    assert json.loads(report.read_text()) == expected
+    assert json.loads(capsys.readouterr().out) == expected
+    assert alert.read_text() == "Unapproved GitHub access: claude[bot], stranger\n"
+
+
 def test_weekly_job_reads_dev_and_alerts_through_notifications():
     import yaml
 

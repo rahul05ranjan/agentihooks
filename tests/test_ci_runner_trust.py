@@ -135,7 +135,8 @@ def test_protected_loader_reads_only_dev_approvals():
     checkout = next(step for step in job["steps"] if step.get("uses", "").startswith("actions/checkout@"))
     assert checkout["with"]["ref"] == "dev"
     assert checkout["with"]["repository"] == "the-cloud-clockwork/agentihooks"
-    assert any("--actors-output" in step.get("run", "") for step in job["steps"])
+    assert any("trusted-actors.json" in step.get("run", "") for step in job["steps"])
+    assert ci_runner_trust.check({"runner-trust.yml": workflow}, ACTORS) == []
 
 
 @pytest.mark.parametrize("override", ["extra-step", "replace-command", "change-ref", "change-output", "workflow-env"])

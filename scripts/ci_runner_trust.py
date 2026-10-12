@@ -3,8 +3,6 @@ import json
 import re
 from pathlib import Path
 
-import yaml
-
 ACTORS = ".github/workflows/trusted-actors.json"
 LOADER = "the-cloud-clockwork/agentihooks/.github/workflows/runner-trust.yml@dev"
 GUARD = (
@@ -13,6 +11,37 @@ GUARD = (
     "contains(fromJSON(needs.runner-trust.outputs.actors), github.actor) && "
     "contains(fromJSON(needs.runner-trust.outputs.actors), github.triggering_actor)"
 )
+
+
+def loader_contract() -> dict:
+    command = (
+        "python3 -c 'import json; from pathlib import Path; "
+        'print("actors=" + json.dumps(json.loads(Path(".github/workflows/trusted-actors.json").read_text()), '
+        'separators=(",", ":")))'
+        '\' >> "$GITHUB_OUTPUT"'
+    )
+    return {
+        "on": {"workflow_call": {"outputs": {"actors": {"value": "${{ jobs.actors.outputs.actors }}"}}}},
+        "permissions": {"contents": "read"},
+        "jobs": {
+            "actors": {
+                "runs-on": "ubuntu-latest",
+                "timeout-minutes": 2,
+                "outputs": {"actors": "${{ steps.actors.outputs.actors }}"},
+                "steps": [
+                    {
+                        "uses": "actions/checkout@v4",
+                        "with": {
+                            "repository": "the-cloud-clockwork/agentihooks",
+                            "ref": "dev",
+                            "persist-credentials": False,
+                        },
+                    },
+                    {"name": "Read protected actor approvals", "id": "actors", "run": command},
+                ],
+            }
+        },
+    }
 
 
 def validate_actors(actors: object) -> list[str]:
@@ -70,6 +99,13 @@ def check(workflows: dict[str, dict], actors: object = None) -> list[str]:
     if actors is not None:
         validate_actors(actors)
     problems = []
+    if "runner-trust.yml" in workflows:
+        loader = dict(workflows["runner-trust.yml"])
+        loader.pop("name", None)
+        if True in loader:
+            loader["on"] = loader.pop(True)
+        if loader != loader_contract():
+            problems.append("runner-trust.yml: runner trust loader may not override protected actor data")
     for file, workflow in workflows.items():
         events = workflow.get("on", workflow.get(True, {}))
         events = [events] if isinstance(events, str) else events
@@ -100,6 +136,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.actors_output:
         print("actors=" + json.dumps(actors, separators=(",", ":")))
         return 0
+    import yaml
+
     workflows = {
         path.name: yaml.safe_load(path.read_text()) or {}
         for path in (args.root / ".github/workflows").iterdir()
