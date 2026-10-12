@@ -3,13 +3,14 @@ import os
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
-from pytest import TestReport
+import pytest
 
 
 class KillMemory:
     def __init__(self, folder: Path) -> None:
         self.folder = folder
         self.mutant: str | None = None
+        self.rank: dict[str, int] = {}
 
     def _path(self, mutant: str) -> Path:
         # Upload refuses some characters mangled names may hold, so the file is named by a digest.
@@ -22,7 +23,11 @@ class KillMemory:
 
     def prepare(self, mutant: str | None, tests: Iterable[str]) -> Iterable[str]:
         self.mutant = mutant
-        return tests if mutant is None else self.order(mutant, tests)
+        if mutant is None:
+            return tests
+        ordered = self.order(mutant, tests)
+        self.rank = {test: index for index, test in enumerate(ordered)}
+        return ordered
 
     def wrap(self, execute_pytest: Callable[..., int]) -> Callable[..., int]:
         def execute_remembering_kills(runner, params, **kwargs):
@@ -32,7 +37,12 @@ class KillMemory:
 
         return execute_remembering_kills
 
-    def pytest_runtest_logreport(self, report: TestReport) -> None:
+    # The test conftest sorts paths by folder so package conftests load; the run order is set back here.
+    @pytest.hookimpl(trylast=True)
+    def pytest_collection_modifyitems(self, items: list[pytest.Item]) -> None:
+        items.sort(key=lambda item: self.rank.get(item.nodeid, len(self.rank)))
+
+    def pytest_runtest_logreport(self, report: pytest.TestReport) -> None:
         if not report.failed or self.mutant is None:
             return
         path = self._path(self.mutant)
