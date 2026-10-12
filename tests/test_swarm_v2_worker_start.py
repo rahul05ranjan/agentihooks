@@ -697,19 +697,20 @@ class Workspaces:
         return workspaces.Workspace(tree, BRANCH, mirror, PROJECT, "dev", BASE_COMMIT, request.task, 3, 1.5)
 
 
-def checked_out(tmp_path, prepared, record=None):
+def checked_out(tmp_path, monkeypatch, prepared, record=None):
     controller = Controller((200, ANSWER))
     launch = material(tmp_path, record or {**RECORD, "checkout": CHECKOUT})
     attempt = tmp_path / "attempts" / EXECUTION
-    return start.prepare(
-        attempt, launch, controller.send, controller.sleep, Boot(), shipped(tmp_path), workspace=prepared
-    )
+    monkeypatch.setattr(start, "checkout", prepared)
+    return start.prepare(attempt, launch, controller.send, controller.sleep, Boot(), shipped(tmp_path))
 
 
-def test_the_start_prepares_the_permitted_project_checkout_on_its_branch_before_the_registration_record(tmp_path):
+def test_the_start_prepares_the_permitted_project_checkout_on_its_branch_before_the_registration_record(
+    tmp_path, monkeypatch
+):
     prepared = Workspaces()
 
-    record = checked_out(tmp_path, prepared)
+    record = checked_out(tmp_path, monkeypatch, prepared)
 
     origin = "https://github.com/the-cloud-clockwork/agentihooks.git"
     attempt = tmp_path / "attempts" / EXECUTION
@@ -718,19 +719,19 @@ def test_the_start_prepares_the_permitted_project_checkout_on_its_branch_before_
     assert json.loads((attempt / "registration.json").read_text()) == AUTHORITY
 
 
-def test_a_launch_record_without_a_checkout_prepares_none(tmp_path):
+def test_a_launch_record_without_a_checkout_prepares_none(tmp_path, monkeypatch):
     prepared = Workspaces()
 
-    assert checked_out(tmp_path, prepared, RECORD) == {}
+    assert checked_out(tmp_path, monkeypatch, prepared, RECORD) == {}
 
     assert prepared.calls == []
 
 
-def test_a_checkout_that_cannot_be_prepared_refuses_the_start_without_a_registration_record(tmp_path):
+def test_a_checkout_that_cannot_be_prepared_refuses_the_start_without_a_registration_record(tmp_path, monkeypatch):
     prepared = Workspaces(workspaces.WorkspaceError("fetch of the project failed"))
 
     with pytest.raises(workspaces.WorkspaceError):
-        checked_out(tmp_path, prepared)
+        checked_out(tmp_path, monkeypatch, prepared)
 
     assert not (tmp_path / "attempts" / EXECUTION / "registration.json").exists()
 

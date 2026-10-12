@@ -30,7 +30,6 @@ CONFIRMED = ("execution_id", "task_id", "grant_id")
 PROJECT = re.compile(r"github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
 
 Send = Callable[[str, str, dict], tuple[int, object]]
-Prepare = Callable[[Path, workspaces.Request], workspaces.Workspace]
 
 
 def post(url: str, grant: str, body: dict) -> tuple[int, object]:
@@ -77,14 +76,13 @@ def checkout(attempt: Path, request: workspaces.Request) -> workspaces.Workspace
     return workspaces.prepare(filesystem.recorded(attempt, record), request)
 
 
-def _checked_out(attempt: Path, spec: dict, workspace: Prepare) -> dict:
+def _checked_out(attempt: Path, spec: dict) -> dict:
     wanted, authority = spec.get("checkout"), spec["authority"]
     if wanted is None:
         return {}
     origin = f"https://{wanted['project']}.git"
-    found = workspace(
-        attempt, workspaces.Request(origin, authority["task_id"], authority["generation"], wanted.get("agent", ""))
-    )
+    request = workspaces.Request(origin, authority["task_id"], authority["generation"], wanted.get("agent", ""))
+    found = checkout(attempt, request)
     tree = {"project": wanted["project"], "branch": found.branch, "base": found.base, "base_commit": found.base_commit}
     return {"checkout": tree}
 
@@ -160,7 +158,6 @@ def prepare(
     boot: Callable[[worker_home.Request], dict] = worker_home.bootstrap,
     templates: Path = TEMPLATES,
     bundle: Path = BUNDLE,
-    workspace: Prepare = checkout,
 ) -> dict:
     bundle = delivered(bundle)
     spec = _launch(launch, templates, bundle)
@@ -183,7 +180,7 @@ def prepare(
             bundle,
         )
     )
-    prepared = _checked_out(attempt, spec, workspace)
+    prepared = _checked_out(attempt, spec)
     worker_home.store_grant(attempt, grant)
     _private(attempt / RECORD, authority)
     return {**record, **prepared}
