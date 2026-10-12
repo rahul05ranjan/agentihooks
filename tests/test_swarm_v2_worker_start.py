@@ -449,6 +449,79 @@ def test_the_launch_restore_runs_after_bootstrap_with_the_launch_record(tmp_path
     }
 
 
+def test_remote_restore_is_reported_before_receipt_and_registration(tmp_path, monkeypatch):
+    attempt = tmp_path / "attempts" / EXECUTION
+    spec = {**RECORD, "restore": NATIVE_RESTORE, "checkpoint_remote": True}
+    launch = material(tmp_path, spec)
+    calls = []
+    restored = restore.Restored("native", "ckpt-1", 41, "s-1", ("claude", "--resume", "s-1"))
+    monkeypatch.delenv(start.checkpoint_runtime.REMOTE, raising=False)
+
+    def restoring(actual, root):
+        assert actual == spec
+        assert root == attempt
+        assert os.environ[start.checkpoint_runtime.REMOTE] == "true"
+        assert json.loads((attempt / "launch.json").read_text()) == spec
+        assert stat.S_IMODE((attempt / "launch.json").stat().st_mode) == 0o600
+        return restored
+
+    def reporting(actual, grant, outcome):
+        calls.append((actual, grant, outcome))
+        assert not (attempt / start.RESTORED).exists()
+        assert not (attempt / "registration.json").exists()
+
+    monkeypatch.setattr(start.checkpoint_runtime, "prepare", restoring)
+    monkeypatch.setattr(start, "report", reporting)
+    start.prepare(attempt, launch, Controller((200, ANSWER)).send, None, Boot(), shipped(tmp_path))
+    assert calls == [(spec, GRANT, restored)]
+    assert json.loads((attempt / start.RESTORED).read_text())["recovery"] == "native"
+
+
+@pytest.mark.parametrize("status", [200, 201, 403])
+def test_restore_receipt_transport_is_authenticated_bounded_and_requires_success(monkeypatch, status):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    restored = restore.Restored("native", "ckp-one", 41, "session", ("claude", "--resume", "session"))
+    spec = {"execution_id": EXECUTION, "control_url": CONTROL + "/"}
+    calls = []
+    monkeypatch.setattr(
+        start.urllib.request,
+        "urlopen",
+        lambda request, **kwargs: calls.append((request, kwargs)) or nullcontext(SimpleNamespace(status=status)),
+    )
+    if status == 200:
+        assert start.report(spec, GRANT, restored) is None
+    else:
+        with pytest.raises(start.LaunchRefused) as caught:
+            start.report(spec, GRANT, restored)
+        assert str(caught.value) == "restore outcome was not accepted"
+    [(request, kwargs)] = calls
+    assert request.full_url == CONTROL + f"/v1/executions/{EXECUTION}/restore-outcome"
+    assert request.get_method() == "POST"
+    assert request.get_header("Authorization") == "Bearer " + GRANT
+    assert request.get_header("Content-type") == "application/json"
+    assert json.loads(request.data) == {
+        "recovery": "native",
+        "checkpoint_id": "ckp-one",
+        "watermark": 41,
+        "session_id": "session",
+        "command": ["claude", "--resume", "session"],
+    }
+    assert kwargs == {"timeout": start.TIMEOUT_SECONDS}
+
+
+@pytest.mark.parametrize("error", [OSError("transport refused"), start.HTTPException("broken response")])
+def test_failed_restore_receipt_transport_refuses_start(monkeypatch, error):
+    def broken(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(start.urllib.request, "urlopen", broken)
+    with pytest.raises(start.LaunchRefused) as caught:
+        start.report({"execution_id": EXECUTION, "control_url": CONTROL}, GRANT, restore.Restored("fresh", "", 0))
+    assert str(caught.value) == "restore outcome was not accepted"
+
+
 def test_a_checkpoint_restore_without_a_store_refuses_the_start_and_registers_nothing(tmp_path):
     launch = material(tmp_path, {**RECORD, "restore": NATIVE_RESTORE})
     with pytest.raises(restore.RestoreRefused) as refused:
