@@ -148,6 +148,113 @@ def test_an_https_join_completes_the_tls_handshake(admin, cert, tmp_path, monkey
     assert capsys.readouterr().out.startswith("joined the hive as ")
 
 
+def _head_and_body(port, request):
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as conn:
+        conn.sendall(request)
+        reply = b""
+        while chunk := conn.recv(65536):
+            reply += chunk
+    head, _, body = reply.partition(b"\r\n\r\n")
+    return head.decode().split("\r\n"), body
+
+
+@pytest.mark.parametrize(
+    ("request_line", "body"),
+    [
+        (b"POST /hive/join HTTP/1.0", b'{"code": "unknown"}'),
+        (b"POST /elsewhere HTTP/1.0", b"{}"),
+        (b"POST /hive/join HTTP/1.0", b"[]"),
+    ],
+)
+def test_every_answer_carries_its_length(hive, request_line, body):
+    head, answer = _head_and_body(hive, request_line + b"\r\nContent-Length: %d\r\n\r\n%s" % (len(body), body))
+
+    assert f"Content-Length: {len(answer)}" in head
+    assert json.loads(answer)
+
+
+@pytest.fixture
+def tls_hive(admin, cert):
+    httpd = server.make_server(admin, PUBLIC, "localhost", 0, cert)
+    port = _serve(httpd)
+    yield port
+    httpd.shutdown()
+    httpd.server_close()
+
+
+def test_curl_reads_a_full_https_join_with_no_stream_error(admin, cert, tls_hive, capsys):
+    code = auth.invite(admin, "laptop")
+
+    result = subprocess.run(
+        [
+            "curl",
+            "--silent",
+            "--show-error",
+            "--cacert",
+            cert[0],
+            "--data",
+            json.dumps({"code": code}),
+            f"https://localhost:{tls_hive}{server.JOIN_PATH}",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert (result.returncode, result.stderr) == (0, "")
+    assert json.loads(result.stdout)["name"] == "laptop"
+    assert capsys.readouterr().err == ""
+
+
+def test_the_server_ends_tls_with_a_close_notify(cert, tls_hive):
+    strict = ssl.create_default_context(cafile=cert[0])
+    with socket.create_connection(("localhost", tls_hive), timeout=5) as raw:
+        with strict.wrap_socket(raw, server_hostname="localhost", suppress_ragged_eofs=False) as conn:
+            conn.sendall(b"POST /elsewhere HTTP/1.0\r\nContent-Length: 2\r\n\r\n{}")
+            reply = b""
+            while chunk := conn.recv(65536):
+                reply += chunk
+
+    assert reply.startswith(b"HTTP/1.0 404 ")
+    assert reply.endswith(b'{"error": "not found"}')
+
+
+def _process_one(httpd, client):
+    request, address = httpd.get_request()
+    client()
+    httpd.process_request_thread(request, address)
+
+
+def test_a_connection_dropped_before_the_tls_handshake_logs_nothing(admin, cert, capsys):
+    httpd = server.make_server(admin, PUBLIC, "localhost", 0, cert)
+    probe = socket.create_connection(("localhost", httpd.server_address[1]), timeout=5)
+    try:
+        _process_one(httpd, probe.close)
+    finally:
+        httpd.server_close()
+
+    assert capsys.readouterr().err == ""
+
+
+def test_an_unexpected_handler_error_is_still_logged(admin, monkeypatch, capsys):
+    def broken(*_):
+        raise RuntimeError("exchange broke")
+
+    monkeypatch.setattr(auth, "exchange", broken)
+    httpd = server.make_server(admin, PUBLIC, "127.0.0.1", 0)
+    client = socket.create_connection(("127.0.0.1", httpd.server_address[1]), timeout=5)
+    try:
+        _process_one(
+            httpd, lambda: client.sendall(b'POST /hive/join HTTP/1.0\r\nContent-Length: 12\r\n\r\n{"code": ""}')
+        )
+    finally:
+        client.close()
+        httpd.server_close()
+
+    err = capsys.readouterr().err
+    assert "RuntimeError: exchange broke" in err
+
+
 def test_join_posts_the_code_to_the_join_path_with_the_request_timeout(tmp_path, monkeypatch, capsys):
     sent = {}
 
