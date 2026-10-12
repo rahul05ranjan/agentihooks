@@ -162,3 +162,30 @@ def test_current_survives_an_unreadable_declaration(tmp_path, monkeypatch):
 )
 def test_is_master_session(environ, expected):
     assert reservation.is_master_session(environ) is expected
+
+
+def test_current_opens_the_swarm_store_by_default(tmp_path, monkeypatch):
+    store = _Store({"one": [_Agent("master", "claude", "main")]})
+    monkeypatch.setattr(reservation.master_account, "load", lambda environ: {"claude": MasterAccount("claude", "main")})
+    monkeypatch.setattr(reservation, "_store", lambda environ: store)
+    assert reservation.current("claude", {}, proc=tmp_path) == reservation.Reservation("claude", "main", 1)
+
+
+def test_current_survives_a_redis_failure(tmp_path, monkeypatch):
+    from redis.exceptions import ConnectionError
+
+    def broken(environ):
+        raise ConnectionError("refused")
+
+    monkeypatch.setattr(reservation.master_account, "load", broken)
+    assert reservation.current("claude", {}, store=None, proc=tmp_path) is None
+
+
+def test_store_wraps_the_routing_client(monkeypatch):
+    from scripts.routing import place
+
+    monkeypatch.setattr(place, "_client", lambda environ: None)
+    assert reservation._store({}) is None
+    client = object()
+    monkeypatch.setattr(place, "_client", lambda environ: client)
+    assert reservation._store({}).redis is client
