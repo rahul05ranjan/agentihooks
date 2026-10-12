@@ -89,6 +89,7 @@ class Timing:
     poll_s: float = POLL_S
     backoff_s: float = BACKOFF_S
     backoff_max_s: float = BACKOFF_MAX_S
+    sleep: Callable[[float], None] = time.sleep
 
 
 @dataclass(frozen=True)
@@ -98,6 +99,7 @@ class Binding:
     recipient: str
     owner: str
     transport: Transport
+    reconnect: Callable[[], protocol.Connection] | None = None
 
 
 class Pump:
@@ -118,22 +120,63 @@ class Pump:
         self.surfaced = ""
 
     def run(self, stop: Callable[[], bool]) -> str:
-        """Pump until stop() or a failure; a failure is logged, marks the transport degraded and returns DEGRADED.
-
-        A failure to write that mark propagates.
-        """
+        starting, reconnecting = True, False
+        backoff = self.timing.backoff_s
         try:
-            self.start()
-            while not stop():
-                self.step()
-            return STOPPED
-        except Exception as failure:
-            self.log(DEGRADED_LOG.format(self.binding.recipient, type(failure).__name__, failure))
-            self.binding.transport.mark(state=DEGRADED, last_error_class=type(failure).__name__)
-            return DEGRADED
+            while True:
+                try:
+                    if starting:
+                        self.start()
+                        starting = False
+                    elif reconnecting:
+                        self._reconnect()
+                        reconnecting = False
+                    if stop():
+                        return STOPPED
+                    self.step()
+                    backoff = self.timing.backoff_s
+                except DispatchError as failure:
+                    self._degrade(failure)
+                    return DEGRADED
+                except Exception as failure:
+                    self._degrade(failure)
+                    if stop():
+                        return STOPPED
+                    self.timing.sleep(backoff)
+                    backoff = min(backoff * 2, self.timing.backoff_max_s)
+                    starting, reconnecting = False, True
         finally:
             if self.subscription is not None:
                 self.subscription.close()
+            self.binding.connection.close()
+
+    def _degrade(self, failure: Exception) -> None:
+        from redis.exceptions import RedisError
+
+        self.log(DEGRADED_LOG.format(self.binding.recipient, type(failure).__name__, failure))
+        try:
+            self.binding.transport.mark(state=DEGRADED, last_error_class=type(failure).__name__)
+        except RedisError:
+            pass
+
+    def _reconnect(self) -> None:
+        from scripts.codex_session.supervisor import UNIX
+
+        if self.subscription is not None:
+            self.subscription.close()
+            self.subscription = None
+        self.binding.connection.close()
+        if self.binding.reconnect is not None:
+            connection = self.binding.reconnect()
+        else:
+            record = self.binding.transport.bindings.get(
+                self.binding.transport.slug, self.binding.transport.execution_id
+            )
+            connection, _ = protocol.connect(record.endpoint_ref.removeprefix(UNIX), 5.0)
+        self.binding = replace(self.binding, connection=connection)
+        self.state = ThreadState()
+        self.queue.clear()
+        self.start()
 
     def start(self) -> None:
         binding = self.binding

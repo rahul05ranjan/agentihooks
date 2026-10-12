@@ -119,8 +119,20 @@ class Rig:
         self.pump = self.new_pump()
 
     def new_pump(self):
-        binding = codex.Binding(self.connection, THREAD, ME, OWNER, codex.Transport(self.bindings, SLUG, EXECUTION))
-        timing = codex.Timing(clock=self.clock, now_ms=lambda: int(self.clock.now * 1000), reconcile_s=30)
+        binding = codex.Binding(
+            self.connection,
+            THREAD,
+            ME,
+            OWNER,
+            codex.Transport(self.bindings, SLUG, EXECUTION),
+            reconnect=lambda: protocol.Connection(self.server, 5, clock=self.clock),
+        )
+        timing = codex.Timing(
+            clock=self.clock,
+            now_ms=lambda: int(self.clock.now * 1000),
+            reconcile_s=30,
+            sleep=lambda delay: setattr(self.clock, "now", self.clock.now + delay),
+        )
         return codex.Pump(self.store, binding, timing, log=self.logged.append)
 
     def record(self):
@@ -521,11 +533,12 @@ def test_a_broken_event_stream_degrades_the_transport(rig):
     from websockets.exceptions import ConnectionClosedError
 
     rig.server.broken = ConnectionClosedError(None, None)
-    assert rig.run(3) == DEGRADED
+    assert rig.run(3) == codex.STOPPED
     assert (rig.record().state, rig.record().last_error_class) == (DEGRADED, "ProtocolError")
-    assert rig.logged == [
-        f"codex pump for {ME} degraded: ProtocolError: thread/read lost the connection: ConnectionClosedError"
-    ]
+    assert (
+        rig.logged
+        == [f"codex pump for {ME} degraded: ProtocolError: thread/read lost the connection: ConnectionClosedError"] * 4
+    )
 
 
 def test_a_degraded_pump_reconnects_with_backoff_and_resumes_delivery(rig):
@@ -583,12 +596,15 @@ def test_old_generation_mail_cannot_publish_or_ack_after_successor_admission(rig
 
 def test_a_stray_text_frame_is_refused_and_diagnostics_stay_off_the_socket(rig):
     rig.server.frames.append("codex: warning written to the wrong stream")
-    assert rig.run(3) == DEGRADED
+    assert rig.run(3) == codex.STOPPED
+    assert rig.record().state == CONNECTED
     assert rig.logged == [f"codex pump for {ME} degraded: ProtocolError: the event stream got a frame that is not JSON"]
     assert all(message["jsonrpc"] == "2.0" for message in rig.server.sent)
-    assert rig.server.sent == [
-        {"jsonrpc": "2.0", "id": 1, "method": "thread/read", "params": {"threadId": THREAD, "includeTurns": True}}
-    ]
+    assert (
+        rig.server.sent
+        == [{"jsonrpc": "2.0", "id": 1, "method": "thread/read", "params": {"threadId": THREAD, "includeTurns": True}}]
+        * 2
+    )
 
 
 def test_losing_ownership_degrades_at_the_next_reconcile(rig):
