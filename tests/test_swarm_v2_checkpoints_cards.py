@@ -1,3 +1,4 @@
+import json
 from dataclasses import asdict
 
 import pytest
@@ -41,8 +42,54 @@ def test_a_real_attempt_failure_card_offers_its_verified_checkpoint(world, conti
     assert row["resume_available"] is True
     assert row["resume_label"] == label
     assert row["checkpoint"] == "ckp-verified"
-    assert row["reason"].endswith("at record 41")
+    mode = "native resume" if continuation == "native" else "context continuation"
+    assert row["reason"] == f"node_lost; {mode} from ckp-verified at record 41"
+    fence = json.loads(world.store.redis.hget(world.store.key(recovery.slug, "attempt-fences"), world.old.execution_id))
+    assert source == {
+        world.old.seat: {
+            "generation": world.old.generation,
+            "at": fence["fenced_at_ms"],
+            "reason": row["reason"],
+            "checkpoint": "ckp-verified",
+            "resume_available": True,
+            "resume_label": label,
+            "continuity": "pending",
+        }
+    }
     assert world.store.restored(recovery.slug) == []
+
+
+def test_card_reports_verified_native_continuity_after_worker_receipt(world):
+    recovery = world.recovery(world.live)
+    decision = recovery.handle(world.old.execution_id, "node_lost")
+    directive = recovery.restore(decision.replacement)
+    recovery.confirm(decision.replacement, {**directive, "command": ["claude", "--resume", directive["session_id"]]})
+    source = cards.rows(world.store, recovery.slug)
+    assert source[world.old.seat]["continuity"] == "native"
+
+
+def test_card_keeps_newest_failure_per_seat_and_continues_after_old_records(world):
+    recovery = world.recovery(world.live, automatic=False)
+    recovery.handle(world.old.execution_id, "node_lost")
+    redis, key = world.store.redis, lambda suffix: world.store.key(recovery.slug, suffix)
+    original = world.old.execution_id
+    decision = json.loads(redis.hget(key("attempt-recoveries"), original))
+    fence = json.loads(redis.hget(key("attempt-fences"), original))
+    redis.hdel(key("attempt-recoveries"), original)
+    redis.hset(
+        key("attempt-recoveries"),
+        "newest",
+        json.dumps({**decision, "generation": decision["generation"] + 1, "reason": "newest"}),
+    )
+    redis.hset(key("attempt-fences"), "newest", json.dumps(fence))
+    redis.hset(key("attempt-recoveries"), original, json.dumps(decision))
+    redis.hset(key("attempt-recoveries"), "other", json.dumps({**decision, "reason": "other"}))
+    redis.hset(key("attempt-fences"), "other", json.dumps({**fence, "seat": "other-seat"}))
+    source = cards.rows(world.store, recovery.slug)
+    assert set(source) == {world.old.seat, "other-seat"}
+    assert source[world.old.seat]["reason"] == "newest"
+    assert source[world.old.seat]["generation"] == decision["generation"] + 1
+    assert source["other-seat"]["reason"] == "other"
 
 
 def test_a_card_with_no_checkpoint_offers_only_fresh_without_rewriting_legacy_restore_rows(world):
