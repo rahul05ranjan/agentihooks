@@ -49,7 +49,9 @@ def test_capture_normalizes_record_sequence_kind_and_missing_text(tmp_path, monk
     assert count == 2
     assert (
         raw
-        == b'{"seq": 1, "kind": "user", "text": "Hello\\xe2\\x80\\xa8world"}\n{"seq": 2, "kind": "assistant", "text": ""}\n'
+        == (
+            '{"seq": 1, "kind": "user", "text": "Hello\u2028world"}\n{"seq": 2, "kind": "assistant", "text": ""}\n'
+        ).encode()
     )
     assert calls == [transcript]
 
