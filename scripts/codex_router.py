@@ -318,6 +318,7 @@ class CodexAccountSource:
     run: Callable | None = None
     sessions: Mapping[str, int] = field(default_factory=dict)
     refresh: bool = True
+    held: object = None
 
     def _run(self) -> tuple[Callable, ...]:
         return () if self.run is None else (self.run,)
@@ -345,8 +346,14 @@ class CodexAccountSource:
                 kind=SUBSCRIPTION if account.is_token else INTERACTIVE,
             )
             for account in pool
-            if account.signed_in and (cap := account_cap(quota := readings.get(account.name), now)) is not None
+            if account.signed_in
+            and (cap := self._cap(account.name, quota := readings.get(account.name), now)) is not None
         ]
+
+    def _cap(self, name: str, quota: "CodexQuota | None", now: float) -> int | None:
+        if self.held is not None and quota is not None and self.held.closes(name, quota.seven_day.used):
+            return 0
+        return account_cap(quota, now)
 
     def slots(self, environ: Mapping[str, str], now: float) -> list[Slot]:
         pool = self.pool(environ)
@@ -382,7 +389,12 @@ def select(
     by_name = {account.name: account for account in pool}
     api, weight = place.api_side(codex_api.CodexApiSource(sessions), "codex", environ or {}, now)
     pool_live = sum(sessions.get(account.name, 0) for account in pool)
-    seat = place.place(api, CodexAccountSource(sessions=sessions).offer(pool, quotas, now), weight, pool_live)
+    from scripts.routing import reservation
+
+    held = reservation.current("codex", environ or {})
+    seat = place.place(
+        api, CodexAccountSource(sessions=sessions, held=held).offer(pool, quotas, now), weight, pool_live
+    )
     if seat is None:
         refused = [text for account in token_accounts(environ or {}) if (text := refusal(account, environ or {}))]
         no_seat = "no signed in Codex account has a fresh reading and a free session under its quota band"
