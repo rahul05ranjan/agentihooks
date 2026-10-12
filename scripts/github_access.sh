@@ -32,6 +32,16 @@ case "$mode" in
     jq '{allows_public_repositories: .runner_group.allows_public_repositories}' "$policy" |
       gh api --method PATCH "orgs/$organization/actions/runner-groups/$group" --input - > /dev/null
     gh api --method PUT "repos/$organization/$repository/rulesets/$ruleset" --input "$payload" > /dev/null
+    installed="$(gh api "orgs/$organization/installations?per_page=100" --paginate | jq -s '[.[].installations[]]')"
+    unapproved="$(jq -r --argjson allowed "$(jq '[.installed_apps[].app_id]' "$policy")" \
+      '.[] | select(.app_id as $id | ($allowed | index($id)) == null) | [.app_slug, .html_url] | @tsv' <<< "$installed")"
+    if [[ -n "$unapproved" ]]; then
+      while IFS=$'\t' read -r app url; do
+        printf 'Uninstall %s: %s\n' "$app" "$url"
+        xdg-open "$url"
+      done <<< "$unapproved"
+      read -r -p 'Uninstall those apps in the browser, then press Enter to verify: ' confirmation
+    fi
     ;;
   *) echo 'Usage: bash scripts/github_access.sh check|apply' >&2; exit 2 ;;
 esac
@@ -50,6 +60,8 @@ actual="$(gh api "orgs/$organization")"
 check_json 'organization default permission' "$actual" '"read"' '.default_repository_permission'
 actual="$(gh api "orgs/$organization/members?per_page=100" --paginate | jq -s add)"
 check_json 'organization members' "$actual" "$(jq -cn --arg operator "$operator" '[$operator]')" 'map(.login) | sort'
+actual="$(gh api "orgs/$organization/installations?per_page=100" --paginate | jq -s '[.[].installations[]]')"
+check_json 'installed GitHub apps' "$actual" "$(jq '.installed_apps | sort_by(.app_id)' "$policy")" 'map({app_id, app_slug}) | sort_by(.app_id)'
 
 while IFS= read -r name; do
   prefix="repos/$organization/$name"

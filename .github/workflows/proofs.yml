@@ -8,7 +8,7 @@ on:
         type: choice
         required: true
         default: tests
-        options: [tests, mutation, semgrep, worker-image, swarm-image, brain-smoke, helm-kind]
+        options: [tests, mutation, semgrep, worker-image, swarm-image, brain-smoke, helm-kind, github-access]
       base:
         description: Base revision for mutation or Semgrep scope
         required: true
@@ -34,6 +34,11 @@ permissions:
   actions: read
 
 jobs:
+  github-access:
+    if: inputs.proof == 'github-access'
+    uses: ./.github/workflows/github-access-audit.yml
+    secrets: inherit
+
   mutation:
     if: inputs.proof == 'mutation'
     uses: ./.github/workflows/mutation-preflight.yml
