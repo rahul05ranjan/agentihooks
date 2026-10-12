@@ -76,7 +76,7 @@ def test_nonlocal_consumers_use_aggregate_without_credential_probes(redis, monke
     monkeypatch.setattr(capacity.codex_router.CodexAccountSource, "readings", forbidden)
     assert account_sessions.sessions_by_account() == {"one": 3}
     assert account_sessions.codex_sessions_by_account() == {"one": 3}
-    rows = capacity.accounts({}, 100)
+    rows = capacity.accounts({"AGENTIHOOKS_RUNTIME_BACKEND": "kubernetes"}, 100)
     claude = next(row for row in rows if row.harness == "claude")
     assert (claude.sessions, claude.five_left, claude.week_left, claude.cap) == (3, 80, 70, 6)
 
