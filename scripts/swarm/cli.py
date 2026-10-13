@@ -687,7 +687,8 @@ def control_readings(store, args):
             if key in (*SETTABLE, *LANE_KEYS, *EFFORT_KEYS, *CONFIG_KEYS, *GATE_KEYS, "autonomy")
         }
     if args.command == "lift":
-        lifted = lift.agent_lifted(args.slug, args.agent, args.gate)
+        task = next((a.task for a in store.agents(args.slug) if a.name == args.agent), "")
+        lifted = lift.held(args.slug, args.agent, task, args.gate)
         return {f"{args.gate} gate lift for {args.agent}": "lifted" if lifted else "not lifted"}
     return {f"the swarm state with {lifecycle_control(args)}": config.state}
 
@@ -1092,8 +1093,18 @@ def cmd_lift(store, args):
         raise SwarmError(f"{args.agent} is not in this swarm")
     if args.gate not in {*entry.GATES, *lift.SERVER_GATES}:
         raise SwarmError(f"no gate named {args.gate}")
-    lift.lift_agent(Who(name=agent.name, swarm=args.slug, task=agent.task), args.gate)
+    lift.lift_agent(
+        Who(name=agent.name, swarm=args.slug, task=agent.task), args.gate, pull=_lifted_pull(args.slug, agent.task)
+    )
     print(json.dumps({"agent": agent.name, "gate": args.gate, "minutes": lift.LIFT_SECONDS // 60}))
+
+
+def _lifted_pull(slug, task):
+    from scripts.gates.intent import pr_head
+
+    url = task and (LedgerClient().task(slug, task) or {}).get("pr_url")
+    head = url and pr_head(url)
+    return {"url": url, "head": head} if head else {}
 
 
 def cmd_send_message(store, args):
