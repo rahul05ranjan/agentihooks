@@ -131,14 +131,16 @@ def _since(watch, marks, seen, mark):
     return seen[mark]
 
 
-def _stall(watch, task, pull, marks, seen):
+def _stall(watch, task, pull, marks, seen, agent):
     tid, queued = task["id"], _key(watch, QUEUED)
     if pull.queued:
         watch.store.redis.sadd(queued, tid)
-    if pull.mergeable == "CONFLICTING" or (not pull.queued and watch.store.redis.sismember(queued, tid)):
+    if not pull.queued and (pull.mergeable == "CONFLICTING" or watch.store.redis.sismember(queued, tid)):
+        if pull.draft or (agent is not None and agent.name in watch.live and agent.state == "working"):
+            return None, None
         return "unmergeable", _since(watch, marks, seen, f"{tid}:unmergeable")
     marks_red = [mark for mark in (pull.pushed_at, pull.red_at) if mark is not None]
-    if pull.red and pull.resolved and marks_red:
+    if pull.red and pull.resolved and not pull.queued and marks_red:
         return "red", max(marks_red)
     if pull.resolved and not pull.red and not pull.queued and not pull.draft:
         return "green", _since(watch, marks, seen, f"{tid}:green")
@@ -154,9 +156,15 @@ def _pull_request(watch, mail, task, limit, marks, seen):
     if pull.state != "OPEN":
         watch.store.redis.srem(_key(watch, QUEUED), task["id"])
         return []
-    case, since = _stall(watch, task, pull, marks, seen)
+    agent = next(
+        (a for a in watch.store.agents(watch.slug) if a.name == task.get("claimed_by") and a.task == task["id"]),
+        None,
+    )
+    case, since = _stall(watch, task, pull, marks, seen, agent)
     if case is None:
         return []
+    if case != "owner":
+        since = max(since, pull.pushed_at or 0, pull.red_at or 0, agent.started_at if agent else 0)
     minutes = _minutes(watch, since)
     if minutes < getattr(limit, case):
         return []

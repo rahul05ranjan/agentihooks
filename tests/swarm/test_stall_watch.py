@@ -190,7 +190,7 @@ def test_a_task_awaiting_the_merge_pass_has_no_owner_to_lose():
 
 
 def test_an_unmergeable_pull_request_reopens_after_five_minutes():
-    swarm = Swarm(CONFLICTING)
+    swarm = Swarm(CONFLICTING, live=False)
     swarm.tick(START)
     assert not _reopened(swarm)
     swarm.tick(START + 5 * MINUTE)
@@ -199,7 +199,7 @@ def test_an_unmergeable_pull_request_reopens_after_five_minutes():
 
 
 def test_a_pull_request_dropped_from_the_queue_reopens_after_five_minutes():
-    swarm = Swarm(QUEUED)
+    swarm = Swarm(QUEUED, live=False)
     swarm.tick(START)
     swarm.pulls[URL] = RUNNING
     swarm.tick(START + MINUTE)
@@ -474,7 +474,7 @@ def test_a_task_that_leaves_review_drops_its_queue_mark():
 
 
 def test_a_reopen_after_a_queue_drop_clears_its_queue_mark():
-    swarm = Swarm(QUEUED)
+    swarm = Swarm(QUEUED, live=False)
     swarm.tick(START)
     swarm.pulls[URL] = RUNNING
     swarm.tick(START + MINUTE)
@@ -658,6 +658,20 @@ def test_an_operator_capped_lane_never_alerts_about_unclaimed_tasks():
     assert swarm.tick(START) == []
     assert swarm.tick(START + 180 * MINUTE) == []
     assert swarm.inbox() == []
+
+
+def test_a_lane_alert_stays_open_when_its_first_task_is_taken():
+    swarm = Swarm(RUNNING)
+    _full_lane(swarm)
+    swarm.ledger.rows["t3"] = {"id": "t3", "state": "open", "claimed_by": "", "lane": "eng"}
+    swarm.ready["eng"].append(swarm.ledger.rows["t3"])
+    swarm.tick(START)
+    swarm.tick(START + 15 * MINUTE)
+    [item] = swarm.inbox()
+    swarm.ledger.rows["t1"].update(state="claimed", claimed_by=OWNER)
+    swarm.ready["eng"] = [swarm.ledger.rows["t3"]]
+    assert swarm.tick(START + 16 * MINUTE) == []
+    assert InboxStore(swarm.store.redis).get(item.id).state != "done"
 
 
 @pytest.mark.parametrize(
