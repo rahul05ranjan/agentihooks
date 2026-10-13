@@ -3,7 +3,7 @@ from dataclasses import asdict, dataclass, replace
 from typing import TYPE_CHECKING
 
 from scripts.hive import registry
-from scripts.swarm import lease
+from scripts.swarm import lease, reaper
 from scripts.swarm.store import AgentRecord, RedisStore, SwarmError
 from scripts.swarm_v2.runtime.base import SpawnRequest
 from scripts.swarm_v2.runtime.process import launch_target
@@ -12,6 +12,8 @@ if TYPE_CHECKING:
     from redis import Redis
 
     from scripts.swarm_v2.runtime.local import LocalHerdrRuntime
+
+RECEIPT_SECONDS = 86400
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,17 @@ class Ack:
     status: str
     target: dict
     failure: str = ""
+
+
+@dataclass(frozen=True)
+class CommandOrder:
+    id: str
+    action: str
+    slug: str = ""
+    name: str = ""
+    execution_id: str = ""
+    generation: int = 0
+    text: str = ""
 
 
 class Orders:
@@ -62,6 +75,27 @@ class Orders:
             pipe.hset(f"{self.stream(hive)}:acks", item, canonical)
             pipe.xdel(self.stream(hive), item)
             pipe.execute()
+
+    def commands(self, hive: str) -> str:
+        return f"{registry.key(hive)}:commands"
+
+    def command_receipt(self, hive: str, order_id: str) -> str:
+        return f"{registry.key(hive)}:command:{order_id}"
+
+    def command(self, hive: str, order: CommandOrder) -> Ack | None:
+        receipt = self.command_receipt(hive, order.id)
+        raw = self.redis.hget(receipt, "ack")
+        if raw:
+            return Ack(**json.loads(raw))
+        if self.redis.hsetnx(receipt, "sent", "1"):
+            with self.redis.pipeline() as pipe:
+                pipe.expire(receipt, RECEIPT_SECONDS)
+                pipe.xadd(self.commands(hive), {"order": json.dumps(asdict(order))})
+                pipe.execute()
+        return None
+
+    def forget(self, hive: str, order_id: str) -> None:
+        self.redis.delete(self.command_receipt(hive, order_id))
 
 
 class Consumer:
@@ -98,6 +132,45 @@ class Consumer:
             if ack is not None:
                 self.orders.finish(self.hive, item, order, ack)
         return len(entries)
+
+    def poll_commands(self) -> int:
+        stream = self.orders.commands(self.hive)
+        entries = self.store.redis.xrange(stream, count=32)
+        for item, fields in entries:
+            try:
+                order = CommandOrder(**json.loads(fields["order"]))
+            except (KeyError, TypeError, ValueError):
+                self.store.redis.xdel(stream, item)
+                continue
+            receipt = self.orders.command_receipt(self.hive, order.id)
+            with self.store.redis.pipeline() as pipe:
+                if not self.store.redis.hexists(receipt, "ack"):
+                    pipe.hset(receipt, "ack", json.dumps(asdict(self.command(order))))
+                    pipe.expire(receipt, RECEIPT_SECONDS)
+                pipe.xdel(stream, item)
+                pipe.execute()
+        return len(entries)
+
+    def command(self, order: CommandOrder) -> Ack:
+        if order.action == "reap":
+            return _done(self.runtime.herdr.reap_name(order.name))
+        try:
+            agent = self.store.execution_registry.get(order.slug, order.execution_id)
+        except SwarmError:
+            return Ack("failed", {}, "identity")
+        if agent.generation != order.generation or agent.runtime_target.get("host_id") != self.hive:
+            return Ack("failed", {}, "identity")
+        if order.action == "name":
+            return _done(self.runtime.herdr.name_pane(agent))
+        if order.action == "retire":
+            outcome = self.runtime.terminate(agent, tuple(reaper.scratch_homes(order.slug, agent.task)))
+        elif order.action == "nudge":
+            outcome = self.runtime.command(agent, order.text)
+        else:
+            return Ack("failed", {}, "unknown_action")
+        if outcome.ok:
+            return Ack("done", agent.runtime_target)
+        return Ack("failed", agent.runtime_target, outcome.detail or outcome.status.value)
 
     def apply(self, order: LaunchOrder) -> Ack | None:
         now = lease.now_ms(self.store)
@@ -197,3 +270,7 @@ class Consumer:
     def _stop(self, agent: AgentRecord, failure: str) -> Ack:
         outcome = self.runtime.terminate(agent)
         return Ack("failed", agent.runtime_target, failure if outcome.ok else "ambiguous")
+
+
+def _done(ok: bool) -> Ack:
+    return Ack("done", {}) if ok else Ack("failed", {}, "refused")
