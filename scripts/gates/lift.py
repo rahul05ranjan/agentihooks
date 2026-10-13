@@ -56,14 +56,18 @@ def task_lift_path(slug, task, gate, home=None):
     return task_lifts_dir(slug, task, home) / safe_name(gate)
 
 
-def task_lifted(slug, task, gate, home=None, now=None):
+def task_lifted(slug, task, gate, home=None, now=None, command=""):
     if not (slug and task):
         return False
     record = _record(task_lift_path(slug, task, gate, home))
     if not record.get("url"):
         return _alive(record, now)
-    from scripts.gates.intent import pr_head
+    from scripts.gates.identity import simple_commands
+    from scripts.gates.intent import _merge_target, _same_pull, pr_head
 
+    targets = filter(None, map(_merge_target, simple_commands(command)))
+    if not all(_same_pull(target, record["url"]) for target in targets):
+        return False
     return bool(record.get("head")) and pr_head(record["url"]) == record["head"]
 
 
@@ -72,9 +76,9 @@ def drop_task(slug, task, home=None):
         path.unlink()
 
 
-def held(slug, agent, task, gate, home=None):
+def held(slug, agent, task, gate, home=None, command=""):
     if task and gate not in SERVER_GATES:
-        return task_lifted(slug, task, gate, home)
+        return task_lifted(slug, task, gate, home, command=command)
     return agent_lifted(slug, agent, gate, home)
 
 
