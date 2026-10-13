@@ -237,7 +237,7 @@ def test_the_required_workflow_uses_the_protected_canonical_aggregation():
 
     workflow = yaml.safe_load((PROGRAM.parents[1] / ".github/workflows/test.yml").read_text())
     steps = workflow["jobs"]["gate-required"]["steps"]
-    assert steps == ci_reuse.gate_steps() or steps == ci_reuse.gate_steps(queue_coverage=True)
+    assert steps == ci_reuse.gate_steps(queue_coverage=True)
     assert workflow["jobs"]["reuse"] == ci_reuse.reuse_job()
 
 

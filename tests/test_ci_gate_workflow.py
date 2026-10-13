@@ -227,6 +227,35 @@ def test_coverage_ratchet_grades_a_merge_group_against_the_branch_it_queues_onto
     assert '"${QUEUE_BASE:-' in base["run"]
 
 
+def test_the_merge_queue_grades_the_ratchet_on_the_queue_baseline_runner():
+    jobs = _workflow()["jobs"]
+    queue, standalone = jobs["queue-baseline"], jobs["coverage-ratchet"]
+    assert (
+        standalone["if"]
+        == "${{ !cancelled() && needs.unit.result == 'success' && github.event_name != 'merge_group' }}"
+    )
+    assert queue["outputs"] == {"baseline": "${{ steps.record.outcome }}", "ratchet": "${{ steps.ratchet.outcome }}"}
+    steps = queue["steps"]
+    record = next(step for step in steps if step.get("id") == "record")
+    grade = next(step for step in steps if step.get("id") == "ratchet")
+    report = next(step for step in steps if step.get("name") == "Upload the coverage ratchet report")
+    published = next(step for step in steps if step.get("name") == "Publish the base tree's coverage baseline")
+    assert record["name"] == "Record this run's coverage baseline"
+    assert steps.index(record) < steps.index(published) < steps.index(grade) < steps.index(report)
+    assert grade["name"] == "Hold every line the base ran"
+    assert grade["if"] == "needs.reuse.outputs.reused != 'true'"
+    assert grade["env"] == {"BASE": "${{ github.event.merge_group.base_sha }}"}
+    original = _step("coverage-ratchet", "Hold every line the base ran")["run"]
+    assert grade["run"] == "git fetch --no-tags --unshallow origin\n" + original.replace(
+        '"$GITHUB_WORKSPACE/head-coverage"', '"$GITHUB_WORKSPACE/.coverage-shards"'
+    )
+    shards = next(step for step in steps if step.get("name") == "Download this run's shard coverage")
+    assert shards["with"]["pattern"] == _step("coverage-ratchet", "Download shard coverage")["with"]["pattern"]
+    assert report["if"] == "always() && steps.ratchet.outcome != 'skipped'"
+    assert report["with"] == _step("coverage-ratchet", "Upload the coverage ratchet report")["with"]
+    assert {"queue-baseline", "coverage-ratchet"} <= set(jobs["gate-required"]["needs"])
+
+
 def _step(job, name):
     return next(step for step in _workflow()["jobs"][job]["steps"] if step.get("name") == name)
 
