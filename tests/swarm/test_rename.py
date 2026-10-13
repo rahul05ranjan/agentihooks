@@ -127,13 +127,16 @@ def test_rename_is_idempotent_and_preserves_claim_seat_and_crew(store):
     assert len(store.names.names("sw")) == 1
 
 
-@pytest.mark.parametrize(("harness", "typed"), [("codex", True), ("claude", False), ("", False)])
-def test_rename_names_a_running_codex_session_after_its_new_name(store, harness, typed):
+@pytest.mark.parametrize(
+    ("harness", "transport", "typed"),
+    [("codex", "", True), ("codex", "app_server", False), ("claude", "", False), ("", "", False)],
+)
+def test_rename_names_a_running_codex_session_after_its_new_name(store, harness, transport, typed):
     from scripts.swarm.rename import rename_swarm
     from scripts.swarm.runtime import HerdrRuntime
 
     old = "sw-eng-1"
-    store.put_agent("sw", AgentRecord(old, "eng", "t1", pane_id="w1:p1", harness=harness))
+    store.put_agent("sw", AgentRecord(old, "eng", "t1", pane_id="w1:p1", harness=harness, transport=transport))
     pane = {"pane_id": "w1:p1", "name": old, "workspace_id": "w1"}
     mutations = []
 
