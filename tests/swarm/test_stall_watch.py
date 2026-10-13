@@ -134,6 +134,40 @@ def test_a_red_pull_request_with_no_push_past_its_limit_reopens():
     assert "red with no push for 15 minutes" in swarm.inbox()[0].text
 
 
+@pytest.mark.parametrize("pull", [RED, GREEN, CONFLICTING])
+def test_a_new_owner_gets_the_full_limit_after_hours_without_a_push(pull):
+    swarm = Swarm(pull, live=False)
+    swarm.tick(START)
+    claim = START + 180 * MINUTE
+    swarm.store.put_agent(SLUG, AgentRecord(OWNER, "eng", "t1", started_at=claim, seat="eng-1@sw"))
+    assert swarm.tick(claim + MINUTE) == []
+    assert swarm.ledger.rows["t1"]["state"] == "pr"
+    assert swarm.retired == []
+    assert swarm.inbox() == []
+    limit = 15 if pull.red else 10 if pull == GREEN else 5
+    assert swarm.tick(claim + (limit - 1) * MINUTE) == []
+    swarm.tick(claim + limit * MINUTE)
+    assert _reopened(swarm)
+
+
+def test_red_checks_in_the_merge_queue_never_reopen_the_task():
+    swarm = Swarm(replace(RED, queued=True))
+    assert swarm.tick(START + 180 * MINUTE) == []
+    assert swarm.ledger.rows["t1"]["state"] == "pr"
+    assert swarm.retired == []
+    assert swarm.inbox() == []
+
+
+@pytest.mark.parametrize("pull,live", [(replace(CONFLICTING, draft=True), False), (CONFLICTING, True)])
+def test_unmergeable_drafts_and_live_working_owners_stay_held(pull, live):
+    swarm = Swarm(pull, live=live)
+    assert swarm.tick(START) == []
+    assert swarm.tick(START + 180 * MINUTE) == []
+    assert swarm.ledger.rows["t1"]["state"] == "pr"
+    assert swarm.retired == []
+    assert swarm.inbox() == []
+
+
 def test_a_push_after_red_restarts_the_red_limit():
     swarm = Swarm(PullRequest("OPEN", None, START + 10 * MINUTE, True, True, head="h", red_at=START))
     assert swarm.tick(START + 20 * MINUTE) == [] and not _reopened(swarm)
