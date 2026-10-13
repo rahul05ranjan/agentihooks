@@ -460,6 +460,7 @@ def cmd_create(store, args):
         links=template.links,
         autonomy=template.autonomy or DELEGATE,
         scratch=not ledger_creator.shared(os.environ),
+        caps_pinned=args.max_eng_agents is not None or args.max_ci_agents is not None,
     )
     store.create(config)
     from scripts.swarm import commands
@@ -791,6 +792,8 @@ def cmd_set(store, args):
                 f"or {', '.join(LANE_KEYS)}=<value>"
             )
         changes[SETTABLE[key]] = int(value)
+    if {"max_eng", "max_ci"} & changes.keys():
+        changes["caps_pinned"] = True
     config = store.update(args.slug, **changes)
     _store_master_counts(store, args.slug, counts, hives)
     _store_master_rules(store, args.slug, rules)

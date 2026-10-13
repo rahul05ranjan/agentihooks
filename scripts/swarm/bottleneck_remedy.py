@@ -140,11 +140,11 @@ def _raise(slug, ledger, task, stage):
 def _shift(slug, config, store, lanes, stage):
     giver, taker = SEATS[stage.name]
     caps, shift = lane_split._capacity(config, store, slug)
-    if reason := lane_split.refusal(caps, giver, taker, lanes()):
-        return reason
     moved = {giver: caps[giver] - 1, taker: caps[taker] + 1}
-    lane_split._apply(slug, config, store, moved, shift + moved["ci"] - caps["ci"])
     text = SHIFTED.format(giver=giver, taker=taker, targeted=stage.targeted, eng=moved["eng"], ci=moved["ci"])
+    if reason := lane_split.refusal(config, caps, giver, taker, lanes()) or lane_split.switched(slug, config, text):
+        return reason
+    lane_split._apply(slug, config, store, moved, shift + moved["ci"] - caps["ci"])
     return dispatcher.Action(RULE, "apply", text, {})
 
 
