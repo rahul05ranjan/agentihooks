@@ -51,11 +51,7 @@ def collect_cached_stats(
         for path in tracked
         if path and not is_test_file(path) and (root / path).is_file()
     }
-    versions = {
-        distribution.metadata["Name"]: distribution.version
-        for distribution in metadata.distributions()
-        if distribution.metadata["Name"].lower() != "agentihooks"
-    }
+    versions = {distribution.metadata["Name"]: distribution.version for distribution in metadata.distributions()}
     context = {
         "schema": 1,
         "sources": sources,
