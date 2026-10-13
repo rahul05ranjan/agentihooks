@@ -852,6 +852,31 @@ def test_domain_operation_families_use_their_named_guards(live):
         assert "rejected" in reply
 
 
+def test_publish_plan_writes_land_through_the_plans_and_slices_resources(live):
+    from scripts.swarm_ledger.api.client import ResourceClient
+    from tests.swarm_ledger.test_ledger_authority import ledger
+
+    client = ResourceClient(ledger.BASE, ledger.credentials(SLUG, service=True))
+    state = client.mutate(
+        SLUG,
+        [
+            {"op": "plan_add", "id": "plan-seed", "by": "swarm", "plan": "merge", "title": "Merge path", "url": ""},
+            {
+                "op": "phase_update",
+                "id": "plan-link",
+                "by": "swarm",
+                "item": "phases/p1",
+                "fields": {"plan": "plans/merge"},
+            },
+            {"op": "slice_add", "id": "slice-seed", "by": "swarm", "phase": "phases/p1", "anchor": "first"},
+        ],
+    )
+    assert not state.get("rejected")
+    assert client.request(SLUG, "plans/merge")["data"]["title"] == "Merge path"
+    assert [row["anchor"] for row in client.collection(SLUG, "slices")] == ["first"]
+    assert [request(live, "GET", path)[0] for path in ("plans", "slices")] == [200, 200]
+
+
 def test_resource_reads_preserve_pinned_identity(live):
     from unittest.mock import patch
 
