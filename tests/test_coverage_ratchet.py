@@ -229,6 +229,34 @@ def test_incidental_classification_requires_two_measured_misses(snapshots):
     assert result.unconfirmed == ({"hooks/a.py": {3: snapshots}} if snapshots >= 2 else {})
 
 
+def test_unconfirmed_counts_take_precedence_over_different_version_clearance():
+    runs = [_measure("base", {"hooks/a.py": {1, 2, 3}}, {"hooks/a.py": SOURCE})]
+    runs += [_measure(f"older{n}", {"hooks/a.py": {1, 2}}, {"hooks/a.py": SOURCE}) for n in range(2)]
+    runs.append(_measure("different", {"hooks/a.py": {1, 2, 3}}, {"hooks/a.py": SOURCE + "\n# different version\n"}))
+    result = ratchet.grade({"hooks/a.py": {1, 2}}, lambda path: SOURCE, iter(runs))
+    assert result.lost == {}
+    assert result.unstable == {}
+    assert result.unconfirmed == {"hooks/a.py": {3: 2}}
+
+
+@pytest.mark.parametrize("covered,snapshots", [(True, 20), (False, 1), (False, 2), (False, 20)])
+def test_ledger_stall_fixture_grades_each_history_case(covered, snapshots):
+    fixture = json.loads((Path(__file__).parent / "fixtures" / "coverage_incidental.json").read_text())
+    path, source = fixture["path"], fixture["source"]
+    runs = [_measure(fixture["commit"], {path: {315}}, {path: source})]
+    runs += [
+        _measure(snapshot["commit"], {path: {315} if covered else set()}, {path: source})
+        for snapshot in fixture["history"][:snapshots]
+    ]
+    result = ratchet.grade({path: set()}, lambda name: source, iter(runs))
+    assert result.lost == ({path: [315]} if covered or snapshots < 2 else {})
+    assert result.unstable == {}
+    assert result.unconfirmed == ({path: {315: snapshots}} if not covered and snapshots >= 2 else {})
+    text = ratchet.report(result, {path: [315]}, {path: 0}, {path: 1})
+    if result.unconfirmed:
+        assert f"{path}:315 unconfirmed: {snapshots} measured history snapshots did not run it" in text
+
+
 def test_the_ledger_hook_baseline_line_accepts_old_or_unconfirmed_grading():
     fixture = json.loads((Path(__file__).parent / "fixtures" / "coverage_incidental.json").read_text())
     path = fixture["path"]
