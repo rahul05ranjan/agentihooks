@@ -1,4 +1,5 @@
 import json
+import os
 import runpy
 import subprocess
 import sys
@@ -13,7 +14,12 @@ from scripts import ci_queue_fail_fast as fail_fast
 _ROOT = Path(__file__).resolve().parents[1]
 pytestmark = pytest.mark.unit
 
-_ARGS = ["--repo", "org/repo", "--run", "7", "--attempt", "1"]
+_QUEUE = "github.event_name == 'merge_group'"
+_GATE_NEED = (
+    "${{ !cancelled() && (github.event_name != 'workflow_dispatch' || needs.admission.result == 'success')"
+    " && (github.event_name != 'merge_group' || needs.reuse.outputs.reused != 'true') }}"
+)
+_APP_TOKEN = "${{ steps.app-token.outputs.token }}"
 
 
 def _job(name, conclusion=None, status=None):
@@ -32,23 +38,9 @@ def _step(job, name):
     return next(step for step in job["steps"] if step.get("name") == name)
 
 
-@pytest.fixture(autouse=True)
-def sleeps(monkeypatch):
-    slept = []
-
-    def sleep(seconds):
-        slept.append(seconds)
-        if len(slept) > 20:
-            pytest.fail("the watcher kept polling")
-
-    monkeypatch.setattr(fail_fast.time, "sleep", sleep)
-    return slept
-
-
 def test_the_watcher_skips_its_own_job_and_waits_on_stage_budget():
     assert fail_fast.SELF == "queue-fail-fast"
     assert fail_fast.LAST == "stage-budget"
-    assert fail_fast.INTERVAL_S == 15
 
 
 @pytest.mark.parametrize("conclusion", ["failure", "timed_out", "cancelled"])
@@ -84,158 +76,127 @@ def test_the_run_settles_only_once_stage_budget_completed(jobs, expected):
     assert fail_fast.settled(jobs) is expected
 
 
-def test_watch_polls_until_a_graded_job_fails(sleeps):
-    reads = iter(
-        [[_job("unit (3.12, 1)")], [_job("unit (3.12, 1)"), _job("lint", "success")], [_job("lint", "failure")]]
-    )
-    assert fail_fast.watch(lambda: next(reads)) == "lint"
-    assert sleeps == [15, 15]
+@pytest.mark.parametrize(
+    "jobs, expected",
+    [
+        ([_job("unit (3.12, 1)"), _job("lint", "success")], "wait"),
+        ([_job("stage-budget")], "wait"),
+        ([_job("lint", "failure")], "failed=lint"),
+        ([_job("stage-budget", "success"), _job("sonar", "failure")], "failed=sonar"),
+        ([_job("lint", "success"), _job("stage-budget", "success")], "failed="),
+    ],
+)
+def test_the_verdict_names_a_failure_settles_or_waits(jobs, expected):
+    assert fail_fast.verdict(jobs) == expected
 
 
-def test_watch_names_a_failure_listed_beside_a_completed_stage_budget(sleeps):
-    assert fail_fast.watch(lambda: [_job("stage-budget", "success"), _job("sonar", "failure")]) == "sonar"
-    assert sleeps == []
+def _listing(tmp_path, *jobs):
+    path = tmp_path / "jobs.jsonl"
+    path.write_text("".join(json.dumps(job) + "\n\n" for job in jobs))
+    return path
 
 
-def test_watch_stops_without_a_name_once_every_graded_job_settled(sleeps):
-    reads = iter([[_job("stage-budget")], [_job("unit (3.11, 1)", "success"), _job("stage-budget", "success")]])
-    assert fail_fast.watch(lambda: next(reads)) is None
-    assert sleeps == [15]
+def test_main_prints_the_verdict_of_a_jobs_listing(tmp_path, capsys):
+    assert fail_fast.main([str(_listing(tmp_path, _job("lint", "success"), _job("sonar", "timed_out")))]) == 0
+    assert capsys.readouterr().out == "failed=sonar\n"
 
 
-def test_watch_keeps_polling_through_a_failed_read(capsys, sleeps):
-    reads = iter([subprocess.CalledProcessError(1, ["gh"], stderr="HTTP 502 \n"), [_job("lint", "failure")]])
-
-    def read():
-        answer = next(reads)
-        if isinstance(answer, Exception):
-            raise answer
-        return answer
-
-    assert fail_fast.watch(read) == "lint"
-    assert sleeps == [15]
-    assert capsys.readouterr().out == "::warning::Reading this run's jobs failed: HTTP 502\n"
-
-
-def test_watch_gives_up_after_ten_failed_reads_in_a_row(capsys, sleeps):
-    error = subprocess.CalledProcessError(1, ["gh"], stderr="HTTP 401")
-    answers = iter([error] * 9 + [[_job("lint")]] + [error] * 10)
-
-    def read():
-        answer = next(answers)
-        if isinstance(answer, Exception):
-            raise answer
-        return answer
-
-    with pytest.raises(subprocess.CalledProcessError):
-        fail_fast.watch(read)
-    assert fail_fast.MISSES == 10
-    assert len(sleeps) == 19
-    assert capsys.readouterr().out.count("::warning::") == 19
-
-
-@pytest.mark.parametrize("error", [ValueError("bad json"), FileNotFoundError("gh")])
-def test_watch_lets_any_other_read_error_end_the_watcher(error, sleeps):
-    def read():
-        raise error
-
-    with pytest.raises(type(error)):
-        fail_fast.watch(read)
-    assert sleeps == []
-
-
-def test_read_jobs_lists_every_job_of_this_attempt(monkeypatch):
-    seen = {}
-
-    def run(args, **kwargs):
-        seen["args"], seen["kwargs"] = args, kwargs
-        return subprocess.CompletedProcess(args, 0, stdout=json.dumps(_job("lint", "success")) + "\n\n")
-
-    monkeypatch.setattr(fail_fast.subprocess, "run", run)
-    assert fail_fast.read_jobs("org/repo", "7", "2") == [_job("lint", "success")]
-    assert seen["args"] == [
-        "gh",
-        "api",
-        "--paginate",
-        "repos/org/repo/actions/runs/7/attempts/2/jobs?per_page=100",
-        "--jq",
-        ".jobs[] | @json",
-    ]
-    assert seen["kwargs"] == {"check": True, "capture_output": True, "text": True}
-
-
-def _output(tmp_path, monkeypatch):
-    output = tmp_path / "output"
-    output.write_text("keep=1\n")
-    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
-    return output
-
-
-def test_main_names_the_failed_job_for_the_cancel_step(tmp_path, monkeypatch, capsys):
-    output = _output(tmp_path, monkeypatch)
-    seen = []
-
-    def read(repo, run, attempt):
-        seen.append((repo, run, attempt))
-        return [_job("lint", "failure")]
-
-    assert fail_fast.main(_ARGS, read) == 0
-    assert seen == [("org/repo", "7", "1")]
-    assert output.read_text() == "keep=1\nfailed=lint\n"
-    assert capsys.readouterr().out == "::error::lint failed, so Gate Required cannot pass; cancelling this queue run.\n"
-
-
-def test_main_sleeps_between_polls_and_leaves_the_cancel_step_off_once_settled(tmp_path, monkeypatch, capsys, sleeps):
-    output = _output(tmp_path, monkeypatch)
-    reads = iter([[_job("lint")], [_job("lint", "success"), _job("stage-budget", "success")]])
-    assert fail_fast.main(_ARGS, lambda *_: next(reads)) == 0
-    assert sleeps == [15]
-    assert output.read_text() == "keep=1\nfailed=\n"
-    assert capsys.readouterr().out == "Every graded job settled without a failure.\n"
-
-
-@pytest.mark.parametrize("flag", ["--repo", "--run", "--attempt"])
-def test_main_requires_the_repo_run_and_attempt(flag, tmp_path, monkeypatch):
-    _output(tmp_path, monkeypatch)
-    index = _ARGS.index(flag)
+def test_main_requires_the_jobs_listing():
     with pytest.raises(SystemExit) as raised:
-        fail_fast.main(_ARGS[:index] + _ARGS[index + 2 :], pytest.fail)
+        fail_fast.main([])
     assert raised.value.code == 2
 
 
-def test_the_module_reads_the_jobs_api_from_the_command_line(tmp_path, monkeypatch):
-    output = _output(tmp_path, monkeypatch)
-    calls = []
-
-    def run(args, **_):
-        calls.append(args[3])
-        return subprocess.CompletedProcess(args, 0, stdout=json.dumps(_job("lint", "failure")) + "\n")
-
-    monkeypatch.setattr(subprocess, "run", run)
-    monkeypatch.setattr(sys, "argv", ["ci_queue_fail_fast", *_ARGS])
+def test_the_module_runs_from_the_command_line(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["ci_queue_fail_fast", str(_listing(tmp_path, _job("unit (3.11, 1)")))])
     with pytest.raises(SystemExit) as raised:
         runpy.run_module("scripts.ci_queue_fail_fast", run_name="__main__")
     assert raised.value.code == 0
-    assert calls == ["repos/org/repo/actions/runs/7/attempts/1/jobs?per_page=100"]
-    assert output.read_text() == "keep=1\nfailed=lint\n"
+    assert capsys.readouterr().out == "wait\n"
 
 
-def test_the_watcher_runs_only_on_merge_queue_runs_with_cancel_rights():
-    job = _jobs()["queue-fail-fast"]
-    assert job["if"] == "github.event_name == 'merge_group'"
-    assert job["permissions"] == {"contents": "read", "actions": "write"}
+def _watch(tmp_path, reads):
+    fake, bin_dir = tmp_path / "fake", tmp_path / "bin"
+    fake.mkdir()
+    bin_dir.mkdir()
+    for index, jobs in enumerate(reads):
+        if jobs is not None:
+            (fake / f"{index}.json").write_text("".join(json.dumps(job) + "\n" for job in jobs))
+    scripts = {
+        "gh": 'n=$(cat "$FAKE/count" 2>/dev/null || echo 0)\necho $((n + 1)) > "$FAKE/count"\n'
+        'echo "$*" >> "$FAKE/calls"\n[[ -f "$FAKE/$n.json" ]] && cat "$FAKE/$n.json"\n',
+        "sleep": 'echo "$1" >> "$FAKE/sleeps"\n(( $(wc -l < "$FAKE/sleeps") <= 30 ))\n',
+        "python3": f'exec "{sys.executable}" "$@"\n',
+    }
+    for name, body in scripts.items():
+        (bin_dir / name).write_text("#!/usr/bin/env bash\n" + body)
+        (bin_dir / name).chmod(0o755)
+    output = tmp_path / "output"
+    output.write_text("")
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "FAKE": str(fake),
+        "RUNNER_TEMP": str(tmp_path),
+        "GITHUB_OUTPUT": str(output),
+        "GITHUB_REPOSITORY": "org/repo",
+        "GITHUB_RUN_ID": "7",
+        "GITHUB_RUN_ATTEMPT": "2",
+    }
+    run = _step(_jobs()["queue-fail-fast"], "Watch for the first failed graded job")["run"]
+    result = subprocess.run(["bash", "-e", "-c", run], cwd=_ROOT, env=env, capture_output=True, text=True)
+    sleeps = (fake / "sleeps").read_text().split() if (fake / "sleeps").exists() else []
+    calls = (fake / "calls").read_text().splitlines()
+    return result, output.read_text(), sleeps, calls
+
+
+def test_the_watch_step_polls_this_attempt_until_a_graded_job_fails(tmp_path):
+    result, output, sleeps, calls = _watch(tmp_path, [[_job("lint")], [_job("lint", "failure")]])
+    assert result.returncode == 0, result.stderr
+    assert output == "failed=lint\n"
+    assert sleeps == ["15"]
+    assert (
+        calls == ["api --paginate repos/org/repo/actions/runs/7/attempts/2/jobs?per_page=100 --jq .jobs[] | @json"] * 2
+    )
+
+
+def test_the_watch_step_stops_without_a_name_once_every_graded_job_settled(tmp_path):
+    result, output, sleeps, _ = _watch(tmp_path, [[_job("lint", "success"), _job("stage-budget", "success")]])
+    assert result.returncode == 0, result.stderr
+    assert output == "failed=\n"
+    assert sleeps == []
+
+
+def test_the_watch_step_gives_up_quietly_after_ten_failed_reads_in_a_row(tmp_path):
+    result, output, sleeps, calls = _watch(tmp_path, [None] * 9 + [[_job("lint")]] + [None] * 10)
+    assert result.returncode == 0, result.stderr
+    assert output == ""
+    assert len(calls) == 20
+    assert len(sleeps) == 19
+    assert result.stdout.count("::warning::") == 1
+
+
+def test_the_watcher_is_a_gate_need_that_works_only_on_merge_queue_runs():
+    jobs = _jobs()
+    job = jobs["queue-fail-fast"]
+    assert job["if"] == _GATE_NEED
+    assert job["needs"] == ["reuse", "admission"]
+    assert "permissions" not in job
     assert job["timeout-minutes"] == 60
-    assert job["runs-on"] == _jobs()["stage-budget"]["runs-on"]
-    assert "needs" not in job
+    assert job["runs-on"] == jobs["stage-budget"]["runs-on"]
+    assert "queue-fail-fast" in _gate_needs(jobs)
+    assert "queue-fail-fast" not in jobs["stage-budget"]["needs"]
+    assert [step["if"] for step in job["steps"][:3]] == [_QUEUE] * 3
 
 
-def test_the_watcher_reads_on_the_app_token_and_cancels_on_its_own_token():
+def test_the_watcher_reads_and_cancels_on_the_app_token():
     job = _jobs()["queue-fail-fast"]
     mint = _step(job, "Mint the tcc main ci App token")
     watch = _step(job, "Watch for the first failed graded job")
     cancel = _step(job, "Cancel this queue run so the queue drops the entry")
     assert job["steps"][0] == {
         "uses": "actions/checkout@v4",
+        "if": _QUEUE,
         "with": {"ref": "${{ github.sha }}", "persist-credentials": False},
     }
     assert mint["id"] == "app-token"
@@ -244,23 +205,22 @@ def test_the_watcher_reads_on_the_app_token_and_cancels_on_its_own_token():
         "client-id": "${{ secrets.TCC_CI_CLIENT_ID }}",
         "private-key": "${{ secrets.TCC_CI_APP_PRIVATE_KEY }}",
         "repositories": "${{ github.event.repository.name }}",
-        "permission-actions": "read",
+        "permission-actions": "write",
         "permission-contents": "read",
     }
     assert watch["id"] == "watch"
-    assert watch["env"] == {"GH_TOKEN": "${{ steps.app-token.outputs.token }}"}
-    assert watch["run"] == (
-        'python3 -m scripts.ci_queue_fail_fast --repo "$GITHUB_REPOSITORY" --run "$GITHUB_RUN_ID"'
-        ' --attempt "$GITHUB_RUN_ATTEMPT"'
-    )
+    assert watch["env"] == {"GH_TOKEN": _APP_TOKEN}
     assert cancel["if"] == "steps.watch.outputs.failed != ''"
-    assert cancel["env"] == {"GH_TOKEN": "${{ github.token }}"}
-    assert cancel["run"] == 'gh run cancel "$GITHUB_RUN_ID" -R "$GITHUB_REPOSITORY"'
+    assert cancel["env"] == {"GH_TOKEN": _APP_TOKEN, "FAILED": "${{ steps.watch.outputs.failed }}"}
+    assert cancel["run"].splitlines() == [
+        'echo "::error::$FAILED failed, so Gate Required cannot pass; cancelling this queue run."',
+        'gh run cancel "$GITHUB_RUN_ID" -R "$GITHUB_REPOSITORY"',
+    ]
 
 
 def test_stage_budget_needs_every_graded_job_so_its_completion_means_all_settled():
     jobs = _jobs()
-    assert _gate_needs(jobs) - {"stage-budget"} <= set(jobs["stage-budget"]["needs"])
+    assert _gate_needs(jobs) - {"stage-budget", "queue-fail-fast"} <= set(jobs["stage-budget"]["needs"])
 
 
 def test_every_merge_queue_job_but_the_watcher_is_graded():
@@ -270,13 +230,13 @@ def test_every_merge_queue_job_but_the_watcher_is_graded():
         for job_id, job in jobs.items()
         if "github.event_name == 'push'" in str(job.get("if", "")) and "merge_group" not in str(job.get("if", ""))
     }
-    queued = set(jobs) - push_only - {"admission", "gate-required", "queue-fail-fast"}
+    queued = set(jobs) - push_only - {"admission", "gate-required"}
     assert push_only == {"refresh-durations", "flake-budget", "coverage-baseline"}
     assert queued <= _gate_needs(jobs)
 
 
-def test_the_watcher_budget_is_the_whole_run():
-    assert ci_budget.BUDGETS["queue-fail-fast"] == ci_budget.RUN_BUDGET_S
+def test_the_watcher_budget_covers_its_work_outside_the_queue():
+    assert ci_budget.BUDGETS["queue-fail-fast"] == 60
 
 
 def test_the_stage_report_leaves_out_the_watcher():
@@ -287,4 +247,4 @@ def test_the_stage_report_leaves_out_the_watcher():
 
 
 def test_plant_fails_only_in_the_merge_queue():
-    assert sys.modules["os"].environ.get("GITHUB_EVENT_NAME") != "merge_group"
+    assert os.environ.get("GITHUB_EVENT_NAME") != "merge_group"
