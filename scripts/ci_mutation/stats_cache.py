@@ -53,7 +53,7 @@ def collect_cached_stats(
     }
     versions = {distribution.metadata["Name"]: distribution.version for distribution in metadata.distributions()}
     context = {
-        "schema": 1,
+        "schema": 2,
         "sources": sources,
         "changes": changes,
         "options": options,
@@ -64,7 +64,9 @@ def collect_cached_stats(
     folder.mkdir(parents=True, exist_ok=True)
     keys = {
         path: hashlib.sha256(
-            json.dumps({**context, "tests": test_inputs(root, path, modules, records)}, sort_keys=True).encode()
+            json.dumps(
+                {**context, "path": path, "tests": test_inputs(root, path, modules, records)}, sort_keys=True
+            ).encode()
         ).hexdigest()
         for path in files
     }
