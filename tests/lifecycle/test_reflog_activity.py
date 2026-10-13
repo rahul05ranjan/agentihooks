@@ -53,7 +53,7 @@ def test_recent_git_activity_still_keeps_worktree(repo, name):
     assert (finding.action, finding.reason) == ("keep", "clean, recent")
 
 
-@pytest.mark.parametrize("content", ["", "broken", "identity invalid +0000\tmessage\n"])
+@pytest.mark.parametrize("content", ["", "broken", "identity invalid +0000\tmessage\n", "broken 1 +0000\n"])
 def test_unusable_reflog_keeps_its_file_activity(repo, content):
     path = repo.worktree("unusable-log")
     age(path, 3 * 3600)
