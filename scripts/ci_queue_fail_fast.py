@@ -1,9 +1,3 @@
-"""Watch a merge queue Tests run and name the first graded job that failed.
-
-Gate Required needs every job, so without this a queue entry holds its build slot until the slowest job ends.
-The watcher stops once stage-budget is listed: that job needs every graded job, so all of them have settled.
-"""
-
 import argparse
 import json
 import os
@@ -13,9 +7,11 @@ from collections.abc import Callable
 from pathlib import Path
 
 SELF = "queue-fail-fast"
+# Needs every graded job, so once it completes nothing graded can still fail.
 LAST = "stage-budget"
 FATAL = ("failure", "timed_out", "cancelled")
 INTERVAL_S = 15
+MISSES = 10
 
 
 def failed(jobs: list[dict]) -> str | None:
@@ -23,13 +19,19 @@ def failed(jobs: list[dict]) -> str | None:
 
 
 def settled(jobs: list[dict]) -> bool:
-    return any(job["name"] == LAST for job in jobs)
+    return any(job["name"] == LAST and job["status"] == "completed" for job in jobs)
 
 
 def read_jobs(repo: str, run: str, attempt: str) -> list[dict]:
     out = subprocess.run(
-        ["gh", "api", "--paginate", f"repos/{repo}/actions/runs/{run}/attempts/{attempt}/jobs?per_page=100"]
-        + ["--jq", ".jobs[] | @json"],
+        [
+            "gh",
+            "api",
+            "--paginate",
+            f"repos/{repo}/actions/runs/{run}/attempts/{attempt}/jobs?per_page=100",
+            "--jq",
+            ".jobs[] | @json",
+        ],
         check=True,
         capture_output=True,
         text=True,
@@ -38,12 +40,17 @@ def read_jobs(repo: str, run: str, attempt: str) -> list[dict]:
 
 
 def watch(read: Callable[[], list[dict]], sleep: Callable[[float], None] = time.sleep) -> str | None:
+    misses = 0
     while True:
         try:
             jobs = read()
         except subprocess.CalledProcessError as error:
+            misses += 1
             print(f"::warning::Reading this run's jobs failed: {error.stderr.strip()}")
+            if misses == MISSES:
+                raise
         else:
+            misses = 0
             if name := failed(jobs):
                 return name
             if settled(jobs):

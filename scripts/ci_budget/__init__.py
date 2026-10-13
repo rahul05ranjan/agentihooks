@@ -9,6 +9,8 @@ from datetime import datetime
 RUN_BUDGET_S = 15 * 60
 GATE = "Gate — Required"
 SELF = "stage-budget"
+# Spans the whole merge queue run by design, so its wall time is not a stage's.
+WATCHER = "queue-fail-fast"
 BUDGETS = {
     "admission": 30,
     "reuse": 30,
@@ -52,7 +54,7 @@ def stages(jobs: list[dict]) -> dict[str, float]:
     spans: dict[str, tuple[float, float]] = {}
     for job in jobs:
         stage = stage_of(job["name"])
-        if job.get("conclusion") == "skipped" or not job.get("completed_at"):
+        if stage == WATCHER or job.get("conclusion") == "skipped" or not job.get("completed_at"):
             continue
         begin, end = seconds(job["created_at"]), seconds(job["completed_at"])
         first, last = spans.get(stage, (begin, end))
