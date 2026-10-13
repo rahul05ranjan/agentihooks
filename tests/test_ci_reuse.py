@@ -841,6 +841,84 @@ def test_an_unreadable_run_list_says_which_head(full_source, tmp_path):
     assert not (temp / "evidence/runs.json").exists()
 
 
+@pytest.mark.parametrize(
+    ("failures", "status", "calls", "kept"),
+    [
+        (0, 502, 1, True),
+        (1, 500, 2, True),
+        (2, 503, 3, True),
+        (3, 504, 3, False),
+        (1, 400, 1, False),
+        (1, 403, 1, False),
+        (1, 429, 1, False),
+    ],
+)
+def test_attempt_jobs_use_five_job_pages_and_bounded_server_retries(
+    full_source, tmp_path, failures, status, calls, kept
+):
+    from scripts import ci_reuse
+
+    _, _, head, _, env, responses, _ = full_source
+    jobs = responses[JOBS]["jobs"]
+    jobs.extend({"id": 200 + n, "name": f"extra {n}", "conclusion": "success"} for n in range(45))
+    Path(env["REUSE_FIXTURE"]).write_text(json.dumps(responses))
+    bin_dir = Path(env["PATH"].split(":")[0])
+    (bin_dir / "gh").rename(bin_dir / "original-gh")
+    requests = tmp_path / "requests.jsonl"
+    (bin_dir / "gh").write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, subprocess, sys\n"
+        "from pathlib import Path\n"
+        "endpoint = next(arg for arg in sys.argv[2:] if arg.startswith('repos/'))\n"
+        "if '/attempts/' not in endpoint:\n"
+        "    sys.exit(subprocess.call([str(Path(__file__).with_name('original-gh')), *sys.argv[1:]]))\n"
+        "requests = Path(os.environ['REQUESTS'])\n"
+        "calls = len(requests.read_text().splitlines()) if requests.exists() else 0\n"
+        "with requests.open('a') as stream: stream.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        "if not endpoint.endswith('?per_page=5') or '--paginate' not in sys.argv:\n"
+        "    sys.exit('expected paginated five job pages')\n"
+        "jobs = json.loads(Path(os.environ['REUSE_FIXTURE']).read_text())[endpoint.replace('per_page=5', 'per_page=100')]['jobs']\n"
+        "for offset in range(0, len(jobs), 5):\n"
+        "    print(*(json.dumps(job) for job in jobs[offset:offset + 5]), sep='\\n', flush=True)\n"
+        "    if calls < int(os.environ['FAILURES']):\n"
+        "        print(f'gh: server error (HTTP {os.environ[\"STATUS\"]})', file=sys.stderr)\n"
+        "        sys.exit(1)\n"
+    )
+    (bin_dir / "gh").chmod(0o755)
+    (bin_dir / "sleep").write_text('#!/usr/bin/env bash\nset -euo pipefail\nprintf \'%s\\n\' "$1" >> "$SLEEPS"\n')
+    (bin_dir / "sleep").chmod(0o755)
+    sleeps = tmp_path / "sleeps"
+    runner = tmp_path / "runner"
+    runner.mkdir()
+    [step] = [step for step in ci_reuse.paged_reuse_job()["steps"] if step.get("name") == FETCH]
+    result = subprocess.run(
+        ["bash", "-e", "-c", step["run"]],
+        env=dict(
+            env,
+            GITHUB_REPOSITORY="o/r",
+            RUNNER_TEMP=str(runner),
+            QUEUE_REF=QUEUE_REF,
+            REQUESTS=str(requests),
+            FAILURES=str(failures),
+            STATUS=str(status),
+            SLEEPS=str(sleeps),
+        ),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert len(requests.read_text().splitlines()) == calls
+    assert (sleeps.read_text().splitlines() if sleeps.exists() else []) == ["1", "2"][: calls - 1]
+    evidence = runner / "evidence" / "7"
+    if kept:
+        assert [json.loads(line) for line in (evidence / "jobs.jsonl").read_text().splitlines()] == jobs
+        assert (evidence / "reuse.log").is_file()
+    else:
+        assert not (evidence / "jobs.jsonl").exists()
+        assert not (evidence / "reuse.log").exists()
+    assert not (evidence / "jobs.error").exists()
+
+
 def _queue_needs(baseline="success", ratchet="success", ratchet_job="skipped", queue_job="success"):
     needs = {name: {"result": "success"} for name in ("unit", "lint", "sonar", "stage-budget")}
     needs["reuse"] = {"result": "success", "outputs": {"reused": "false"}}
