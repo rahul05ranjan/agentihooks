@@ -967,6 +967,24 @@ def test_a_gated_checks_wait_ends_only_on_its_gate(tick, rollup, outcome):
     assert (idle.wait(tick.store.redis, "sw", ME) is None) is bool(outcome)
 
 
+@pytest.mark.parametrize("conclusion", ["SUCCESS", "FAILURE"])
+def test_a_required_gate_ends_checks_wait_beside_a_pending_jobless_workflow(tick, conclusion):
+    tick.hold("checks", URL)
+    tick.pulls[URL] = gated_probe(
+        [{"name": "Gate — Required", "conclusion": conclusion}],
+        [QUEUED_TESTS],
+        workflows(GATE_WORKFLOW),
+    )
+    assert tick.end() == []
+    outcome = "green" if conclusion == "SUCCESS" else "red"
+    assert tick.end() == [f"ended the wait of {ME}: checks on {URL}, now {outcome}"]
+    assert idle.wait(tick.store.redis, "sw", ME) is None
+    assert tick.told() == [
+        f"Your wait on checks on {URL}, now {outcome} has ended. Pick task t1 back up: "
+        "agentihooks swarm sw done, block, or wait on the next thing."
+    ]
+
+
 @pytest.mark.parametrize(
     "done",
     [
