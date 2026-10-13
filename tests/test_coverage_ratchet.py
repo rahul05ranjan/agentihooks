@@ -412,6 +412,7 @@ def test_the_report_lists_every_missed_line_and_every_lost_line(tmp_path):
 @pytest.mark.parametrize("snapshots", [0, 1, 2, 3])
 def test_command_reports_unconfirmed_history_counts(tmp_path, monkeypatch, snapshots):
     sources = {"hooks/a.py": SOURCE}
+    subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True, capture_output=True)
     _repo(tmp_path, sources)
     base = coverage_history.git("rev-parse", "HEAD", cwd=tmp_path).strip()
     runs = [_measure(base, {"hooks/a.py": {1, 2, 3}}, sources)]
@@ -451,6 +452,7 @@ def test_command_keeps_changed_importing_tests_red(tmp_path, monkeypatch, change
     imports = "import hooks.a\nassert True\n"
     base_test = "assert True\n" if change in {"added", "unrelated"} else imports
     sources = {"hooks/a.py": SOURCE, test: base_test}
+    subprocess.run(["git", "-C", str(tmp_path), "init", "-q"], check=True, capture_output=True)
     _repo(tmp_path, sources)
     base = coverage_history.git("rev-parse", "HEAD", cwd=tmp_path).strip()
     if change == "deleted":
