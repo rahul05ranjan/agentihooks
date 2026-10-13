@@ -1018,7 +1018,9 @@ def test_the_first_failed_job_ends_the_wait_and_names_it_while_siblings_run(tick
     assert tick.end() == []
     assert len(tick.told()) == 1
     with capsys.disabled():
-        print(f"Scratch wait ended on {conclusion}: stats (1) failed; stats (2) and Gate Required still running; owner notified once.")
+        print(
+            f"Scratch wait ended on {conclusion}: stats (1) failed; stats (2) and Gate Required still running; owner notified once."
+        )
 
 
 def test_the_failure_notice_names_only_jobs_from_the_confirming_read(tick):
