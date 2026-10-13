@@ -253,3 +253,42 @@ assert {test for result in results for test in result["durations"]} == {"tests/t
             check=True,
         )
     assert json.loads((root / "collections.json").read_text()) == [["tests/test_sample.py"]]
+
+
+def test_distinct_files_with_identical_dependency_closures_keep_all_coverage(tmp_path):
+    from scripts.ci_mutation.stats_cache import collect_cached_stats
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "tests").mkdir()
+    (root / "tests/test_a.py").write_text("import tests.test_b\ndef test_sample():\n    pass\n")
+    (root / "tests/test_b.py").write_text("import tests.test_a\ndef test_sample():\n    pass\n")
+    files = ["tests/test_a.py", "tests/test_b.py"]
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(["git", "add", *files], cwd=root, check=True)
+    calls = []
+
+    def collect(chosen):
+        calls.append(chosen)
+        return [
+            {
+                "status": 0,
+                "tests": {"scripts.sample.x_sample": ["tests/test_a.py::test_sample", "tests/test_b.py::test_sample"]},
+                "durations": {"tests/test_a.py::test_sample": 1, "tests/test_b.py::test_sample": 2},
+                "cpu": 3,
+            }
+        ]
+
+    cache = tmp_path / "cache"
+    cold = collect_cached_stats(root, cache, {}, files, [], collect)
+    warm = collect_cached_stats(root, cache, {}, files, [], collect)
+    assert calls == [files]
+    for results in (cold, warm):
+        assert {test for result in results for test in result["tests"]["scripts.sample.x_sample"]} == {
+            "tests/test_a.py::test_sample",
+            "tests/test_b.py::test_sample",
+        }
+        assert {test for result in results for test in result["durations"]} == {
+            "tests/test_a.py::test_sample",
+            "tests/test_b.py::test_sample",
+        }
