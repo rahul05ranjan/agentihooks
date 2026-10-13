@@ -2,6 +2,7 @@ import argparse
 import json
 import math
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -15,7 +16,10 @@ NONE = "none"
 DURATIONS = ".test_durations"
 TESTS = "tests"
 SOURCES = ("hooks", "scripts")
-COVERED = (".py", ".js")
+DOCS = "docs/"
+DOC = ".md"
+# A name the workflow passes to pytest through one space separated output line.
+SAFE = re.compile(r"[A-Za-z0-9_./-]+")
 # Changing any of these changes how every test runs, so only the full suite grades them.
 HARNESS = frozenset(
     {
@@ -47,8 +51,8 @@ def needs_full_suite(changed: list[str]) -> bool:
     return any(path in HARNESS or Path(path).name == CONFTEST for path in changed)
 
 
-def is_covered(root: Path, path: str) -> bool:
-    return path.split("/", 1)[0] in SOURCES and Path(path).suffix in COVERED and (root / path).is_file()
+def is_doc(path: str) -> bool:
+    return path.startswith(DOCS) or path.endswith(DOC)
 
 
 def naming_tests(root: Path, needles: set[str]) -> set[str]:
@@ -70,7 +74,7 @@ def selected_tests(root: Path, changed: list[str]) -> set[str]:
         else:
             needles.add(Path(path).name)
     tests |= naming_tests(root, needles)
-    return {path for path in tests if (root / path).is_file()}
+    return {path for path in tests if SAFE.fullmatch(path) and (root / path).is_file()}
 
 
 def file_seconds(durations: dict[str, float], files: set[str]) -> dict[str, float]:
@@ -99,7 +103,7 @@ def decide(root: Path, changed: list[str], durations: dict[str, float], limit: i
         return FULL, []
     tests = selected_tests(root, changed)
     if not tests:
-        return (FULL if any(is_covered(root, path) for path in changed) else NONE), []
+        return (NONE if all(is_doc(path) for path in changed) else FULL), []
     legs = legs_for(root, tests, durations, limit)
     return (FULL, []) if legs is None else (SELECTED, legs)
 
