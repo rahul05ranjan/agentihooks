@@ -259,13 +259,13 @@ def test_stage_budget_needs_every_graded_job_so_its_completion_means_all_settled
 
 def test_every_merge_queue_job_but_the_watcher_is_graded():
     jobs = _jobs()
-    queued = {
+    push_only = {
         job_id
         for job_id, job in jobs.items()
-        if "github.event_name == 'push'" not in str(job.get("if", ""))
-        or "merge_group" in str(job.get("if", ""))
-        and job_id not in ("admission", "gate-required", "queue-fail-fast")
+        if "github.event_name == 'push'" in str(job.get("if", "")) and "merge_group" not in str(job.get("if", ""))
     }
+    queued = set(jobs) - push_only - {"admission", "gate-required", "queue-fail-fast"}
+    assert push_only == {"refresh-durations", "flake-budget", "coverage-baseline"}
     assert queued <= _gate_needs(jobs)
 
 
