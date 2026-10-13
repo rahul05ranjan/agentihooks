@@ -133,6 +133,15 @@ def test_a_replacement_stops_the_accept_loop_and_says_so():
     server.server_close()
 
 
+def test_a_deferred_server_binds_nothing_until_asked():
+    server = server_drain.DrainingServer(("127.0.0.1", 0), Held, bind_and_activate=False)
+    try:
+        assert server.server_address == ("127.0.0.1", 0)
+        assert server.socket.getsockname()[1] == 0
+    finally:
+        server.server_close()
+
+
 @pytest.mark.parametrize("replacing", [True, False])
 def test_serve_drains_and_releases_the_writer_before_it_re_execs(monkeypatch, tmp_path, replacing):
     calls = []
