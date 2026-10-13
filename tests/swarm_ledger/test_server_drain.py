@@ -115,11 +115,13 @@ def test_a_stop_signal_before_the_accept_loop_runs_never_holds_the_process_open(
     before = set(threading.enumerate())
     installed[signal.SIGTERM](signal.SIGTERM, None)
     stopping = [thread for thread in threading.enumerate() if thread not in before]
-    server.serve_forever(poll_interval=0.01)
-    for thread in stopping:
-        thread.join(5)
+    serving = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+    serving.start()
+    serving.join(5)
+    stopped = not serving.is_alive()
+    server.shutdown()
     server.server_close()
-    assert stopping and all(thread.daemon for thread in stopping)
+    assert stopped and stopping and all(thread.daemon for thread in stopping)
 
 
 def test_a_replacement_stops_the_accept_loop_and_says_so():
