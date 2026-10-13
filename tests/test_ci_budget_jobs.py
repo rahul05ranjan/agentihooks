@@ -42,6 +42,9 @@ print(json.dumps({"total_count": 23, "jobs": [{"id": i} for i in range(start, mi
 """
 
 
+from scripts.ci_budget import jobs as reader
+
+
 def _read(tmp_path, fault):
     gh = tmp_path / "gh"
     gh.write_text(f"#!{sys.executable}\n{FAKE}")
@@ -94,3 +97,46 @@ def test_workflow_reader_stops_after_bounded_retries(tmp_path, fault):
     assert result.returncode != 0
     assert requests == [[10, 1], [5, 1], [2, 1], [1, 1]]
     assert jobs == []
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        subprocess.TimeoutExpired(["gh"], 10),
+        subprocess.CalledProcessError(1, ["gh"], stderr="gh: Bad Gateway (HTTP 502)"),
+    ],
+)
+def test_reader_retries_timeout_or_server_error_with_short_backoff(monkeypatch, error):
+    calls, sleeps = [], []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        if len(calls) == 1:
+            raise error
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps({"jobs": [{"id": 15}]}))
+
+    monkeypatch.setattr(reader.subprocess, "run", run)
+    monkeypatch.setattr(reader.time, "sleep", sleeps.append)
+    assert reader.read_page("repos/owner/repo/jobs", 15, 5) == ([{"id": 15}], 2)
+    assert [command[-1] for command, _ in calls] == [
+        "repos/owner/repo/jobs?per_page=5&page=4",
+        "repos/owner/repo/jobs?per_page=2&page=8",
+    ]
+    assert all(kwargs == {"capture_output": True, "text": True, "check": True, "timeout": 10} for _, kwargs in calls)
+    assert sleeps == [1]
+
+
+@pytest.mark.parametrize("status", [400, 404, 429, 499, 600])
+def test_reader_does_not_retry_a_non_server_http_error(monkeypatch, status):
+    calls = []
+    error = subprocess.CalledProcessError(1, ["gh"], stderr=f"gh: timeout (HTTP {status})")
+
+    def run(command, **kwargs):
+        calls.append(command)
+        raise error
+
+    monkeypatch.setattr(reader.subprocess, "run", run)
+    with pytest.raises(subprocess.CalledProcessError) as caught:
+        reader.read_page("repos/owner/repo/jobs", 0, 10)
+    assert caught.value is error
+    assert len(calls) == 1
