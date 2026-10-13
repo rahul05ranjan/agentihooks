@@ -1,11 +1,11 @@
 import pytest
-from scripts.gates.enforcement import Enforcement
 
 from scripts.gates import log
 from scripts.gates.base import Who
+from scripts.gates.enforcement import Enforcement
 from scripts.swarm.store import RedisStore, SwarmConfig
 
-pytestmark = [pytest.mark.unit, pytest.mark.xdist_group("swarm-enforcement")]
+pytestmark = [pytest.mark.unit, pytest.mark.xdist_group("fakeredis")]
 
 
 @pytest.mark.parametrize("configured", [None, "observe", "unknown"])
