@@ -63,7 +63,8 @@ def dispatch(handler: object, server: ModuleType) -> dict | str | None:
 def ledger_read(server: ModuleType, slug: str, path: str, query: dict) -> dict:
     if path.split("/")[0] == "hierarchy":
         return resources.hierarchy_read(server.repository, slug, path, query)
-    return resources.read(server.repository.current(slug).state, path, query)
+    entry = server.repository.current(slug)
+    return resources.read(entry.state, path, query, entry.views)
 
 
 def agent_token(handler: object, server: ModuleType, slug: str) -> dict:

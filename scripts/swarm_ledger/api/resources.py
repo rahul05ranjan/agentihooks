@@ -58,12 +58,18 @@ def thread_rows(doc: dict) -> list:
     ]
 
 
-def read(doc: dict, path: str, query: dict | None = None) -> dict:
+def read(doc: dict, path: str, query: dict | None = None, cache: dict | None = None) -> dict:
     raw = value(doc, path)
-    rev = resource_revision(doc, path)
     if isinstance(raw, list):
+        key = (resource_revision, path)
+        if cache is None:
+            rev = resource_revision(doc, path)
+        else:
+            if key not in cache:
+                cache[key] = resource_revision(doc, path)
+            rev = cache[key]
         return page(raw, rev, query or {})
-    return bounded({"data": project(raw), "revision": rev})
+    return bounded({"data": project(raw), "revision": resource_revision(doc, path)})
 
 
 COLLECTIONS = (
@@ -142,21 +148,21 @@ def page(rows: list, rev: str, query: dict) -> dict:
             raise APIError(409, "revision_conflict", "Collection changed; restart pagination")
         offset = int(offset_text)
     selected = []
+    size = reply_size({"data": [], "revision": rev, "next_cursor": None})
     for row in rows[offset : offset + query.get("limit", 50)]:
         item = project(row)
         if isinstance(item, dict):
             item = {**item, "revision": revision(row)}
         end = offset + len(selected) + 1
-        candidate = {
-            "data": [*selected, item],
-            "revision": rev,
-            "next_cursor": f"{rev}:{end}" if end < len(rows) else None,
-        }
-        if reply_size(candidate) > MAX_REPLY:
+        next_cursor = f"{rev}:{end}" if end < len(rows) else None
+        item_size = reply_size(item) + (2 if selected else 0)
+        cursor_size = reply_size(next_cursor) - 4
+        if size + item_size + cursor_size > MAX_REPLY:
             if not selected:
                 raise APIError(413, "resource_too_large", "Use the explicit export operation for this resource")
             break
         selected.append(item)
+        size += item_size
     end = offset + len(selected)
     return bounded({"data": selected, "revision": rev, "next_cursor": f"{rev}:{end}" if end < len(rows) else None})
 
