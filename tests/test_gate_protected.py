@@ -335,7 +335,11 @@ def test_the_protected_grader_admits_only_the_exact_paged_reuse_variant(weakened
     head["jobs"]["reuse"] = ci_reuse.paged_reuse_job()
     policy = _POLICY if anton else None
     if anton:
-        head["jobs"]["reuse"] = _anton_reuse(head["jobs"]["reuse"])
+        head["jobs"]["reuse"]["runs-on"] = _anton()
+        [install] = [
+            step for step in head["jobs"]["reuse"]["steps"] if step.get("name") == "Install metadata dependencies"
+        ]
+        install["env"] = {"PYTHONNOUSERSITE": "1"}
     if weakened:
         [step] = [
             step
