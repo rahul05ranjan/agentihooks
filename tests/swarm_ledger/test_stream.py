@@ -56,7 +56,9 @@ def frames(response):
 
 
 def next_of(reader, names):
+    deadline = time.monotonic() + 5
     for name, data, cursor in reader:
+        assert time.monotonic() < deadline, f"stream missed {names} before the deadline"
         if name in names:
             return name, data, cursor
     raise AssertionError(f"stream ended before {names}")
