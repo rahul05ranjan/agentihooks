@@ -178,6 +178,11 @@ def test_single_shard_collection_preserves_both_supported_workflow_states():
         "${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.changed != '0'"
         " && needs.plan.outputs.shards != '[0]' }}"
     )
+    assert jobs["mutation-shard"]["if"] == (
+        "${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.changed != '0'"
+        " && (needs.stats.result == 'success' || (needs.stats.result == 'skipped'"
+        " && needs.plan.outputs.shards == '[0]')) }}"
+    )
     inline = steps[names.index(inline_name)]
     assert inline["if"] == "needs.plan.outputs.shards == '[0]'"
     assert inline["env"]["BASES"] == "${{ needs.plan.outputs.bases }}"
