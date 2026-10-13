@@ -18,7 +18,7 @@ CODEX_LEGACY = Capabilities(push_inbox=False, native_terminal_attach=False, requ
 UNKNOWN = Capabilities(push_inbox=False, native_terminal_attach=False, requires_foreground_inbox_wait=False)
 
 
-def of(harness: str, transport: str = "") -> Capabilities:
+def of(harness: str | None, transport: str | None) -> Capabilities:
     if harness == "claude":
         return CLAUDE
     if harness == "codex":

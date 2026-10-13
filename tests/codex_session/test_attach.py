@@ -23,8 +23,8 @@ RECORD = TransportRecord(
 
 
 class Clock:
-    def __init__(self):
-        self.now, self.slept = 0.0, []
+    def __init__(self, now=0.0):
+        self.now, self.slept = now, []
 
     def __call__(self):
         return self.now
@@ -87,7 +87,7 @@ def test_a_thread_that_never_connects_times_out():
 
 
 def test_a_viewer_that_ran_and_closed_returns_without_another_attach():
-    clock, ran = Clock(), []
+    clock, ran = Clock(100.0), []
 
     def run(command):
         ran.append(command)
@@ -105,16 +105,22 @@ def test_a_closed_viewer_with_a_clean_exit_returns_at_once():
 
 
 def test_a_viewer_refused_before_the_first_rollout_is_retried_a_bounded_number_of_times():
-    clock, ran = Clock(), []
+    clock, ran = Clock(100.0), []
     assert attach.attach(reads(RECORD), lambda command: ran.append(command) or 2, "codex", 10, clock, clock.sleep) == 2
     assert len(ran) == 3
     assert clock.slept == [0.5] * 3
 
 
 def test_a_viewer_that_attaches_on_its_second_try_keeps_running():
-    clock, codes = Clock(), [2, 0]
+    clock, codes = Clock(100.0), [2, 0]
     assert attach.attach(reads(RECORD), lambda command: codes.pop(0), "codex", 10, clock, clock.sleep) == 0
     assert codes == []
+
+
+def test_each_attach_waits_for_the_thread_with_the_given_sleep():
+    clock = Clock(100.0)
+    assert attach.attach(reads(None, RECORD), lambda command: 0, "codex", 10, clock, clock.sleep) == 0
+    assert clock.slept == [0.5]
 
 
 def test_main_attaches_the_named_agent_with_the_given_binary():
@@ -139,8 +145,28 @@ def test_main_reports_a_refused_attach(capsys):
 
 
 def test_the_parser_defaults():
-    args = attach._parser().parse_args(["--slug", "sw", "--agent", "a"])
+    parser = attach._parser()
+    args = parser.parse_args(["--slug", "sw", "--agent", "a"])
     assert (args.codex_bin, args.timeout) == ("codex", 120.0)
+    assert parser.prog == "python -m scripts.codex_session attach"
+
+
+@pytest.mark.parametrize("argv", [["--agent", "a"], ["--slug", "sw"]])
+def test_the_parser_needs_the_slug_and_the_agent(argv, capsys):
+    with pytest.raises(SystemExit):
+        attach._parser().parse_args(argv)
+    assert "the following arguments are required" in capsys.readouterr().err
+
+
+def test_main_reads_the_named_agent_and_runs_the_viewer_by_default(monkeypatch):
+    from types import SimpleNamespace
+
+    asked, ran = [], []
+    monkeypatch.setattr(attach, "recorded", lambda slug, name: asked.append((slug, name)) or reads(RECORD))
+    monkeypatch.setattr(attach.subprocess, "run", lambda command: ran.append(command) or SimpleNamespace(returncode=0))
+    assert attach.main(["--slug", "sw", "--agent", "sw-master-1"]) == 0
+    assert asked == [("sw", "sw-master-1")]
+    assert ran == [attach.viewer_argv("codex", RECORD)]
 
 
 def test_recorded_reads_the_named_agents_current_transport(monkeypatch):
@@ -189,3 +215,11 @@ def test_the_app_server_pane_runs_the_server_in_its_own_session_and_the_viewer_i
         "sw-master-1",
     ]
     assert str(log) not in lines[serve + 2]
+
+
+def test_a_viewer_launched_outside_a_swarm_names_an_empty_slug(tmp_path):
+    spec = init_agent.AgentSpec(agent="codex", profile="engineer", transport=init_agent.APP_SERVER, seat="master@sw")
+    launcher, _ = init_agent._write_launcher(tmp_path, "a", "Open.", [], {"XDG_RUNTIME_DIR": str(tmp_path)}, spec)
+    lines = launcher.read_text().splitlines()
+    serve = next(index for index, line in enumerate(lines) if line.startswith("setsid -f "))
+    assert shlex.split(lines[serve + 1])[4:] == ["--slug", "", "--agent", "a"]

@@ -125,7 +125,7 @@ def test_a_push_mode_codex_master_prompt_drops_the_wait_inbox_loop():
     text = _master(APP_SERVER_TRANSPORT)
     assert "wait --inbox in a foreground tool call" not in text
     assert codex_master.waiting("sw", push=True) in text
-    assert "When writing a handoff, make its Next action read agentihooks msg inbox." in text
+    assert "When writing a handoff, make its Next action read agentihooks msg inbox." in text.splitlines()
     assert "and use agentihooks swarm sw wait --inbox when no work remains" not in text
     assert "## Next\nRead agentihooks msg inbox\n" in text
 
@@ -186,3 +186,53 @@ def test_the_spawned_task_names_the_transport_its_launch_chooses(setting, harnes
     config = SwarmConfig("sw", "/repo", 1, 0, codex_inbox_transport=setting)
     assert codex.transport(config, harness) == expected
     assert codex.transport(SwarmConfig("sw", "/repo", 1, 0), "codex") == LEGACY_TRANSPORT
+
+
+def test_a_config_without_a_transport_setting_reads_as_legacy():
+    from types import SimpleNamespace
+
+    from scripts.swarm_v2.runtime import codex
+
+    assert codex.transport(SimpleNamespace(), "codex") == LEGACY_TRANSPORT
+
+
+class Built(Exception):
+    pass
+
+
+@pytest.mark.parametrize(
+    ("setting", "harness", "expected"),
+    [
+        (APP_SERVER_TRANSPORT, "codex", {"harness": "codex", "transport": APP_SERVER_TRANSPORT}),
+        (LEGACY_TRANSPORT, "codex", {"harness": "codex", "transport": LEGACY_TRANSPORT}),
+        (APP_SERVER_TRANSPORT, "claude", {"harness": "claude"}),
+    ],
+)
+def test_the_spawn_hands_the_prompt_the_transport_its_launch_chooses(tmp_path, monkeypatch, setting, harness, expected):
+    from types import SimpleNamespace
+
+    from scripts.swarm.runtime import HerdrRuntime
+
+    seen = {}
+
+    def build(slug, repo, lane, name, task, **kwargs):
+        seen.update(task)
+        raise Built
+
+    for key in ("MODEL", "EFFORT"):
+        for agent in ("CLAUDE", "CODEX"):
+            monkeypatch.delenv(f"AGENTIHOOKS_{agent}_{key}", raising=False)
+    monkeypatch.setattr(prompt, "build", build)
+    runtime = HerdrRuntime(home=tmp_path, run=None, choose=lambda *_: (harness, "open"))
+    config = SimpleNamespace(
+        slug="sw",
+        repo=str(tmp_path),
+        code="a1b2c3",
+        compact_limit=0,
+        lanes={"eng": {"agent": "auto", "model": "auto", "effort": "auto"}},
+        autonomy="delegate",
+        codex_inbox_transport=setting,
+    )
+    with pytest.raises(Built):
+        runtime.spawn(config, "eng", "agent@a1b2c3-0001", {"id": "t1", "title": "x"})
+    assert {key: seen[key] for key in ("harness", "transport") if key in seen} == expected
