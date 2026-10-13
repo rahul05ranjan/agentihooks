@@ -123,6 +123,7 @@ def stamp(slug, task_id, url, doc, mode, now_ms, home=None):
         return {"verdict": "off", "body": body}
     verdicts = Verdicts(slug, NAME, home)
     planned = verdicts.read(task_id)
+    _bind_pulls(verdicts, task, url)
     if task is not None and not task.get("split") and planned and planned.get("planned") and planned["verdict"] == PASS:
         if _same_phase(planned, task):
             return {"verdict": PASS, "body": body}
@@ -132,6 +133,16 @@ def stamp(slug, task_id, url, doc, mode, now_ms, home=None):
 
 def _split_fields(task, url):
     return {"url": url, "split": True} if task and task.get("split") else {}
+
+
+def _pull_subject(task, url):
+    return f"{task}.{hashlib.sha256(url.encode()).hexdigest()}"
+
+
+def _bind_pulls(state, task, url):
+    if task and task.get("split"):
+        pulls = list(dict.fromkeys([*(task.get("split_pulls") or []), url]))[: len(task["split"])]
+        Verdicts(state.slug, f"{NAME}-pulls", state.home).write(task["id"], PASS, "registered split pulls", pulls=pulls)
 
 
 def _pr_field(url, field, run):
@@ -656,6 +667,15 @@ class Check:
             **_split_fields(task, task["pr_url"]),
         }
         verdicts.write(task["id"], verdict, reason, self.now_ms, **fields)
+        if task.get("split"):
+            _bind_pulls(verdicts, task, task["pr_url"])
+            Verdicts(self.slug, f"{NAME}-pulls", self.home).write(
+                _pull_subject(task["id"], task["pr_url"]),
+                verdict,
+                reason,
+                self.now_ms,
+                **{**fields, "head": head, "url": task["pr_url"]},
+            )
         if self.mode == "coach":
             self._coaching().write(task["id"], verdict, reason, self.now_ms, **fields)
         who = Who(name=task.get("claimed_by", ""), task=task["id"])
@@ -778,7 +798,31 @@ class IntentGate:
         if not (who.pinned and who.task) or not any(map(_gated, simple_commands(call.command))):
             return Decision()
         record = state.read(who.task)
-        if _other_half(call.command, record):
+        targets = list(filter(None, map(_merge_target, simple_commands(call.command))))
+        pulls = Verdicts(state.slug, f"{NAME}-pulls", state.home)
+        bound = pulls.read(who.task)
+        if bound and targets:
+            for target in targets:
+                named = PULL.search(target)
+                urls = [
+                    url
+                    for url in bound["pulls"]
+                    if (PULL.search(url).groups() if named else PULL.search(url)[3])
+                    == (named.groups() if named else target)
+                ]
+                if len(urls) != 1:
+                    return Decision.deny("Intent requires a pull request registered on this task.")
+                saved = pulls.read(_pull_subject(who.task, urls[0]))
+                if not saved or not saved.get("head") or pr_head(urls[0]) != saved["head"]:
+                    return Decision.deny("Intent must be checked on this pull request head before it can merge.")
+                decision = self._decide_record(call, who, state, mode, saved, bound=True)
+                if not decision.allowed:
+                    return decision
+            return Decision()
+        return self._decide_record(call, who, state, mode, record)
+
+    def _decide_record(self, call, who, state, mode, record, bound=False):
+        if not bound and _other_half(call.command, record):
             return Decision.deny(
                 f"intent for task {who.task} was judged on {record['url']}, not this pull request. Record this half "
                 f"first: agentihooks swarm {who.swarm} pr <pull request url> --half <n>, then wait for its verdict."
