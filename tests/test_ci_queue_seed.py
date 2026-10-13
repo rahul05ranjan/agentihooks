@@ -286,7 +286,7 @@ def test_the_base_run_is_any_tests_run_on_the_base_commit_that_kept_a_baseline(b
 
 
 def test_the_base_run_ignores_dispatched_runs_that_wait_on_a_hosted_lane(base_run):
-    result, output, _ = base_run(dispatch="111", kept_by="333", status="completed", wait="5")
+    result, output, _ = base_run(dispatch="111", kept_by="333", status="completed")
     assert result.returncode != 0
     assert "finished without a coverage baseline" in result.stdout
     assert output == ""
