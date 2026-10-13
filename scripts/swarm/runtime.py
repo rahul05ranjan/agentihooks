@@ -510,7 +510,9 @@ class HerdrRuntime:
         )
         if saved and agent != saved["harness"]:
             raise SpawnError("unsupported handoff: router substituted the original harness", "unsupported")
-        task = {**task, "harness": agent}
+        from scripts.swarm_v2.runtime import codex
+
+        task = {**task, "harness": agent, "transport": codex.transport(config, agent)}
         text = timing.call(
             prompt.build,
             config.slug,
@@ -523,8 +525,6 @@ class HerdrRuntime:
         )
         timing.call(priming_trace.write, self.home, config.slug, name, task)
         argv = self._argv(config, name, agent, text, f"{name}.md", profile, decision.overlays)
-        from scripts.swarm_v2.runtime import codex
-
         argv += codex.arguments(config, agent, task)
         argv += _pinned(decision.overlays, decision.bundle_revision)
         if saved.get("model"):
@@ -1018,6 +1018,12 @@ class HerdrRuntime:
         if agent.runtime_backend != "local":
             return
         try:
+            if live_binding.managed(agent):
+                from scripts.inbox.store import InboxStore
+                from scripts.inbox.wake import BY
+
+                InboxStore(connect().redis).send(BY, agent.name, text)
+                return
             self.herdr(["agent", "prompt", pane_target(agent), marked(text)])
         except Exception as exc:
             return str(exc) or type(exc).__name__

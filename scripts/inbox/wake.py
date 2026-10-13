@@ -10,7 +10,7 @@ from scripts.inbox import addresses, exits
 from scripts.inbox.seats import is_seat
 from scripts.inbox.seen import SEEN_ON_LEDGER, SeenMarks
 from scripts.inbox.store import redelivery_ms
-from scripts.swarm import idle, outage
+from scripts.swarm import capabilities, idle, outage
 from scripts.swarm.delivery import READY, post
 from scripts.swarm.store import MASTER, RedisStore, SwarmError
 from scripts.swarm_ledger import ledger_comments
@@ -26,7 +26,6 @@ WAKE_TEXT = (
     "You have unread inbox messages: run agentihooks msg inbox, then read each one and answer it with agentihooks "
     "msg reply or the swarm commands, never as text in this terminal, and close the rest."
 )
-WATCHED = ("claude",)
 WOKEN, TO_MASTER, TO_OPERATOR = "woken", "escalated_master", "escalated_operator"
 
 
@@ -39,8 +38,8 @@ def quiet_ms(environ):
 
 
 def typed_wake(agent):
-    """Only a worker pane whose harness has no inbox channel is typed into; the master pane is the operator's."""
-    return bool(agent.pane_id) and agent.lane != MASTER and agent.harness not in WATCHED
+    """Only a worker pane whose transport does not own delivery is typed into; the master pane is the operator's."""
+    return bool(agent.pane_id) and agent.lane != MASTER and not capabilities.of_agent(agent).push_inbox
 
 
 def decide(item, pane, history, now_ms, window, slug, since=0):

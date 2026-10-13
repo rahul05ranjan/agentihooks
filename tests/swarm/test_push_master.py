@@ -1,12 +1,12 @@
 from dataclasses import replace
 
 import pytest
-from scripts.swarm.capabilities import Capabilities
 
 from scripts.handoff import transfers
 from scripts.inbox import wake
 from scripts.profiles import codex_master
 from scripts.swarm import capabilities, prompt
+from scripts.swarm.capabilities import Capabilities
 from scripts.swarm.store import (
     APP_SERVER_TRANSPORT,
     LEGACY_TRANSPORT,
@@ -178,3 +178,19 @@ def test_a_push_master_confirms_the_push_transformed_next(seat):
     pushed = codex_master.next_action(action, "sw", push=True)
     assert pushed == "Read agentihooks msg inbox."
     assert transfers.confirm(store, "sw", transfer["id"], new, pushed, 5)["continuity"]["next"] == pushed
+
+
+@pytest.mark.parametrize(
+    ("setting", "harness", "expected"),
+    [
+        (APP_SERVER_TRANSPORT, "codex", APP_SERVER_TRANSPORT),
+        (LEGACY_TRANSPORT, "codex", LEGACY_TRANSPORT),
+        (APP_SERVER_TRANSPORT, "claude", ""),
+    ],
+)
+def test_the_spawned_task_names_the_transport_its_launch_chooses(setting, harness, expected):
+    from scripts.swarm_v2.runtime import codex
+
+    config = SwarmConfig("sw", "/repo", 1, 0, codex_inbox_transport=setting)
+    assert codex.transport(config, harness) == expected
+    assert codex.transport(SwarmConfig("sw", "/repo", 1, 0), "codex") == LEGACY_TRANSPORT

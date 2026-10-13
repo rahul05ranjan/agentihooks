@@ -317,6 +317,22 @@ def _app_server_command(
     ]
 
 
+def _viewer_lines(serve: str, launcher: Path, name: str, environ: dict[str, str]) -> str:
+    """The supervised server runs in its own session so closing the pane ends only the native terminal viewer."""
+    log = launcher.with_name(f"{launcher.stem}.serve.log")
+    viewer = [
+        sys.executable,
+        "-m",
+        "scripts.codex_session",
+        "attach",
+        "--slug",
+        environ.get("AGENTIHOOKS_SWARM", ""),
+        "--agent",
+        name,
+    ]
+    return f"setsid -f {serve} </dev/null >>{shlex.quote(str(log))} 2>&1\n{shlex.join(viewer)}"
+
+
 def _agent_command(
     spec: AgentSpec,
     report: Path,
@@ -390,6 +406,8 @@ def _write_launcher(
     opening = prompt_file if app_server else None
     command, before = _agent_command(spec, _route_report(launcher), name, claude_args, environ, directory, opening)
     command_text = shlex.join(command)
+    if app_server:
+        command_text = _viewer_lines(command_text, launcher, name, environ)
     if prompt_file is not None and not app_server:
         prompt_arg = f'"$(cat {shlex.quote(str(prompt_file))})"'
         held = f'set --; [ -n "${{{PROMPT_AFTER_START}:-}}" ] || set -- {prompt_arg}; unset {PROMPT_AFTER_START}; '
