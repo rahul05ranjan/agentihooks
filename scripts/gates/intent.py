@@ -4,11 +4,12 @@ intent gate refuses merge and done while that answer is fail, or pending for und
 import hashlib
 import json
 import re
+import shlex
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Callable
 
@@ -144,7 +145,7 @@ def _bind_pulls(state, task, url, doc):
         from scripts.swarm.done_gate import _pulls
 
         task = {**task, "pr_url": url}
-        pulls = _pulls(task)
+        pulls = [pull for pull in _pulls(task) if PULL.search(pull)]
         inputs = {pull: _fingerprint(doc, {**task, "pr_url": pull}) for pull in pulls}
         Verdicts(state.slug, f"{NAME}-pulls", state.home).write(
             task["id"],
@@ -825,6 +826,7 @@ class IntentGate:
         if not bound:
             return self._decide_record(call, who, state, mode, record)
         for words in commands:
+            single = replace(call, tool_input={**call.tool_input, "command": shlex.join(words)})
             target = _merge_target(words)
             saved = record
             if target:
@@ -841,7 +843,7 @@ class IntentGate:
                     return Decision.deny(
                         "Intent must be checked on this pull request head and contract before it can merge."
                     )
-            decision = self._decide_record(call, who, state, mode, saved, bound=True)
+            decision = self._decide_record(single, who, state, mode, saved, bound=True)
             if not decision.allowed:
                 return decision
         return Decision()
