@@ -72,7 +72,10 @@ def deny_reason(payload: dict, role: str, home: Path) -> str:
 
 
 def main(role: str) -> int:
-    reason = deny_reason(json.load(sys.stdin), role, Path.home())
+    try:
+        reason = deny_reason(json.load(sys.stdin), role, Path.home())
+    except Exception:
+        reason = f"{role} cannot evaluate the coding window; edits stay closed."
     if reason:
         print(reason, file=sys.stderr)
         return 2
