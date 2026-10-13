@@ -201,3 +201,55 @@ def test_two_tabs_share_one_channel_and_both_receive_a_change(live):
     ] * 2
     one.close()
     two.close()
+
+
+def test_sampling_delivers_an_external_store_write_within_one_minute(live):
+    port, token = live
+    conn, response = connect(port, token)
+    try:
+        reader = frames(response)
+        _, snapshot, _ = next_of(reader, {"snapshot"})
+        seq = server.HUB.channels[SLUG].seq
+        started = time.monotonic()
+        state, rejected = server.repository.inner.apply_ops(SLUG, ops=[comment(153)])
+        assert rejected == []
+        assert server.HUB.wait(SLUG, seq, 0) == []
+        server.sample_streams()
+        events = server.HUB.wait(SLUG, seq, 0)
+        assert any(event[2] == "ledger" for event in events), "external write was not sampled"
+        _, change, _ = next_of(reader, {"ledger"})
+        assert apply(snapshot["ledger"], change["patch"])["notes"][-1]["text"] == "note 153"
+        assert change["rev"] == state["_meta"]["rev"]
+        assert time.monotonic() - started < 60
+    finally:
+        response.close()
+        conn.close()
+
+
+def test_sampling_an_unchanged_watched_ledger_costs_one_select(live):
+    port, token = live
+    conn, response = connect(port, token)
+    try:
+        next_of(frames(response), {"snapshot"})
+        statements = []
+        server.repository.inner.trace = statements.append
+        try:
+            server.sample_streams()
+        finally:
+            server.repository.inner.trace = None
+        selects = [statement for statement in statements if statement.lstrip().upper().startswith("SELECT")]
+        assert len(selects) == 1, selects
+        assert "generation" in selects[0].lower()
+    finally:
+        response.close()
+        conn.close()
+
+
+def test_sampling_a_ledger_without_an_open_page_costs_no_select(live):
+    statements = []
+    server.repository.inner.trace = statements.append
+    try:
+        server.sample_streams()
+    finally:
+        server.repository.inner.trace = None
+    assert not [statement for statement in statements if statement.lstrip().upper().startswith("SELECT")]
