@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from hooks.lifecycle.gitstate import inspect
 from hooks.lifecycle.lease import admin_dir
 from hooks.lifecycle.worktrees import classify
 
@@ -24,6 +25,8 @@ def test_reflog_expiry_does_not_renew_idle_worktree(repo, command):
 
     assert log.read_bytes() == old_content
     assert log.stat().st_mtime > old_mtime
+    state = inspect(path, snap().now)
+    assert state.last_touch == old_mtime
     finding = classify(path, repo.root(), snap())
     assert (finding.action, finding.reason) == ("remove", "clean and on a remote")
 
