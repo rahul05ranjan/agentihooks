@@ -69,7 +69,7 @@ def task_lifted(slug, task, gate, home=None, now=None):
 
 def drop_task(slug, task, home=None):
     for path in task_lifts_dir(slug, task, home).glob("*"):
-        path.unlink(missing_ok=True)
+        path.unlink()
 
 
 def held(slug, agent, task, gate, home=None):

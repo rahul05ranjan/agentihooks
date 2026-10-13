@@ -662,8 +662,8 @@ def control_readings(store, args):
             if key in (*SETTABLE, *LANE_KEYS, *EFFORT_KEYS, *CONFIG_KEYS, *GATE_KEYS, "autonomy")
         }
     if args.command == "lift":
-        task = next((a.task for a in store.agents(args.slug) if a.name == args.agent), "")
-        lifted = lift.held(args.slug, args.agent, task, args.gate)
+        agent = _lifted_agent(store, args)
+        lifted = lift.held(args.slug, agent.name, agent.task, args.gate)
         return {f"{args.gate} gate lift for {args.agent}": "lifted" if lifted else "not lifted"}
     return {f"the swarm state with {lifecycle_control(args)}": config.state}
 
@@ -1063,15 +1063,20 @@ def cmd_lift(store, args):
     from scripts.gates import entry
 
     store.config(args.slug)
-    agent = next((a for a in store.agents(args.slug) if a.name == args.agent), None)
-    if agent is None:
-        raise SwarmError(f"{args.agent} is not in this swarm")
+    agent = _lifted_agent(store, args)
     if args.gate not in {*entry.GATES, *lift.SERVER_GATES}:
         raise SwarmError(f"no gate named {args.gate}")
     pull = {} if args.gate in lift.SERVER_GATES else _lifted_pull(args.slug, agent.task)
     lift.lift_agent(Who(name=agent.name, swarm=args.slug, task=agent.task), args.gate, pull=pull)
     bound = {"head": pull["head"]} if pull else {"minutes": lift.LIFT_SECONDS // 60}
     print(json.dumps({"agent": agent.name, "gate": args.gate, **bound}))
+
+
+def _lifted_agent(store, args):
+    agent = next((a for a in store.agents(args.slug) if a.name == args.agent), None)
+    if agent is None:
+        raise SwarmError(f"{args.agent} is not in this swarm")
+    return agent
 
 
 def _lifted_pull(slug, task):

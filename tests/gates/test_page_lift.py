@@ -121,6 +121,12 @@ class TestTaskLift:
         assert not lift.task_lifted(SLUG, TASK, "stub", tmp_path, now=100.0 + lift.LIFT_SECONDS)
         assert not lift.task_lifted(SLUG, "", "stub", tmp_path, now=101.0)
 
+    def test_a_task_lift_outside_a_swarm_lifts_nothing(self, tmp_path):
+        path = lift.task_lift_path("", TASK, "stub", tmp_path)
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"at": 100.0}))
+        assert not lift.task_lifted("", TASK, "stub", tmp_path, now=101.0)
+
     def test_an_agent_without_a_task_keeps_its_agent_lift(self, tmp_path):
         lift.lift_agent(Who(name="master@1-0", swarm=SLUG), "stub", tmp_path)
         assert self.run(tmp_path, None, agent="master@1-0", task="")[0] == 0
@@ -202,7 +208,9 @@ class TestCommand:
     @pytest.fixture(autouse=True)
     def read_heads(self, monkeypatch):
         read = []
-        ledger = SimpleNamespace(task=lambda slug, task: {"id": task, "pr_url": URL} if task == TASK else None)
+        ledger = SimpleNamespace(
+            task=lambda slug, task: {"id": task, "pr_url": URL} if (slug, task) == (SLUG, TASK) else None
+        )
         monkeypatch.setattr(cli, "LedgerClient", lambda: ledger)
         monkeypatch.setattr("scripts.gates.intent.pr_head", lambda url: read.append(url) or "a1")
         return read
@@ -239,7 +247,7 @@ class TestCommand:
         assert lift.agent_lifted(SLUG, ME, "talk")
         assert not lift.task_lift_path(SLUG, TASK, "talk").exists()
         assert read_heads == []
-        assert json.loads(capsys.readouterr().out) == {"agent": ME, "gate": "talk", "minutes": 60}
+        assert capsys.readouterr().out == json.dumps({"agent": ME, "gate": "talk", "minutes": 60}) + "\n"
 
     def test_an_agent_cannot_lift_a_gate(self, monkeypatch, capsys):
         monkeypatch.setattr(cli, "connect", saved)
