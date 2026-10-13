@@ -142,7 +142,10 @@ class ExecutionRegistry:
         if agent.execution_id or agent.generation:
             self.conflict(slug, "new execution identity and generation must be allocated by the store")
         self.validate(slug, agent)
+        from scripts.codex_session.binding import PUBLISHING
+
         key = self.store.key(slug, "executions")
+        publishing = self.store.key(slug, PUBLISHING)
         for _ in range(WRITE_ATTEMPTS):
             with self.redis.pipeline() as pipe:
                 try:

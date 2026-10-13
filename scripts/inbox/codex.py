@@ -90,7 +90,7 @@ class Transport:
         import json
         from dataclasses import asdict
 
-        from scripts.codex_session.binding import RECORDS
+        from scripts.codex_session.binding import IDENTITY, RECORDS, BindingError
         from scripts.inbox.receipts import transact
 
         key = self.bindings.store.key(self.slug, RECORDS)
@@ -98,8 +98,11 @@ class Transport:
         def update(pipe):
             pipe.watch(key)
             record = self.require(pipe)
+            updated = replace(record, **changes)
+            if any(getattr(record, field) != getattr(updated, field) for field in IDENTITY):
+                raise BindingError("transport record identity is immutable")
             pipe.multi()
-            pipe.hset(key, self.execution_id, json.dumps(asdict(replace(record, **changes))))
+            pipe.hset(key, self.execution_id, json.dumps(asdict(updated)))
 
         transact(self.bindings.redis, update)
 

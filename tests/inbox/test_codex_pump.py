@@ -649,6 +649,15 @@ def test_retirement_racing_a_receipt_commit_refuses_the_old_ack(rig, monkeypatch
     assert rig.pump.receipts.get(delivery.id).committed is False
 
 
+def test_atomic_transport_updates_keep_record_identity_immutable(rig):
+    from scripts.codex_session.binding import BindingError
+
+    with pytest.raises(BindingError) as refused:
+        rig.pump.binding.transport.mark(execution_id="other")
+    assert str(refused.value) == "transport record identity is immutable"
+    assert rig.record().execution_id == EXECUTION
+
+
 @pytest.mark.parametrize("busy", [False, True])
 def test_successor_admission_cannot_overtake_an_inbox_publication(rig, monkeypatch, busy):
     from scripts.swarm.store import SwarmError
