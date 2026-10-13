@@ -58,6 +58,7 @@ class Swarm:
         import fakeredis
 
         self.store = RedisStore(fakeredis.FakeRedis(decode_responses=True))
+        self.store.create(SwarmConfig(SLUG, "/repo", 1, 1, gates={"stall-watch": "enforce"}))
         self.ledger = Ledger(
             [{"id": "t1", "state": "pr", "pr_url": URL, "claimed_by": OWNER, "branch": "b1", **(task or {})}]
         )
@@ -655,7 +656,7 @@ def test_many_ready_tasks_send_one_lane_alert_with_the_ready_count():
 def test_an_operator_capped_lane_never_alerts_about_unclaimed_tasks():
     swarm = Swarm(RUNNING)
     _full_lane(swarm)
-    swarm.store.create(SwarmConfig(SLUG, "/repo", max_eng=1, max_ci=0, max_plan=0, scaling="manual"))
+    swarm.store.update(SLUG, max_eng=1, max_ci=0, max_plan=0, scaling="manual")
     assert swarm.tick(START) == []
     assert swarm.tick(START + 180 * MINUTE) == []
     assert swarm.inbox() == []
@@ -667,7 +668,7 @@ def test_an_existing_lane_alert_never_escalates_after_manual_caps_apply():
     swarm.tick(START)
     swarm.tick(START + 15 * MINUTE)
     [item] = swarm.inbox()
-    swarm.store.create(SwarmConfig(SLUG, "/repo", max_eng=1, max_ci=0, max_plan=0, scaling="manual"))
+    swarm.store.update(SLUG, max_eng=1, max_ci=0, max_plan=0, scaling="manual")
     assert swarm.tick(START + 45 * MINUTE) == []
     assert swarm.ledger.priorities == []
     assert swarm.posted == []
@@ -863,3 +864,60 @@ def test_each_alert_row_is_judged_on_its_own():
     swarm.store.redis.hset(key, "t9", _row("t9", inbox.send("swarm", "master@sw", "due").id))
     assert swarm.tick(START + 20 * MINUTE) == ["stall on task t9 unanswered, raised to the operator"]
     assert [item for item, _ in swarm.ledger.priorities] == ["tasks/t9"]
+
+
+@pytest.mark.parametrize("mode", [None, "observe", "off", "enforce"])
+def test_the_watchdog_mode_controls_mutations_and_keeps_alerts(mode):
+    from scripts.gates import log
+
+    swarm = Swarm(GREEN, environ={"AGENTIHOOKS_GATE_STALL_WATCH": "enforce"})
+    swarm.store.update(SLUG, gates={} if mode is None else {"stall-watch": mode})
+    swarm.tick(START)
+    swarm.tick(START + 10 * MINUTE)
+    [item] = swarm.inbox()
+    assert URL in item.text
+    rows = log.recent(SLUG)
+    if mode == "enforce":
+        assert swarm.retired == [OWNER] and _reopened(swarm)
+        assert [(row["kind"], row["tool"]) for row in rows] == [("deny", "reopen"), ("deny", "stop")]
+    else:
+        assert swarm.retired == [] and not _reopened(swarm)
+        assert swarm.ledger.updates == [] and swarm.ledger.comments == []
+        assert swarm.ledger.task(SLUG, "t1")["claimed_by"] == OWNER
+        assert swarm.store.claimant(SLUG, "t1") == OWNER
+        assert [agent.name for agent in swarm.store.agents(SLUG)] == [OWNER]
+        expected = [] if mode == "off" else [("observe", "reopen"), ("observe", "stop")]
+        assert [(row["kind"], row["tool"]) for row in rows] == expected
+        if rows:
+            assert all(row["gate"] == "stall-watch" and row["agent"] == OWNER and row["task"] == "t1" for row in rows)
+            assert all(row["reason"] == "green and not queued for 10 minutes" for row in rows)
+            assert all(row["at"] == START + 10 * MINUTE for row in rows)
+        swarm.tick(START + 30 * MINUTE)
+        assert len(swarm.ledger.priorities) == 1 and len(swarm.posted) == 1
+
+
+def test_five_live_watchdog_candidates_remain_claimed_for_an_hour_by_default():
+    from scripts.gates import log
+
+    swarm = Swarm(GREEN)
+    swarm.store.update(SLUG, gates={})
+    for index in range(2, 6):
+        tid, owner = f"t{index}", f"worker-{index}"
+        swarm.ledger.rows[tid] = {"id": tid, "state": "pr", "pr_url": URL, "claimed_by": owner}
+        swarm.store.put_agent(SLUG, AgentRecord(owner, "eng", tid, seat=f"eng-{index}@sw"))
+        swarm.store.redis.set(swarm.store.key(SLUG, "claim", tid), owner)
+        swarm.live.add(owner)
+    swarm.tick(START)
+    for minutes in range(10, 61, 10):
+        swarm.tick(START + minutes * MINUTE)
+    assert swarm.retired == []
+    assert swarm.ledger.updates == []
+    assert all(task["state"] == "pr" for task in swarm.ledger.rows.values())
+    assert len(swarm.store.agents(SLUG)) == 5
+    assert all(swarm.store.claimant(SLUG, tid) == task["claimed_by"] for tid, task in swarm.ledger.rows.items())
+    rows = log.recent(SLUG, limit=None)
+    assert len(rows) == 60
+    assert sum(row["tool"] == "stop" for row in rows) == 30
+    assert sum(row["tool"] == "reopen" for row in rows) == 30
+    assert all(row["kind"] == "observe" for row in rows)
+    assert len(swarm.inbox()) == 5
