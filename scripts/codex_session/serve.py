@@ -174,13 +174,8 @@ def main(
     pump = None
     try:
         pump = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "scripts.inbox.codex",
-                spec.slug,
-                record.execution_id,
-            ],  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+            # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+            [sys.executable, "-m", "scripts.inbox.codex", spec.slug, record.execution_id],
             cwd=spec.cwd,
             env=spec.environ,
         )
