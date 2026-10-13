@@ -113,7 +113,7 @@ def test_merge_target_reads_the_first_pull_request_operand():
 @pytest.mark.parametrize("target", [FIRST, "9"])
 @pytest.mark.parametrize("head,allowed", [("abc", True), ("new", False), (None, False)])
 def test_the_tests_first_intent_survives_recording_the_main_pull(tmp_path, monkeypatch, target, head, allowed):
-    task = split_task(split=[], split_pulls=[], pr_urls=[FIRST])
+    task = split_task()
     judged(tmp_path, task)
     monkeypatch.setattr(intent, "stamp_body", lambda *args: True)
     intent.stamp(SLUG, TASK, SECOND, {**DOC, "tasks": [task]}, "enforce", NOW + 1, home=tmp_path)
@@ -125,9 +125,9 @@ def test_the_tests_first_intent_survives_recording_the_main_pull(tmp_path, monke
 
 
 def test_the_main_intent_does_not_override_a_failed_tests_first_pull(tmp_path, monkeypatch):
-    task = split_task(split=[], split_pulls=[], pr_urls=[FIRST])
+    task = split_task()
     judged(tmp_path, task, verdict="fail")
-    main = {**task, "pr_url": SECOND, "pr_urls": [FIRST, SECOND]}
+    main = {**task, "pr_url": SECOND, "split_pulls": [FIRST, SECOND]}
     judged(tmp_path, main)
     monkeypatch.setattr(intent, "pr_head", lambda url: "abc")
     decision = intent.IntentGate().decide(bash(f"gh pr merge {FIRST}"), WHO, verdicts(tmp_path))
@@ -136,7 +136,7 @@ def test_the_main_intent_does_not_override_a_failed_tests_first_pull(tmp_path, m
 
 
 def test_listed_intent_refuses_a_pull_without_its_own_judgment(tmp_path, monkeypatch):
-    task = split_task(split=[], split_pulls=[], pr_urls=[FIRST, SECOND])
+    task = split_task(split_pulls=[FIRST, SECOND])
     judged(tmp_path, task)
     monkeypatch.setattr(intent, "pr_head", lambda url: "abc")
     for url in [SECOND, "https://github.com/o/r/pull/99"]:

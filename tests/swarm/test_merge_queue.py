@@ -566,7 +566,7 @@ def test_cli_accepts_the_earlier_pull_the_task_lists(monkeypatch, action):
     from types import SimpleNamespace
 
     first = "https://github.com/o/r/pull/6"
-    task = {"id": "t1", "pr_url": URL, "pr_urls": [first, URL]}
+    task = {"id": "t1", "pr_url": URL, "split": ["1-2", "3-4"], "split_pulls": [first, URL]}
     monkeypatch.setattr(cli, "connect", lambda: swarm_of("eng"))
     monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", "engineer@a1b2c3-0001")
     monkeypatch.setattr(cli, "LedgerClient", lambda: SimpleNamespace(tasks=lambda slug: [task]))
@@ -579,7 +579,7 @@ def test_cli_accepts_the_earlier_pull_the_task_lists(monkeypatch, action):
 def test_cli_refuses_an_unlisted_pull_before_a_queue_call(monkeypatch):
     from types import SimpleNamespace
 
-    task = {"id": "t1", "pr_url": URL, "pr_urls": ["https://github.com/o/r/pull/6", URL]}
+    task = {"id": "t1", "pr_url": URL, "split": ["1-2", "3-4"], "split_pulls": ["https://github.com/o/r/pull/6", URL]}
     monkeypatch.setattr(cli, "connect", lambda: swarm_of("eng"))
     monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", "engineer@a1b2c3-0001")
     monkeypatch.setattr(cli, "LedgerClient", lambda: SimpleNamespace(tasks=lambda slug: [task]))
