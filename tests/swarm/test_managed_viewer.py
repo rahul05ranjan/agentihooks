@@ -15,7 +15,7 @@ def test_a_managed_nudge_lands_in_the_inbox_and_never_types_into_the_viewer(rig)
     assert rig.runner.nudge(rig.agent, "You sit idle on your task.") is None
     inbox = InboxStore(rig.store.redis)
     items = inbox.inbox(inbox.names.resolve(rig.agent.name))
-    assert [(item.sender, item.text) for item in items] == [(BY, "You sit idle on your task.")]
+    assert [(item.sender, item.text, item.fyi) for item in items] == [(BY, "You sit idle on your task.", True)]
     rig.runner.herdr.assert_not_called()
 
 

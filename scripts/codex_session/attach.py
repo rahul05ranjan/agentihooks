@@ -1,8 +1,4 @@
-"""`python -m scripts.codex_session attach`: open the native Codex terminal on an execution's recorded thread.
-
-The terminal is a viewer of the supervised app-server; closing it leaves the server, the thread and inbox delivery
-running, and attaching again resumes the same thread.
-"""
+"""`python -m scripts.codex_session attach`: a native Codex terminal viewing an execution's recorded thread."""
 
 import argparse
 import subprocess
@@ -18,6 +14,9 @@ ATTEMPTS = 3
 EARLY_EXIT_S = 5.0
 ENDED = "the execution's app-server {}; there is no thread to attach"
 NOT_READY = "the execution has no connected thread after {:g} seconds"
+NO_ATTACH = "{} runs no app-server a native terminal can attach to"
+Read = Callable[[], TransportRecord | None]
+Run = Callable[[list[str]], int]
 
 
 class AttachError(RuntimeError):
@@ -33,7 +32,7 @@ def attachable(record: TransportRecord | None) -> bool:
 
 
 def wait_attachable(
-    read: Callable[[], TransportRecord | None],
+    read: Read,
     timeout: float,
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
@@ -51,8 +50,8 @@ def wait_attachable(
 
 
 def attach(
-    read: Callable[[], TransportRecord | None],
-    run: Callable[[list[str]], int],
+    read: Read,
+    run: Run,
     codex_bin: str,
     timeout: float,
     clock: Callable[[], float] = time.monotonic,
@@ -70,15 +69,19 @@ def attach(
     return code
 
 
-def recorded(slug: str, name: str) -> Callable[[], TransportRecord | None]:
-    from scripts.swarm import live_binding
+def recorded(slug: str, name: str) -> Read:
+    from scripts.swarm import capabilities, live_binding
     from scripts.swarm.store import connect
 
     store = connect()
 
     def read() -> TransportRecord | None:
         agent = next((agent for agent in store.agents(slug) if agent.name == name), None)
-        return None if agent is None else live_binding.transport(store, agent)
+        if agent is None:
+            return None
+        if not capabilities.of_agent(agent).native_terminal_attach:
+            raise AttachError(NO_ATTACH.format(name))
+        return live_binding.transport(store, agent)
 
     return read
 
@@ -92,7 +95,7 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str], read: Callable | None = None, run: Callable | None = None) -> int:
+def main(argv: list[str], read: Read | None = None, run: Run | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         return attach(

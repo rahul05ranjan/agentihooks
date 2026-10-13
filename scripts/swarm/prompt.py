@@ -59,7 +59,7 @@ def build_master(slug, repo, name, task, autonomy=DELEGATE):
     from scripts.swarm import capabilities
 
     codex = task.get("harness") == "codex"
-    push = capabilities.of(task.get("harness", ""), task.get("transport", "")).push_inbox
+    push = not capabilities.of(task.get("harness", ""), task.get("transport", "")).requires_foreground_inbox_wait
     if codex:
         task = codex_master.handoff(task, slug, push)
     me = f"agentihooks swarm {slug} --as {name}"
