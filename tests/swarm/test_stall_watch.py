@@ -9,7 +9,7 @@ from scripts.swarm import ledger_events, outage, ready, stall_watch
 from scripts.swarm.health.findings import Finding
 from scripts.swarm.ledger_events import PullRequest
 from scripts.swarm.stall_watch import ALERTED, REOPENED
-from scripts.swarm.store import MASTER, AgentRecord, RedisStore
+from scripts.swarm.store import MASTER, AgentRecord, RedisStore, SwarmConfig
 from scripts.swarm_v2 import masters
 from scripts.swarm_v2.masters import MasterSeats
 from tests.swarm.test_tick import FakeLedger
