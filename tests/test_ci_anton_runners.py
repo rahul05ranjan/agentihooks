@@ -24,6 +24,7 @@ def pool(label):
 LIGHT, STANDARD, BATCH = "anton-oss-light", "anton-oss", "anton-oss-batch"
 
 MOVED = {
+    ("access-audit.yml", "audit"): LIGHT,
     ("hive-worker.yml", "contracts"): LIGHT,
     ("hive-worker.yml", "kind"): STANDARD,
     ("hive-worker.yml", "publish"): STANDARD,
@@ -79,9 +80,6 @@ OIDC = {("pages.yml", "deploy"), ("publish-pypi.yml", "publish")}
 
 # The protected grader refuses a head that changes these, so they move only through the gate change protocol.
 PROTECTED = {("test.yml", "gate-required"), ("test.yml", "reuse"), ("runner-trust.yml", "actors")}
-
-# The one job holding the organization token stays off every shared runner.
-ORG_TOKEN = {("access-audit.yml", "audit")}
 
 # Runner trust never admits a pull_request_target run to a private runner.
 TARGET = {("gate-protected.yml", "grade")}
