@@ -59,7 +59,7 @@ def watch(read: Callable[[], list[dict]]) -> str | None:
 
 
 def main(argv: list[str] | None = None, read: Callable[[str, str, str], list[dict]] = read_jobs) -> int:
-    parser = argparse.ArgumentParser(description="name the first failed job of a merge queue Tests run")
+    parser = argparse.ArgumentParser()
     parser.add_argument("--repo", required=True)
     parser.add_argument("--run", required=True)
     parser.add_argument("--attempt", required=True)
