@@ -165,3 +165,55 @@ def test_the_actor_policy_comes_from_the_grader_not_the_graded_root(tmp_path, mo
     (tmp_path / ci_runner_classes.TABLE).write_text(json.dumps({"a.yml/x": "light"}))
     monkeypatch.chdir(ROOT)
     assert ci_runner_classes.main(["--root", str(tmp_path)]) == 1
+
+
+QUEUE_ROUTE = "(github.event_name == 'merge_group' && 'anton-oss-queue' || 'anton-oss')"
+
+
+def queue_routed(route=QUEUE_ROUTE, policy=POLICY):
+    return routed("anton-oss", policy).replace("&& 'anton-oss' ||", f"&& {route} ||")
+
+
+def test_a_standard_job_may_send_merge_group_runs_to_the_queue_pool():
+    assert classes({"b.yml": workflow(queue_routed())}, {"b.yml/build": "standard"}) == []
+    assert trust({"b.yml": workflow(queue_routed())}) == []
+
+
+@pytest.mark.parametrize("cls", ["light", "batch"])
+def test_only_the_standard_class_has_a_queue_pool(cls):
+    problems = classes({"b.yml": workflow(queue_routed())}, {"b.yml/build": cls})
+    assert problems == [f"b.yml/build: runs-on must be ubuntu-latest or the routed {cls} runner"]
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "(github.event_name == 'merge_group' && 'anton-oss' || 'anton-oss-queue')",
+        "(github.event_name == 'push' && 'anton-oss-queue' || 'anton-oss')",
+        "(github.event_name != 'merge_group' && 'anton-oss-queue' || 'anton-oss')",
+        "(github.event_name == 'merge_group' && 'anton' || 'anton-oss')",
+        "(github.event_name == 'merge_group' && 'anton-oss-queue' || 'ubuntu-latest')",
+        "'anton-oss-queue'",
+    ],
+)
+def test_any_other_queue_route_is_red_in_both_gates(route):
+    runner = queue_routed(route)
+    assert classes({"b.yml": workflow(runner)}, {"b.yml/build": "standard"}) == [
+        "b.yml/build: runs-on must be ubuntu-latest or the routed standard runner"
+    ]
+    assert trust({"b.yml": workflow(runner)}) != []
+
+
+def test_every_standard_test_job_sends_merge_group_runs_to_the_queue_pool():
+    import yaml
+
+    jobs = yaml.safe_load((ROOT / ".github/workflows/test.yml").read_text())["jobs"]
+    table = json.loads((ROOT / ci_runner_classes.TABLE).read_text())
+    policy = json.loads((ROOT / ci_runner_classes.ACTORS).read_text())
+    standard = sorted(
+        key.split("/")[1] for key, cls in table.items() if key.startswith("test.yml/") and cls == "standard"
+    )
+    assert standard
+    assert {name: jobs[name]["runs-on"] for name in standard} == {
+        name: queue_routed(policy=policy) for name in standard
+    }
