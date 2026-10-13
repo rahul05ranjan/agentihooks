@@ -981,7 +981,7 @@ def test_a_required_gate_ends_checks_wait_beside_a_pending_jobless_workflow(tick
         workflows(GATE_WORKFLOW),
     )
     assert tick.end() == []
-    outcome = "green" if conclusion == "SUCCESS" else "red"
+    outcome = "green" if conclusion == "SUCCESS" else "red; failed: Gate — Required"
     assert tick.end() == [f"ended the wait of {ME}: checks on {URL}, now {outcome}"]
     assert idle.wait(tick.store.redis, "sw", ME) is None
     assert tick.told() == [
