@@ -33,3 +33,28 @@ def test_a_legacy_codex_nudge_still_types_into_its_pane(rig):  # noqa: F811
     assert command[:3] == ["agent", "prompt", runtime.pane_target(legacy)]
     inbox = InboxStore(rig.store.redis)
     assert inbox.inbox(inbox.names.resolve(rig.agent.name)) == []
+
+
+def test_a_managed_agent_never_resumes_into_a_new_pane():
+    from types import SimpleNamespace
+
+    from scripts.swarm.store import APP_SERVER_TRANSPORT, AgentRecord
+
+    agent = AgentRecord(
+        "sw-eng-1",
+        "eng",
+        "t1",
+        harness="codex",
+        profile="engineer",
+        transport=APP_SERVER_TRANSPORT,
+        execution_id="exe-1",
+    )
+    launched = []
+    herdr = runtime.HerdrRuntime(herdr=lambda args: launched.append(args) or {})
+    with pytest.raises(runtime.SpawnError) as refused:
+        herdr.resume(SimpleNamespace(slug="sw"), agent, "Continue.")
+    assert (str(refused.value), refused.value.status) == (
+        "unsupported resume: a managed Codex execution continues through its supervised server",
+        "unsupported",
+    )
+    assert launched == []

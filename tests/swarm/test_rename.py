@@ -6,7 +6,7 @@ import pytest
 from scripts.inbox.seats import seat_address
 from scripts.inbox.store import InboxStore
 from scripts.swarm.naming import NamingError
-from scripts.swarm.store import AgentRecord, RedisStore, SwarmConfig
+from scripts.swarm.store import APP_SERVER_TRANSPORT, AgentRecord, RedisStore, SwarmConfig
 from scripts.terminate_agent import Session, resolve
 
 pytestmark = [pytest.mark.unit, pytest.mark.xdist_group("fakeredis")]
@@ -129,7 +129,7 @@ def test_rename_is_idempotent_and_preserves_claim_seat_and_crew(store):
 
 @pytest.mark.parametrize(
     ("harness", "transport", "typed"),
-    [("codex", "", True), ("codex", "app_server", False), ("claude", "", False), ("", "", False)],
+    [("codex", "", True), ("codex", APP_SERVER_TRANSPORT, False), ("claude", "", False), ("", "", False)],
 )
 def test_rename_names_a_running_codex_session_after_its_new_name(store, harness, transport, typed):
     from scripts.swarm.rename import rename_swarm
@@ -137,7 +137,10 @@ def test_rename_names_a_running_codex_session_after_its_new_name(store, harness,
 
     old = store.next_name("sw", "eng") if transport else "sw-eng-1"
     agent = AgentRecord(old, "eng", "t1", pane_id="w1:p1", harness=harness, seat="eng-1@sw", transport=transport)
-    store.start_execution("sw", agent) if transport else store.put_agent("sw", agent)
+    if transport:
+        store.start_execution("sw", agent)
+    else:
+        store.put_agent("sw", agent)
     pane = {"pane_id": "w1:p1", "name": old, "workspace_id": "w1"}
     mutations = []
 

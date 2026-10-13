@@ -357,3 +357,17 @@ def test_swarm_terminal_falls_back_to_the_worker_terminal(monkeypatch, capsys):
     )
     cli.cmd_terminal(store, SimpleNamespace(slug="sw", execution="exe-4"))
     assert json.loads(capsys.readouterr().out) == {"target": "exe-4"}
+
+
+def test_swarm_terminal_reports_a_refused_reopen_as_a_swarm_error(monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts.swarm import cli
+    from scripts.swarm.store import SwarmError
+
+    def refused(store, slug, execution, environ):
+        raise attach.AttachError("sw-master-1 has no connected thread to reopen")
+
+    monkeypatch.setattr(attach, "local_terminal", refused)
+    with pytest.raises(SwarmError, match="^sw-master-1 has no connected thread to reopen$"):
+        cli.cmd_terminal(object(), SimpleNamespace(slug="sw", execution="exe-1"))
