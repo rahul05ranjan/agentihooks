@@ -318,7 +318,7 @@ def _app_server_command(
 
 
 def _viewer_lines(serve: str, launcher: Path, name: str, environ: dict[str, str], inputs: list[str]) -> str:
-    """The supervised server runs in its own session and removes its own inputs; closing the pane ends only the viewer."""
+    """The supervised server removes its own inputs; closing the pane ends only the viewer."""
     log = launcher.with_name(f"{launcher.stem}.serve.log")
     viewer = [
         sys.executable,

@@ -181,6 +181,7 @@ def test_recorded_reads_the_named_agents_current_transport(monkeypatch):
         ),
         AgentRecord("legacy", "eng", "t2", harness="codex", execution_id="exe-2"),
         AgentRecord("launching", "eng", "t3", harness="codex"),
+        AgentRecord("claude", "eng", "t4", harness="claude"),
     ]
     store = SimpleNamespace(agents=lambda slug: agents if slug == "sw" else [])
     monkeypatch.setattr("scripts.swarm.store.connect", lambda: store)
@@ -192,9 +193,10 @@ def test_recorded_reads_the_named_agents_current_transport(monkeypatch):
     assert attach.recorded("sw", "missing")() is None
     assert attach.recorded("other", "sw-master-1")() is None
     assert attach.recorded("sw", "launching")() is None
-    with pytest.raises(attach.AttachError) as refused:
-        attach.recorded("sw", "legacy")()
-    assert str(refused.value) == "legacy runs no app-server a native terminal can attach to"
+    for name in ("legacy", "claude"):
+        with pytest.raises(attach.AttachError) as refused:
+            attach.recorded("sw", name)()
+        assert str(refused.value) == f"{name} runs no app-server a native terminal can attach to"
 
 
 def test_the_app_server_pane_runs_the_server_in_its_own_session_and_the_viewer_in_front(tmp_path):
