@@ -164,7 +164,15 @@ def full_source(reuse_repo, tmp_path):
         "from pathlib import Path\n"
         "allow = '--allow-escape-sequences' in sys.argv\n"
         "args = [arg for arg in sys.argv[2:] if arg not in ('--paginate', '--allow-escape-sequences')]\n"
-        "value = json.loads(Path(os.environ['REUSE_FIXTURE']).read_text())[args[0]]\n"
+        "from urllib.parse import parse_qs, urlsplit\n"
+        "query = parse_qs(urlsplit(args[0]).query)\n"
+        "paged = '/attempts/' in args[0] and 'page' in query\n"
+        "endpoint = args[0].split('?')[0] + '?per_page=100' if paged else args[0]\n"
+        "value = json.loads(Path(os.environ['REUSE_FIXTURE']).read_text())[endpoint]\n"
+        "if paged:\n"
+        "    size, page = int(query['per_page'][0]), int(query['page'][0])\n"
+        "    start = (page - 1) * size\n"
+        "    value['jobs'] = value['jobs'][start:start + size]\n"
         "data = base64.b64decode(value.get('binary', ''))\n"
         "if args[0].endswith('/logs') and b'\\x1b' in data and not allow:\n"
         "    sys.exit('the response contains terminal escape sequences; '\n"
@@ -190,6 +198,14 @@ def test_an_identical_queue_tree_reuses_a_full_passed_run(full_source, tmp_path)
     assert "reused=true" in result.stdout
     assert "run=7" in result.stdout
     assert json.loads(output.read_text())["tree"] == git(root, "rev-parse", f"{head}^{{tree}}")
+
+
+def test_an_identical_queue_tree_reuses_a_full_passed_run_with_the_paged_reader(full_source, tmp_path, monkeypatch):
+    from scripts import ci_reuse
+
+    job = ci_reuse.paged_reuse_job()
+    monkeypatch.setattr(ci_reuse, "reuse_job", lambda: job)
+    test_an_identical_queue_tree_reuses_a_full_passed_run(full_source, tmp_path)
 
 
 def test_a_passed_run_behind_a_hundred_newer_runs_still_reuses(full_source, tmp_path):
