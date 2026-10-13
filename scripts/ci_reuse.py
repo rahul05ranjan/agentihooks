@@ -36,13 +36,14 @@ QUEUE_COVERAGE = (
 
 SELECTED_SCOPE = (
     '\'all(to_entries[]; .value.result == "success"',
-    '\'(.select.outputs.scope // "") as $scope | all(to_entries[]; .value.result == "success"',
+    '\'(.select.outputs.scope // "") as $scope | ($event != "pull_request" or $scope != "selected"'
+    ' or ."unit-selected".result == "success") and all(to_entries[]; .value.result == "success"',
 )
 SELECTED_SKIPS = (
     ')\' <<< "$NEEDS"; then\n  echo "::error::Every required gate must succeed."',
     ' or ((.key == "split" or .key == "unit" or .key == "shard-check" or .key == "coverage-ratchet")'
     ' and .value.result == "skipped" and $event == "pull_request" and ($scope == "selected" or $scope == "none"))'
-    ' or (.key == "unit-selected" and .value.result == "skipped" and ($event != "pull_request" or $scope != "selected"))'
+    ' or (.key == "unit-selected" and .value.result == "skipped" and ($event != "pull_request" or $scope == "full" or $scope == "none"))'
     ')\' <<< "$NEEDS"; then\n  echo "::error::Every required gate must succeed."',
 )
 

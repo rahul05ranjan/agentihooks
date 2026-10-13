@@ -533,11 +533,12 @@ def test_a_head_switching_to_either_canonical_aggregation_is_green(queue_coverag
 
 
 @pytest.mark.parametrize("change", ["outcome", "byte", "extra"])
-def test_a_head_altering_the_queue_canonical_aggregation_is_red(change):
+@pytest.mark.parametrize("selected", [False, True])
+def test_a_head_altering_the_queue_canonical_aggregation_is_red(change, selected):
     from scripts import ci_reuse
 
     base, head = _aggregators()
-    steps = ci_reuse.gate_steps(queue_coverage=True)
+    steps = ci_reuse.gate_steps(queue_coverage=True, selected=selected)
     [step] = steps
     altered = {
         "outcome": [{**step, "run": step["run"].replace("ratchet", "baseline")}],
