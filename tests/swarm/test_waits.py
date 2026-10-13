@@ -985,6 +985,20 @@ def test_a_required_gate_ends_checks_wait_beside_a_pending_jobless_workflow(tick
     ]
 
 
+@pytest.mark.parametrize("conclusion", ["FAILURE", "ERROR", "STARTUP_FAILURE", "ACTION_REQUIRED"])
+@pytest.mark.parametrize("gate", [None, "SUCCESS"])
+def test_a_failed_required_check_ends_wait_beside_a_pending_jobless_workflow(tick, conclusion, gate):
+    tick.hold("checks", URL)
+    tick.pulls[URL] = gated_probe(
+        [{"name": "unit", "conclusion": conclusion}, {"name": "Gate — Required", "conclusion": gate}],
+        [QUEUED_TESTS],
+        workflows(GATE_WORKFLOW),
+    )
+    assert tick.end() == []
+    assert tick.end() == [f"ended the wait of {ME}: checks on {URL}, now red"]
+    assert idle.wait(tick.store.redis, "sw", ME) is None
+
+
 @pytest.mark.parametrize(
     "done",
     [
