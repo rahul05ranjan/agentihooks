@@ -135,8 +135,9 @@ def test_rename_names_a_running_codex_session_after_its_new_name(store, harness,
     from scripts.swarm.rename import rename_swarm
     from scripts.swarm.runtime import HerdrRuntime
 
-    old = "sw-eng-1"
-    store.put_agent("sw", AgentRecord(old, "eng", "t1", pane_id="w1:p1", harness=harness, transport=transport))
+    old = store.next_name("sw", "eng") if transport else "sw-eng-1"
+    agent = AgentRecord(old, "eng", "t1", pane_id="w1:p1", harness=harness, seat="eng-1@sw", transport=transport)
+    store.start_execution("sw", agent) if transport else store.put_agent("sw", agent)
     pane = {"pane_id": "w1:p1", "name": old, "workspace_id": "w1"}
     mutations = []
 
