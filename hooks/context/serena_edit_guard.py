@@ -8,6 +8,7 @@ and the gates require formatted code.
 import re
 from pathlib import Path
 
+from hooks.context.master_coding import owns_worktree
 from hooks.hook_manager import BlockAction
 
 _FILE_TOOLS = frozenset({"Edit", "MultiEdit", "Write"})
@@ -67,7 +68,7 @@ def check(payload: dict) -> None:
     if tool_name in _FILE_TOOLS:
         path = Path(tool_input.get("file_path") or "")
         root = _guarded(path if path.is_absolute() else cwd / path)
-        if root:
+        if root and not owns_worktree(str(payload.get("session_id") or ""), root):
             _block(path, root)
         return
 

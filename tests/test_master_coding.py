@@ -218,3 +218,15 @@ def test_a_closed_window_refuses_python_edits_in_the_master_worktree(worktrees):
     master_coding.observe(SID, "disallow-master-coding", typed=True)
     with pytest.raises(hook_manager.BlockAction, match="edited through Serena"):
         serena_edit(own)
+
+
+def test_the_open_window_owns_only_a_named_worktree_directly_under_the_worktrees_home(worktrees, monkeypatch):
+    own, _ = worktrees
+    master_coding.observe(SID, "allow-master-coding", typed=True)
+    root = own.parent.parent
+    assert master_coding.owns_worktree(SID, root)
+    assert not master_coding.owns_worktree(SID, root.parent / "nested" / "repo" / root.name)
+    assert not master_coding.owns_worktree("other-session", root)
+    monkeypatch.delenv("AGENTIHOOKS_AGENT_NAME")
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    assert not master_coding.owns_worktree(SID, root)

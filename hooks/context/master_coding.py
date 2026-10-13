@@ -62,6 +62,18 @@ def is_open(session_id: str, now: float | None = None) -> bool:
     return (time.time() if now is None else now) - opened < WINDOW_SEC
 
 
+def owns_worktree(session_id: str, root: Path) -> bool:
+    """The window is open and root is this master's own worktree under ~/dev/worktrees."""
+    from scripts.swarm.naming import NamingError, is_worktree
+
+    if not is_open(session_id) or root.parent.parent != Path.home() / "dev" / "worktrees":
+        return False
+    try:
+        return is_worktree(root.name, os.environ)
+    except NamingError:
+        return False
+
+
 def closed_in_window(value: str, cwd: Path) -> bool:
     """Condition folders and credential files stay closed even while the window is open."""
     target = (cwd / Path(value).expanduser()).resolve()
