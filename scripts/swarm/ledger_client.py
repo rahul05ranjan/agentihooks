@@ -72,7 +72,7 @@ class LedgerClient:
             from scripts.swarm_ledger.api.client import failure
 
             replay, error = failure(exc)
-            if error.get("code") != "resource_missing":
+            if exc.code != 404 or error.get("code") != "resource_missing":
                 raise replay from None
             return None
 
