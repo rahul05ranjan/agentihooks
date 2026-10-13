@@ -175,9 +175,12 @@ def test_recorded_reads_the_named_agents_current_transport(monkeypatch):
     from scripts.swarm.store import APP_SERVER_TRANSPORT, AgentRecord
 
     agents = [
-        AgentRecord("other", "eng", "t1", harness="codex", transport=APP_SERVER_TRANSPORT),
-        AgentRecord("sw-master-1", "master", "master", harness="codex", transport=APP_SERVER_TRANSPORT),
-        AgentRecord("legacy", "eng", "t2", harness="codex"),
+        AgentRecord("other", "eng", "t1", harness="codex", transport=APP_SERVER_TRANSPORT, execution_id="exe-0"),
+        AgentRecord(
+            "sw-master-1", "master", "master", harness="codex", transport=APP_SERVER_TRANSPORT, execution_id="exe-1"
+        ),
+        AgentRecord("legacy", "eng", "t2", harness="codex", execution_id="exe-2"),
+        AgentRecord("launching", "eng", "t3", harness="codex"),
     ]
     store = SimpleNamespace(agents=lambda slug: agents if slug == "sw" else [])
     monkeypatch.setattr("scripts.swarm.store.connect", lambda: store)
@@ -188,6 +191,7 @@ def test_recorded_reads_the_named_agents_current_transport(monkeypatch):
     assert attach.recorded("sw", "sw-master-1")() == RECORD
     assert attach.recorded("sw", "missing")() is None
     assert attach.recorded("other", "sw-master-1")() is None
+    assert attach.recorded("sw", "launching")() is None
     with pytest.raises(attach.AttachError) as refused:
         attach.recorded("sw", "legacy")()
     assert str(refused.value) == "legacy runs no app-server a native terminal can attach to"
