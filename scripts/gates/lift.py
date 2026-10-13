@@ -44,10 +44,40 @@ def agent_lifted(slug, agent, gate, home=None, now=None):
     return _fresh(agent_lift_path(slug, agent, gate, home), now)
 
 
-def lift_agent(who, gate, home=None, now=None):
+def task_lift_path(slug, task, gate, home=None):
+    return log.gates_dir(slug, home) / "lifts" / "tasks" / safe_name(task) / safe_name(gate)
+
+
+def task_lifted(slug, task, gate, home=None, now=None):
+    if not (slug and task):
+        return False
+    path = task_lift_path(slug, task, gate, home)
+    try:
+        record = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return False
+    if not (isinstance(record, dict) and record.get("head")):
+        return _fresh(path, now)
+    from scripts.gates.intent import pr_head
+
+    return pr_head(record.get("url") or "") == record["head"]
+
+
+def held(slug, agent, task, gate, home=None):
+    if task and gate not in SERVER_GATES:
+        return task_lifted(slug, task, gate, home)
+    return agent_lifted(slug, agent, gate, home)
+
+
+def lift_agent(who, gate, home=None, now=None, pull=None):
+    at = time.time() if now is None else now
     path = agent_lift_path(who.swarm, who.name, gate, home)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"at": time.time() if now is None else now}))
+    path.write_text(json.dumps({"at": at}))
+    if who.swarm and who.task:
+        path = task_lift_path(who.swarm, who.task, gate, home)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"at": at, **(pull or {})}))
     log.append(who.swarm, log.Row.of(gate, "lift", who, reason=LIFT_REASON), home)
 
 
