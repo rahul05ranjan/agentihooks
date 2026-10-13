@@ -13,8 +13,11 @@ agentihooks doctor <slug> task FINDING --fix code|tune
 agentihooks doctor <slug> measure FINDING      run the detectors once and print the finding's number, 0 when a
                                                seen finding is gone while the agent it names is live, refusing
                                                an unseen id, a retired agent or a failed detector; a bare class
-                                               name prints count, unknown and max over every live target (the
-                                               active bindings for telemetry-stale and exporter-backlog);
+                                               name prints count, unknown and max over every live target: for
+                                               telemetry-stale and exporter-backlog the active bindings, unknown
+                                               those with no exporter progress; for other classes the current
+                                               findings, unknown the detectors that failed. failed-spawn ids
+                                               count the spawn journal's window, so 0 there is a real reading;
                                                master-launch-missed replays the last hour's (or --since to --until)
                                                failed master launches and counts those no finding put before the
                                                Doctor master, refusing when the journal is unreadable
@@ -282,11 +285,16 @@ def cmd_measure(store, args):
     if "/" not in args.finding:
         print(_class_read(store, slug, doctor, now, args.finding).line(args.finding))
         return
-    found, failed = detect.collect(detect.readers(store, swarm.LedgerClient(), slug, now))
-    for line in failed:
-        print(line, file=sys.stderr)
+    found, failed = _collect(detect.readers(store, swarm.LedgerClient(), slug, now))
     live = {name for a in store.agents(slug) if a.state == registry.ACTIVE for name in (a.name, a.seat) if name}
     print(f"{args.finding} {measure.exact(args.finding, found, failed, loop.seen(store, doctor), live)}")
+
+
+def _collect(readers):
+    found, failed = detect.collect(readers)
+    for line in failed:
+        print(line, file=sys.stderr)
+    return found, failed
 
 
 def _class_read(store, slug, doctor, now, name):
@@ -298,9 +306,7 @@ def _class_read(store, slug, doctor, now, name):
         bindings = registry.bindings([asdict(a) for a in store.agents(slug)])
         progress = [registry.progress(b["session_id"], b["harness"]) if b["session_id"] else None for b in bindings]
         return measure.of_lag_class(name, found, [measure.lag(local, now) for local in progress])
-    found, failed = detect.collect(readers)
-    for line in failed:
-        print(line, file=sys.stderr)
+    found, failed = _collect(readers)
     seen = {measure.class_of(record["kind"]) for record in loop.seen(store, doctor).values()}
     return measure.of_class(name, found, failed, seen)
 

@@ -286,7 +286,10 @@ that finding's number. It refuses a finding id it never saw, a gone finding whos
 agent is no longer live and an absent finding while a detector failed, rather
 than print zero. `measure telemetry-stale` (or `exporter-backlog`) reads every
 active binding and prints `count`, `unknown` (no exporter progress) and `max`
-unaccepted seconds, and `python -m scripts.doctor.traces_read <slug>` prints
+unaccepted seconds; any other class name prints its current findings, with
+`unknown` counting the detectors that failed. A `failed-spawn/<task>` id counts
+the spawn journal over its window, so zero there is a real reading.
+`python -m scripts.doctor.traces_read <slug>` prints
 the measures (active bindings, coverage) and findings for one swarm.
 
 ### The Langfuse connector

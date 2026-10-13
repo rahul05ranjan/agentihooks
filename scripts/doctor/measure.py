@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 
 from scripts.doctor import traces
+from scripts.swarm.health.findings import Finding
 from scripts.swarm.store import SwarmError
 
 LAG_CLASSES = ("telemetry-stale", "exporter-backlog")
@@ -14,11 +15,11 @@ class Read:
     unknown: int
     maximum: int
 
-    def line(self, name):
+    def line(self, name: str) -> str:
         return f"{name} count {self.count} unknown {self.unknown} max {self.maximum}"
 
 
-def class_of(kind):
+def class_of(kind: str) -> str:
     return kind.replace(" ", "-")
 
 
@@ -30,7 +31,7 @@ def _class_hint(finding_id):
     return f"measure the class {finding_id.split('/', 1)[0]} to read every live target"
 
 
-def exact(finding_id, found, failed, seen, live):
+def exact(finding_id: str, found: list[Finding], failed: list[str], seen: dict, live: set[str]) -> int:
     """A current finding's number; 0 only for a seen finding that is gone while the agent it names is live."""
     match = next((f for f in found if f.id == finding_id), None)
     if match:
@@ -50,7 +51,7 @@ def _measures(name, found):
     return [f.measure for f in found if class_of(f.kind) == name]
 
 
-def of_class(name, found, failed, seen_classes):
+def of_class(name: str, found: list[Finding], failed: list[str], seen_classes: set[str]) -> Read:
     """Every current finding of a class seen before; unknown counts the detectors that failed."""
     measures = _measures(name, found)
     if not measures and name not in seen_classes:
@@ -58,11 +59,11 @@ def of_class(name, found, failed, seen_classes):
     return Read(len(measures), len(failed), max(measures, default=0))
 
 
-def lag(local, now_ms):
-    return None if local is None else traces._lag({"local": local}, now_ms)
+def lag(local: dict | None, now_ms: int) -> int | None:
+    return None if local is None else traces.unaccepted_seconds({"local": local}, now_ms)
 
 
-def of_lag_class(name, found, lags):
+def of_lag_class(name: str, found: list[Finding], lags: list[int | None]) -> Read:
     """Every active binding: unknown when its exporter progress is unreadable, the maximum over its unaccepted
     seconds and the class's current findings."""
     known = [seconds for seconds in lags if seconds is not None]
