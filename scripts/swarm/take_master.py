@@ -11,6 +11,7 @@ from scripts.handoff import transfers
 from scripts.inbox.seats import seat_address
 from scripts.swarm import launch_check, launch_model, naming
 from scripts.swarm.store import MASTER, AgentRecord, SwarmError
+from scripts.swarm_ledger import ledger_link
 from scripts.swarm_v2 import masters as master_seats
 
 PROC = Path("/proc")
@@ -50,7 +51,13 @@ def _master_name(name, code):
     return bool(parsed) and parsed.kind == MASTER and parsed.code == code
 
 
-def take(store, slug, name, runtime, now_ms, replace_live=False):
+def pin(slug, name, environ=os.environ):
+    if ledger_link.remote(environ):
+        environ.pop("AGENTIHOOKS_LEDGER_AGENT_TOKEN", None)
+        environ.update(AGENTIHOOKS_SWARM=slug, AGENTIHOOKS_AGENT_NAME=name)
+
+
+def take(store, slug, name, runtime, now_ms, replace_live=False, admit=lambda name: None):
     live = runtime.live_names()
     carried, name = name, store.names.resolve(name)
     seated = _master_name(name, store.ensure_code(slug).code)
@@ -67,6 +74,8 @@ def take(store, slug, name, runtime, now_ms, replace_live=False):
         raise SwarmError("this session is not registered with agentihooks, so the tick could not see it as master")
     if not seated and carried and not store.names.entry(carried):
         store.names.alias(carried, name)
+    pin(slug, name)
+    admitted = admit(name)
     for agent in others:
         if not runtime.retire(agent):
             raise SwarmError(f"could not retire {agent.name}; try again")
@@ -95,4 +104,4 @@ def take(store, slug, name, runtime, now_ms, replace_live=False):
     for session_id in live_session_ids(pid):
         agent_trace.record_seat(session_id, name, slug, MASTER, MASTER)
     launch_check.begin(store, slug, record, now_ms, relaunch=False)
-    return record, transfers.attach(store, slug, record)
+    return record, transfers.attach(store, slug, record), admitted

@@ -518,7 +518,7 @@ def test_take_master_begins_a_check_that_never_relaunches(store, monkeypatch, tm
     monkeypatch.setattr(take_master, "harness_of", lambda pid: "claude")
     monkeypatch.setattr(take_master, "argv_of", lambda pid: ())
     monkeypatch.setattr(take_master, "name_session", lambda pid, name: 1)
-    record, _ = take_master.take(store, "sw", "", FakeRuntime(), LAUNCH)
+    record, _, _ = take_master.take(store, "sw", "", FakeRuntime(), LAUNCH)
     assert launch_check.pending(store, "sw") == {record.name: {"task": MASTER, "at": LAUNCH, "relaunch": False}}
 
 

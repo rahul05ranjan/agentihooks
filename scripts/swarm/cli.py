@@ -580,9 +580,11 @@ def cmd_take_master(store, args):
     from scripts.gates import Who
 
     name = Who.from_env().name
-    record, transfer = take_master.take(store, args.slug, name, runtime, now_ms(), args.replace)
     ledger = LedgerClient()
-    if ledger.closed(args.slug):
+    record, transfer, closed = take_master.take(
+        store, args.slug, name, runtime, now_ms(), args.replace, lambda master: ledger.closed(args.slug)
+    )
+    if closed:
         ledger.reopen(args.slug, record.name)
     if store.config(args.slug).state in ("stopped", "stopping"):
         store.update(args.slug, state="running")
