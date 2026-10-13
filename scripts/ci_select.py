@@ -111,10 +111,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--event", required=True)
     parser.add_argument("--legs", type=int, required=True)
     parser.add_argument("--root", type=Path, default=Path("."))
+    parser.add_argument("--durations", type=Path, nargs="*", default=[])
     args = parser.parse_args(argv)
     scope, legs = FULL, []
     if args.event == PULL_REQUEST:
-        durations = json.loads((args.root / DURATIONS).read_text())
+        durations = {}
+        for path in args.durations or [args.root / DURATIONS]:
+            durations.update(json.loads(path.read_text()))
         scope, legs = decide(args.root, changed_files(args.root, args.base, args.head), durations, args.legs)
     outputs = {"scope": scope, "legs": json.dumps(list(range(1, len(legs) + 1))), "count": str(len(legs))}
     outputs.update({f"files_{index}": " ".join(leg) for index, leg in enumerate(legs, 1)})

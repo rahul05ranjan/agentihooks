@@ -38,11 +38,13 @@ MOVED = {
     ("test.yml", "mutation-stats"): "anton-oss-batch",
     ("test.yml", "queue-baseline"): "anton-oss",
     ("test.yml", "refresh-durations"): "anton-oss",
+    ("test.yml", "select"): "anton-oss-light",
     ("test.yml", "shard-check"): "anton-oss-light",
     ("test.yml", "split"): "anton-oss",
     ("test.yml", "stage-budget"): "anton-oss-light",
     ("test.yml", "test-count"): "anton-oss-light",
     ("test.yml", "unit"): "anton-oss",
+    ("test.yml", "unit-selected"): "anton-oss",
 }
 
 

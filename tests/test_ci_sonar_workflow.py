@@ -23,7 +23,7 @@ def test_sonar_is_required_on_dev_and_main_pull_requests():
     jobs = workflow["jobs"]
     assert "sonar" in jobs["gate-required"]["needs"]
     sonar = jobs["sonar"]
-    assert sonar["needs"] in (["unit", "reuse"], ["unit", "reuse", "admission"])
+    assert sonar["needs"] == ["unit", "unit-selected", "select", "reuse", "admission"]
     assert sonar["if"] in (
         "${{ !cancelled() && (github.event_name != 'merge_group' || needs.reuse.outputs.reused != 'true') }}",
         "${{ !cancelled() && (github.event_name != 'workflow_dispatch' || needs.admission.result == 'success') && (github.event_name != 'merge_group' || needs.reuse.outputs.reused != 'true') }}",

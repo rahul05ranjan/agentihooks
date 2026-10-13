@@ -177,6 +177,12 @@ def test_no_script_a_step_runs_calls_the_api():
         "tests/refresh_durations.py",
         "tests/shard_budget.py",
         "tests/shard_check.py",
+        "scripts/ci_select.py",
+        "tests/__init__.py",
+        "tests/browser_coverage.py",
+        "tests/flake_ledger.py",
+        "tests/routing/test_codex_api.py",
+        "tests/shards.py",
         "scripts/ci_reuse.py",
         "scripts/ci_runner_classes.py",
     ]
@@ -385,7 +391,7 @@ def test_a_value_without_the_workflow_token_holds_none(value):
 
 def test_sonar_downloads_this_runs_coverage_after_the_shards():
     sonar = _jobs()["sonar"]
-    assert sonar["needs"] in (["unit", "reuse"], ["unit", "reuse", "admission"])
+    assert sonar["needs"] == ["unit", "unit-selected", "select", "reuse", "admission"]
     steps = sonar["steps"]
     download = next(step for step in steps if step.get("name") == "Download shard coverage")
     merge = next(step for step in steps if step.get("name") == "Merge shard coverage")
