@@ -50,7 +50,7 @@ def test_a_gone_native_master_is_retired_and_replaced(native_taker, monkeypatch)
     new, _ = take_master.take(store, "sw", "new-session", runtime, 2000, replace_live=True)
 
     assert retired == [(None, 100)]
-    assert store.agent("sw", old.name) is None
+    assert old.name not in {agent.name for agent in store.agents("sw")}
     assert store.execution_occupants("sw")[new.seat].execution_id == new.execution_id
     assert new.runtime_target == {
         "host_id": "member-1",
@@ -75,7 +75,7 @@ def test_a_live_native_master_whose_retirement_refuses_still_blocks_replacement(
         take_master.take(store, "sw", "new-session", runtime, 2000, replace_live=True)
 
     assert retired == [(4242, 100)]
-    assert store.agent("sw", old.name) == old
+    assert store.agents("sw") == [old]
     assert store.execution_occupants("sw")[old.seat].execution_id == old.execution_id
     assert runtime.refusal(old)["refusal"] == "live process refused"
 
@@ -90,7 +90,7 @@ def test_a_live_native_master_requires_replace_before_any_retirement(native_take
         take_master.take(store, "sw", "new-session", runtime, 2000)
 
     assert retired == []
-    assert store.agent("sw", old.name) == old
+    assert store.agents("sw") == [old]
 
 
 def test_a_reused_native_master_pid_is_never_signalled_during_replacement(native_taker, monkeypatch):
@@ -102,7 +102,7 @@ def test_a_reused_native_master_pid_is_never_signalled_during_replacement(native
     new, _ = take_master.take(store, "sw", "new-session", runtime, 2000, replace_live=True)
 
     assert retired == [(None, 100)]
-    assert store.agent("sw", old.name) is None
+    assert old.name not in {agent.name for agent in store.agents("sw")}
     assert store.execution_occupants("sw")[new.seat].execution_id == new.execution_id
 
 

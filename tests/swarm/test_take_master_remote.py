@@ -98,7 +98,9 @@ def test_take_master_on_a_remote_ledger_places_and_pins_the_new_master_before_it
     assert sent == [("sw", "agent-token", MINT), ("sw", "agent-token", MINT), ("sw", "metadata", PINNED)]
     assert (os.environ["AGENTIHOOKS_SWARM"], os.environ["AGENTIHOOKS_AGENT_NAME"]) == ("sw", MASTER)
     assert "AGENTIHOOKS_LEDGER_AGENT_TOKEN" not in os.environ
-    assert _masters(store) == [(MASTER, HIVE_ID, {"host_id": HIVE_ID})]
+    assert _masters(store) == [
+        (MASTER, HIVE_ID, {"host_id": HIVE_ID, "process_namespace": "boot/pidns", "pid": 4242, "pid_start": 100})
+    ]
     assert store.seats.occupant("master@sw").occupant == MASTER
     monkeypatch.setenv("AGENTIHOOKS_SWARM", "")
     assert broadcast.session_swarm(4242) == "sw"
@@ -133,7 +135,13 @@ def test_replace_on_a_remote_host_retires_the_old_master_before_placing_the_new_
     ledger.closed = lambda slug: killed.append(list(rt.killed)) or False
     assert run("sw", "take-master", "--replace") == 0
     assert killed == [[MASTER]]
-    assert _masters(store) == [("master@a1b2c3-0002", HIVE_ID, {"host_id": HIVE_ID})]
+    assert _masters(store) == [
+        (
+            "master@a1b2c3-0002",
+            HIVE_ID,
+            {"host_id": HIVE_ID, "process_namespace": "boot/pidns", "pid": 4242, "pid_start": 100},
+        )
+    ]
 
 
 def test_a_refused_replace_on_a_remote_host_leaves_the_old_master_retired_and_no_new_one(remote_taker, monkeypatch):
@@ -258,7 +266,9 @@ def test_a_retake_after_a_remote_refusal_replaces_the_ended_execution(remote_tak
     ledger.closed = lambda slug: False
     assert run("sw", "take-master") == 0
     assert [(a.name, a.generation) for a in store.execution_registry.records("sw")] == [(MASTER, 1), (MASTER, 2)]
-    assert _masters(store) == [(MASTER, HIVE_ID, {"host_id": HIVE_ID})]
+    assert _masters(store) == [
+        (MASTER, HIVE_ID, {"host_id": HIVE_ID, "process_namespace": "boot/pidns", "pid": 4242, "pid_start": 100})
+    ]
 
 
 def test_pin_on_a_remote_host_without_a_carried_token_names_the_swarm_and_agent():
