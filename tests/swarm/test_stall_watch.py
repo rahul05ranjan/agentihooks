@@ -158,9 +158,10 @@ def test_red_checks_in_the_merge_queue_never_reopen_the_task():
     assert swarm.inbox() == []
 
 
-@pytest.mark.parametrize("pull,live", [(replace(CONFLICTING, draft=True), True), (CONFLICTING, True)])
-def test_unmergeable_drafts_and_live_working_owners_stay_held(pull, live):
-    swarm = Swarm(pull, live=live)
+@pytest.mark.parametrize("pull,state", [(replace(CONFLICTING, draft=True), "starting"), (CONFLICTING, "working")])
+def test_unmergeable_drafts_and_live_working_owners_stay_held(pull, state):
+    swarm = Swarm(pull)
+    swarm.store.put_agent(SLUG, AgentRecord(OWNER, "eng", "t1", state=state, seat="eng-1@sw"))
     assert swarm.tick(START) == []
     assert swarm.tick(START + 180 * MINUTE) == []
     assert swarm.ledger.rows["t1"]["state"] == "pr"
@@ -614,7 +615,7 @@ def test_an_unclaimed_alert_names_the_ledger_row_and_no_pull_request():
         f"stall: task t1 ready and unclaimed while its lane is full for 15 minutes, {ALERTED}; told {LEAD}"
     ]
     [item] = swarm.inbox()
-    assert item.text == _alert(**UNCLAIMED_ALERT, title="Ready work")
+    assert item.text == _alert(**UNCLAIMED_ALERT, title="Ready work; eng lane: 1 ready tasks")
 
 
 def test_an_unclaimed_task_missing_from_the_snapshot_is_named_from_its_lane():
@@ -633,7 +634,7 @@ def test_two_unclaimed_tasks_alert_in_the_same_tick():
     swarm.ledger.rows["t3"] = {"id": "t3", "state": "open", "claimed_by": "", "lane": "eng"}
     swarm.ready["eng"].append(swarm.ledger.rows["t3"])
     swarm.tick(START)
-    assert len(swarm.tick(START + 15 * MINUTE)) == 2
+    assert len(swarm.tick(START + 15 * MINUTE)) == 1
 
 
 def test_many_ready_tasks_send_one_lane_alert_with_the_ready_count():

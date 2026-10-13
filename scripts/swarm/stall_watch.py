@@ -221,6 +221,8 @@ def _alert(watch, mail, task, case, minutes, action, limit):
         "limit": getattr(limit, case),
         "at": watch.now_ms,
     }
+    if case == UNCLAIMED:
+        row["lane"] = task.get("lane", "")
     address = mail.owner(f"tasks/{tid}")
     text = ALERT.format(
         slug=watch.slug, title=task.get("title") or "no title", wait=wait, **{**row, "case": CASES[case]}
@@ -233,9 +235,16 @@ def _alert(watch, mail, task, case, minutes, action, limit):
 
 
 def _lane_full(watch, lane, decision):
+    if watch.store.redis.hget(watch.store.key(watch.slug, "config"), "scaling") == "manual":
+        return False
     configured = (decision.get("configured") or {}).get(lane, 0)
     working = [a for a in watch.store.agents(watch.slug) if a.lane == lane and a.state != FINISHED]
     return configured > 0 and len(working) >= configured
+
+
+def _lane_tasks(watch, rows, lane):
+    tasks = [rows.get(task["id"], task) for task in watch.claimable(lane)]
+    return [task for task in tasks if task.get("state", "open") == "open" and not task.get("claimed_by")]
 
 
 def _unclaimed(watch, mail, rows, limit, marks, seen):
@@ -243,16 +252,18 @@ def _unclaimed(watch, mail, rows, limit, marks, seen):
     alerted, current, actions = watch.store.redis.hgetall(key), {}, []
     if sum((decision.get("placeable") or {}).values()) > 0:
         for lane in LANES:
-            if not _lane_full(watch, lane, decision):
+            tasks = _lane_tasks(watch, rows, lane)
+            if not tasks or not _lane_full(watch, lane, decision):
                 continue
-            for task in watch.claimable(lane):
-                since = current[task["id"]] = str(_since(watch, marks, seen, f"{task['id']}:{UNCLAIMED}"))
-                minutes = _minutes(watch, int(since))
-                if minutes >= limit.unclaimed and alerted.get(task["id"]) != since:
-                    actions += _alert(watch, mail, rows.get(task["id"], task), UNCLAIMED, minutes, ALERTED, limit)
-                    alerted[task["id"]] = since
+            since = current[lane] = str(_since(watch, marks, seen, f"{lane}:{UNCLAIMED}"))
+            minutes = _minutes(watch, int(since))
+            if minutes >= limit.unclaimed and alerted.get(lane) != since:
+                task = {**tasks[0], "lane": lane}
+                task["title"] = f"{task.get('title') or 'no title'}; {lane} lane: {len(tasks)} ready tasks"
+                actions += _alert(watch, mail, task, UNCLAIMED, minutes, ALERTED, limit)
+                alerted[lane] = since
     watch.store.redis.delete(key)
-    kept = {tid: since for tid, since in alerted.items() if current.get(tid) == since}
+    kept = {lane: since for lane, since in alerted.items() if current.get(lane) == since}
     if kept:
         watch.store.redis.hset(key, mapping=kept)
     return actions
@@ -270,7 +281,7 @@ def _escalate(watch, rows):
     for tid, raw in watch.store.redis.hgetall(key).items():
         row = json.loads(raw)
         task = rows.get(tid, {})
-        moot = row["case"] == UNCLAIMED and (task.get("state") != "open" or task.get("claimed_by"))
+        moot = row["case"] == UNCLAIMED and not _lane_tasks(watch, rows, row.get("lane") or task.get("lane"))
         is_open = _open(inbox, row["item"])
         if moot and is_open:
             inbox.close(row["item"], SENDER, DONE, f"task {tid} was claimed")
