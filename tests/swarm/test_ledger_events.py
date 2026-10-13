@@ -759,7 +759,7 @@ def test_a_head_with_only_skipped_checks_keeps_waiting(suites, gated):
     assert ledger_events.pull_request(raw).resolved is (gated or suites != [QUEUED_TESTS])
 
 
-@pytest.mark.parametrize("gate", [None, "PENDING", "CANCELLED", "TIMED_OUT"])
+@pytest.mark.parametrize("gate", [None, "PENDING", "CANCELLED"])
 def test_a_gate_that_has_not_passed_or_failed_keeps_the_head_unresolved(gate):
     rollup = SKIPPED_ONLY + [{"name": "unit", "conclusion": "SUCCESS"}, {"name": GATE, "conclusion": gate}]
     raw = {"state": "OPEN", "gated": True, "statusCheckRollup": rollup, "checkSuites": [FINISHED_RUN]}

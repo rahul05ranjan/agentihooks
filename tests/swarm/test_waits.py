@@ -967,7 +967,7 @@ def test_a_gated_checks_wait_ends_only_on_its_gate(tick, rollup, outcome):
     assert (idle.wait(tick.store.redis, "sw", ME) is None) is bool(outcome)
 
 
-@pytest.mark.parametrize("conclusion", ["SUCCESS", "FAILURE"])
+@pytest.mark.parametrize("conclusion", ["SUCCESS", "FAILURE", "TIMED_OUT"])
 def test_a_required_gate_ends_checks_wait_beside_a_pending_jobless_workflow(tick, conclusion):
     tick.hold("checks", URL)
     tick.pulls[URL] = gated_probe(

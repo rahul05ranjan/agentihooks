@@ -127,14 +127,11 @@ def _unpassed_gate(gated, checks, results, running):
 
 
 def _resolved(gated, checks, results, running):
-    if (gated or not running) and any(result in FINAL_RED for result in results):
+    if gated:
+        return any(result in FINAL_RED | {"TIMED_OUT"} for result in results) or "SUCCESS" in _gate(checks, results)
+    if not running and any(result in FINAL_RED for result in results):
         return True
-    if not gated:
-        return not running and "SUCCESS" in results and all(result in PASSED for result in results)
-    gate = _gate(checks, results)
-    if any(result in FINAL_RED for result in gate):
-        return True
-    return "SUCCESS" in gate
+    return not running and "SUCCESS" in results and all(result in PASSED for result in results)
 
 
 def _gate(checks, results):
