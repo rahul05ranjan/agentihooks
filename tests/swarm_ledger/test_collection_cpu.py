@@ -18,6 +18,7 @@ pytestmark = pytest.mark.unit
 
 def test_thousand_task_collection_bounds_page_encodes(tmp_path, monkeypatch):
     document = build_doc({"title": "Collection CPU"})
+    document["_meta"] = {"rev": 1, "updated_at": 1, "applied": []}
     document["tasks"] = [
         {
             "id": f"t{index}",
