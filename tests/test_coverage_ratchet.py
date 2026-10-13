@@ -220,6 +220,15 @@ def test_a_base_only_line_with_two_measured_misses_is_unconfirmed(snapshots):
     )
 
 
+@pytest.mark.parametrize("snapshots", [0, 1, 2, 3])
+def test_incidental_classification_requires_two_measured_misses(snapshots):
+    runs = [_measure("base", {"hooks/a.py": {1, 2, 3}}, {"hooks/a.py": SOURCE})]
+    runs += [_measure(f"older{n}", {"hooks/a.py": {1, 2}}, {"hooks/a.py": SOURCE}) for n in range(snapshots)]
+    result = ratchet.grade({"hooks/a.py": {1, 2}}, lambda path: SOURCE, iter(runs))
+    assert result.lost == ({"hooks/a.py": [3]} if snapshots < 2 else {})
+    assert result.unconfirmed == ({"hooks/a.py": {3: snapshots}} if snapshots >= 2 else {})
+
+
 def test_the_ledger_hook_baseline_line_accepts_old_or_unconfirmed_grading():
     fixture = json.loads((Path(__file__).parent / "fixtures" / "coverage_incidental.json").read_text())
     path = fixture["path"]
