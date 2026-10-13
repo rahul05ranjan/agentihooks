@@ -2,10 +2,11 @@
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 
 from hooks.context.account_sessions import agent_pid
-from hooks.context.broadcast import live_session_ids, name_session
+from hooks.context.broadcast import live_session_ids, name_session, pin_session
 from hooks.observability import agent_trace
 from scripts.handoff import transfers
 from scripts.inbox.seats import seat_address
@@ -57,6 +58,59 @@ def pin(slug, name, environ=os.environ):
         environ.update(AGENTIHOOKS_SWARM=slug, AGENTIHOOKS_AGENT_NAME=name)
 
 
+def hive_of(environ=os.environ):
+    return environ.get("AGENTIHOOKS_HIVE_ID", "") if ledger_link.remote(environ) else ""
+
+
+def placed(store, slug, record, hive):
+    previous = store.execution_occupants(slug).get(record.seat)
+    record = replace(record, hive=hive, runtime_target={"host_id": hive})
+    return store.start_execution(slug, record, previous.execution_id if previous else "")
+
+
+def admitted(store, slug, record, admit, pid):
+    hive = hive_of()
+    if hive:
+        record = placed(store, slug, record, hive)
+    pin(slug, record.name)
+    try:
+        admit(record.name)
+    except BaseException:
+        if hive:
+            store.execution_registry.update(slug, replace(record, state="ended"))
+            store.drop_agent(slug, record.name)
+        raise
+    if hive:
+        pin_session(pid, slug)
+    return record
+
+
+def retired(store, slug, runtime, others):
+    for agent in others:
+        if not runtime.retire(agent):
+            raise SwarmError(f"could not retire {agent.name}; try again")
+        store.drop_agent(slug, agent.name)
+
+
+def master_record(slug, name, pid, now_ms):
+    account, validated = launch_of(pid)
+    harness = harness_of(pid) or validated.get("harness", "")
+    model, effort = launch_model.read(harness, argv_of(pid)) if harness else ("", "")
+    return AgentRecord(
+        name,
+        MASTER,
+        MASTER,
+        harness=harness,
+        profile=validated.get("profile") or os.environ.get("AGENTIHOOKS_PROFILE", ""),
+        started_at=now_ms,
+        model=validated.get("model") or model,
+        effort=validated.get("effort") or effort,
+        account=account,
+        seat=seat_address(slug, MASTER),
+        profile_decision={"validation": validated} if validated else {},
+    )
+
+
 def take(store, slug, name, runtime, now_ms, replace_live=False, admit=lambda name: None):
     live = runtime.live_names()
     carried, name = name, store.names.resolve(name)
@@ -72,33 +126,16 @@ def take(store, slug, name, runtime, now_ms, replace_live=False, admit=lambda na
         name = store.next_name(slug, MASTER, now_ms)
     if not name_session(pid, name):
         raise SwarmError("this session is not registered with agentihooks, so the tick could not see it as master")
-    pin(slug, name)
-    admit(name)
+    if hive_of():
+        retired(store, slug, runtime, others)
+        others = []
+    record = admitted(store, slug, master_record(slug, name, pid, now_ms), admit, pid)
     if not seated and carried and not store.names.entry(carried):
         store.names.alias(carried, name)
-    for agent in others:
-        if not runtime.retire(agent):
-            raise SwarmError(f"could not retire {agent.name}; try again")
-        store.drop_agent(slug, agent.name)
+    retired(store, slug, runtime, others)
     for agent in masters:
         if agent.name in own and agent.name != name:
             store.drop_agent(slug, agent.name)
-    account, validated = launch_of(pid)
-    harness = harness_of(pid) or validated.get("harness", "")
-    model, effort = launch_model.read(harness, argv_of(pid)) if harness else ("", "")
-    record = AgentRecord(
-        name,
-        MASTER,
-        MASTER,
-        harness=harness,
-        profile=validated.get("profile") or os.environ.get("AGENTIHOOKS_PROFILE", ""),
-        started_at=now_ms,
-        model=validated.get("model") or model,
-        effort=validated.get("effort") or effort,
-        account=account,
-        seat=seat_address(slug, MASTER),
-        profile_decision={"validation": validated} if validated else {},
-    )
     store.seats.occupy(record.seat, name, now_ms)
     store.put_agent(slug, record)
     for session_id in live_session_ids(pid):

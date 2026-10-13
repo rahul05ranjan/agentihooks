@@ -3,9 +3,11 @@ import os
 import pytest
 
 from hooks.context import account_sessions, broadcast
+from scripts.gates import base
 from scripts.swarm import take_master
 from scripts.swarm.ledger_client import LedgerRefused
 from scripts.swarm_ledger import ledger as remote
+from scripts.swarm_ledger import ledger_authority as authority
 from scripts.swarm_ledger.api import client
 from tests.swarm.test_cli import env, run  # noqa: F401
 from tests.swarm.test_take_master import taker  # noqa: F401
@@ -13,8 +15,11 @@ from tests.swarm.test_take_master import taker  # noqa: F401
 pytestmark = pytest.mark.xdist_group("fakeredis")
 
 HIVE = "hive-ledger-credential"
+HIVE_ID = "member-1"
 CARRIED = "s-261013-101500"
 MASTER = "master@a1b2c3-0001"
+PINNED = {"X-Ledger-Token": f"minted for {MASTER}", "X-Ledger-Agent": MASTER}
+MINT = {"X-Hive-Credential": HIVE, "X-Ledger-Agent": MASTER}
 
 
 def _hive_client(sent):
@@ -42,6 +47,7 @@ def remote_taker(taker, monkeypatch, tmp_path):  # noqa: F811
         "AGENTIHOOKS_DEPLOYMENT": "compose",
         "LEDGER_URL": "https://hub.example",
         "AGENTIHOOKS_HIVE_LEDGER_CREDENTIAL": HIVE,
+        "AGENTIHOOKS_HIVE_ID": HIVE_ID,
         "AGENTIHOOKS_LEDGER_AGENT_TOKEN": "carried token",
         "AGENTIHOOKS_AGENT_NAME": CARRIED,
         "AGENTIHOOKS_SWARM": "",
@@ -54,26 +60,44 @@ def remote_taker(taker, monkeypatch, tmp_path):  # noqa: F811
     broadcast.register_session("session", 4242, "/repo", "sol", name=CARRIED)
     monkeypatch.setattr(remote, "BASE", "")
     monkeypatch.setattr(remote.repository, "token", _operator_token)
+    monkeypatch.setattr("scripts.swarm.store.redis_client", lambda environ=None: taker[0].redis)
     sent = []
     monkeypatch.setattr(client, "ResourceClient", _hive_client(sent))
     return (*taker, sent)
 
 
-def test_take_master_on_a_remote_ledger_pins_the_new_master_before_its_first_ledger_call(remote_taker):
+def _admission(ledger, seen):
+    def closed(slug):
+        seen.append((remote.credentials(slug), authority.hive_agent(HIVE_ID, slug, MASTER)))
+        return False
+
+    ledger.closed = closed
+
+
+def _masters(store):
+    return [(a.name, a.hive, a.runtime_target) for a in store.agents("sw") if a.lane == "master"]
+
+
+def test_take_master_on_a_remote_ledger_places_and_pins_the_new_master_before_its_first_ledger_call(
+    remote_taker, monkeypatch
+):
     store, ledger, _, _, sent = remote_taker
     seen = []
-    ledger.closed = lambda slug: seen.append(remote.credentials(slug)) or False
+    _admission(ledger, seen)
 
     assert run("sw", "take-master") == 0
 
-    pinned = {"X-Ledger-Token": f"minted for {MASTER}", "X-Ledger-Agent": MASTER}
-    assert seen == [pinned]
-    hive = {"X-Hive-Credential": HIVE, "X-Ledger-Agent": MASTER}
-    assert sent == [("sw", "agent-token", hive), ("sw", "agent-token", hive), ("sw", "metadata", pinned)]
+    assert seen == [(PINNED, True)]
+    assert sent == [("sw", "agent-token", MINT), ("sw", "agent-token", MINT), ("sw", "metadata", PINNED)]
     assert (os.environ["AGENTIHOOKS_SWARM"], os.environ["AGENTIHOOKS_AGENT_NAME"]) == ("sw", MASTER)
     assert "AGENTIHOOKS_LEDGER_AGENT_TOKEN" not in os.environ
-    assert [a.name for a in store.agents("sw") if a.lane == "master"] == [MASTER]
+    assert _masters(store) == [(MASTER, HIVE_ID, {"host_id": HIVE_ID})]
     assert store.seats.occupant("master@sw").occupant == MASTER
+    monkeypatch.setenv("AGENTIHOOKS_SWARM", "")
+    assert broadcast.session_swarm(4242) == "sw"
+    who = base.Who.from_env()
+    assert (who.name, who.swarm, who.pinned) == (MASTER, "sw", True)
+    assert remote.credentials("sw") == PINNED
 
 
 def test_a_session_already_named_this_master_mints_its_token_with_the_hive_credential(remote_taker, monkeypatch):
@@ -82,23 +106,53 @@ def test_a_session_already_named_this_master_mints_its_token_with_the_hive_crede
     monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", MASTER)
     broadcast.name_session(4242, MASTER)
     seen = []
-    ledger.closed = lambda slug: seen.append(remote.credentials(slug)) or False
+    _admission(ledger, seen)
     assert run("sw", "take-master") == 0
-    assert seen == [{"X-Ledger-Token": f"minted for {MASTER}", "X-Ledger-Agent": MASTER}]
+    assert seen == [(PINNED, True)]
     assert "AGENTIHOOKS_LEDGER_AGENT_TOKEN" not in os.environ
-    hive = {"X-Hive-Credential": HIVE, "X-Ledger-Agent": MASTER}
-    assert [(path, credentials) for _, path, credentials in sent[:2]] == [("agent-token", hive)] * 2
+    assert sent[:2] == [("sw", "agent-token", MINT)] * 2
+
+
+def test_replace_on_a_remote_host_retires_the_old_master_before_placing_the_new_one(remote_taker, monkeypatch):
+    store, ledger, rt, _, _ = remote_taker
+    monkeypatch.setenv("AGENTIHOOKS_DEPLOYMENT", "local")
+    run("sw", "start")
+    monkeypatch.setenv("AGENTIHOOKS_DEPLOYMENT", "compose")
+    killed = []
+    ledger.closed = lambda slug: killed.append(list(rt.killed)) or False
+    assert run("sw", "take-master", "--replace") == 0
+    assert killed == [[MASTER]]
+    assert _masters(store) == [("master@a1b2c3-0002", HIVE_ID, {"host_id": HIVE_ID})]
 
 
 def test_a_local_ledger_keeps_the_session_unpinned(taker, monkeypatch):  # noqa: F811
-    _, ledger, _, _ = taker
+    store, ledger, _, _ = taker
     monkeypatch.setenv("AGENTIHOOKS_DEPLOYMENT", "local")
+    monkeypatch.setenv("AGENTIHOOKS_HIVE_ID", HIVE_ID)
     monkeypatch.setenv("AGENTIHOOKS_SWARM", "")
     monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", CARRIED)
     monkeypatch.setenv("AGENTIHOOKS_LEDGER_AGENT_TOKEN", "carried token")
     assert run("sw", "take-master") == 0
     assert (os.environ["AGENTIHOOKS_SWARM"], os.environ["AGENTIHOOKS_AGENT_NAME"]) == ("", CARRIED)
     assert os.environ["AGENTIHOOKS_LEDGER_AGENT_TOKEN"] == "carried token"
+    assert _masters(store) == [(MASTER, "", {})]
+
+
+def test_only_a_remote_session_reads_its_pinned_swarm(monkeypatch, tmp_path):
+    monkeypatch.setattr(broadcast, "BROADCAST_FILE", str(tmp_path / "broadcast.json"))
+    monkeypatch.setattr(account_sessions, "agent_pid", lambda: 4242)
+    broadcast.register_session("session", 4242, "/repo", "sol", name=MASTER)
+    assert broadcast.pin_session(4242, "sw") == 1
+    assert broadcast.pin_session(5151, "sw") == 0
+    monkeypatch.setenv("AGENTIHOOKS_SWARM", "")
+    monkeypatch.setenv("AGENTIHOOKS_DEPLOYMENT", "local")
+    assert (base.Who.from_env().name, base.Who.from_env().swarm) == (MASTER, "")
+    monkeypatch.setenv("AGENTIHOOKS_DEPLOYMENT", "compose")
+    assert (base.Who.from_env().name, base.Who.from_env().swarm) == (MASTER, "sw")
+    assert base.Who.from_env({"AGENTIHOOKS_DEPLOYMENT": "compose"}).swarm == ""
+    monkeypatch.setenv("AGENTIHOOKS_SWARM", "other")
+    assert base.Who.from_env().swarm == "other"
+    assert broadcast.session_swarm(5151) == ""
 
 
 def _refused(slug):
@@ -148,10 +202,20 @@ def test_a_refused_reopen_of_a_closed_ledger_saves_no_master_and_no_seat(taker):
     assert store.seats.occupant("master@sw").occupant == ""
 
 
-def test_a_remote_refusal_saves_no_master_seat_or_alias(remote_taker):
+def test_a_remote_refusal_ends_the_placed_master_and_saves_no_seat_alias_or_pin(remote_taker):
     store, ledger, _, _, _ = remote_taker
-    ledger.closed = _unauthenticated
+    placed = []
+
+    def refuse(slug):
+        placed.append(authority.hive_agent(HIVE_ID, slug, MASTER))
+        _unauthenticated(slug)
+
+    ledger.closed = refuse
     assert _taken(["sw", "take-master"]) == "unauthenticated: the ledger server refused the credential"
-    assert [a.name for a in store.agents("sw") if a.lane == "master"] == []
+    assert placed == [True]
+    assert _masters(store) == []
+    assert authority.hive_agent(HIVE_ID, "sw", MASTER) is False
+    assert [(a.name, a.state) for a in store.execution_registry.records("sw")] == [(MASTER, "ended")]
     assert store.seats.occupant("master@sw").occupant == ""
     assert store.names.aliases(MASTER) == []
+    assert broadcast.session_swarm(4242) == ""
