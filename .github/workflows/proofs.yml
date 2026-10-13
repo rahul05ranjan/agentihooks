@@ -8,7 +8,7 @@ on:
         type: choice
         required: true
         default: tests
-        options: [tests, mutation, semgrep, worker-image, swarm-image, brain-smoke, helm-kind, github-access, row-memory]
+        options: [tests, redis-cpu, mutation, semgrep, worker-image, swarm-image, brain-smoke, helm-kind, github-access, row-memory]
       base:
         description: Base revision for mutation or Semgrep scope
         required: true
@@ -120,3 +120,58 @@ jobs:
         run: |
           read -r -a paths <<< "$TEST_PATHS"
           python -m pytest "${paths[@]}" -v -n auto --dist loadgroup --tb=short
+
+  redis-cpu:
+    if: inputs.proof == 'redis-cpu'
+    runs-on: ${{ (github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.actor) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.triggering_actor) || (github.event_name == 'merge_group' || github.event_name == 'push' && github.ref == 'refs/heads/dev') && github.actor == 'github-merge-queue[bot]' && github.triggering_actor == 'github-merge-queue[bot]') && 'anton-oss' || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: profiler
+          persist-credentials: false
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.base }}
+          path: measured
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.15'
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          version: '0.12.23'
+          enable-cache: false
+
+      - name: Install matched dependencies
+        working-directory: measured
+        run: uv pip install --system --excludes .github/test-excludes.txt -e '.[dev,all]' 'fakeredis[lua]==2.39.0' 'redis==8.1.0' 'pytest==9.0.2'
+
+      - name: Restore the complete recorded unit shard
+        uses: actions/download-artifact@v4
+        with:
+          name: durations-3.12-12
+          run-id: 38393101248
+          github-token: ${{ github.token }}
+          path: shard
+
+      - name: Install the browser that page tests drive
+        uses: ./measured/.github/actions/browser-cache
+
+      - name: Profile the unchanged unit shard
+        working-directory: measured
+        run: python ../profiler/tests/ci_profile/redis_cpu.py ../shard/durations.json ../redis-cpu
+
+      - name: Keep the complete CPU measurement and profile
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: redis-cpu
+          path: redis-cpu/
+          if-no-files-found: error
+          retention-days: 14
