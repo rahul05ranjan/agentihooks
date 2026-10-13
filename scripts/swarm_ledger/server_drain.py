@@ -10,10 +10,10 @@ DRAIN_S = 8.0  # under the swarm watchdog's ten second kill wait
 class DrainingServer(ThreadingHTTPServer):
     replacing = False
 
-    def __init__(self, address, handler):
+    def __init__(self, address, handler, bind_and_activate=True):
         self.active = 0
         self.idle = threading.Condition()
-        super().__init__(address, handler)
+        super().__init__(address, handler, bind_and_activate)
 
     def process_request(self, request, client_address):
         with self.idle:
