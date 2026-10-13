@@ -17,3 +17,7 @@ class Enforcement:
         kind = "deny" if chosen == "enforce" else "observe"
         log.append(who.swarm, log.Row.of(self.name, kind, who, action, reason, now_ms))
         return chosen == "enforce"
+
+
+STALL_WATCH = Enforcement("stall-watch")
+ENFORCEMENTS = {STALL_WATCH.name: STALL_WATCH}

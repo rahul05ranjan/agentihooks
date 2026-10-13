@@ -921,3 +921,23 @@ def test_five_live_watchdog_candidates_remain_claimed_for_an_hour_by_default():
     assert sum(row["tool"] == "reopen" for row in rows) == 30
     assert all(row["kind"] == "observe" for row in rows)
     assert len(swarm.inbox()) == 5
+
+
+@pytest.mark.parametrize("owner", ["", None])
+def test_an_ownerless_stall_logs_only_a_reopen_without_retiring_another_agent(owner):
+    from scripts.gates import log
+
+    swarm = Swarm(RED, task={"claimed_by": owner})
+    swarm.store.update(SLUG, gates={})
+    swarm.tick(START)
+    swarm.tick(START + 15 * MINUTE)
+    assert swarm.retired == [] and swarm.ledger.updates == []
+    [row] = log.recent(SLUG)
+    assert (row["gate"], row["kind"], row["agent"], row["task"], row["tool"]) == (
+        "stall-watch",
+        "observe",
+        "",
+        "t1",
+        "reopen",
+    )
+    assert [agent.name for agent in swarm.store.agents(SLUG)] == [OWNER]
