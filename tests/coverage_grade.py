@@ -218,7 +218,7 @@ def grade(
     histories, versions = _histories(base, eligible, runs)
     for path, by_line in histories.items():
         for line, history in by_line.items():
-            if len(versions[path][line]) >= 2 and not any(versions[path][line]):
+            if len(versions[path][line]) >= 2:
                 result.unconfirmed.setdefault(path, {})[line] = len(versions[path][line])
             elif _flaky(history):
                 result.unstable.setdefault(path, []).append(line)
