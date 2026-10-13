@@ -798,3 +798,76 @@ def test_an_unreadable_run_list_says_which_head(full_source, tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout == f"No reuse: cannot list the passed runs of head {head}\n"
     assert not (temp / "evidence/runs.json").exists()
+
+
+def _queue_needs(baseline="success", ratchet="success", ratchet_job="skipped", queue_job="success"):
+    needs = {name: {"result": "success"} for name in ("unit", "lint", "sonar", "stage-budget")}
+    needs["reuse"] = {"result": "success", "outputs": {"reused": "false"}}
+    needs["coverage-ratchet"] = {"result": ratchet_job}
+    needs["queue-baseline"] = {"result": queue_job, "outputs": {"baseline": baseline, "ratchet": ratchet}}
+    return needs
+
+
+def _gate(steps, needs, event="merge_group"):
+    [step] = steps
+    env = dict(os.environ, NEEDS=json.dumps(needs), MUTATION="false", KIND="false", EVENT=event, REUSED="false")
+    return subprocess.run(["bash", "-e", "-c", step["run"]], env=env, capture_output=True, text=True)
+
+
+def test_the_queue_coverage_gate_accepts_a_combined_queue_runner_when_both_outcomes_succeeded():
+    from scripts import ci_reuse
+
+    result = _gate(ci_reuse.gate_steps(queue_coverage=True), _queue_needs())
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("outcome", ["baseline", "ratchet"])
+@pytest.mark.parametrize("value", ["failure", "skipped", "cancelled", None])
+def test_the_queue_coverage_gate_refuses_either_outcome_unless_it_succeeded(outcome, value):
+    from scripts import ci_reuse
+
+    needs = _queue_needs()
+    if value is None:
+        del needs["queue-baseline"]["outputs"][outcome]
+    else:
+        needs["queue-baseline"]["outputs"][outcome] = value
+    result = _gate(ci_reuse.gate_steps(queue_coverage=True), needs)
+    assert result.returncode == 1
+    assert f"::error::The queue coverage {outcome} did not succeed." in result.stdout
+
+
+@pytest.mark.parametrize("queue_job", ["failure", "skipped", "cancelled"])
+def test_the_queue_coverage_gate_refuses_a_queue_baseline_job_that_did_not_succeed(queue_job):
+    from scripts import ci_reuse
+
+    result = _gate(ci_reuse.gate_steps(queue_coverage=True), _queue_needs(queue_job=queue_job))
+    assert result.returncode == 1
+    assert "::error::Every required gate must succeed." in result.stdout
+
+
+@pytest.mark.parametrize("ratchet_job", ["failure", "cancelled"])
+def test_the_queue_coverage_gate_refuses_a_standalone_ratchet_that_ran_and_failed(ratchet_job):
+    from scripts import ci_reuse
+
+    result = _gate(ci_reuse.gate_steps(queue_coverage=True), _queue_needs(ratchet_job=ratchet_job))
+    assert result.returncode == 1
+    assert "::error::Every required gate must succeed." in result.stdout
+
+
+@pytest.mark.parametrize("event", ["pull_request", "push", "workflow_dispatch"])
+def test_the_queue_coverage_gate_needs_the_standalone_ratchet_outside_the_queue(event):
+    from scripts import ci_reuse
+
+    needs = _queue_needs(baseline="skipped", ratchet="skipped", queue_job="skipped")
+    steps = ci_reuse.gate_steps(queue_coverage=True)
+    assert _gate(steps, needs, event).returncode == 1
+    needs["coverage-ratchet"] = {"result": "success"}
+    assert _gate(steps, needs, event).returncode == 0
+
+
+def test_the_canonical_gate_still_needs_the_standalone_ratchet_in_the_queue():
+    from scripts import ci_reuse
+
+    assert ci_reuse.gate_steps(queue_coverage=False) == ci_reuse.gate_steps()
+    assert _gate(ci_reuse.gate_steps(), _queue_needs()).returncode == 1
+    assert _gate(ci_reuse.gate_steps(), _queue_needs(ratchet_job="success")).returncode == 0

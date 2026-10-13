@@ -406,3 +406,30 @@ def test_protected_cli_validates_approvals_from_the_base_not_head(repo):
     head = _commit(repo, {"test.yml": candidate}, {}, "head without policy")
     with pytest.raises(ValueError, match="trusted actors"):
         gate_protected.main(["--root", str(repo), "--base", base, "--head", head])
+
+
+def _aggregators():
+    base, head = _workflow(), _workflow()
+    for workflow in (base, head):
+        workflow["jobs"]["gate-required"] = workflow["jobs"].pop("gate")
+    return base, head
+
+
+@pytest.mark.parametrize("queue_coverage", [False, True])
+def test_a_head_switching_to_either_canonical_aggregation_is_green(queue_coverage):
+    from scripts import ci_reuse
+
+    base, head = _aggregators()
+    head["jobs"]["gate-required"]["steps"] = ci_reuse.gate_steps(queue_coverage=queue_coverage)
+    assert _grade({"test.yml": head}, base={"test.yml": base}) == []
+
+
+def test_a_head_altering_the_queue_canonical_aggregation_is_red():
+    from scripts import ci_reuse
+
+    base, head = _aggregators()
+    [step] = ci_reuse.gate_steps(queue_coverage=True)
+    head["jobs"]["gate-required"]["steps"] = [{**step, "run": step["run"].replace("ratchet", "baseline")}]
+    assert _grade({"test.yml": head}, base={"test.yml": base}) == [
+        "The head's Gate — Required changes its steps; the protected branch grades with its own."
+    ]
