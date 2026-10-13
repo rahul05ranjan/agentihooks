@@ -14,8 +14,8 @@ def reply_size(reply: object) -> int:
     return len(json.dumps(reply, ensure_ascii=False).encode())
 
 
-def bounded(reply: dict, size: int | None = None) -> dict:
-    if (reply_size(reply) if size is None else size) > MAX_REPLY:
+def bounded(reply: dict) -> dict:
+    if reply_size(reply) > MAX_REPLY:
         raise APIError(413, "resource_too_large", "Use the explicit export operation for this resource")
     return reply
 
@@ -177,10 +177,8 @@ def page(rows: list, rev: str, query: dict, revisions: list | None = None) -> di
         size += item_size
     end = offset + len(selected)
     next_cursor = f"{rev}:{end}" if end < len(rows) else None
-    return bounded(
-        {"data": selected, "revision": rev, "next_cursor": next_cursor},
-        size + reply_size(next_cursor) - 4,
-    )
+    reply = {"data": selected, "revision": rev, "next_cursor": next_cursor}
+    return reply if selected else bounded(reply)
 
 
 def swarm_read(status: dict | None, path: str, query: dict) -> dict:
