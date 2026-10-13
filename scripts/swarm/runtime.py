@@ -815,7 +815,6 @@ class HerdrRuntime:
                 record = self._managed_record(agent)
                 alive = live_binding.server_alive(record)
                 facts[agent.name] = live_binding.read(agent, record.server_pid) if alive else {"process": alive}
-                self._binding_pids[agent.name] = str(record.server_pid) if alive else None
                 continue
             session = live_binding.bound_session(agent, items)
             validated = agent.profile_decision.get("validation", {}).get("pid")

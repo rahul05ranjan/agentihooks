@@ -1,5 +1,6 @@
 import json
 from dataclasses import asdict, replace
+from unittest.mock import Mock
 
 import pytest
 
@@ -9,6 +10,7 @@ from scripts.inbox import codex
 from scripts.inbox.dispatch import Dispatcher
 from scripts.inbox.receipts import MISMATCH, RELEASED, DispatchError, Receipts
 from scripts.inbox.store import InboxStore
+from scripts.swarm.execution import ExecutionRegistry
 from scripts.swarm.store import AgentRecord, RedisStore, SwarmConfig
 
 pytestmark = [pytest.mark.unit, pytest.mark.xdist_group("fakeredis")]
@@ -574,6 +576,119 @@ def test_a_degraded_pump_reconnects_with_backoff_and_resumes_delivery(rig):
     assert [d.state for d in deliveries(rig, item.id)] == ["accepted"]
 
 
+def test_native_reconnect_uses_the_recorded_socket_and_closes_every_subscription(rig, monkeypatch):
+    from websockets.exceptions import ConnectionClosedError
+
+    rig.server.broken = ConnectionClosedError(None, None)
+    subscriptions = []
+    original = rig.store.redis.pubsub
+
+    def pubsub():
+        subscription = original()
+        subscriptions.append(subscription)
+        return subscription
+
+    def connect(path, timeout):
+        rig.server.broken = None
+        return protocol.Connection(rig.server, 5, clock=rig.clock), {}
+
+    connector = Mock(side_effect=connect)
+    monkeypatch.setattr(protocol, "connect", connector)
+    monkeypatch.setattr(rig.store.redis, "pubsub", pubsub)
+    rig.pump.binding = replace(rig.pump.binding, reconnect=None)
+    assert rig.run(3) == codex.STOPPED
+    connector.assert_called_once_with("/run/cx/s", 5.0)
+    assert len(subscriptions) == 2
+    assert all(not subscription.subscribed for subscription in subscriptions)
+    assert rig.record().state == CONNECTED
+
+
+def test_a_running_pump_keeps_one_subscription_and_delivers_each_live_item(rig, monkeypatch):
+    subscriptions = []
+    original = rig.store.redis.pubsub
+    items, stops = [], []
+
+    def pubsub():
+        subscription = original()
+        subscriptions.append(subscription)
+        return subscription
+
+    def stop():
+        stops.append(True)
+        if len(stops) <= 3:
+            items.append(rig.store.send("alice", ME, f"item {len(stops)}"))
+            return False
+        return True
+
+    monkeypatch.setattr(rig.store.redis, "pubsub", pubsub)
+    assert rig.pump.run(stop) == codex.STOPPED
+    assert len(subscriptions) == 1
+    assert all(rig.store.get(item.id).state == "delivered" for item in items)
+    assert rig.server.methods().count("turn/start") == 1
+    assert rig.server.methods().count("turn/steer") == 2
+
+
+def test_reconnect_backoff_resets_after_a_healthy_iteration(rig):
+    from websockets.exceptions import ConnectionClosedError
+
+    stops, sleeps = [], []
+
+    def stop():
+        stops.append(True)
+        if len(stops) in {2, 5}:
+            rig.server.broken = ConnectionClosedError(None, None)
+        return len(stops) >= 7
+
+    def reconnect():
+        rig.server.broken = None
+        return protocol.Connection(rig.server, 5, clock=rig.clock)
+
+    def sleep(delay):
+        sleeps.append(delay)
+        rig.clock.now += delay
+
+    rig.pump.binding = replace(rig.pump.binding, reconnect=reconnect)
+    rig.pump.timing = replace(rig.pump.timing, sleep=sleep)
+    assert rig.pump.run(stop) == codex.STOPPED
+    assert sleeps == [codex.BACKOFF_S, codex.BACKOFF_S]
+
+
+def test_a_stale_pump_stops_without_reconnecting_or_changing_its_transport(rig):
+    rig.pump.start()
+    swarm = rig.bindings.store
+    swarm.start_execution(
+        SLUG, AgentRecord(swarm.next_name(SLUG, "eng"), "eng", "task", seat=f"eng-1@{SLUG}"), EXECUTION
+    )
+    before = rig.record()
+    assert rig.run(1) == DEGRADED
+    assert rig.logged == [f"codex pump for {ME} degraded: StaleExecution: execution is no longer current"]
+    assert rig.record() == before
+
+
+def test_admission_retries_when_publication_is_reserved_after_its_seat_read(rig, monkeypatch):
+    swarm = rig.bindings.store
+    registry = ExecutionRegistry(swarm)
+    original, raced = registry._admit, []
+
+    def admit(pipe, *args):
+        if not raced:
+            raced.append(True)
+
+            def publish():
+                try:
+                    original(pipe, *args)
+                finally:
+                    assert swarm.execution_occupants(SLUG)[f"eng-1@{SLUG}"].execution_id == EXECUTION
+
+            rig.pump.binding.transport.publish(publish)
+        else:
+            original(pipe, *args)
+
+    monkeypatch.setattr(registry, "_admit", admit)
+    candidate = AgentRecord(swarm.next_name(SLUG, "eng"), "eng", "task", seat=f"eng-1@{SLUG}")
+    assert registry.start(SLUG, candidate, EXECUTION).generation == 2
+
+
 @pytest.mark.parametrize("reason", ["handoff", "quota"])
 def test_old_generation_mail_cannot_publish_or_ack_after_successor_admission(rig, reason):
     rig.pump.start()
@@ -588,14 +703,14 @@ def test_old_generation_mail_cannot_publish_or_ack_after_successor_admission(rig
     )
     assert successor.generation == 2
     sent = list(rig.server.sent)
-    with pytest.raises(DispatchError, match="execution is no longer current"):
+    with pytest.raises(DispatchError, match="^execution is no longer current$"):
         rig.pump.step()
     assert rig.server.sent == sent
-    with pytest.raises(DispatchError, match="execution is no longer current"):
+    with pytest.raises(DispatchError, match="^execution is no longer current$"):
         rig.pump.receipts.accept(delivery.id, OWNER, delivery.digest)
     assert rig.store.get(item.id).state == "pending"
     assert rig.pump.receipts.get(delivery.id).committed is False
-    with pytest.raises(DispatchError, match="execution is no longer current"):
+    with pytest.raises(DispatchError, match="^execution is no longer current$"):
         rig.pump.binding.transport.mark(state=CONNECTED)
 
 
@@ -620,7 +735,7 @@ def test_successor_admission_racing_a_receipt_commit_refuses_the_old_ack(rig, mo
         return original(*args, **kwargs)
 
     monkeypatch.setattr(rig.store, "stage_move", stage)
-    with pytest.raises(DispatchError, match="execution is no longer current"):
+    with pytest.raises(DispatchError, match="^execution is no longer current$"):
         rig.pump.receipts.accept(delivery.id, OWNER, delivery.digest)
     assert len(admitted) == 1
     assert rig.store.get(item.id).state == "pending"
@@ -642,7 +757,7 @@ def test_retirement_racing_a_receipt_commit_refuses_the_old_ack(rig, monkeypatch
         return original(*args, **kwargs)
 
     monkeypatch.setattr(rig.store, "stage_move", stage)
-    with pytest.raises(DispatchError, match="execution is no longer current"):
+    with pytest.raises(DispatchError, match="^execution is no longer current$"):
         rig.pump.receipts.accept(delivery.id, OWNER, delivery.digest)
     assert retired == [True]
     assert rig.store.get(item.id).state == "pending"
@@ -669,13 +784,14 @@ def test_successor_admission_cannot_overtake_an_inbox_publication(rig, monkeypat
     item = rig.store.send("alice", ME, "publication")
     swarm = rig.bindings.store
     candidate = AgentRecord(swarm.next_name(SLUG, "eng"), "eng", "task", seat=f"eng-1@{SLUG}")
+    registry = ExecutionRegistry(swarm)
     name = "steer_turn" if busy else "start_turn"
     original = getattr(protocol, name)
     refused = []
 
     def publish(*args):
-        with pytest.raises(SwarmError, match="publication is in flight"):
-            swarm.start_execution(SLUG, candidate, EXECUTION)
+        with pytest.raises(SwarmError, match="^current execution publication is in flight; retry after it finishes$"):
+            registry.start(SLUG, candidate, EXECUTION)
         refused.append(True)
         return original(*args)
 
@@ -685,7 +801,7 @@ def test_successor_admission_cannot_overtake_an_inbox_publication(rig, monkeypat
     assert rig.store.get(item.id).state == "delivered"
     successor = swarm.start_execution(SLUG, candidate, EXECUTION)
     assert successor.generation == 2
-    with pytest.raises(DispatchError, match="execution is no longer current"):
+    with pytest.raises(DispatchError, match="^execution is no longer current$"):
         rig.pump._send("old mail")
 
 

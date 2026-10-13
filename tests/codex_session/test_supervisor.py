@@ -255,6 +255,40 @@ def test_finish_clears_a_dead_bridges_abandoned_publication(store, server, clock
     assert not store.redis.hgetall(key)
 
 
+@pytest.mark.parametrize("resource", ["endpoint", "publication", "transport"])
+def test_terminal_cleanup_keeps_resources_that_change_during_release(
+    store, server, clock, root, tmp_path, monkeypatch, resource
+):
+    started = supervisor.launch(store, launch_spec(store, server, tmp_path), deps(server, clock, root))
+    bindings = BindingStore(store)
+    record = replace(started.record, state=EXITED)
+    bindings.put(SLUG, record)
+    endpoints, publishing = store.key(SLUG, ENDPOINTS), store.key(SLUG, "execution-publishing")
+    store.redis.hset(publishing, SEAT, record.execution_id)
+    original, changed = bindings.get, []
+
+    def get(*args):
+        observed = original(*args)
+        if not changed:
+            changed.append(True)
+            if resource == "endpoint":
+                store.redis.hset(endpoints, record.endpoint_ref, "successor")
+            elif resource == "publication":
+                store.redis.hset(publishing, SEAT, "successor")
+            else:
+                bindings.put(SLUG, replace(record, state=CONNECTED))
+        return observed
+
+    monkeypatch.setattr(bindings, "get", get)
+    bindings.release(SLUG, record)
+    if resource == "endpoint":
+        assert store.redis.hget(endpoints, record.endpoint_ref) == "successor"
+    elif resource == "publication":
+        assert store.redis.hget(publishing, SEAT) == "successor"
+    else:
+        assert store.redis.hget(publishing, SEAT) == record.execution_id
+
+
 def test_a_thread_without_an_id_fails_as_a_protocol_error(store, server, clock, root, tmp_path):
     server.thread = {"sessionId": "session-only"}
     failure = failed(store, server, clock, root, launch_spec(store, server, tmp_path), "protocol")
@@ -554,6 +588,9 @@ def test_failure_before_transport_reservation_ends_admitted_execution(
     assert not server.spawns
     assert not store.agents(SLUG)
     assert store.execution_occupants(SLUG)[SEAT].state == "finished"
+    import json
+
+    assert json.loads(store.redis.lrange(store.key(SLUG, "history"), 0, -1)[0])["ended_at"] == 1000
     assert not store.redis.hgetall(store.key(SLUG, ENDPOINTS))
 
 

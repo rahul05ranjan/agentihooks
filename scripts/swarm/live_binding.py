@@ -106,7 +106,7 @@ def read(agent: AgentRecord, pid: int, proc: Path = Path("/proc")) -> dict:
 def managed(agent: AgentRecord) -> bool:
     from scripts.swarm.store import APP_SERVER_TRANSPORT
 
-    return agent.runtime_backend == "local" and getattr(agent, "transport", "") == APP_SERVER_TRANSPORT
+    return agent.runtime_backend == "local" and getattr(agent, "transport", None) == APP_SERVER_TRANSPORT
 
 
 def transport(store: RedisStore, agent: AgentRecord) -> TransportRecord | None:
