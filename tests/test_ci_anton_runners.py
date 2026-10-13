@@ -87,6 +87,9 @@ OIDC = {("pages.yml", "deploy"), ("publish-pypi.yml", "publish")}
 # The runner trust loader contract fixes this job's runner.
 PROTECTED = {("runner-trust.yml", "actors")}
 
+# The one job holding the organization token stays off every shared runner.
+ORG_TOKEN = {("access-audit.yml", "audit")}
+
 # Runner trust never admits a pull_request_target run to a private runner.
 TARGET = {("gate-protected.yml", "grade")}
 
