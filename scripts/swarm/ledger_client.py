@@ -1,6 +1,7 @@
 """The swarm's view of a swarm ledger: read tasks, write task fields, comments and chat over the ledger HTTP API."""
 
 import sys
+import urllib.error
 import uuid
 from pathlib import Path
 
@@ -61,6 +62,15 @@ class LedgerClient:
 
     def tasks(self, slug):
         return self._resource(slug, "tasks", collection=True)
+
+    def task(self, slug, task_id):
+        """One task without its threads, or None when the ledger holds no such task."""
+        try:
+            return self._resource(slug, f"tasks/{task_id}")
+        except urllib.error.HTTPError as exc:
+            if exc.code != 404:
+                raise
+            return None
 
     def events(self, slug):
         return self._resource(slug, "events", collection=True)

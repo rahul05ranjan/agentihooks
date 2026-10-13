@@ -321,6 +321,13 @@ class SQLiteLedgerRepository:
             connection.execute(BEGIN)
             return json.loads(self._entry(connection, slug).text)
 
+    def current(self, slug: str) -> Entry:
+        """The stored entry: its generation, text and a parsed copy that callers only read."""
+        self._adopt(slug)
+        with self.connect() as connection, connection:
+            connection.execute(BEGIN)
+            return self._entry(connection, slug)
+
     def read(self, slug: str, *keys: str) -> dict:
         """Only the named parts of a ledger, such as `overview`, `_meta.members` or `tasks/t1`."""
         self._adopt(slug)
