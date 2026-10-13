@@ -223,3 +223,130 @@ def test_a_viewer_launched_outside_a_swarm_names_an_empty_slug(tmp_path):
     lines = launcher.read_text().splitlines()
     serve = next(index for index, line in enumerate(lines) if line.startswith("setsid -f "))
     assert shlex.split(lines[serve + 1])[4:] == ["--slug", "", "--agent", "a"]
+
+
+def _agents():
+    from scripts.swarm.store import APP_SERVER_TRANSPORT, AgentRecord
+
+    push = {"harness": "codex", "transport": APP_SERVER_TRANSPORT}
+    return [
+        AgentRecord("sw-eng-1", "eng", "t1", execution_id="exe-0", **push),
+        AgentRecord("sw-master-1", "master", "master", execution_id="exe-1", **push),
+        AgentRecord("sw-eng-2", "eng", "t2", execution_id="exe-2", harness="codex"),
+        AgentRecord("sw-eng-3", "eng", "t3", execution_id="exe-3", harness="claude"),
+        AgentRecord("sw-eng-4", "eng", "t4", execution_id="exe-4", runtime_backend="kubernetes", **push),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("execution", "name"),
+    [("exe-1", "sw-master-1"), ("exe-0", "sw-eng-1"), ("exe-2", None), ("exe-3", None), ("exe-4", None), ("x", None)],
+)
+def test_only_a_local_app_server_execution_reopens_in_a_native_terminal(execution, name):
+    from types import SimpleNamespace
+
+    store = SimpleNamespace(agents=lambda slug: _agents() if slug == "sw" else [])
+    found = attach.reopenable(store, "sw", execution)
+    assert (found and found.name) == name
+    assert attach.reopenable(store, "other", execution) is None
+
+
+def test_reopen_resumes_the_recorded_thread_and_never_starts_a_server(monkeypatch):
+    from types import SimpleNamespace
+
+    store, agent = SimpleNamespace(), _agents()[1]
+    monkeypatch.setattr(
+        "scripts.swarm.live_binding.transport",
+        lambda found, seen: RECORD if (found, seen) == (store, agent) else None,
+    )
+    opened = []
+    placed = SimpleNamespace(pane_id="w9:p4")
+    result = attach.reopen(store, agent, lambda title, argv: opened.append((title, argv)) or placed, "/bin/codex")
+    assert opened == [("sw-master-1", ["/bin/codex", "resume", "--remote", RECORD.endpoint_ref, "thread-1"])]
+    assert not {"app-server", "serve", "scripts.codex_session"} & set(opened[0][1])
+    assert result == {"agent": "sw-master-1", "thread": "thread-1", "pane": "w9:p4"}
+
+
+@pytest.mark.parametrize("record", [None, replace(RECORD, state=STARTING), replace(RECORD, thread_id="")])
+def test_reopen_refuses_an_execution_with_no_connected_thread(monkeypatch, record):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr("scripts.swarm.live_binding.transport", lambda found, seen: record)
+    opened = []
+    with pytest.raises(attach.AttachError) as refused:
+        attach.reopen(SimpleNamespace(), _agents()[1], lambda title, argv: opened.append(argv), "codex")
+    assert str(refused.value) == "sw-master-1 has no connected thread to reopen"
+    assert opened == []
+
+
+def test_the_local_terminal_opens_the_viewer_in_the_swarm_workspace(monkeypatch):
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from scripts import herdr_host
+    from scripts.swarm import naming
+
+    config = SimpleNamespace(repo="/home/op/dev/agentihooks", code="323133", slug="sw")
+    store = SimpleNamespace(agents=lambda slug: _agents(), config=lambda slug: config)
+    monkeypatch.setattr("scripts.swarm.live_binding.transport", lambda found, seen: RECORD)
+    opened = []
+    monkeypatch.setattr(
+        herdr_host,
+        "open_command",
+        lambda *call: opened.append(call) or herdr_host.Placement("w1", "w1:t1", "w1:p1"),
+    )
+    environ = {"HERDR_SOCKET": "/run/herdr.sock"}
+    assert attach.local_terminal(store, "sw", "exe-1", environ) == {
+        "agent": "sw-master-1",
+        "thread": "thread-1",
+        "pane": "w1:p1",
+    }
+    assert opened == [
+        (
+            Path(config.repo),
+            "sw-master-1",
+            attach.viewer_argv("codex", RECORD),
+            naming.space(config.repo, config.code, config.slug),
+            environ,
+        )
+    ]
+
+
+def test_the_local_terminal_leaves_other_executions_to_the_worker_terminal(monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts import herdr_host
+
+    store = SimpleNamespace(agents=lambda slug: _agents(), config=lambda slug: pytest.fail("config read"))
+    monkeypatch.setattr(herdr_host, "open_command", lambda *call: pytest.fail("pane opened"))
+    assert attach.local_terminal(store, "sw", "exe-4", {}) is None
+
+
+def test_swarm_terminal_reopens_a_local_execution_before_the_worker_terminal(monkeypatch, capsys):
+    import json
+    from types import SimpleNamespace
+
+    from scripts.swarm import cli
+
+    monkeypatch.setattr(attach, "local_terminal", lambda store, slug, execution, environ: {"pane": execution})
+    monkeypatch.setattr(
+        "scripts.swarm_v2.kubernetes.operator_terminal.command", lambda *args: pytest.fail("worker terminal")
+    )
+    cli.cmd_terminal(object(), SimpleNamespace(slug="sw", execution="exe-1"))
+    assert json.loads(capsys.readouterr().out) == {"pane": "exe-1"}
+
+
+def test_swarm_terminal_falls_back_to_the_worker_terminal(monkeypatch, capsys):
+    import json
+    from types import SimpleNamespace
+
+    from scripts.swarm import cli
+
+    store = object()
+    monkeypatch.setattr(attach, "local_terminal", lambda found, slug, execution, environ: None)
+    monkeypatch.setattr(
+        "scripts.swarm_v2.kubernetes.operator_terminal.command",
+        lambda found, slug, execution, environ, who: {"target": execution} if found is store else None,
+    )
+    cli.cmd_terminal(store, SimpleNamespace(slug="sw", execution="exe-4"))
+    assert json.loads(capsys.readouterr().out) == {"target": "exe-4"}
