@@ -126,6 +126,10 @@ class TestTaskLift:
         lift.lift_agent(Who(name="master@1-0", swarm=SLUG), "stub", tmp_path)
         assert self.run(tmp_path, None, agent="master@1-0", task="")[0] == 0
 
+    def test_an_agent_lift_from_before_its_claim_does_not_cover_its_task(self, tmp_path):
+        lift.lift_agent(Who(name=ME, swarm=SLUG), "stub", tmp_path)
+        assert self.run(tmp_path, "a1", agent=ME)[0] == 2
+
     def test_a_dropped_task_lift_lifts_nothing_even_for_the_lifted_agent(self, tmp_path):
         lift.lift_agent(WHO, "stub", tmp_path, pull={"url": URL, "head": "a1"})
         lift.drop_task(SLUG, TASK, tmp_path)
