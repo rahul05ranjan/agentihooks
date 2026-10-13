@@ -19,6 +19,7 @@
   "pages.yml/build": "hosted",
   "pages.yml/deploy": "hosted",
   "proofs.yml/tests": "standard",
+  "proofs.yml/redis-cpu": "standard",
   "publish-pypi.yml/publish": "hosted",
   "publish-pypi.yml/verify": "hosted",
   "release.yml/release": "hosted",
