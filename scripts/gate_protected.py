@@ -35,13 +35,14 @@ def runners(policy: object = None) -> list[str]:
 
 def reuse_jobs(policy: object = None) -> list[dict]:
     jobs = []
-    for runner in runners(policy):
-        job = ci_reuse.reuse_job()
-        if runner != job["runs-on"]:
-            job["runs-on"] = runner
-            [install] = [step for step in job["steps"] if step.get("name") == "Install metadata dependencies"]
-            install["env"] = {"PYTHONNOUSERSITE": "1"}
-        jobs.append(job)
+    for factory in (ci_reuse.reuse_job, ci_reuse.paged_reuse_job):
+        for runner in runners(policy):
+            job = factory()
+            if runner != job["runs-on"]:
+                job["runs-on"] = runner
+                [install] = [step for step in job["steps"] if step.get("name") == "Install metadata dependencies"]
+                install["env"] = {"PYTHONNOUSERSITE": "1"}
+            jobs.append(job)
     return jobs
 
 

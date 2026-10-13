@@ -346,7 +346,7 @@ def test_the_protected_grader_admits_only_the_exact_paged_reuse_variant(weakened
             for step in head["jobs"]["reuse"]["steps"]
             if step.get("name") == "Fetch the evidence of recent passed runs"
         ]
-        step["run"] = step["run"].replace("per_page=5", "per_page=100")
+        step["run"] = step["run"].replace("--page-size 5", "--page-size 100")
     problems = gate_protected.grade({"test.yml": base}, {}, {"test.yml": head}, {}, _TODAY, policy)
     assert bool(problems) == weakened, problems
 
