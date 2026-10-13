@@ -3,9 +3,12 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 import yaml
+
+from scripts.ci_budget import jobs as reader
 
 pytestmark = pytest.mark.unit
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,9 +43,6 @@ if fault == "shrink" and (size > 5 or start >= 15 and size > 2):
     sys.exit(1)
 print(json.dumps({"total_count": 23, "jobs": [{"id": i} for i in range(start, min(start + size, 23))]}))
 """
-
-
-from scripts.ci_budget import jobs as reader
 
 
 def _read(tmp_path, fault):
@@ -103,7 +103,10 @@ def test_workflow_reader_stops_after_bounded_retries(tmp_path, fault):
     "error",
     [
         subprocess.TimeoutExpired(["gh"], 10),
+        subprocess.CalledProcessError(1, ["gh"], stderr="gh: Server Error (HTTP 500)"),
         subprocess.CalledProcessError(1, ["gh"], stderr="gh: Bad Gateway (HTTP 502)"),
+        subprocess.CalledProcessError(1, ["gh"], stderr="gh: I/O TIMEOUT"),
+        subprocess.CalledProcessError(1, ["gh"], stderr="gh: request timed out"),
     ],
 )
 def test_reader_retries_timeout_or_server_error_with_short_backoff(monkeypatch, error):
@@ -118,6 +121,7 @@ def test_reader_retries_timeout_or_server_error_with_short_backoff(monkeypatch, 
     monkeypatch.setattr(reader.subprocess, "run", run)
     monkeypatch.setattr(reader.time, "sleep", sleeps.append)
     assert reader.read_page("repos/owner/repo/jobs", 15, 5) == ([{"id": 15}], 2)
+    assert all(command[:2] == ["gh", "api"] for command, _ in calls)
     assert [command[-1] for command, _ in calls] == [
         "repos/owner/repo/jobs?per_page=5&page=4",
         "repos/owner/repo/jobs?per_page=2&page=8",
@@ -138,5 +142,71 @@ def test_reader_does_not_retry_a_non_server_http_error(monkeypatch, status):
     monkeypatch.setattr(reader.subprocess, "run", run)
     with pytest.raises(subprocess.CalledProcessError) as caught:
         reader.read_page("repos/owner/repo/jobs", 0, 10)
+    assert caught.value is error
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("count", [0, 20, 23])
+@pytest.mark.parametrize("shrink", [False, True])
+def test_reader_preserves_every_job_when_page_size_changes(monkeypatch, count, shrink):
+    calls, sleeps = [], []
+
+    def run(command, **kwargs):
+        assert len(calls) < count + 5
+        assert command[:2] == ["gh", "api"]
+        assert urlsplit(command[-1]).path == "repos/owner/repo/jobs"
+        query = parse_qs(urlsplit(command[-1]).query)
+        size, page = int(query["per_page"][0]), int(query["page"][0])
+        calls.append((size, page))
+        start = (page - 1) * size
+        if shrink and (size > 5 or start >= 15 and size > 2):
+            raise subprocess.CalledProcessError(1, command, stderr="gh: Server Error (HTTP 503)")
+        return subprocess.CompletedProcess(
+            command, 0, stdout=json.dumps({"jobs": [{"id": i} for i in range(start, min(start + size, count))]})
+        )
+
+    monkeypatch.setattr(reader.subprocess, "run", run)
+    monkeypatch.setattr(reader.time, "sleep", sleeps.append)
+    assert reader.read_jobs("repos/owner/repo/jobs") == [{"id": i} for i in range(count)]
+    assert max(size for size, _ in calls) == 10
+    if shrink:
+        assert calls[:2] == [(10, 1), (5, 1)]
+        assert sleeps == ([1] if count == 0 else [1, 1])
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        subprocess.TimeoutExpired(["gh"], 10),
+        subprocess.CalledProcessError(1, ["gh"], stderr="gh: Server Error (HTTP 599)"),
+    ],
+)
+def test_reader_exhausts_retries_without_partial_results(monkeypatch, error):
+    calls, sleeps = [], []
+
+    def run(command, **kwargs):
+        calls.append(command[-1])
+        raise error
+
+    monkeypatch.setattr(reader.subprocess, "run", run)
+    monkeypatch.setattr(reader.time, "sleep", sleeps.append)
+    with pytest.raises(type(error)) as caught:
+        reader.read_jobs("repos/owner/repo/jobs")
+    assert caught.value is error
+    assert calls == [f"repos/owner/repo/jobs?per_page={size}&page=1" for size in [10, 5, 2, 1]]
+    assert sleeps == [1, 2, 3]
+
+
+def test_reader_fails_an_unknown_error_without_retry(monkeypatch):
+    calls = []
+    error = subprocess.CalledProcessError(1, ["gh"], stderr="gh: connection refused")
+
+    def run(command, **kwargs):
+        calls.append(command)
+        raise error
+
+    monkeypatch.setattr(reader.subprocess, "run", run)
+    with pytest.raises(subprocess.CalledProcessError) as caught:
+        reader.read_jobs("repos/owner/repo/jobs")
     assert caught.value is error
     assert len(calls) == 1
