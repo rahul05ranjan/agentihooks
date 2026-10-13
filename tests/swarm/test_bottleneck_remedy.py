@@ -174,7 +174,7 @@ def test_a_seat_shift_never_passes_a_cap_and_proposes_instead(store, home, shipp
 
 
 def test_a_seat_shift_into_a_lane_with_no_ready_task_proposes_instead(store, home, shipped):
-    fire(store, "claim_wait", value=7.5)
+    fire(store, "seat_wait", value=7.5)
     empty = lane_split.Lanes(ready={"eng": 0, "ci": 1}, live={"eng": 1, "ci": 0}, room=4)
     why = "the eng lane has no ready task"
     assert run(store, lanes=empty) == [proposed(CLAIM, why)]
@@ -183,7 +183,7 @@ def test_a_seat_shift_into_a_lane_with_no_ready_task_proposes_instead(store, hom
 
 def test_a_seat_shift_keeps_the_caps_the_operator_or_master_set(store, home, shipped):
     store.update(SLUG, caps_pinned=True)
-    fire(store, "claim_wait", value=7.5)
+    fire(store, "seat_wait", value=7.5)
     why = "the operator or the master set the lane caps"
     assert run(store) == [proposed(CLAIM, why)]
     assert caps(store) == (2, 2)
@@ -191,7 +191,7 @@ def test_a_seat_shift_keeps_the_caps_the_operator_or_master_set(store, home, shi
 
 def test_a_seat_shift_in_log_only_records_the_would_be_move(store, home, shipped):
     store.update(SLUG, gates={})
-    fire(store, "claim_wait", value=7.5)
+    fire(store, "seat_wait", value=7.5)
     why = "the lane split switch is log only"
     assert run(store) == [proposed(CLAIM, why)]
     assert caps(store) == (2, 2)
