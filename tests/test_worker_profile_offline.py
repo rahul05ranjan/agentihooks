@@ -50,3 +50,18 @@ def test_offline_codex_profile_rejects_a_failing_rendered_hook(tmp_path):
 
     assert failed.value.returncode == 7
     assert not (home / ".agentihooks/active-sessions.json").exists()
+
+
+def test_offline_codex_profile_rejects_a_hook_that_does_not_register(tmp_path):
+    home = configured_home(tmp_path, f"{shlex.quote(sys.executable)} -c 'pass'")
+
+    with pytest.raises(FileNotFoundError):
+        profile_probe.codex_session_start(home)
+
+
+def test_offline_codex_profile_rejects_an_empty_session_start_group(tmp_path):
+    home = configured_home(tmp_path, "unused")
+    (home / ".codex/hooks.json").write_text(json.dumps({"hooks": {"SessionStart": []}}))
+
+    with pytest.raises(AssertionError, match="no SessionStart hook"):
+        profile_probe.codex_session_start(home)
