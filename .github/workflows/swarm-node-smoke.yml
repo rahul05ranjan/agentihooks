@@ -25,7 +25,7 @@ jobs:
           ref: ${{ github.sha }}
       - name: Pull the locked worker base with bounded rate limit retries
         run: bash docker/swarm-node/pull-base.sh
-      - name: Prove clean worker builds and offline startup
+      - name: Prove the selected worker image build, scan and offline runs
         env:
           WORKER_PROOF: ${{ matrix.proof }}
         run: bash docker/swarm-node/smoke.sh "$RUNNER_TEMP/worker-image-evidence" "$WORKER_PROOF"

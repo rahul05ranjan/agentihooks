@@ -10,7 +10,7 @@ case "$proof" in
     *) echo "unknown worker proof: $proof" >&2; exit 2 ;;
 esac
 if [[ "$proof" == compare ]]; then
-python3 - "$output" "${3:?supply the tested revision}" <<'PY'
+    python3 - "$output" "${3:?supply the tested revision}" <<'PY'
 import json, sys
 from pathlib import Path
 output=Path(sys.argv[1])
@@ -18,25 +18,29 @@ revision=sys.argv[2]
 for proof in ('startup','rebuild','profiles'):
     result=json.loads((output/proof/'mode-result.json').read_text())
     assert result=={'proof':proof,'tested_commit':revision,'status':'passed'},proof
-reports=[json.loads((output/proof/f'{name}.json').read_text()) for proof,name in (
-    ('startup','first'),('startup','second'),('startup','rollback'),('rebuild','rebuild'),('profiles','profiles'))]
-first=reports[0]
-assert all(report==first for report in reports), 'independent worker inventories differ'
+reports={name:json.loads((output/proof/f'{name}.json').read_text()) for proof,name in (
+    ('startup','first'),('startup','second'),('startup','rollback'),('rebuild','rebuild'),('profiles','profiles'))}
+first=reports['first']
+assert all(report==first for report in reports.values()), 'independent worker inventories differ'
 assert first['manifest']['source_revision']==revision
 assert first['worker_image_build_validation_failures']==0
 profiles=json.loads((output/'profiles/SV2-IMG-02/result.json').read_text())
 assert profiles['status']=='passed' and profiles['tested_commit']==revision
-shared={'package':'SV2-IMG-01','tested_commit':revision,'mocked':False,'startup_network':'none'}
+startup=json.loads((output/'startup/a-result.json').read_text())
+shared={'package':'SV2-IMG-01','fixture':startup['fixture'],'tested_commit':revision,'mocked':False,'startup_network':'none','lock_sha256':first['manifest']['declared']['lock_sha256']}
 for case in ('a','b'):
     (output/f'{case}-result.json').write_bytes((output/'startup'/f'{case}-result.json').read_bytes())
-(output/'c-result.json').write_text(json.dumps(shared|{'uncached_rebuild_inventory_equal':True,'retained_previous_image_started':True,'worker_image_build_validation_failures':0},indent=2)+'\n')
+(output/'c-result.json').write_text(json.dumps(shared|{'uncached_rebuild_inventory_equal':reports['rebuild']==first,'retained_image_started_after_rejected_builds':reports['rollback']==first,'worker_image_build_validation_failures':0},indent=2)+'\n')
 (output/'result.json').write_text(json.dumps(shared|{'cases':['A','B','C'],'status':'passed','production_rollout':'not exercised'},indent=2)+'\n')
-print('SV2-IMG-01 passed: parallel startup, rejected builds, uncached rebuild, retained image rollback and equal inventories')
+print('SV2-IMG-01 passed: parallel startup, rejected builds, uncached rebuild on its own daemon, retained image after rejected builds and equal inventories')
 PY
     exit 0
 fi
 build_args=()
 if [[ "$proof" == rebuild ]]; then build_args=(--no-cache-filter worker); fi
+if [[ "$(docker info --format '{{.DriverStatus}}')" == *io.containerd.snapshotter.v1* ]]; then
+    build_args+=(--provenance=false --output "type=image,compression=uncompressed")
+fi
 fixture="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
 image="agentihooks-worker-proof:$fixture"
 rebuild="agentihooks-worker-rebuild:$fixture"
@@ -46,6 +50,7 @@ context="$output/context-$fixture"
 mkdir "$context"
 git -C "$repo" archive HEAD | tar -x -C "$context"
 cleanup() {
+    if [[ -n "${scanner_pid:-}" ]]; then wait "$scanner_pid" || true; fi
     if [[ -n "${scan_pid:-}" ]]; then wait "$scan_pid" || true; fi
     if [[ -n "${profile_pid:-}" ]]; then wait "$profile_pid" || true; fi
     docker image rm "$image" "$rebuild" "$rejected" >/dev/null 2>&1 || true
@@ -56,8 +61,11 @@ PY
 }
 trap cleanup EXIT
 
+bash "$context/docker/swarm-node/scan.sh" --pull-scanner > "$output/scanner-pull.log" 2>&1 &
+scanner_pid=$!
 docker build "${build_args[@]}" --platform linux/amd64 ${WORKER_BASE_CONTEXT:+--build-context "$WORKER_BASE_CONTEXT"} --build-arg SOURCE_REVISION="$revision" \
     -f "$context/docker/swarm-node/Dockerfile" -t "$image" "$context" > "$output/build.log" 2>&1
+wait "$scanner_pid"
 if [[ "$proof" == rebuild ]]; then
     bash "$context/docker/swarm-node/scan.sh" "$image" "$output/credential-scan"
     docker run --rm --network none --read-only --tmpfs /home/worker:uid=10001,gid=10001 \
@@ -74,41 +82,41 @@ PYMODE
     exit 0
 fi
 if [[ "$proof" != profiles ]]; then
-bash "$context/docker/swarm-node/scan.sh" "$image" "$output/credential-scan" &
-scan_pid=$!
-for attempt in first second; do
-    docker run --rm --network none --read-only \
-        --tmpfs /home/worker:uid=10001,gid=10001 --tmpfs /tmp \
-        "$image" > "$output/$attempt.json"
-done
-docker run --rm --network none --read-only --tmpfs /home/worker:uid=10001,gid=10001 \
-    "$image" python -c 'from pathlib import Path; import os; assert os.getuid()==10001; assert not os.access("/opt/agentihooks/templates", os.W_OK); import hooks, scripts.swarm_v2.runtime; print("private home and local runtime imports passed")' \
-    > "$output/compatibility.log"
-docker run --rm --network none --read-only --tmpfs /home/worker:uid=10001,gid=10001 --tmpfs /tmp \
-    -v "$context/tests/contracts/swarm_v2/fixtures/checkpoint/current.json:/checkpoint.json:ro" \
-    "$image" python -c 'import json; from pathlib import Path; from scripts.swarm_v2.contracts import load; load()["validators"]["checkpoint"].validate(json.loads(Path("/checkpoint.json").read_text())); print("installed checkpoint contract accepted")' \
-    > "$output/checkpoint-contracts.log"
+    bash "$context/docker/swarm-node/scan.sh" "$image" "$output/credential-scan" &
+    scan_pid=$!
+    for attempt in first second; do
+        docker run --rm --network none --read-only \
+            --tmpfs /home/worker:uid=10001,gid=10001 --tmpfs /tmp \
+            "$image" > "$output/$attempt.json"
+    done
+    docker run --rm --network none --read-only --tmpfs /home/worker:uid=10001,gid=10001 \
+        "$image" python -c 'from pathlib import Path; import os; assert os.getuid()==10001; assert not os.access("/opt/agentihooks/templates", os.W_OK); import hooks, scripts.swarm_v2.runtime; print("private home and local runtime imports passed")' \
+        > "$output/compatibility.log"
+    docker run --rm --network none --read-only --tmpfs /home/worker:uid=10001,gid=10001 --tmpfs /tmp \
+        -v "$context/tests/contracts/swarm_v2/fixtures/checkpoint/current.json:/checkpoint.json:ro" \
+        "$image" python -c 'import json; from pathlib import Path; from scripts.swarm_v2.contracts import load; load()["validators"]["checkpoint"].validate(json.loads(Path("/checkpoint.json").read_text())); print("installed checkpoint contract accepted")' \
+        > "$output/checkpoint-contracts.log"
 
 fi
 
 if [[ "$proof" != startup ]]; then
-probe="$context/tests/swarm_node"
-fixtures="$context/docker/swarm-node/fixtures/profiles"
-chmod -R a+rX "$probe" "$fixtures"
-(
-    for case in positive positive-second rejection recovery rollback noexec; do
-        volume=/home/worker:uid=10001,gid=10001,exec
-        if [[ "$case" == noexec ]]; then
-            volume=/home/worker:uid=10001,gid=10001
-        fi
-        docker run --rm --network none --read-only --tmpfs "$volume" --tmpfs /tmp \
-            -v "$fixtures:/fixtures:ro" -v "$probe:/opt/probe:ro" \
-            "$image" bash /opt/probe/profile-probe.sh "${case%-second}" \
-            > "$output/profile-$case.json" 2> "$output/profile-$case.log"
-    done
-    python3 "$probe/profile_evidence.py" "$output" "$fixture" "$revision" "$fixtures"
-) &
-profile_pid=$!
+    probe="$context/tests/swarm_node"
+    fixtures="$context/docker/swarm-node/fixtures/profiles"
+    chmod -R a+rX "$probe" "$fixtures"
+    (
+        for case in positive positive-second rejection recovery rollback noexec; do
+            volume=/home/worker:uid=10001,gid=10001,exec
+            if [[ "$case" == noexec ]]; then
+                volume=/home/worker:uid=10001,gid=10001
+            fi
+            docker run --rm --network none --read-only --tmpfs "$volume" --tmpfs /tmp \
+                -v "$fixtures:/fixtures:ro" -v "$probe:/opt/probe:ro" \
+                "$image" bash /opt/probe/profile-probe.sh "${case%-second}" \
+                > "$output/profile-$case.json" 2> "$output/profile-$case.log"
+        done
+        python3 "$probe/profile_evidence.py" "$output" "$fixture" "$revision" "$fixtures"
+    ) &
+    profile_pid=$!
 fi
 if [[ "$proof" == profiles ]]; then
     bash "$context/docker/swarm-node/scan.sh" "$image" "$output/credential-scan"
@@ -152,11 +160,11 @@ PY
 done
 mv "$context/docker/swarm-node/versions.original" "$context/docker/swarm-node/versions.lock"
 if [[ "$proof" == all ]]; then
-docker build --no-cache-filter worker --platform linux/amd64 ${WORKER_BASE_CONTEXT:+--build-context "$WORKER_BASE_CONTEXT"} --build-arg SOURCE_REVISION="$revision" \
-    -f "$context/docker/swarm-node/Dockerfile" -t "$rebuild" "$context" > "$output/rebuild.log" 2>&1
-bash "$context/docker/swarm-node/scan.sh" "$rebuild" "$output/credential-scan-rebuild"
-docker run --rm --network none --read-only --tmpfs /home/worker:uid=10001,gid=10001 \
-    --tmpfs /tmp "$rebuild" > "$output/rebuild.json"
+    docker build --no-cache-filter worker --platform linux/amd64 ${WORKER_BASE_CONTEXT:+--build-context "$WORKER_BASE_CONTEXT"} --build-arg SOURCE_REVISION="$revision" \
+        -f "$context/docker/swarm-node/Dockerfile" -t "$rebuild" "$context" > "$output/rebuild.log" 2>&1
+    bash "$context/docker/swarm-node/scan.sh" "$rebuild" "$output/credential-scan-rebuild"
+    docker run --rm --network none --read-only --tmpfs /home/worker:uid=10001,gid=10001 \
+        --tmpfs /tmp "$rebuild" > "$output/rebuild.json"
 fi
 docker run --rm --network none --read-only --tmpfs /home/worker:uid=10001,gid=10001 \
     --tmpfs /tmp "$image" > "$output/rollback.json"
