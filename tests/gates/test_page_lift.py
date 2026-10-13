@@ -112,6 +112,17 @@ class TestTaskLift:
         lift.lift_agent(WHO, "stub", tmp_path, pull={"url": URL, "head": "b2"})
         assert self.run(tmp_path, "b2")[0] == 0
 
+    @pytest.mark.parametrize(
+        "target,allowed", [(URL, True), ("7", True), ("https://github.com/o/r/pull/8", False), ("8", False)]
+    )
+    def test_a_task_lift_covers_only_its_own_pull_request(self, tmp_path, target, allowed):
+        lift.lift_agent(WHO, "stub", tmp_path, pull={"url": URL, "head": "a1"})
+        gate = Stub()
+        payload = {"tool_name": "Bash", "tool_input": {"command": f"agentihooks swarm {SLUG} merge queue {target}"}}
+        env = {"AGENTIHOOKS_SWARM": SLUG, "AGENTIHOOKS_AGENT_NAME": SUCCESSOR, "AGENTIHOOKS_SWARM_TASK": TASK}
+        with patch.dict(entry.GATES, {gate.name: gate}), patch("scripts.gates.intent.pr_head", return_value="a1"):
+            assert entry.main([gate.name], io.StringIO(json.dumps(payload)), env, tmp_path) == (0 if allowed else 2)
+
     def test_a_lift_for_another_task_does_not_apply(self, tmp_path):
         lift.lift_agent(Who(name=ME, swarm=SLUG, task="t2"), "stub", tmp_path, pull={"url": URL, "head": "a1"})
         assert self.run(tmp_path, "a1", agent=ME)[0] == 2

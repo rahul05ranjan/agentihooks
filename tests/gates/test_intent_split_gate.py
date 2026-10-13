@@ -141,3 +141,75 @@ def test_listed_intent_refuses_a_pull_without_its_own_judgment(tmp_path, monkeyp
     monkeypatch.setattr(intent, "pr_head", lambda url: "abc")
     for url in [SECOND, "https://github.com/o/r/pull/99"]:
         assert not intent.IntentGate().decide(bash(f"gh pr merge {url}"), WHO, verdicts(tmp_path)).allowed
+
+
+@pytest.mark.parametrize(
+    "suffix", ["gh pr merge", f"agentihooks swarm {SLUG} ready handoff.md", f"agentihooks swarm {SLUG} done"]
+)
+def test_a_passing_pull_does_not_override_a_failed_command_in_the_same_call(tmp_path, monkeypatch, suffix):
+    task = split_task()
+    judged(tmp_path, task)
+    main = {**task, "pr_url": SECOND, "split_pulls": [FIRST, SECOND]}
+    judged(tmp_path, main, verdict="fail")
+    monkeypatch.setattr(intent, "pr_head", lambda url: "abc")
+    decision = intent.IntentGate().decide(bash(f"gh pr merge {FIRST}; {suffix}"), WHO, verdicts(tmp_path))
+    assert not decision.allowed
+    assert "failed" in decision.reason
+
+
+def test_a_reused_legacy_coach_verdict_can_queue_its_registered_pull(tmp_path, monkeypatch):
+    from scripts.gates.verdicts import Verdicts
+
+    task = split_task()
+    Verdicts(SLUG, "intent-coach", tmp_path).write(
+        TASK,
+        "pass",
+        "judged",
+        NOW,
+        head="abc",
+        url=FIRST,
+        phase="p8",
+        coach_rounds=0,
+        inputs=intent._fingerprint(DOC, task),
+    )
+    monkeypatch.setattr(intent, "stamp_body", lambda *args: True)
+    intent.stamp(SLUG, TASK, FIRST, {**DOC, "tasks": [task]}, "coach", NOW + 1, home=tmp_path)
+    seen = []
+    intent.Check(
+        SLUG,
+        "coach",
+        NOW + 2,
+        Ledger(),
+        Mail(),
+        lambda url: seen.append(url),
+        lambda state: ("fail", "unused"),
+        home=tmp_path,
+        head=lambda url: "abc",
+    ).run({**DOC, "tasks": [task]})
+    assert seen == []
+    monkeypatch.setattr(intent, "pr_head", lambda url: "abc")
+    assert intent.IntentGate().decide(bash(f"gh pr merge {FIRST}"), WHO, verdicts(tmp_path), "coach").allowed
+
+
+@pytest.mark.parametrize("changed", ["task", "phase"])
+def test_a_changed_contract_invalidates_the_earlier_pull_judgment(tmp_path, monkeypatch, changed):
+    task = split_task()
+    judged(tmp_path, task)
+    main = {**task, "pr_url": SECOND, "split_pulls": [FIRST, SECOND]}
+    doc = DOC
+    if changed == "task":
+        main = {**main, "description": "Changed task contract."}
+    else:
+        doc = {**DOC, "phases": [{"id": "p8", "title": "Gates", "description": "Changed phase contract."}]}
+    intent.Check(
+        SLUG,
+        "enforce",
+        NOW + 1,
+        Ledger(),
+        Mail(),
+        lambda url: VIEW,
+        lambda state: ("fail", "changed contract"),
+        home=tmp_path,
+    ).run({**doc, "tasks": [main]})
+    monkeypatch.setattr(intent, "pr_head", lambda url: "abc")
+    assert not intent.IntentGate().decide(bash(f"gh pr merge {FIRST}"), WHO, verdicts(tmp_path)).allowed
