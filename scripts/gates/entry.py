@@ -63,7 +63,7 @@ def main(argv=None, stdin=None, environ=None, home=None):
     if decision.allowed:
         return 0
     if lift.lifted(who.swarm, payload.get("session_id"), gate.name, home) or lift.held(
-        who.swarm, who.name, who.task, gate.name, home
+        who.swarm, who.name, who.task, gate.name, home, command=call.command
     ):
         _record(who, log.Row.of(gate.name, "observe", who, call.tool, LIFTED + decision.reason), home)
         return 0
