@@ -5,6 +5,8 @@ import threading
 from contextlib import contextmanager, suppress
 from pathlib import Path
 
+from scripts.swarm_ledger import request_metrics
+
 from . import hierarchy
 from .events import append_events, read_events, trim_events, write_events
 from .rows import TABLES, assemble, diff, encode, flatten, read_rows, write_rows
@@ -44,10 +46,10 @@ class Missing(KeyError, ValueError):
 
 
 class Entry:
-    """One ledger as last stored: its generation, canonical text and a parsed copy no caller receives."""
+    """One ledger as last stored: its generation, canonical text, a parsed copy callers only read and views of it."""
 
     def __init__(self, generation, text, state):
-        self.generation, self.text, self.state = generation, text, state
+        self.generation, self.text, self.state, self.views = generation, text, state, {}
 
 
 def summarize(slug: str, state: dict) -> dict:
@@ -321,6 +323,24 @@ class SQLiteLedgerRepository:
             connection.execute(BEGIN)
             return json.loads(self._entry(connection, slug).text)
 
+    def current(self, slug: str) -> Entry:
+        """The stored entry: its generation, text and a parsed copy that callers only read."""
+        self._adopt(slug)
+        with self.connect() as connection, connection:
+            connection.execute(BEGIN)
+            return self._entry(connection, slug)
+
+    def encoded_view(self, slug: str, view) -> str:
+        """view(state) of the stored ledger, built once per generation and keyed by view, so view is a module
+        level function that never changes the state it reads."""
+        self._adopt(slug)
+        with self.connect() as connection, connection:
+            connection.execute(BEGIN)
+            entry = self._entry(connection, slug)
+        if view not in entry.views:
+            entry.views[view] = view(entry.state)
+        return entry.views[view]
+
     def read(self, slug: str, *keys: str) -> dict:
         """Only the named parts of a ledger, such as `overview`, `_meta.members` or `tasks/t1`."""
         self._adopt(slug)
@@ -340,9 +360,9 @@ class SQLiteLedgerRepository:
         from . import mutation
 
         self._adopt(slug)
-        with self.domain.LOCK, self.connect() as connection:
+        with request_metrics.locked(self.domain.LOCK), self.connect() as connection:
             with connection:
-                connection.execute(BEGIN_IMMEDIATE)
+                request_metrics.begin(connection, BEGIN_IMMEDIATE)
                 entry = self._entry(connection, slug)
                 state = json.loads(entry.text)
                 rejected, ctx = mutation.apply(slug, state, self.domain, changes, ops, gate)
@@ -398,8 +418,8 @@ class SQLiteLedgerRepository:
         """Store a ledger built from content: its first sync derives priorities, notifications and rev 1."""
         from . import mutation
 
-        with self.domain.LOCK, self.connect() as connection, connection:
-            connection.execute(BEGIN_IMMEDIATE)
+        with request_metrics.locked(self.domain.LOCK), self.connect() as connection, connection:
+            request_metrics.begin(connection, BEGIN_IMMEDIATE)
             if not replace and connection.execute(STORED, (slug,)).fetchone():
                 return False
             state = {**doc, "_meta": meta}
@@ -413,8 +433,8 @@ class SQLiteLedgerRepository:
         seeds = stored["_meta"].get("seeds")
         if seeds is not None:
             stored["_meta"]["seeds"] = {}
-        with self.domain.LOCK, self.connect() as connection, connection:
-            connection.execute(BEGIN_IMMEDIATE)
+        with request_metrics.locked(self.domain.LOCK), self.connect() as connection, connection:
+            request_metrics.begin(connection, BEGIN_IMMEDIATE)
             if not replace and connection.execute(STORED, (slug,)).fetchone():
                 raise ValueError(f"ledger {slug} exists; import refuses to replace it")
             self._insert(connection, slug, stored, token or secrets.token_urlsafe(24), seeds)
@@ -437,8 +457,8 @@ class SQLiteLedgerRepository:
 
     def rebuild(self, slug: str) -> dict:
         self._adopt(slug)
-        with self.domain.LOCK, self.connect() as connection, connection:
-            connection.execute(BEGIN_IMMEDIATE)
+        with request_metrics.locked(self.domain.LOCK), self.connect() as connection, connection:
+            request_metrics.begin(connection, BEGIN_IMMEDIATE)
             return hierarchy.rebuild(connection, slug, self._entry(connection, slug).state)
 
     def nodes(self, slug: str, read: str, node: str | None = None) -> list:

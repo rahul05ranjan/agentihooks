@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 run="hive-compose-$(python3 -c 'import uuid; print(uuid.uuid4().hex[:12])')"
-tls="$(mktemp -d)"
+tls="$(mktemp -d -p "${RUNNER_TEMP:-${TMPDIR:-/tmp}}")"
 export COMPOSE_PROJECT_NAME="$run" COMPOSE_PROFILES=join SWARM_TLS_DIR="$tls" SWARM_REDIS_SCHEME=rediss \
   SWARM_CA_FILE=/tls/ca.pem SWARM_MEMBER_REDIS_URL=rediss://redis:6379/0
 SWARM_REDIS_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_urlsafe())')"
@@ -107,4 +107,18 @@ for _ in $(seq 30); do
 done
 printf 'after a Redis restart, the refreshed '
 docker exec "$run-member" python -c "$member_auth"
+docker exec "$run-member" agentihooks hive refresh >/dev/null
+printf 'after a Redis restart, a refresh still finds the member record\n'
+docker compose exec -T -e SLUG="$slug" swarm python -c '
+import os
+from scripts.inbox.seats import SeatRegistry
+from scripts.swarm.store import connect
+slug = os.environ["SLUG"]
+seat = SeatRegistry(connect().redis).occupant(f"eng-1@{slug}")
+assert seat and seat.occupant == "member-agent", f"the seat lost its occupant after the Redis restart: {seat}"
+print(f"after a Redis restart, the seat is still held by {seat.occupant}")
+'
+anonymous="$(docker compose exec -T redis redis-cli --tls --cacert /run/swarm-tls/ca.pem ping 2>&1 || true)"
+printf 'unauthenticated Redis client: %s\n' "$anonymous"
+[[ $anonymous == *NOAUTH* ]]
 printf 'Compose hive smoke passed\n'

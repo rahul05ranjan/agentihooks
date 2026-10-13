@@ -134,6 +134,7 @@ def test_no_script_a_step_runs_calls_the_api():
         ".github/actions/browser-cache/verify.sh",
         ".github/coverage/combine.sh",
         ".github/coverage/proxy.py",
+        ".github/coverage/sonar-retry.sh",
         "deploy/helm/agentihooks-swarm/ci/kind-due.sh",
         "deploy/helm/agentihooks-swarm/ci/kind-smoke.sh",
         "docker/swarm-node/base-copy.sh",
@@ -145,16 +146,21 @@ def test_no_script_a_step_runs_calls_the_api():
         "scripts/brain-smoke",
         "scripts/ci_budget/__main__.py",
         "scripts/ci_dependency_audit.py",
+        "scripts/ci_dev_reuse.py",
         "scripts/ci_mutation/__main__.py",
         "scripts/ci_mutation/browser.py",
         "scripts/ci_mutation/plan.py",
         "scripts/ci_wiring.py",
         "scripts/packaging/compose-hive-smoke.sh",
         "scripts/packaging/hive-join-smoke.sh",
+        "scripts/packaging/hive-launch-attestation-proof.sh",
+        "scripts/packaging/hive-launch-smoke.sh",
+        "scripts/packaging/pull-runtime-image.sh",
         "scripts/packaging/swarm-image-clients.sh",
         "scripts/packaging/swarm-smoke.sh",
         "scripts/size_limits.py",
         "scripts/swarm_ledger/artifact_sanity.py",
+        "scripts/swarm_ledger/ledger_server.py",
         "tests/chart_hive_join.py",
         "tests/chart_network.py",
         "tests/chart_redis.py",
@@ -169,11 +175,15 @@ def test_no_script_a_step_runs_calls_the_api():
         "tests/js_lcov.py",
         "tests/kind_request.py",
         "tests/ledger_load/gate.py",
+        "tests/ledger_load/streams.py",
         "tests/refresh_durations.py",
         "tests/shard_budget.py",
         "tests/shard_check.py",
         "scripts/ci_reuse.py",
+        "scripts/ci_runner_classes.py",
     ]
+    if (ROOT / "scripts/ci_runner_trust.py").exists():
+        expected.extend(("scripts/ci_runner_trust.py", "scripts/gate_protected.py"))
     assert sorted(str(path.relative_to(ROOT)) for path in calls) == sorted(expected)
     assert {path: count for path, count in calls.items() if count} == {}
 
@@ -386,7 +396,7 @@ def test_sonar_downloads_this_runs_coverage_after_the_shards():
     assert download["with"] == {"pattern": "coverage-3.12-*", "path": ".coverage-shards"}
     assert steps.index(download) < steps.index(merge)
     assert "env" not in merge
-    assert "bash .github/coverage/combine.sh --downloaded 8 ||" in merge["run"]
+    assert "bash .github/coverage/combine.sh --downloaded 12 ||" in merge["run"]
 
 
 @pytest.mark.parametrize("job", ["unit", "shard-check", "test-count", "lint"])
