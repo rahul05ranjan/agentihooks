@@ -85,7 +85,6 @@ def main() -> int:
     selected = {path: (lines, tests) for path, lines in changes.items() if (tests := select_tests(root, Path(path)))}
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     plan = refine_plan(root, selected, SharedStats(args.stats, head))
-    plan["head"] = head
     (args.stats / "plan.json").write_text(json.dumps(plan))
     print(f"Measured mutation worker seconds: {plan['estimated_worker_seconds']:.1f}")
     print(f"Measured mutation shards: {plan['shards']}; assigned mutants: {len(plan['assignments'])}")
