@@ -35,6 +35,7 @@ def started(env, monkeypatch, capsys):  # noqa: F811
 
 def detecting(monkeypatch, found=(), failing=False):
     def readers(store, ledger, slug, now):
+        assert (store is None, ledger is None, slug, now) == (False, False, WATCHED, NOW)
         read = {"trace": lambda: list(found)}
         return {**read, "inbox": lambda: 1 / 0} if failing else read
 
@@ -114,13 +115,15 @@ def test_a_class_name_the_doctor_never_saw_is_refused(started, monkeypatch, caps
 
 def test_the_telemetry_stale_class_reads_every_active_binding(started, monkeypatch, capsys):
     for name, session in ((LIVE, "s1"), ("engineer@d44a5a-0312", "s2"), ("engineer@d44a5a-0313", "")):
-        started.put_agent(WATCHED, AgentRecord(name=name, lane="eng", task="t1", conversation_id=session))
+        started.put_agent(
+            WATCHED, AgentRecord(name=name, lane="eng", task="t1", conversation_id=session, harness="codex")
+        )
     started.put_agent(WATCHED, AgentRecord(name="engineer@gone", lane="eng", task="t9", state="finished"))
     progress = {
-        "s1": {"generated_bytes": 10, "accepted_bytes": 4, "oldest_unaccepted": NOW - 9_000},
-        "s2": {"generated_bytes": 4, "accepted_bytes": 4, "oldest_unaccepted": 0},
+        ("s1", "codex"): {"generated_bytes": 10, "accepted_bytes": 4, "oldest_unaccepted": NOW - 9_000},
+        ("s2", "codex"): {"generated_bytes": 4, "accepted_bytes": 4, "oldest_unaccepted": 0},
     }
-    monkeypatch.setattr(doctor.registry, "progress", lambda session, harness: progress.get(session))
+    monkeypatch.setattr(doctor.registry, "progress", lambda session, harness: progress.get((session, harness)))
     detecting(monkeypatch)
     assert measured(capsys, "telemetry-stale") == (0, "telemetry-stale count 3 unknown 1 max 9\n", "")
 

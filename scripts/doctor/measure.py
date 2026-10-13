@@ -23,12 +23,12 @@ def class_of(kind: str) -> str:
     return kind.replace(" ", "-")
 
 
-def _agent(evidence):
-    return next((e[len("agent ") :] for e in evidence if e.startswith("agent ")), "")
+def _agents(evidence):
+    return [e[len("agent ") :] for e in evidence if e.startswith("agent ")]
 
 
 def _class_hint(finding_id):
-    return f"measure the class {finding_id.split('/', 1)[0]} to read every live target"
+    return f"measure the class {finding_id.partition('/')[0]} to read every live target"
 
 
 def exact(finding_id: str, found: list[Finding], failed: list[str], seen: dict, live: set[str]) -> int:
@@ -41,15 +41,15 @@ def exact(finding_id: str, found: list[Finding], failed: list[str], seen: dict, 
     record = seen.get(finding_id)
     if record is None:
         raise SwarmError(f"no finding {finding_id} has been seen; {_class_hint(finding_id)}")
-    agent = _agent(record["evidence"])
-    if agent and agent not in live:
-        raise SwarmError(f"{finding_id} names agent {agent}, which is no longer live; {_class_hint(finding_id)}")
+    gone = [agent for agent in _agents(record["evidence"]) if agent not in live]
+    if gone:
+        raise SwarmError(f"{finding_id} names agent {gone[0]}, which is no longer live; {_class_hint(finding_id)}")
     return 0
 
 
 def spawn_count(finding_id: str, found: list[Finding], tasks: set[str]) -> int:
     """Failed spawns of a ledger task, or the master, in the journal window; 0 is a reading only for a known one."""
-    subject = finding_id.split("/", 1)[1]
+    subject = finding_id.partition("/")[2]
     if subject != "master" and subject not in tasks:
         raise SwarmError(f"{finding_id} names no task on the watched ledger")
     return next((f.measure for f in found if f.id == finding_id), 0)
