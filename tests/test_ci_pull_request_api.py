@@ -398,12 +398,18 @@ def test_sonar_downloads_this_runs_coverage_after_the_shards():
     steps = sonar["steps"]
     download = next(step for step in steps if step.get("name") == "Download shard coverage")
     merge = next(step for step in steps if step.get("name") == "Merge shard coverage")
-    assert download["if"] == merge["if"] == "steps.current.outputs.superseded != 'true'"
+    assert (
+        download["if"]
+        == merge["if"]
+        == ("steps.current.outputs.superseded != 'true' && needs.select.outputs.scope != 'none'")
+    )
     assert download["uses"].startswith("actions/download-artifact@")
     assert download["with"] == {"pattern": "coverage-3.12-*", "path": ".coverage-shards"}
     assert steps.index(download) < steps.index(merge)
-    assert "env" not in merge
-    assert "bash .github/coverage/combine.sh --downloaded 12 ||" in merge["run"]
+    assert merge["env"] == {
+        "SHARDS": "${{ needs.select.outputs.scope == 'selected' && needs.select.outputs.count || 12 }}"
+    }
+    assert 'bash .github/coverage/combine.sh --downloaded "$SHARDS" ||' in merge["run"]
 
 
 @pytest.mark.parametrize("job", ["unit", "shard-check", "test-count", "lint"])
