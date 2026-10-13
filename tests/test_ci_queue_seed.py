@@ -132,7 +132,10 @@ def test_the_queue_baseline_holds_the_exact_base_tree_on_the_app_token():
     assert [steps.index(s) for s in (mint, find, download, hold, upload)] == sorted(
         steps.index(s) for s in (mint, find, download, hold, upload)
     )
-    assert job["timeout-minutes"] in {13, 60}
+    rules = json.loads((_ROOT / ".github" / "rulesets" / "dev-no-delete.json").read_text())
+    queue = next(rule["parameters"] for rule in rules["rules"] if rule["type"] == "merge_queue")
+    assert job["timeout-minutes"] == queue["check_response_timeout_minutes"]
+    assert "anton-oss-light" in job["runs-on"]
 
 
 @pytest.mark.parametrize(("measured", "fails"), [("abc", False), ("old", True)])
@@ -304,11 +307,12 @@ def test_a_failed_runs_listing_is_red_at_once_instead_of_waiting(base_run):
 
 
 @pytest.mark.parametrize("removed_after", [0, 2])
-def test_the_base_run_is_red_when_the_predecessor_is_removed(base_run, removed_after):
+def test_the_base_run_is_red_when_the_predecessor_is_removed(base_run, tmp_path, removed_after):
     result, output, _ = base_run(kept_by="333", removed_after=removed_after)
     assert result.returncode != 0
-    assert "::error::" in result.stdout
+    assert "No Tests run remains" in result.stdout
     assert output == ""
+    assert int((tmp_path / "polls").read_text()) == removed_after
 
 
 def test_a_finished_base_without_a_baseline_is_red_at_once(base_run, tmp_path):

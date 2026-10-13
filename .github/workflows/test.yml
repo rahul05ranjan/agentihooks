@@ -1558,8 +1558,8 @@ jobs:
     needs: [unit, reuse]
     # The record step refuses a missing 3.12 shard, so a run red only on another shard still publishes what later entries wait on.
     if: ${{ !cancelled() && github.event_name == 'merge_group' }}
-    runs-on: ${{ (github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.actor) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.triggering_actor) || (github.event_name == 'merge_group' || github.event_name == 'push' && github.ref == 'refs/heads/dev') && github.actor == 'github-merge-queue[bot]' && github.triggering_actor == 'github-merge-queue[bot]') && 'anton-oss' || 'ubuntu-latest' }}
-    timeout-minutes: 13
+    runs-on: ${{ (github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.actor) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.triggering_actor) || (github.event_name == 'merge_group' || github.event_name == 'push' && github.ref == 'refs/heads/dev') && github.actor == 'github-merge-queue[bot]' && github.triggering_actor == 'github-merge-queue[bot]') && 'anton-oss-light' || 'ubuntu-latest' }}
+    timeout-minutes: 60
     permissions:
       contents: read
     steps:
@@ -1639,10 +1639,12 @@ jobs:
           BASE_SHA: ${{ github.event.merge_group.base_sha }}
         run: |
           tree=$(gh api "repos/$GITHUB_REPOSITORY/commits/$BASE_SHA" --jq '.commit.tree.sha')
-          wait="${WAIT_SECONDS:-600}"
-          deadline=$((SECONDS + wait))
           while true; do
             runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/test.yml/runs?head_sha=$BASE_SHA&per_page=20" --jq '.workflow_runs[] | select(.event != "workflow_dispatch") | "\(.id) \(.status)"')
+            if [[ -z "$runs" ]]; then
+              echo "::error::No Tests run remains on base $BASE_SHA, so the queue entry was removed and this group is superseded."
+              exit 1
+            fi
             running=0
             while read -r run status; do
               [[ -n "$run" ]] || continue
@@ -1655,12 +1657,8 @@ jobs:
                 exit 0
               fi
             done <<< "$runs"
-            if [[ -n "$runs" && "$running" == 0 ]]; then
+            if [[ "$running" == 0 ]]; then
               echo "::error::Every Tests run on base $BASE_SHA finished without a coverage baseline, so the queue entry it measured failed and this group is superseded."
-              exit 1
-            fi
-            if (( SECONDS >= deadline )); then
-              echo "::error::No run kept a coverage baseline for base $BASE_SHA within $wait seconds."
               exit 1
             fi
             sleep "${POLL_SECONDS:-30}"
