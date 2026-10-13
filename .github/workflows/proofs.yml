@@ -22,6 +22,11 @@ on:
         type: boolean
         required: false
         default: false
+      cpu_fixtures:
+        description: Apply this revision's conftest to the matched CPU proof source
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
   group: ${{ (inputs.proof == 'tests' || inputs.proof == 'redis-cpu') && format('focused-proof-{0}', github.run_id) || format('hosted-lane-{0}', ((endsWith(github.run_id, '0') || endsWith(github.run_id, '1') || endsWith(github.run_id, '2')) && 'a') || ((endsWith(github.run_id, '3') || endsWith(github.run_id, '4') || endsWith(github.run_id, '5')) && 'b') || 'c') }}
@@ -162,6 +167,10 @@ jobs:
 
       - name: Install the browser that page tests drive
         uses: ./measured/.github/actions/browser-cache
+
+      - name: Apply the candidate fixture change to the matched source
+        if: inputs.cpu_fixtures
+        run: cp profiler/tests/conftest.py measured/tests/conftest.py
 
       - name: Profile the unchanged unit shard
         working-directory: measured

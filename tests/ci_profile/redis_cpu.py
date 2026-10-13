@@ -4,6 +4,7 @@ import importlib.metadata
 import json
 import platform
 import pstats
+import re
 import resource
 import sys
 import time
@@ -32,7 +33,7 @@ def cpu() -> float:
 
 def main() -> int:
     manifest, destination = (Path(arg).resolve() for arg in sys.argv[1:])
-    nodes = sorted(json.loads(manifest.read_text()))
+    nodes = sorted({re.sub(r"@[^\[\]]*$", "", node) for node in json.loads(manifest.read_text())})
     destination.mkdir(parents=True, exist_ok=True)
     results = Results()
     profiler = cProfile.Profile()
@@ -53,6 +54,11 @@ def main() -> int:
         "python": platform.python_version(),
         "dependencies": {name: importlib.metadata.version(name) for name in ("fakeredis", "redis", "pytest")},
         "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+        "test_files": {
+            name: hashlib.sha256(Path(name).read_bytes()).hexdigest()
+            for name in sorted({node.split("::", 1)[0] for node in nodes})
+        },
+        "conftest_sha256": hashlib.sha256(Path("tests/conftest.py").read_bytes()).hexdigest(),
         "arguments": arguments,
         "collected": results.collected,
         "results": results.results,
