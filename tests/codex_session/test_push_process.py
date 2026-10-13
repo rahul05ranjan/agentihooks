@@ -13,16 +13,38 @@ import pytest
 pytestmark = pytest.mark.xdist_group("fakeredis")
 
 
+def serve_thread(ws, messages, thread_id):
+    resumed = False
+    for raw in ws:
+        message = json.loads(raw)
+        messages.append(message)
+        method = message["method"]
+        if "id" not in message:
+            continue
+        if method == "initialize":
+            result = {}
+        elif method == "thread/resume":
+            resumed = True
+            result = {"thread": {"id": thread_id, "turns": []}}
+        elif method == "thread/read":
+            result = {"thread": {"id": thread_id, "turns": []}}
+        elif method == "turn/start" and resumed:
+            result = {"turn": {"id": "inbox-turn"}}
+        else:
+            ws.send(json.dumps({"id": message["id"], "error": {"message": "thread was not resumed"}}))
+            continue
+        ws.send(json.dumps({"id": message["id"], "result": result}))
+
+
 def test_served_execution_runs_a_pump_that_resumes_and_delivers_then_retires(tmp_path, monkeypatch):
     import fakeredis
     import redis
-    from scripts.swarm.models import AgentRecord, SwarmConfig
     from websockets.sync.server import unix_serve
 
     from scripts.codex_session import serve, supervisor
     from scripts.codex_session.binding import BindingStore, TransportRecord
     from scripts.inbox.store import InboxStore
-    from scripts.swarm.store import RedisStore
+    from scripts.swarm.store import AgentRecord, RedisStore, SwarmConfig
 
     slug, execution, recipient, thread_id = "pump-proof", "execution-1", "engineer@proof", "thread-bound"
     tcp = fakeredis.TcpFakeServer(("127.0.0.1", 0))
@@ -50,28 +72,6 @@ def test_served_execution_runs_a_pump_that_resumes_and_delivers_then_retires(tmp
         PYTHONPATH=str(Path(__file__).resolve().parents[2]),
     )
     spec = SimpleNamespace(slug=slug, cwd=str(tmp_path), environ=child_env)
-
-    def handle(ws):
-        resumed = False
-        for raw in ws:
-            message = json.loads(raw)
-            messages.append(message)
-            method = message["method"]
-            if "id" not in message:
-                continue
-            if method == "initialize":
-                result = {}
-            elif method == "thread/resume":
-                resumed = True
-                result = {"thread": {"id": thread_id, "turns": []}}
-            elif method == "thread/read":
-                result = {"thread": {"id": thread_id, "turns": []}}
-            elif method == "turn/start" and resumed:
-                result = {"turn": {"id": "inbox-turn"}}
-            else:
-                ws.send(json.dumps({"id": message["id"], "error": {"message": "thread was not resumed"}}))
-                continue
-            ws.send(json.dumps({"id": message["id"], "result": result}))
 
     def spawn(command, **kwargs):
         assert command == [sys.executable, "-m", "scripts.inbox.codex", slug, execution]
@@ -111,7 +111,7 @@ def test_served_execution_runs_a_pump_that_resumes_and_delivers_then_retires(tmp
     monkeypatch.setattr(subprocess, "Popen", spawn)
     monkeypatch.setattr(serve.signal, "signal", lambda *args: None)
     try:
-        with unix_serve(handle, endpoint) as server:
+        with unix_serve(lambda ws: serve_thread(ws, messages, thread_id), endpoint) as server:
             server_thread = threading.Thread(target=server.serve_forever, daemon=True)
             server_thread.start()
             try:
