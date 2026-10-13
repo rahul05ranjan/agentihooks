@@ -291,7 +291,7 @@ def test_the_base_run_ignores_dispatched_runs_that_wait_on_a_hosted_lane(base_ru
 
 @pytest.mark.parametrize("status", ["queued", "in_progress"])
 def test_the_base_run_waits_past_ten_minutes_for_an_earlier_queue_entry_to_publish(base_run, status):
-    result, output, _ = base_run(after=5, status=status)
+    result, output, _ = base_run(after=7, status=status)
     assert result.returncode == 0, result.stderr
     assert output == "id=222\ntree=tree-of-base\n"
 
