@@ -875,7 +875,7 @@ def test_the_watchdog_mode_controls_mutations_and_keeps_alerts(mode):
     swarm.tick(START)
     swarm.tick(START + 10 * MINUTE)
     [item] = swarm.inbox()
-    assert URL in item.text
+    assert item.text == _alert(case="green", minutes=10, wait=20, action=REOPENED if mode == "enforce" else ALERTED)
     rows = log.recent(SLUG)
     if mode == "enforce":
         assert swarm.retired == [OWNER] and _reopened(swarm)
@@ -941,3 +941,28 @@ def test_an_ownerless_stall_logs_only_a_reopen_without_retiring_another_agent(ow
         "reopen",
     )
     assert [agent.name for agent in swarm.store.agents(SLUG)] == [OWNER]
+
+
+@pytest.mark.parametrize("first, second", [("enforce", "observe"), ("observe", "enforce")])
+def test_a_mode_change_between_logged_actions_never_retires_or_reopens(first, second, monkeypatch):
+    from scripts.gates import log
+
+    swarm = Swarm(GREEN)
+    swarm.store.update(SLUG, gates={"stall": first})
+    append = log.append
+
+    def change_mode(slug, row, home=None):
+        assert slug == SLUG
+        append(slug, row, home)
+        if row.tool == "reopen":
+            swarm.store.update(SLUG, gates={"stall": second})
+
+    monkeypatch.setattr(log, "append", change_mode)
+    swarm.tick(START)
+    swarm.tick(START + 10 * MINUTE)
+    assert swarm.retired == [] and swarm.ledger.updates == []
+    assert swarm.store.claimant(SLUG, "t1") == OWNER
+    assert [(row["kind"], row["tool"]) for row in log.recent(SLUG)] == [
+        ("deny" if first == "enforce" else "observe", "reopen"),
+        ("deny" if second == "enforce" else "observe", "stop"),
+    ]
