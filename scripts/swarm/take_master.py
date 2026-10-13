@@ -53,7 +53,8 @@ def _master_name(name, code):
 
 def pin(slug, name, environ=os.environ):
     if ledger_link.remote(environ):
-        environ.pop("AGENTIHOOKS_LEDGER_AGENT_TOKEN", None)
+        if environ.get("AGENTIHOOKS_AGENT_NAME") != name:
+            environ.pop("AGENTIHOOKS_LEDGER_AGENT_TOKEN", None)
         environ.update(AGENTIHOOKS_SWARM=slug, AGENTIHOOKS_AGENT_NAME=name)
 
 
@@ -72,10 +73,10 @@ def take(store, slug, name, runtime, now_ms, replace_live=False, admit=lambda na
         name = store.next_name(slug, MASTER, now_ms)
     if not name_session(pid, name):
         raise SwarmError("this session is not registered with agentihooks, so the tick could not see it as master")
+    pin(slug, name)
+    admit(name)
     if not seated and carried and not store.names.entry(carried):
         store.names.alias(carried, name)
-    pin(slug, name)
-    admitted = admit(name)
     for agent in others:
         if not runtime.retire(agent):
             raise SwarmError(f"could not retire {agent.name}; try again")
@@ -104,4 +105,4 @@ def take(store, slug, name, runtime, now_ms, replace_live=False, admit=lambda na
     for session_id in live_session_ids(pid):
         agent_trace.record_seat(session_id, name, slug, MASTER, MASTER)
     launch_check.begin(store, slug, record, now_ms, relaunch=False)
-    return record, transfers.attach(store, slug, record), admitted
+    return record, transfers.attach(store, slug, record)

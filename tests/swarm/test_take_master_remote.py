@@ -69,14 +69,24 @@ def test_take_master_on_a_remote_ledger_pins_the_new_master_before_its_first_led
     pinned = {"X-Ledger-Token": f"minted for {MASTER}", "X-Ledger-Agent": MASTER}
     assert seen == [pinned]
     hive = {"X-Hive-Credential": HIVE, "X-Ledger-Agent": MASTER}
-    assert sent[0] == ("sw", "agent-token", hive)
-    tokens = [credentials for _, path, credentials in sent if path == "agent-token"]
-    reads = [credentials for _, path, credentials in sent if path != "agent-token"]
-    assert (tokens, reads) == ([hive] * len(tokens), [pinned] * len(reads))
+    assert sent == [("sw", "agent-token", hive), ("sw", "agent-token", hive), ("sw", "metadata", pinned)]
     assert (os.environ["AGENTIHOOKS_SWARM"], os.environ["AGENTIHOOKS_AGENT_NAME"]) == ("sw", MASTER)
     assert "AGENTIHOOKS_LEDGER_AGENT_TOKEN" not in os.environ
     assert [a.name for a in store.agents("sw") if a.lane == "master"] == [MASTER]
     assert store.seats.occupant("master@sw").occupant == MASTER
+
+
+def test_a_session_already_named_this_master_keeps_its_ledger_token(remote_taker, monkeypatch):
+    store, ledger, _, _, sent = remote_taker
+    assert store.next_name("sw", "master") == MASTER
+    monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", MASTER)
+    broadcast.name_session(4242, MASTER)
+    seen = []
+    ledger.closed = lambda slug: seen.append(remote.credentials(slug)) or False
+    assert run("sw", "take-master") == 0
+    assert seen == [{"X-Ledger-Token": "carried token", "X-Ledger-Agent": MASTER}]
+    assert os.environ["AGENTIHOOKS_LEDGER_AGENT_TOKEN"] == "carried token"
+    assert [path for _, path, _ in sent] == ["metadata"]
 
 
 def test_a_local_ledger_keeps_the_session_unpinned(taker, monkeypatch):  # noqa: F811
@@ -126,3 +136,21 @@ def test_a_refused_take_master_retires_no_live_master(taker):  # noqa: F811
     assert rt.killed == []
     assert [a.name for a in store.agents("sw") if a.lane == "master"] == [MASTER]
     assert store.seats.occupant("master@sw") == seated
+
+
+def test_a_refused_reopen_of_a_closed_ledger_saves_no_master_and_no_seat(taker):  # noqa: F811
+    store, ledger, _, _ = taker
+    ledger.is_closed = True
+    ledger.reopen = lambda slug, by: _refused(slug)
+    assert run("sw", "take-master") == 1
+    assert [a.name for a in store.agents("sw") if a.lane == "master"] == []
+    assert store.seats.occupant("master@sw").occupant == ""
+
+
+def test_a_remote_refusal_saves_no_master_seat_or_alias(remote_taker):
+    store, ledger, _, _, _ = remote_taker
+    ledger.closed = _unauthenticated
+    assert _taken(["sw", "take-master"]) == "unauthenticated: the ledger server refused the credential"
+    assert [a.name for a in store.agents("sw") if a.lane == "master"] == []
+    assert store.seats.occupant("master@sw").occupant == ""
+    assert store.names.aliases(MASTER) == []
