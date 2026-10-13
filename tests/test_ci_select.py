@@ -278,6 +278,28 @@ def test_main_prints_without_a_github_output(repo, monkeypatch, capsys):
     assert capsys.readouterr().out == "scope=full\nlegs=[]\ncount=0\n"
 
 
+@pytest.mark.parametrize("dropped", ["--base", "--head", "--event", "--legs"])
+def test_main_requires_every_selection_input(repo, dropped):
+    given = {"--base": "HEAD", "--head": "HEAD", "--event": "push", "--legs": "3"}
+    del given[dropped]
+    with pytest.raises(SystemExit) as refused:
+        ci_select.main([part for pair in given.items() for part in pair] + ["--root", str(repo)])
+    assert refused.value.code == 2
+
+
+def test_main_reads_the_working_folder_by_default(heavy, monkeypatch, tmp_path):
+    write(heavy, {"hooks/sample.py": "VALUE = 9\n", ".test_durations": json.dumps(seconds(test_sample=1.0))})
+    git(heavy, "commit", "-am", "change")
+    output = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    monkeypatch.chdir(heavy)
+    assert ci_select.main(["--base", "HEAD~1", "--head", "HEAD", "--event", "pull_request", "--legs", "3"]) == 0
+    assert output.read_text() == (
+        "scope=selected\nlegs=[1]\ncount=1\n"
+        "files_1=tests/test_heavy1.py tests/test_heavy2.py tests/test_heavy3.py tests/test_sample.py\n"
+    )
+
+
 def test_main_budgets_on_the_given_durations_with_later_files_winning(heavy, monkeypatch, tmp_path):
     write(heavy, {"hooks/sample.py": "VALUE = 8\n"})
     git(heavy, "commit", "-am", "change")
