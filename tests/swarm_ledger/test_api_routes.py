@@ -60,7 +60,9 @@ def test_an_expired_cursor_answers_410_with_a_reload_hint(monkeypatch):
 def test_only_a_stream_accept_header_turns_the_events_path_into_a_stream(monkeypatch):
     seen = []
     monkeypatch.setattr(routes, "events", lambda request, server, slug: seen.append(("stream", slug)))
-    monkeypatch.setattr(resources, "read", lambda state, path, query, cache: seen.append(("collection", path)) or {"data": []})
+    monkeypatch.setattr(
+        resources, "read", lambda state, path, query, cache: seen.append(("collection", path)) or {"data": []}
+    )
     server = fake_server([])
     assert routes.dispatch(handler("text/event-stream"), server) is None
     assert routes.dispatch(handler(), server) == {"data": []}
