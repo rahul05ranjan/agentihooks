@@ -25,10 +25,9 @@ def routed(label, policy=POLICY):
     return "${{ " + trusted + " && '" + label + "' || 'ubuntu-latest' }}"
 
 
-def queue_routed(
-    route="(github.event_name == 'merge_group' && 'anton-oss-queue' || '{}')", policy=POLICY, label="anton-oss"
-):
-    return routed(label, policy).replace(f"&& '{label}' ||", f"&& {route.format(label)} ||")
+def queue_routed(route=None, policy=POLICY, label="anton-oss"):
+    route = route or f"(github.event_name == 'merge_group' && 'anton-oss-queue' || '{label}')"
+    return routed(label, policy).replace(f"&& '{label}' ||", f"&& {route} ||")
 
 
 def workflow(runner="ubuntu-latest"):
