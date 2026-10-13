@@ -4,6 +4,13 @@ set -euo pipefail
 repo="$(git rev-parse --show-toplevel)"
 revision="$(git rev-parse HEAD)"
 output="${1:?supply a task evidence directory}"
+proof="${2:-all}"
+case "$proof" in
+    all|startup|rebuild|profiles) ;;
+    *) echo "unknown worker proof: $proof" >&2; exit 2 ;;
+esac
+build_args=()
+if [[ "$proof" == rebuild ]]; then build_args=(--no-cache-filter worker); fi
 fixture="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
 image="agentihooks-worker-proof:$fixture"
 rebuild="agentihooks-worker-rebuild:$fixture"
@@ -23,8 +30,24 @@ PY
 }
 trap cleanup EXIT
 
-docker build --platform linux/amd64 ${WORKER_BASE_CONTEXT:+--build-context "$WORKER_BASE_CONTEXT"} --build-arg SOURCE_REVISION="$revision" \
+docker build "${build_args[@]}" --platform linux/amd64 ${WORKER_BASE_CONTEXT:+--build-context "$WORKER_BASE_CONTEXT"} --build-arg SOURCE_REVISION="$revision" \
     -f "$context/docker/swarm-node/Dockerfile" -t "$image" "$context" > "$output/build.log" 2>&1
+if [[ "$proof" == rebuild ]]; then
+    bash "$context/docker/swarm-node/scan.sh" "$image" "$output/credential-scan"
+    docker run --rm --network none --read-only --tmpfs /home/worker:uid=10001,gid=10001 \
+        --tmpfs /tmp "$image" > "$output/rebuild.json"
+    python3 - "$output" "$revision" "$proof" <<'PYMODE'
+import json, sys
+from pathlib import Path
+output=Path(sys.argv[1])
+report=json.loads((output/'rebuild.json').read_text())
+assert report['manifest']['source_revision']==sys.argv[2]
+assert report['worker_image_build_validation_failures']==0
+(output/'mode-result.json').write_text(json.dumps({'proof':sys.argv[3],'tested_commit':sys.argv[2],'status':'passed'})+'\n')
+PYMODE
+    exit 0
+fi
+if [[ "$proof" != profiles ]]; then
 bash "$context/docker/swarm-node/scan.sh" "$image" "$output/credential-scan" &
 scan_pid=$!
 for attempt in first second; do
@@ -40,6 +63,9 @@ docker run --rm --network none --read-only --tmpfs /home/worker:uid=10001,gid=10
     "$image" python -c 'import json; from pathlib import Path; from scripts.swarm_v2.contracts import load; load()["validators"]["checkpoint"].validate(json.loads(Path("/checkpoint.json").read_text())); print("installed checkpoint contract accepted")' \
     > "$output/checkpoint-contracts.log"
 
+fi
+
+if [[ "$proof" != startup ]]; then
 probe="$context/tests/swarm_node"
 fixtures="$context/docker/swarm-node/fixtures/profiles"
 chmod -R a+rX "$probe" "$fixtures"
@@ -57,6 +83,19 @@ chmod -R a+rX "$probe" "$fixtures"
     python3 "$probe/profile_evidence.py" "$output" "$fixture" "$revision" "$fixtures"
 ) &
 profile_pid=$!
+fi
+if [[ "$proof" == profiles ]]; then
+    bash "$context/docker/swarm-node/scan.sh" "$image" "$output/credential-scan"
+    docker run --rm --network none --read-only --tmpfs /home/worker:uid=10001,gid=10001 \
+        --tmpfs /tmp "$image" > "$output/profiles.json"
+    wait "$profile_pid"
+    python3 - "$output" "$revision" "$proof" <<'PYMODE'
+import json, sys
+from pathlib import Path
+(Path(sys.argv[1])/'mode-result.json').write_text(json.dumps({'proof':sys.argv[3],'tested_commit':sys.argv[2],'status':'passed'})+'\n')
+PYMODE
+    exit 0
+fi
 
 for rejection in missing-checksum unsupported-architecture mismatched-binary; do
     python3 - "$context/docker/swarm-node/versions.lock" "$rejection" <<'PY'
@@ -86,20 +125,22 @@ PY
     fi
 done
 mv "$context/docker/swarm-node/versions.original" "$context/docker/swarm-node/versions.lock"
+if [[ "$proof" == all ]]; then
 docker build --no-cache-filter worker --platform linux/amd64 ${WORKER_BASE_CONTEXT:+--build-context "$WORKER_BASE_CONTEXT"} --build-arg SOURCE_REVISION="$revision" \
     -f "$context/docker/swarm-node/Dockerfile" -t "$rebuild" "$context" > "$output/rebuild.log" 2>&1
 bash "$context/docker/swarm-node/scan.sh" "$rebuild" "$output/credential-scan-rebuild"
 docker run --rm --network none --read-only --tmpfs /home/worker:uid=10001,gid=10001 \
     --tmpfs /tmp "$rebuild" > "$output/rebuild.json"
+fi
 docker run --rm --network none --read-only --tmpfs /home/worker:uid=10001,gid=10001 \
     --tmpfs /tmp "$image" > "$output/rollback.json"
 wait "$scan_pid"
-wait "$profile_pid"
-python3 - "$output" "$fixture" "$revision" <<'PY'
+if [[ -n "${profile_pid:-}" ]]; then wait "$profile_pid"; fi
+python3 - "$output" "$fixture" "$revision" "$proof" <<'PY'
 import json, sys
 from pathlib import Path
 output=Path(sys.argv[1])
-reports={name:json.loads((output/f'{name}.json').read_text()) for name in ('first','second','rebuild','rollback')}
+reports={name:json.loads((output/f'{name}.json').read_text()) for name in (('first','second','rebuild','rollback') if sys.argv[4]=='all' else ('first','second','rollback'))}
 first=reports['first']
 assert all(report==first for report in reports.values())
 assert first['manifest']['source_revision']==sys.argv[3]
@@ -112,7 +153,11 @@ for case,details in {
     'b':{'rejected':['missing checksum','unsupported architecture','mismatched binary'],'published_rejected_image':False,'worker_image_build_validation_failures':3},
     'c':{'uncached_rebuild_inventory_equal':True,'retained_previous_image_started':True,'worker_image_build_validation_failures':0}
 }.items():
+    if case=='c' and sys.argv[4]!='all':
+        continue
     (output/f'{case}-result.json').write_text(json.dumps(shared|details,indent=2)+'\n')
-(output/'result.json').write_text(json.dumps(shared|{'cases':['A','B','C'],'status':'passed','production_rollout':'not exercised'},indent=2)+'\n')
-print('SV2-IMG-01 passed: two offline startups, three rejected builds, uncached rebuild and retained image rollback')
+(output/'mode-result.json').write_text(json.dumps({'proof':sys.argv[4],'tested_commit':sys.argv[3],'status':'passed'})+'\n')
+if sys.argv[4]=='all':
+    (output/'result.json').write_text(json.dumps(shared|{'cases':['A','B','C'],'status':'passed','production_rollout':'not exercised'},indent=2)+'\n')
+print('SV2-IMG-01 passed: two offline startups, three rejected builds, uncached rebuild and retained image rollback' if sys.argv[4]=='all' else 'Worker startup and rejection proof passed')
 PY

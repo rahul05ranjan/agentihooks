@@ -80,11 +80,20 @@ def run_proof(tmp_path, failure, proof="all"):
     commands = tmp_path / "bin"
     commands.mkdir()
     archive = tmp_path / "source.tar"
+    scan = (
+        SCAN
+        if proof == "all"
+        else (
+            "#!/usr/bin/env bash\nset -euo pipefail\n"
+            'touch "$STATE/scan-agentihooks-worker-proof-finished"\n'
+            'if [[ "$FAILURE" == scan ]]; then exit 17; fi\n'
+        )
+    )
     files = {
         "docker/swarm-node/versions.lock": json.dumps(
             {"tools": {"herdr": {"sha256": "1" * 64}}, "architectures": ["amd64"]}
         ),
-        "docker/swarm-node/scan.sh": SCAN,
+        "docker/swarm-node/scan.sh": scan,
         "docker/swarm-node/Dockerfile": "FROM scratch\n",
         "docker/swarm-node/fixtures/profiles/profile.json": "{}",
         "tests/swarm_node/profile_evidence.py": PROFILE,
@@ -161,7 +170,7 @@ def test_a_failed_background_worker_check_keeps_the_proof_red(tmp_path, failure,
     assert calls[-1][:2] == ["image", "rm"]
 
 
-@pytest.mark.parametrize("proof,builds,runs", [("startup", 4, 5), ("rebuild", 1, 1), ("profiles", 1, 6)])
+@pytest.mark.parametrize("proof,builds,runs", [("startup", 4, 5), ("rebuild", 1, 1), ("profiles", 1, 7)])
 def test_worker_proof_modes_run_only_their_independent_checks(tmp_path, proof, builds, runs):
     result, calls, state, output = run_proof(tmp_path, "", proof)
     assert result.returncode == 0, result.stderr
@@ -206,6 +215,11 @@ def test_parallel_worker_reports_require_equal_inventories_and_all_proofs(tmp_pa
         )
     for name in ("first", "second", "rollback"):
         (evidence / "startup" / f"{name}.json").write_text(json.dumps(report))
+    (evidence / "profiles" / "profiles.json").write_text(json.dumps(report))
+    for case in ("a", "b"):
+        (evidence / "startup" / f"{case}-result.json").write_text(
+            json.dumps({"package": "SV2-IMG-01", "tested_commit": "checked-revision"})
+        )
     rebuild = report | ({"different": True} if change == "inventory" else {})
     (evidence / "rebuild" / "rebuild.json").write_text(json.dumps(rebuild))
     profiles = evidence / "profiles" / "SV2-IMG-02"
