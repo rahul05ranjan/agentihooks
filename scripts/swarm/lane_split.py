@@ -55,7 +55,7 @@ def refusal(config: SwarmConfig, caps: dict, giver: str, taker: str, lanes: Lane
     return ""
 
 
-def gate_hold(slug: str, config: SwarmConfig, would: str, now_ms: int | None = None) -> str:
+def gate_hold(slug: str, config: SwarmConfig, would: str, now_ms: int) -> str:
     chosen = modes.configured(LANE_SPLIT, config.gates)
     if chosen == "enforce":
         return ""
