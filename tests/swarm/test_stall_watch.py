@@ -702,6 +702,13 @@ def test_a_new_push_does_not_extend_the_missing_owner_limit():
     assert _reopened(swarm)
 
 
+def test_an_epoch_event_reopens_at_the_exact_red_limit_without_an_owner():
+    swarm = Swarm(PullRequest("OPEN", None, 0, True, True, head="h"), task={"claimed_by": ""})
+    swarm.tick(15 * MINUTE)
+    assert _reopened(swarm)
+    assert "red with no push for 15 minutes" in swarm.inbox()[0].text
+
+
 @pytest.mark.parametrize("state,owner", [("claimed", ""), ("open", OWNER), ("blocked", "")])
 def test_stale_ready_candidates_are_not_counted_or_alerted(state, owner):
     swarm = Swarm(RUNNING)
