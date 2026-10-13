@@ -19,5 +19,5 @@ class Enforcement:
         return chosen == "enforce"
 
 
-STALL_WATCH = Enforcement("stall-watch")
+STALL_WATCH = Enforcement("stall")
 ENFORCEMENTS = {STALL_WATCH.name: STALL_WATCH}

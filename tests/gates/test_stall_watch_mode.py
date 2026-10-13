@@ -12,9 +12,9 @@ def test_watchdog_mode_defaults_to_log_only_in_status(env, monkeypatch):
     store, _, _ = env
     monkeypatch.delenv("AGENTIHOOKS_AGENT_NAME", raising=False)
     test_cli.run("sw", "create", "--repo", "/repo")
-    assert catalog.defaults()["stall-watch"] == "observe"
+    assert catalog.defaults()["stall"] == "observe"
     report = status.status_report(store, "sw", {"tasks": [], "_meta": {"events": []}})
-    assert report["gate_modes"]["stall-watch"] == "log only"
+    assert report["gate_modes"]["stall"] == "log only"
 
 
 @pytest.mark.parametrize(
@@ -32,5 +32,5 @@ def test_operator_sets_the_watchdog_mode_with_existing_gate_names(env, monkeypat
     store, _, _ = env
     monkeypatch.delenv("AGENTIHOOKS_AGENT_NAME", raising=False)
     test_cli.run("sw", "create", "--repo", "/repo")
-    assert test_cli.run("sw", "set", f"stall-watch-gate={mode}") == 0
-    assert store.config("sw").gates == {"stall-watch": stored}
+    assert test_cli.run("sw", "set", f"stall-gate={mode}") == 0
+    assert store.config("sw").gates == {"stall": stored}

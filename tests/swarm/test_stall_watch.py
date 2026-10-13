@@ -58,7 +58,7 @@ class Swarm:
         import fakeredis
 
         self.store = RedisStore(fakeredis.FakeRedis(decode_responses=True))
-        self.store.create(SwarmConfig(SLUG, "/repo", 1, 1, gates={"stall-watch": "enforce"}))
+        self.store.create(SwarmConfig(SLUG, "/repo", 1, 1, gates={"stall": "enforce"}))
         self.ledger = Ledger(
             [{"id": "t1", "state": "pr", "pr_url": URL, "claimed_by": OWNER, "branch": "b1", **(task or {})}]
         )
@@ -870,8 +870,8 @@ def test_each_alert_row_is_judged_on_its_own():
 def test_the_watchdog_mode_controls_mutations_and_keeps_alerts(mode):
     from scripts.gates import log
 
-    swarm = Swarm(GREEN, environ={"AGENTIHOOKS_GATE_STALL_WATCH": "enforce"})
-    swarm.store.update(SLUG, gates={} if mode is None else {"stall-watch": mode})
+    swarm = Swarm(GREEN, environ={"AGENTIHOOKS_GATE_STALL": "enforce"})
+    swarm.store.update(SLUG, gates={} if mode is None else {"stall": mode})
     swarm.tick(START)
     swarm.tick(START + 10 * MINUTE)
     [item] = swarm.inbox()
@@ -889,7 +889,7 @@ def test_the_watchdog_mode_controls_mutations_and_keeps_alerts(mode):
         expected = [] if mode == "off" else [("observe", "reopen"), ("observe", "stop")]
         assert [(row["kind"], row["tool"]) for row in rows] == expected
         if rows:
-            assert all(row["gate"] == "stall-watch" and row["agent"] == OWNER and row["task"] == "t1" for row in rows)
+            assert all(row["gate"] == "stall" and row["agent"] == OWNER and row["task"] == "t1" for row in rows)
             assert all(row["reason"] == "green and not queued for 10 minutes" for row in rows)
             assert all(row["at"] == START + 10 * MINUTE for row in rows)
         swarm.tick(START + 30 * MINUTE)
@@ -934,7 +934,7 @@ def test_an_ownerless_stall_logs_only_a_reopen_without_retiring_another_agent(ow
     assert swarm.retired == [] and swarm.ledger.updates == []
     [row] = log.recent(SLUG)
     assert (row["gate"], row["kind"], row["agent"], row["task"], row["tool"]) == (
-        "stall-watch",
+        "stall",
         "observe",
         "",
         "t1",
