@@ -80,7 +80,7 @@ def recorded(slug: str, name: str) -> Read:
 
     def read() -> TransportRecord | None:
         agent = next((agent for agent in store.agents(slug) if agent.name == name), None)
-        if agent is None:
+        if agent is None or not agent.execution_id:
             return None
         if not capabilities.of_agent(agent).native_terminal_attach:
             raise AttachError(NO_ATTACH.format(name))
