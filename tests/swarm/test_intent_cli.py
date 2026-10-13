@@ -45,6 +45,16 @@ def test_swarm_pr_arms_the_intent_check_and_stamps_the_body(started, capsys, mon
     assert Verdicts("sw", "intent").read("t1") == {"verdict": "pending", "reason": "intent check running", "at": 4242}
 
 
+def test_recording_the_main_pull_keeps_the_tests_first_pull(started):
+    _, ledger, _ = started
+    first = "https://github.com/o/r/pull/8"
+    assert run("sw", "pr", first) == 0
+    assert run("sw", "pr", URL) == 0
+    assert run("sw", "pr", URL) == 0
+    assert ledger.rows["t1"]["pr_url"] == URL
+    assert ledger.rows["t1"]["pr_urls"] == [first, URL]
+
+
 def test_swarm_pr_with_the_intent_gate_off_arms_nothing(started, capsys, monkeypatch):
     store, _, _ = started
     store.update("sw", gates={"intent": "off"})
