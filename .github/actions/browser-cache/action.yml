@@ -71,4 +71,4 @@ runs:
       shell: bash
       env:
         PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright
-      run: timeout 10s bash "$GITHUB_ACTION_PATH/verify.sh"
+      run: timeout 15s bash "$GITHUB_ACTION_PATH/verify.sh"
