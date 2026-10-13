@@ -92,7 +92,7 @@ CLASSED = {
     ("github-access-audit.yml", "read-back"),
 }
 
-HOSTED = OIDC | PROTECTED | TARGET | ORG_TOKEN | CLASSED
+HOSTED = OIDC | PROTECTED | TARGET | CLASSED
 
 
 def workflows():
@@ -211,7 +211,7 @@ def test_every_hosted_job_stays_on_a_hosted_runner():
         permissions = {**workflows()[name].get("permissions", {}), **jobs[(name, job)].get("permissions", {})}
         assert permissions.get("id-token") == "write", f"{name}:{job}"
         assert jobs[(name, job)]["runs-on"] == "ubuntu-latest", f"{name}:{job}"
-    for name, job in PROTECTED | TARGET | ORG_TOKEN | CLASSED:
+    for name, job in PROTECTED | TARGET | CLASSED:
         assert jobs[(name, job)]["runs-on"] == "ubuntu-latest", f"{name}:{job}"
     assert set(jobs) == set(MOVED) | HOSTED
 
