@@ -43,6 +43,24 @@ def test_vector_check_missing_authority_fails(tmp_path):
         ci_marker_vectors.main([str(tmp_path / "missing.json")])
 
 
+def test_vector_check_uses_its_own_repository_from_another_folder(tmp_path, monkeypatch, capsys):
+    from scripts import ci_marker_vectors
+
+    root = tmp_path / "repo"
+    script = root / "scripts/ci_marker_vectors.py"
+    script.parent.mkdir(parents=True)
+    script.touch()
+    local = root / "tests/fixtures/marker-idempotency-vectors.json"
+    local.parent.mkdir(parents=True)
+    local.write_bytes(VECTORS_FILE.read_bytes())
+    kernel = tmp_path / "kernel.json"
+    kernel.write_bytes(local.read_bytes())
+    monkeypatch.setattr(ci_marker_vectors, "__file__", str(script))
+    monkeypatch.chdir(tmp_path)
+    assert ci_marker_vectors.main([str(kernel)]) == 0
+    assert capsys.readouterr().out == "Marker key vectors match kernel dev.\n"
+
+
 def test_vector_check_is_on_the_required_tests_path():
     import yaml
 
