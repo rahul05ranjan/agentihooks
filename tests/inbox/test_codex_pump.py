@@ -88,6 +88,9 @@ class AppServer:
         turns = [{"id": turn["id"], "status": turn["status"]} for turn in self.turns]
         return {"thread": {"id": params["threadId"], "turns": turns}}
 
+    def thread_resume(self, params):
+        return self.thread_read(params)
+
     def begin_elsewhere(self):
         self.turns.append({"id": f"turn-{len(self.turns) + 1}", "status": codex.IN_PROGRESS, "inputs": []})
         self.frames.append({"method": codex.TURN_STARTED, "params": {"turn": {"id": self.active}}})
