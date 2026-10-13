@@ -32,10 +32,16 @@ def _step(job, name):
     return next(step for step in job["steps"] if step.get("name") == name)
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def sleeps(monkeypatch):
     slept = []
-    monkeypatch.setattr(fail_fast.time, "sleep", slept.append)
+
+    def sleep(seconds):
+        slept.append(seconds)
+        if len(slept) > 20:
+            pytest.fail("the watcher kept polling")
+
+    monkeypatch.setattr(fail_fast.time, "sleep", sleep)
     return slept
 
 
