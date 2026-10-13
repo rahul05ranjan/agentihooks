@@ -47,12 +47,13 @@ def test_swarm_pr_arms_the_intent_check_and_stamps_the_body(started, capsys, mon
 
 def test_recording_the_main_pull_keeps_the_tests_first_pull(started):
     _, ledger, _ = started
+    ledger.rows["t1"]["split"] = ["1-2", "3-4"]
     first = "https://github.com/o/r/pull/8"
-    assert run("sw", "pr", first) == 0
-    assert run("sw", "pr", URL) == 0
-    assert run("sw", "pr", URL) == 0
+    assert run("sw", "pr", first, "--half", "1") == 0
+    assert run("sw", "pr", URL, "--half", "2") == 0
+    assert run("sw", "pr", URL, "--half", "2") == 0
     assert ledger.rows["t1"]["pr_url"] == URL
-    assert ledger.rows["t1"]["pr_urls"] == [first, URL]
+    assert ledger.rows["t1"]["split_pulls"] == [first, URL]
 
 
 def test_swarm_pr_with_the_intent_gate_off_arms_nothing(started, capsys, monkeypatch):
