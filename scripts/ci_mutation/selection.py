@@ -218,10 +218,14 @@ def load_or_collect_stats(runner, test_runner, paths: list[str], mode: str, stat
             files = part_files(Path.cwd(), config.pytest_add_cli_args_test_selection, (index, total))
             write_part(output, key, (index, total), collect_file_stats(runner, test_runner, files, workers, Path.cwd()))
             raise SystemExit(0)
-        apply_stats(
-            runner,
-            collect_file_stats(runner, test_runner, config.pytest_add_cli_args_test_selection, workers, Path.cwd()),
-        )
+        if os.environ.get("MUTATION_STATS_CACHE"):
+            apply_stats(
+                runner,
+                collect_file_stats(runner, test_runner, config.pytest_add_cli_args_test_selection, workers, Path.cwd()),
+            )
+        else:
+            shards = stats_shards(Path.cwd(), config.pytest_add_cli_args_test_selection, workers)
+            collect_parallel_stats(runner, test_runner, shards, Path.cwd())
     finally:
         config.source_paths = relative
 
