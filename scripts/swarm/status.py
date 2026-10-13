@@ -29,6 +29,7 @@ from scripts.swarm import (
     quota_view,
     retire_watch,
     snapshot,
+    stall_watch,
     tick_master,
 )
 from scripts.swarm.health import activity, checks, prompt_backlog, spawn_stall, standing, verdicts
@@ -103,6 +104,7 @@ def findings(store, slug, config, tasks, events):
         )
         + live_binding.findings(store, slug)
         + retire_watch.findings(store, slug)
+        + stall_watch.findings(store, slug)
         + drain_watch.findings(store, slug, limits, now_ms())
         + launch_check.findings(store, slug)
         + spawn_stall.findings(store, slug)
@@ -238,7 +240,7 @@ def status_report(store, slug, state):
     events = state.get("_meta", {}).get("events", [])
     agents = [a.__dict__ for a in store.agents(slug)]
     handed = transfers.list_transfers(store, slug)
-    active = lift.active(gate_log.recent(slug, limit=None), now_ms())
+    active = lift.current(slug, now_ms())
     promotion = tick_master.read(store, slug)
     return {
         "config": {
