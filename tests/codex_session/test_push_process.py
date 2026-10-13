@@ -128,7 +128,7 @@ def test_served_execution_runs_a_pump_that_resumes_and_delivers_then_retires(tmp
         assert [message["params"] for message in resume] == [{"threadId": thread_id}]
         [delivery] = [message for message in messages if message.get("method") == "turn/start"]
         assert delivery["params"]["threadId"] == thread_id
-        assert item.body in delivery["params"]["input"][0]["text"]
+        assert item.text in delivery["params"]["input"][0]["text"]
         assert inbox.get(item.id).state == "delivered"
     finally:
         for process in pumps:
