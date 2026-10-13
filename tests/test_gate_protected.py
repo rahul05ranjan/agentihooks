@@ -522,12 +522,13 @@ def _aggregators():
     return base, head
 
 
+@pytest.mark.parametrize("selected", [False, True])
 @pytest.mark.parametrize("queue_coverage", [False, True])
-def test_a_head_switching_to_either_canonical_aggregation_is_green(queue_coverage):
+def test_a_head_switching_to_either_canonical_aggregation_is_green(queue_coverage, selected):
     from scripts import ci_reuse
 
     base, head = _aggregators()
-    head["jobs"]["gate-required"]["steps"] = ci_reuse.gate_steps(queue_coverage=queue_coverage)
+    head["jobs"]["gate-required"]["steps"] = ci_reuse.gate_steps(queue_coverage=queue_coverage, selected=selected)
     assert _grade({"test.yml": head}, base={"test.yml": base}) == []
 
 
