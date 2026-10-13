@@ -170,7 +170,7 @@ def test_serve_drains_and_releases_the_writer_before_it_re_execs(monkeypatch, tm
         def release(self):
             calls.append("release")
 
-    monkeypatch.setattr(ledger_server, "DrainingServer", Server)
+    monkeypatch.setattr(ledger_server, "ThreadingHTTPServer", Server)
     monkeypatch.setattr(ledger_server.ledger_writer, "WriterLease", Lease)
     monkeypatch.setattr(ledger_server.threading, "Thread", lambda **kw: type("T", (), {"start": lambda self: None})())
     monkeypatch.setattr(ledger_server.server_lifetime, "watch", lambda *args: threading.Event())

@@ -149,7 +149,7 @@ def test_a_folder_other_than_the_shared_one_may_serve_on_8765(monkeypatch, tmp_p
     monkeypatch.setattr(server.core, "LEDGER_DIR", tmp_path)
     monkeypatch.setattr(server, "PORT", 8765)
     monkeypatch.setattr(server, "PIDFILE", tmp_path / ".server.pid")
-    monkeypatch.setattr(server, "DrainingServer", Mock(return_value=Mock(replacing=False)))
+    monkeypatch.setattr(server, "ThreadingHTTPServer", Mock(return_value=Mock(replacing=False)))
     monkeypatch.setattr(server.threading, "Thread", Mock())
     server.serve()
     server.DrainingServer.assert_called_once_with((server.HOST, 8765), server.Handler, bind_and_activate=False)

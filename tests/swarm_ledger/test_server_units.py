@@ -116,7 +116,7 @@ def test_serve_runs_the_ledger_watch_on_a_daemon_thread(monkeypatch, tmp_path):
             pass
 
     monkeypatch.setattr(server.threading, "Thread", Thread)
-    monkeypatch.setattr(server, "DrainingServer", Server)
+    monkeypatch.setattr(server, "ThreadingHTTPServer", Server)
     monkeypatch.setattr(server.server_lifetime, "watch", lambda *args: threading.Event())
     adopted = []
     monkeypatch.setattr(server.legacy, "adopt", adopted.append)

@@ -171,7 +171,7 @@ def test_serve_records_the_code_it_loaded_beside_its_pid_file(monkeypatch, tmp_p
             pass
 
     monkeypatch.setattr(ledger_server.threading, "Thread", lambda **kw: type("T", (), {"start": lambda self: None})())
-    monkeypatch.setattr(ledger_server, "DrainingServer", Server)
+    monkeypatch.setattr(ledger_server, "ThreadingHTTPServer", Server)
     monkeypatch.setattr(ledger_server.server_lifetime, "watch", lambda *args: ledger_server.threading.Event())
     monkeypatch.setattr(ledger_server.legacy, "adopt", lambda stored: None)
     monkeypatch.setattr(ledger_server, "PIDFILE", tmp_path / ".server.pid")

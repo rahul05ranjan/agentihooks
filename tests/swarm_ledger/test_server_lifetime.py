@@ -312,7 +312,7 @@ def test_server_closes_its_socket_and_cancels_the_watch_on_exit(tmp_path, monkey
     monkeypatch.setattr(ledger_server.threading, "Thread", Mock())
     httpd = Mock(replacing=False)
     factory = Mock(return_value=httpd)
-    monkeypatch.setattr(ledger_server, "DrainingServer", factory)
+    monkeypatch.setattr(ledger_server, "ThreadingHTTPServer", factory)
     stopped = Mock()
     watch = Mock(return_value=stopped)
     monkeypatch.setattr(server_lifetime, "watch", watch)

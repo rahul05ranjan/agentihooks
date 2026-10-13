@@ -20,7 +20,7 @@ def listening(monkeypatch, ledger_port, tmp_path):
     admitted.set()
     created = queue.Queue()
 
-    class ObservedServer(server.DrainingServer):
+    class ObservedServer(server.ThreadingHTTPServer):
         def server_activate(self):
             super().server_activate()
             created.put(self)
@@ -32,7 +32,7 @@ def listening(monkeypatch, ledger_port, tmp_path):
             assert admitted.wait(15), "accept gate was never released"
             return super().get_request()
 
-    monkeypatch.setattr(server, "DrainingServer", ObservedServer)
+    monkeypatch.setattr(server, "ThreadingHTTPServer", ObservedServer)
     monkeypatch.setattr(server, "HOST", "127.0.0.1")
     monkeypatch.setattr(server, "PORT", ledger_port)
     monkeypatch.setattr(server, "PIDFILE", tmp_path / ".server.pid")
