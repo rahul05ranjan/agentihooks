@@ -195,15 +195,18 @@ def test_recorded_reads_the_named_agents_current_transport(monkeypatch):
 
 def test_the_app_server_pane_runs_the_server_in_its_own_session_and_the_viewer_in_front(tmp_path):
     spec = init_agent.AgentSpec(agent="codex", profile="engineer", transport=init_agent.APP_SERVER, seat="master@sw")
-    launcher, _ = init_agent._write_launcher(
+    launcher, opening = init_agent._write_launcher(
         tmp_path, "sw-master-1", "Open.", [], {"XDG_RUNTIME_DIR": str(tmp_path), "AGENTIHOOKS_SWARM": "sw"}, spec
     )
     lines = launcher.read_text().splitlines()
     serve = next(index for index, line in enumerate(lines) if line.startswith("setsid -f "))
     words = shlex.split(lines[serve])
     log = launcher.with_name(f"{launcher.stem}.serve.log")
-    assert words[2:6] == [sys.executable, "-m", "scripts.codex_session", "serve"]
-    assert words[-3:] == ["</dev/null", f">>{log}", "2>&1"]
+    assert words[:4] == ["setsid", "-f", "sh", "-c"]
+    server, _, removed = words[4].partition("; rm -f ")
+    assert shlex.split(server)[:4] == [sys.executable, "-m", "scripts.codex_session", "serve"]
+    assert shlex.split(removed) == [str(opening), str(init_agent._route_report(launcher))]
+    assert words[5:] == ["</dev/null", f">>{log}", "2>&1"]
     assert shlex.split(lines[serve + 1]) == [
         sys.executable,
         "-m",
@@ -214,7 +217,7 @@ def test_the_app_server_pane_runs_the_server_in_its_own_session_and_the_viewer_i
         "--agent",
         "sw-master-1",
     ]
-    assert str(log) not in lines[serve + 2]
+    assert shlex.split(lines[serve + 2]) == ["rm", "-f", str(launcher)]
 
 
 def test_a_viewer_launched_outside_a_swarm_names_an_empty_slug(tmp_path):
