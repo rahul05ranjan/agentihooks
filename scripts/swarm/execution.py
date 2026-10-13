@@ -148,7 +148,9 @@ class ExecutionRegistry:
                 try:
                     from scripts.swarm import lease
 
-                    pipe.watch(key)
+                    pipe.watch(key, publishing)
+                    if pipe.hget(publishing, agent.seat):
+                        raise SwarmError("current execution publication is in flight; retry after it finishes")
                     epoch = lease.EPOCH.get()
                     held = lease.current(self.store, slug) if epoch is not None else None
                     if epoch is not None and (held is None or held.epoch != epoch):

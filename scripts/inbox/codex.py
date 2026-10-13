@@ -124,6 +124,35 @@ class Transport:
             raise StaleExecution("execution is no longer current")
         return record
 
+    def publish(self, send: Callable[[], None]) -> None:
+        from scripts.codex_session.binding import PUBLISHING
+        from scripts.inbox.receipts import transact
+
+        key = self.bindings.store.key(self.slug, PUBLISHING)
+
+        def reserve(pipe):
+            pipe.watch(key)
+            record = self.require(pipe)
+            if pipe.hget(key, record.seat):
+                raise protocol.ProtocolError("execution already has an inbox publication in flight")
+            pipe.multi()
+            pipe.hset(key, record.seat, self.execution_id)
+            return record
+
+        record = transact(self.bindings.redis, reserve)
+        try:
+            send()
+        finally:
+
+            def release(pipe):
+                pipe.watch(key)
+                held = pipe.hget(key, record.seat)
+                pipe.multi()
+                if held == self.execution_id:
+                    pipe.hdel(key, record.seat)
+
+            transact(self.bindings.redis, release)
+
 
 @dataclass(frozen=True)
 class Timing:
@@ -323,12 +352,14 @@ class Pump:
             self._send(text)
 
     def _send(self, text: str) -> None:
-        self.binding.transport.require()
-        connection, thread = self.binding.connection, self.binding.thread_id
-        if self.state.active_turn:
-            self.state.follow(protocol.steer_turn(connection, thread, self.state.active_turn, text))
-        else:
-            self.state.follow(protocol.start_turn(connection, thread, text))
+        def send():
+            connection, thread = self.binding.connection, self.binding.thread_id
+            if self.state.active_turn:
+                self.state.follow(protocol.steer_turn(connection, thread, self.state.active_turn, text))
+            else:
+                self.state.follow(protocol.start_turn(connection, thread, text))
+
+        self.binding.transport.publish(send)
 
     def _hold(self) -> None:
         self.hold_until = self.timing.clock() + self.backoff
