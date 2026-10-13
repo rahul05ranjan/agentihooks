@@ -1654,6 +1654,12 @@ def queued_say(args, who) -> bool:
 
 
 def cmd_terminal(store, args):
+    from scripts.codex_session import attach
+
+    opened = attach.local_terminal(store, args.slug, args.execution, dict(os.environ))
+    if opened is not None:
+        print(json.dumps(opened))
+        return
     from scripts.swarm_v2.kubernetes import operator_terminal
 
     print(json.dumps(operator_terminal.command(store, args.slug, args.execution, os.environ, Who.from_env())))

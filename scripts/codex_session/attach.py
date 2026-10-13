@@ -5,6 +5,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 from scripts.codex_session.binding import CONNECTED, EXITED, FAILED, TransportRecord
 
@@ -15,8 +16,11 @@ EARLY_EXIT_S = 5.0
 ENDED = "the execution's app-server {}; there is no thread to attach"
 NOT_READY = "the execution has no connected thread after {:g} seconds"
 NO_ATTACH = "{} runs no app-server a native terminal can attach to"
+NO_THREAD = "{} has no connected thread to reopen"
+LOCAL = "local"
 Read = Callable[[], TransportRecord | None]
 Run = Callable[[list[str]], int]
+Open = Callable[[str, list[str]], object]
 
 
 class AttachError(RuntimeError):
@@ -83,6 +87,41 @@ def recorded(slug: str, name: str) -> Read:
         return live_binding.transport(store, agent)
 
     return read
+
+
+def reopenable(store, slug: str, execution_id: str):
+    from scripts.swarm import capabilities
+
+    agent = next((agent for agent in store.agents(slug) if agent.execution_id == execution_id), None)
+    if agent is None or agent.runtime_backend != LOCAL or not capabilities.of_agent(agent).native_terminal_attach:
+        return None
+    return agent
+
+
+def reopen(store, agent, open_viewer: Open, codex_bin: str) -> dict:
+    from scripts.swarm import live_binding
+
+    record = live_binding.transport(store, agent)
+    if not attachable(record):
+        raise AttachError(NO_THREAD.format(agent.name))
+    placed = open_viewer(agent.name, viewer_argv(codex_bin, record))
+    return {"agent": agent.name, "thread": record.thread_id, "pane": placed.pane_id}
+
+
+def local_terminal(store, slug: str, execution_id: str, environ: dict[str, str]) -> dict | None:
+    from scripts import herdr_host
+    from scripts.swarm import naming
+
+    agent = reopenable(store, slug, execution_id)
+    if agent is None:
+        return None
+    config = store.config(slug)
+    workspace = naming.space(config.repo, config.code, config.slug)
+
+    def open_viewer(title: str, argv: list[str]):
+        return herdr_host.open_command(Path(config.repo), title, argv, workspace, environ)
+
+    return reopen(store, agent, open_viewer, "codex")
 
 
 def _parser() -> argparse.ArgumentParser:
