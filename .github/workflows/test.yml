@@ -451,7 +451,7 @@ jobs:
     if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || needs.admission.result == 'success') && (github.event_name != 'merge_group' || needs.reuse.outputs.reused != 'true') }}
     needs: [split, reuse, admission]
     runs-on: ${{ (github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.actor) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.triggering_actor) || (github.event_name == 'merge_group' || github.event_name == 'push' && github.ref == 'refs/heads/dev') && github.actor == 'github-merge-queue[bot]' && github.triggering_actor == 'github-merge-queue[bot]') && 'anton-oss' || 'ubuntu-latest' }}
-    timeout-minutes: 9
+    timeout-minutes: 15
     permissions:
       contents: read
     env:
@@ -462,8 +462,6 @@ jobs:
         python-version: ["3.11", "3.12"]
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
         exclude:
-          - {python-version: "3.11", shard: 5}
-          - {python-version: "3.11", shard: 6}
           - {python-version: "3.11", shard: 7}
           - {python-version: "3.11", shard: 8}
           - {python-version: "3.11", shard: 9}
@@ -517,21 +515,28 @@ jobs:
         with:
           name: split-${{ matrix.python-version }}
 
+      - name: Download the suite the split job collected
+        if: github.event.pull_request.base.ref != 'main'
+        uses: ./.github/actions/retry-download
+        with:
+          name: collected-${{ matrix.python-version }}
+
       # Page tests drive Chromium; the coverage shards run them so the page JavaScript they reach is measured.
       - name: Install the browser that page tests drive
         if: matrix.python-version == '3.12'
-        timeout-minutes: 2
+        timeout-minutes: 6
         uses: ./.github/actions/browser-cache
 
       # NOT `-m unit`: only 439 of 999 tests carry that marker, so 560 —
       # including every ownership-scope test guarding what uninstall and prune
       # are allowed to delete — never ran in CI at all.
       - name: Run tests
+        timeout-minutes: 7
         env:
           PYTHONUNBUFFERED: "1"
           PYTEST_ADDOPTS: ${{ matrix.python-version == '3.12' && format('--cov=hooks --cov=scripts --cov-report= --cov-config={0}/.github/coverage/coverage.ini -p tests.browser_coverage', github.workspace) || '-p no:pytest_cov' }}
           PLAYWRIGHT_BROWSERS_PATH: ${{ matrix.python-version == '3.12' && format('{0}/.playwright', github.workspace) || '' }}
-          SHARD: ${{ matrix.shard }}/${{ matrix.python-version == '3.12' && 12 || 4 }}
+          SHARD: ${{ matrix.shard }}/${{ matrix.python-version == '3.12' && 12 || 6 }}
           NODE_OPTIONS: ${{ matrix.python-version == '3.12' && format('--require {0}/tests/node_capture.cjs', github.workspace) || '' }}
           CI_FLAKES: ${{ github.workspace }}/flakes.jsonl
           JS_COVERAGE_DIR: ${{ matrix.python-version == '3.12' && format('{0}/js-coverage', github.workspace) || '' }}
@@ -555,6 +560,7 @@ jobs:
           echo "Tests retried in place: $(wc -l < flakes.jsonl)" | tee -a "$GITHUB_STEP_SUMMARY"
           jq -r '"\(.outcome) after \(.attempts) attempts: \(.test)"' flakes.jsonl | tee -a "$GITHUB_STEP_SUMMARY"
           jq -r 'select(.outcome == "flaky") | "::warning title=Flaky test::\(.test) passed on attempt \(.attempts) in run \(.run)"' flakes.jsonl
+          jq -r 'select(.crashes) | "::warning title=Worker crash::\(.test) crashed its worker \(.crashes) time(s) in run \(.run)"' flakes.jsonl
 
       - name: Upload the flake report
         if: ${{ !cancelled() }}
@@ -742,16 +748,10 @@ jobs:
         run: |
           python .github/coverage/proxy.py > sonar-proxy.log 2>&1 &
           echo "pid=$!" >> "$GITHUB_OUTPUT"
-          for attempt in {1..5}; do
-            if curl --fail --silent --show-error --max-time 10 http://127.0.0.1:9000/api/system/status; then
-              version=$(curl --fail --silent --show-error --max-time 10 http://127.0.0.1:9000/api/server/version)
-              test -n "$version"
-              echo "version=$version" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            sleep 1
-          done
-          exit 1
+          bash "$GITHUB_WORKSPACE/.github/coverage/sonar-retry.sh" "Sonar status" -- curl --fail --silent --show-error --max-time 10 http://127.0.0.1:9000/api/system/status
+          version=$(bash "$GITHUB_WORKSPACE/.github/coverage/sonar-retry.sh" "Sonar version" -- curl --fail --silent --show-error --max-time 10 http://127.0.0.1:9000/api/server/version)
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Hold the Delivery L2 binding
         if: steps.current.outputs.superseded != 'true'
@@ -760,7 +760,7 @@ jobs:
         run: |
           set -o pipefail
           : "${SONAR_READ_TOKEN:?SONAR_READ_TOKEN is not set}"
-          bound=$(curl --fail --silent --show-error --max-time 10 \
+          bound=$(bash "$GITHUB_WORKSPACE/.github/coverage/sonar-retry.sh" "Delivery L2 binding" -- curl --fail --silent --show-error --max-time 10 \
             -H "Authorization: Bearer $SONAR_READ_TOKEN" \
             "http://127.0.0.1:9000/api/qualitygates/get_by_project?project=agentihooks" | jq -er .qualityGate.name)
           if [[ "$bound" != 'Delivery L2' ]]; then
@@ -846,7 +846,7 @@ jobs:
             cp -a "$RUNNER_TEMP/sonar-scanner-$SONAR_SCANNER_VERSION-linux-x64/." "$scanner/"
           fi
           read -ra extra <<< "$ARGS"
-          "$scanner/bin/sonar-scanner" -Dsonar.projectBaseDir=. "${extra[@]}"
+          bash "$GITHUB_WORKSPACE/.github/coverage/sonar-retry.sh" --unless .scannerwork/report-task.txt "SonarQube Scan" -- "$scanner/bin/sonar-scanner" -Dsonar.projectBaseDir=. "${extra[@]}"
 
       - name: Upload coverage and analysis evidence
         if: always() && steps.current.outputs.superseded != 'true'
@@ -870,7 +870,7 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
           set -o pipefail
-          api() { curl --fail --silent --show-error --max-time 10 --retry 2 --retry-all-errors -H "Authorization: Bearer $SONAR_TOKEN" "http://127.0.0.1:9000/api/$1"; }
+          api() { bash "$GITHUB_WORKSPACE/.github/coverage/sonar-retry.sh" "Sonar $1" -- curl --fail --silent --show-error --max-time 10 -H "Authorization: Bearer $SONAR_TOKEN" "http://127.0.0.1:9000/api/$1"; }
           task=$(sed -n 's/^ceTaskId=//p' .scannerwork/report-task.txt)
           [[ -n "$task" ]] || { echo "::error::No Sonar task id in report-task.txt."; exit 1; }
           while true; do
@@ -899,7 +899,7 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
           set -o pipefail
-          api() { curl --fail --silent --show-error --max-time 10 -H "Authorization: Bearer $SONAR_TOKEN" "http://127.0.0.1:9000/api/$1"; }
+          api() { bash "$GITHUB_WORKSPACE/.github/coverage/sonar-retry.sh" "Sonar $1" -- curl --fail --silent --show-error --max-time 10 -H "Authorization: Bearer $SONAR_TOKEN" "http://127.0.0.1:9000/api/$1"; }
           expected=$(printf '%s\n' "new_bugs GT 0" "new_coverage LT 80" "new_duplicated_lines_density GT 3" \
             "new_security_hotspots_reviewed LT 100" "new_vulnerabilities GT 0" | sort)
           defined=$(api "qualitygates/show?name=Delivery%20L2" | jq -er '.conditions[] | "\(.metric) \(.op) \(.error)"' | sort)
@@ -921,6 +921,10 @@ jobs:
             echo "::error::The analysis was not graded on the Delivery L2 conditions. Foreign: ${foreign:-none}. Missing: ${missing:-none}."
             exit 1
           fi
+
+      - name: Show the Sonar proxy log
+        if: failure() && steps.proxy.outputs.pid != ''
+        run: cat sonar-proxy.log
 
       - name: Stop the proxy
         if: always() && steps.proxy.outputs.pid != ''
@@ -988,6 +992,26 @@ jobs:
         if: ${{ !cancelled() }}
         run: python -m scripts.ci_wiring
 
+      - name: Require trusted actors before private runner admission
+        if: ${{ !cancelled() }}
+        run: |
+          if [[ -f "$RUNNER_TEMP/grader/scripts/ci_runner_trust.py" ]]; then
+            cd "$RUNNER_TEMP/grader"
+            python -m scripts.gate_protected --head "$GITHUB_SHA"
+          else
+            python -m scripts.ci_runner_trust
+          fi
+
+      - name: Hold every job to a runner class
+        if: ${{ !cancelled() }}
+        run: |
+          if [[ -f "$RUNNER_TEMP/grader/scripts/ci_runner_classes.py" ]]; then
+            cd "$RUNNER_TEMP/grader"
+            python -m scripts.ci_runner_classes --root "$GITHUB_WORKSPACE"
+          else
+            python -m scripts.ci_runner_classes
+          fi
+
       # dev's copy grades against the base's allowlist, so a pull request cannot loosen its own limits or allowlist.
       - name: Hold the size and complexity limits
         if: ${{ !cancelled() }}
@@ -1038,7 +1062,7 @@ jobs:
 
       - name: Install the artifact viewer browser
         if: ${{ !cancelled() && steps.artifacts.outputs.browser == 'true' }}
-        timeout-minutes: 2
+        timeout-minutes: 6
         uses: ./.github/actions/browser-cache
 
       - name: Artifact sanity checks
@@ -1590,7 +1614,7 @@ jobs:
     needs: [mutation-plan, admission]
     if: ${{ !cancelled() && needs.mutation-plan.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.admission.result == 'success') && ((github.event_name == 'pull_request' && github.base_ref == 'dev') || github.event_name == 'workflow_dispatch') }}
     runs-on: ${{ (github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.actor) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.triggering_actor) || (github.event_name == 'merge_group' || github.event_name == 'push' && github.ref == 'refs/heads/dev') && github.actor == 'github-merge-queue[bot]' && github.triggering_actor == 'github-merge-queue[bot]') && 'anton-oss-batch' || 'ubuntu-latest' }}
-    timeout-minutes: 20
+    timeout-minutes: 26
     strategy:
       fail-fast: false
       matrix:
@@ -1625,13 +1649,13 @@ jobs:
       - name: Install the browser that page tests drive
         id: browser
         if: steps.selection.outputs.browser == 'true'
-        timeout-minutes: 2
+        timeout-minutes: 6
         uses: ./.github/actions/browser-cache
 
       - name: Report browser setup failure
         if: failure() && steps.browser.outcome == 'failure'
         run: |
-          echo "::error::Chromium setup failed or exceeded its two minute timeout; mutation tests cannot run."
+          echo "::error::Chromium setup failed or exceeded its six minute timeout; mutation tests cannot run."
           exit 1
 
       - name: Collect one stats part for every mutation shard
@@ -1666,7 +1690,7 @@ jobs:
     needs: [mutation-plan, mutation-stats, admission]
     if: ${{ !cancelled() && needs.mutation-plan.result == 'success' && needs.mutation-stats.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.admission.result == 'success') && ((github.event_name == 'pull_request' && github.base_ref == 'dev') || github.event_name == 'workflow_dispatch') }}
     runs-on: ${{ (github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.actor) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.triggering_actor) || (github.event_name == 'merge_group' || github.event_name == 'push' && github.ref == 'refs/heads/dev') && github.actor == 'github-merge-queue[bot]' && github.triggering_actor == 'github-merge-queue[bot]') && 'anton-oss-batch' || 'ubuntu-latest' }}
-    timeout-minutes: 20
+    timeout-minutes: 26
     strategy:
       fail-fast: false
       matrix:
@@ -1701,13 +1725,13 @@ jobs:
       - name: Install the browser that page tests drive
         id: browser
         if: steps.selection.outputs.browser == 'true'
-        timeout-minutes: 2
+        timeout-minutes: 6
         uses: ./.github/actions/browser-cache
 
       - name: Report browser setup failure
         if: failure() && steps.browser.outcome == 'failure'
         run: |
-          echo "::error::Chromium setup failed or exceeded its two minute timeout; mutation tests cannot run."
+          echo "::error::Chromium setup failed or exceeded its six minute timeout; mutation tests cannot run."
           exit 1
 
       - name: Download the shared mutation stats

@@ -63,6 +63,12 @@ def request(live, method, resource, body=None, **headers):
     return status, json.loads(data)
 
 
+def stored(monkeypatch, document):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(server.repository, "current", lambda slug: SimpleNamespace(state=document))
+
+
 def test_invalid_schema_leaves_resource_unchanged(live):
     status, before = request(live, "GET", "metadata")
     assert status == 200
@@ -589,7 +595,7 @@ def test_page_budget_counts_the_envelope(live, monkeypatch):
 
     row = {"id": "large", "description": "x" * (MAX_REPLY // 2 - 150)}
     document = {"tasks": [row, row], "_meta": {"rev": 1}}
-    monkeypatch.setattr(server.repository, "get_document", lambda slug, **kwargs: document)
+    stored(monkeypatch, document)
     status, reply = request(live, "GET", "tasks?limit=100")
     assert status == 200
     assert len(json.dumps(reply, ensure_ascii=False).encode()) <= MAX_REPLY
@@ -616,7 +622,7 @@ def test_control_actions_validate_before_domain_execution(live):
 
 def test_item_revision_uses_canonical_utf8_content(live, monkeypatch):
     document = {"tasks": [{"title": "Café", "id": "t1"}], "_meta": {"rev": 1}}
-    monkeypatch.setattr(server.repository, "read", lambda slug, *keys: document)
+    stored(monkeypatch, document)
     assert request(live, "GET", "tasks/t1") == (
         200,
         {
@@ -639,7 +645,7 @@ def test_metadata_resource_reports_its_named_fields(live, monkeypatch):
         "summary": "Summary",
         "_meta": {"rev": 7, "updated_at": 200, "created_at": 10, "size": "swarm", "seed_error": None},
     }
-    monkeypatch.setattr(server.repository, "get_document", lambda slug, **kwargs: document)
+    stored(monkeypatch, document)
     status, reply = request(live, "GET", "metadata")
     assert status == 200
     assert reply["data"] == document
@@ -1163,7 +1169,7 @@ def test_storage_errors_have_a_stable_bounded_envelope(live, monkeypatch, caplog
     def unreadable(slug, **kwargs):
         raise error
 
-    monkeypatch.setattr(server.repository, "get_document", unreadable)
+    monkeypatch.setattr(server.repository, "current", unreadable)
     assert request(live, "GET", "metadata") == (
         500,
         {
@@ -1262,7 +1268,7 @@ def test_composite_status_preserves_member_events_and_crew(live, capsys):
 def test_default_collection_limit_and_cursor_edges(live, monkeypatch):
     rows = [{"id": f"t{index}", "title": f"Task {index}"} for index in range(51)]
     document = {"tasks": rows, "_meta": {"rev": 1}}
-    monkeypatch.setattr(server.repository, "get_document", lambda slug, **kwargs: document)
+    stored(monkeypatch, document)
     status, first = request(live, "GET", "tasks")
     assert status == 200
     assert len(first["data"]) == 50
@@ -1665,12 +1671,11 @@ def test_item_ids_and_absent_threads(live):
         404,
         {"error": {"code": "resource_missing", "message": "No such resource"}},
     )
-    revision = request(live, "GET", "tasks")[1]["revision"]
     payload = {
         "ops": [
             {"op": "task_add", "id": "empty-comments", "by": "swarm", "task": "t1", "title": "Empty", "lane": "eng"}
         ],
-        "guards": {"tasks": revision},
+        "guards": {},
     }
     assert request(live, "POST", "operations", payload)[0] == 200
     status, result = request(live, "GET", "tasks/t1/comments")
@@ -1837,6 +1842,59 @@ def test_export_validates_its_body_and_hides_receipts(live, monkeypatch):
     monkeypatch.setattr(server, "swarm_status", read)
     assert request(live, "POST", "swarm/export", {}) == (200, {"data": {"slug": SLUG}})
     read.assert_called_once_with(SLUG)
+
+
+def test_export_encodes_once_per_ledger_generation(live, monkeypatch):
+    loads, dumps, counts = json.loads, json.dumps, {"decode": 0, "encode": 0}
+
+    def ledger(value):
+        return isinstance(value, dict) and "_meta" in value
+
+    def decode(*args, **kwargs):
+        value = loads(*args, **kwargs)
+        counts["decode"] += ledger(value)
+        return value
+
+    def encode(value, *args, **kwargs):
+        counts["encode"] += ledger(value) or (isinstance(value, dict) and ledger(value.get("data")))
+        return dumps(value, *args, **kwargs)
+
+    def export():
+        headers = {"X-Ledger-Token": live["admin"], "Content-Type": "application/json"}
+        status, body, _ = send(live, "POST", f"/api/v1/ledgers/{SLUG}/export", b"{}", **headers)
+        assert status == 200
+        return body
+
+    def stored():
+        state = server.repository.inner.get_document(SLUG)
+        hidden = ("seeds", "api_operations")
+        state["_meta"] = {key: item for key, item in state["_meta"].items() if key not in hidden}
+        return {"data": state}
+
+    first = export()
+    assert json.loads(first) == stored()
+    monkeypatch.setattr(json, "loads", decode)
+    monkeypatch.setattr(json, "dumps", encode)
+    server.repository.inner.get_document(SLUG)
+    assert counts == {"decode": 1, "encode": 0}
+    counts.update(decode=0)
+    assert [export() for _ in range(3)] == [first] * 3
+    assert counts == {"decode": 0, "encode": 0}
+    ops = [{"op": "add", "id": "export-generation", "thread": "chat", "text": "Written after the first export, café"}]
+    headers = {"X-Ledger-Token": live["admin"], "Content-Type": "application/json"}
+    assert send(live, "PUT", f"/api/{SLUG}", dumps({"ops": ops}).encode(), **headers)[0] == 200
+    counts.update(decode=0, encode=0)
+    after = [export() for _ in range(3)]
+    assert counts == {"decode": 0, "encode": 1}
+    monkeypatch.undo()
+    assert after == [after[0]] * 3 and after[0] != first
+    assert after[0] == json.dumps(stored(), ensure_ascii=False).encode()
+    assert "Written after the first export, café" in after[0].decode()
+
+
+def test_export_body_hides_seeds_and_receipts_and_keeps_text_unescaped():
+    state = {"title": "café", "_meta": {"seeds": [1], "api_operations": {"a": 1}, "members": ["m"]}}
+    assert routes.export_body(state) == '{"data": {"title": "café", "_meta": {"members": ["m"]}}}'
 
 
 def test_raw_upload_headers_reject_invalid_lengths_and_names(live):
@@ -2439,8 +2497,7 @@ def test_repository_optional_collections_have_empty_http_resources(live, monkeyp
     from scripts.swarm_ledger.api.resources import revision
 
     document = {"_meta": {}, "questions": [{"id": "q1"}]}
-    monkeypatch.setattr(server.repository, "get_document", lambda slug: document)
-    monkeypatch.setattr(server.repository, "read", lambda slug, *keys: document)
+    stored(monkeypatch, document)
     assert request(live, "GET", path) == (
         200,
         {"data": [], "revision": revision([]), "next_cursor": None},

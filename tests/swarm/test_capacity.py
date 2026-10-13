@@ -11,6 +11,7 @@ from scripts.swarm.tick import SpawnError, _spend_host, tick
 from tests.swarm.test_tick import FakeLedger, FakeRuntime
 
 pytestmark = pytest.mark.xdist_group("fakeredis")
+CODEX_COUNTS = capacity.account_sessions.codex_sessions_by_account
 
 
 @pytest.fixture(autouse=True)
@@ -474,6 +475,36 @@ def test_codex_accounts_with_live_sessions_keep_their_own_quotas(monkeypatch):
     assert [(seat.account, seat.free) for seat in capacity.offered(seen)] == [("a", 5), ("b", 0)]
 
 
+def test_codex_rows_count_a_managed_execution_once_and_hold_it_until_termination(monkeypatch, tmp_path):
+    from scripts.codex_quota import CodexQuota
+    from tests.context.test_account_sessions import _held_store, _managed_host
+
+    root = tmp_path / "proc"
+    _managed_host(root, 1)
+    _held_store(
+        monkeypatch,
+        ("exe-0123456789abcdef0123", "connected", "alpha"),
+        ("exe-b000000000000001", "starting", "alpha"),
+        ("exe-b000000000000002", "exited", "alpha"),
+    )
+    monkeypatch.setattr(capacity.account_sessions, "codex_sessions_by_account", lambda: CODEX_COUNTS(root))
+    monkeypatch.setattr(balancer, "cached_observations", lambda **kw: [])
+    monkeypatch.setattr(capacity.account_sessions, "sessions_by_account", lambda: {})
+    monkeypatch.setattr(
+        capacity.codex_router, "accounts", lambda _: [capacity.codex_router.CodexAccount("alpha", "AH_CX_TOKEN_alpha")]
+    )
+    window = balancer.QuotaWindow(used=10)
+    monkeypatch.setattr(
+        capacity.codex_router,
+        "quotas",
+        lambda pool, environ: {row.name: CodexQuota(100, "pro", window, window) for row in pool},
+    )
+    monkeypatch.setattr(capacity.codex_router, "probe", lambda *a, **kw: pytest.fail("reached the real codex probe"))
+    seen = capacity.accounts({"AH_CX_TOKEN_alpha": "fake-a"}, 100)
+    assert [(row.name, row.sessions, row.cap) for row in seen] == [("alpha", 2, 6)]
+    assert capacity.free_seats(seen[0]) == 4
+
+
 def test_runtime_honors_reserved_harness_seats(tmp_path):
     from scripts.swarm.runtime import HerdrRuntime
 
@@ -524,7 +555,11 @@ def test_profile_and_saved_handoff_harnesses_are_reserved_before_automatic_work(
         task = {"id": "e", "handoff_envelope": {"launch": {"profile": "engineer", "harness": "claude"}}}
     config = SwarmConfig("sw", "/repo", max_eng=1, max_ci=1, max_plan=0)
     requirements = runtime.quota_requirements(config, {"eng": [task], "ci": [{"id": "c"}], "plan": []})
-    assert requirements == {"eng": [("claude",)], "ci": [("claude", "codex")], "plan": []}
+    assert requirements == {
+        "eng": [("claude", "codex") if saved else ("claude",)],
+        "ci": [("claude", "codex")],
+        "plan": [],
+    }
     observed = [account(sessions=2), account("cx", sessions=2, harness="codex")]
     decision = capacity.calculate(config, observed, [], {"eng": 1, "ci": 1, "plan": 0}, requirements)
     runtime._quota_accounts = observed
@@ -819,7 +854,7 @@ def test_failed_launch_does_not_consume_account_or_reserved_slots(tmp_path, monk
     assert runtime._quota_allocations == {"plan": {"claude": 1, "codex": 0}}
 
 
-@pytest.mark.parametrize("fixed", ["profile", "lane", "saved"])
+@pytest.mark.parametrize("fixed", ["profile", "lane"])
 def test_a_fixed_claude_task_never_falls_through_to_codex(tmp_path, monkeypatch, fixed):
     from scripts.swarm.tick import SpawnError
 
@@ -827,16 +862,23 @@ def test_a_fixed_claude_task_never_falls_through_to_codex(tmp_path, monkeypatch,
     task = {"id": "p", "title": "Plan"}
     if fixed == "profile":
         task["profile"] = "frontend"
-    elif fixed == "lane":
-        config = replace(config, lanes={"plan": {"agent": "claude"}})
     else:
-        task["handoff_envelope"] = {
-            "launch": {"profile": "planner", "harness": "claude", "model": "fable", "effort": "high"}
-        }
+        config = replace(config, lanes={"plan": {"agent": "claude"}})
     with pytest.raises(SpawnError, match="^no claude account has placeable quota seats$") as error:
         runtime.spawn(config, "plan", "planner@a1b2c3-0001", task)
     assert error.value.status == "unavailable"
     assert seen == []
+
+
+def test_a_saved_claude_preference_falls_through_to_codex(tmp_path, monkeypatch):
+    runtime, config, seen = _runtime_probe(tmp_path, monkeypatch, [account(cap=0), account("cx", harness="codex")])
+    task = {
+        "id": "p",
+        "title": "Plan",
+        "handoff_envelope": {"launch": {"profile": "planner", "harness": "claude", "model": "fable", "effort": "high"}},
+    }
+    runtime.spawn(config, "plan", "planner@a1b2c3-0001", task)
+    assert seen == [("p", "codex", "cx")]
 
 
 def test_verified_account_seats_override_an_old_harness_cap_choice(tmp_path, monkeypatch):
@@ -1051,7 +1093,7 @@ def test_reservations_ignore_fixed_work_beyond_the_configured_lane_cap():
     [
         ({"profile": "frontend"}, {"id": "e"}, ("claude",)),
         ({"agent": "codex"}, {"id": "e"}, ("codex",)),
-        ({}, {"id": "e", "launch_assignment": {"profile": "engineer", "harness": "codex"}}, ("codex",)),
+        ({}, {"id": "e", "launch_assignment": {"profile": "engineer", "harness": "codex"}}, ("claude", "codex")),
         ({}, {"id": "e", "handoff_envelope": {"launch": {"profile": "frontend", "harness": "codex"}}}, ("claude",)),
     ],
 )
@@ -1292,7 +1334,10 @@ def test_a_recycle_successor_leaves_its_warned_saved_account_or_refuses_naming_i
     runtime.spawn(config, "plan", "planner@a1b2c3-0001", task)
     assert seen == [("p", "claude", "b")]
     runtime, config, seen = _runtime_probe(tmp_path, monkeypatch, [account("w", left=5)])
-    with pytest.raises(SpawnError, match="^no claude account has placeable quota seats: claude w is at its week"):
+    with pytest.raises(
+        SpawnError,
+        match="^no claude or codex account has placeable quota seats: claude w is at its week quota warning$",
+    ):
         runtime.spawn(config, "plan", "planner@a1b2c3-0002", task)
     assert seen == []
 

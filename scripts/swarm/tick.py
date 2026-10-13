@@ -21,6 +21,7 @@ from scripts.gates import claims as claim_cap
 from scripts.gates import log as gate_log
 from scripts.handoff import transfers
 from scripts.handoff.envelope import reclaim
+from scripts.hive import reports
 from scripts.inbox import exits, wake
 from scripts.inbox.seats import seat_address
 from scripts.inbox.store import CLOSED, InboxStore
@@ -64,6 +65,7 @@ from scripts.swarm.ledger_client import LedgerRefused
 from scripts.swarm.naming import parse
 from scripts.swarm.pane import PaneObservation
 from scripts.swarm.profile_choice import ProfileUnresolved
+from scripts.swarm.ready import awaiting as awaiting_merge
 from scripts.swarm.store import MASTER, PREFIX, AgentRecord, SwarmConfig, SwarmError
 from scripts.swarm_ledger import ledger_rank, ledger_workspace
 from scripts.swarm_ledger.repository import hierarchy
@@ -377,7 +379,8 @@ def _follow(slug, store, runtime, agent, pid):
 
 
 def _rebind(slug, store, runtime, agent, pid):
-    panes = [p for p, c in (runtime.conversations() or {}).items() if c and c == agent.conversation_id]
+    found = (runtime.conversations() or {}).items()
+    panes = [p for p, c in found if c and c == agent.conversation_id and "/" not in p]
     if len(panes) != 1:
         return None
     validation = {**agent.profile_decision.get("validation", {}), "pid": pid}
@@ -481,7 +484,10 @@ def _reap(slug, store, ledger, runtime, rows, now_ms):
                 store.release(slug, agent.task, agent.name)
                 store.drop_agent(slug, agent.name)
                 _refund_parked(slug, store, rows, agent.task)
-                goes_on = bool(store.handoff(slug, agent.task)) and rows.get(agent.task, {}).get("state") in ACTIVE
+                row = rows.get(agent.task, {})
+                goes_on = (
+                    bool(store.handoff(slug, agent.task)) and row.get("state") in ACTIVE and not awaiting_merge(row)
+                )
                 if goes_on:
                     _reopen(slug, ledger, rows, agent.task)
                 exits.settle(InboxStore(store.redis), agent.name, agent.seat if goes_on else "", "exited")
@@ -489,7 +495,7 @@ def _reap(slug, store, ledger, runtime, rows, now_ms):
             else:
                 retire_watch.failed(store, slug, agent.name, runtime.refusal(agent), now_ms)
                 actions.append(f"could not retire {agent.name}, retrying next tick")
-        elif agent.runtime_backend != "local":
+        elif agent.runtime_backend != "local" or reports.host(agent):
             actions += _watch_remote(slug, store, ledger, runtime, rows, agent, now_ms)
         elif agent.name in live and agent.lane == MASTER:
             runtime.name_pane(agent)
@@ -600,7 +606,12 @@ def _orphans(slug, store, ledger, rows):
     known = {a.name for a in store.agents(slug)}
     actions = []
     for task_id, row in rows.items():
-        if row.get("state") in ACTIVE and row.get("claimed_by") not in known and store.claimant(slug, task_id) is None:
+        if (
+            row.get("state") in ACTIVE
+            and row.get("claimed_by") not in known
+            and store.claimant(slug, task_id) is None
+            and not awaiting_merge(row)
+        ):
             if _reopen(slug, ledger, rows, task_id):
                 actions.append(f"task {task_id} had no agent, reopened")
     return actions
@@ -613,9 +624,10 @@ def _conversations(slug, store, runtime):
     for agent in store.agents(slug):
         if agent.state in {"finished", "awaiting-decision"} or not agent.pane_id:
             continue
-        if agent.pane_id not in found and resume.recovery_pending(store, slug, agent):
+        pane = reports.pane_key(agent)
+        if pane not in found and (reports.host(agent) or resume.recovery_pending(store, slug, agent)):
             continue
-        current = found.get(agent.pane_id, "")
+        current = found.get(pane, "")
         if current != agent.conversation_id:
             store.put_agent(slug, replace(agent, conversation_id=current))
             store.names.note(agent.name, session_id=current)

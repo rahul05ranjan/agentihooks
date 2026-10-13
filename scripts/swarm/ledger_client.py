@@ -1,8 +1,10 @@
 """The swarm's view of a swarm ledger: read tasks, write task fields, comments and chat over the ledger HTTP API."""
 
 import sys
+import urllib.error
 import uuid
 from pathlib import Path
+from urllib.parse import quote
 
 from scripts.swarm import notice_text
 from scripts.swarm.store import SwarmError
@@ -61,6 +63,18 @@ class LedgerClient:
 
     def tasks(self, slug):
         return self._resource(slug, "tasks", collection=True)
+
+    def task(self, slug, task_id):
+        """One task without its threads, or None when the ledger holds no such task."""
+        try:
+            return self._resource(slug, f"tasks/{quote(task_id, safe='')}")
+        except urllib.error.HTTPError as exc:
+            from scripts.swarm_ledger.api.client import failure
+
+            replay, error = failure(exc)
+            if exc.code != 404 or error.get("code") != "resource_missing":
+                raise replay from None
+            return None
 
     def events(self, slug):
         return self._resource(slug, "events", collection=True)
@@ -131,8 +145,11 @@ class LedgerClient:
             op.pop("to")
         self._call(slug, [op])
 
-    def relay(self, slug, text, by):
-        LedgerClient(service=True)._call(slug, [_op("add", by, thread="chat", text=text, to="operator")])
+    def relay(self, slug: str, text: str, by: str, op_id: str = "") -> None:
+        op = _op("add", by, thread="chat", text=text, to="operator")
+        if op_id:
+            op["id"] = op_id
+        LedgerClient(service=True)._call(slug, [op])
 
     def relay_comment(self, slug, entry, text, by, op_id):
         op = {**_op("add", by, thread=f"{entry}/comments", text=text, to="operator"), "id": op_id}

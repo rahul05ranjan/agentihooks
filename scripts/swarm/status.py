@@ -11,6 +11,7 @@ from scripts.gates import log as gate_log
 from scripts.gates import quiet as quiet_gate
 from scripts.gates.talk import WORKER_LANES
 from scripts.handoff import transfers
+from scripts.hive import placement_waits
 from scripts.inbox.store import InboxStore
 from scripts.swarm import (
     affinity,
@@ -70,6 +71,7 @@ def verdict_store(store, slug):
 
 def findings(store, slug, config, tasks, events):
     agents, limits = store.agents(slug), health.limits()
+    placement_waits.prune(store, slug, tasks)
     events = [
         *events,
         *(
@@ -105,6 +107,7 @@ def findings(store, slug, config, tasks, events):
         + launch_check.findings(store, slug)
         + spawn_stall.findings(store, slug)
         + prompt_backlog.findings(store, slug)
+        + placement_waits.findings(store, slug, now_ms())
         + standing.findings(store.redis, slug, now_ms())
     )
     found = outage.hold_findings(store, slug, found, agents)
@@ -235,7 +238,7 @@ def status_report(store, slug, state):
     events = state.get("_meta", {}).get("events", [])
     agents = [a.__dict__ for a in store.agents(slug)]
     handed = transfers.list_transfers(store, slug)
-    active = lift.active(gate_log.recent(slug, limit=None), now_ms())
+    active = lift.current(slug, now_ms())
     promotion = tick_master.read(store, slug)
     return {
         "config": {
