@@ -51,11 +51,13 @@
   "test.yml/queue-baseline": "standard",
   "test.yml/refresh-durations": "standard",
   "test.yml/reuse": "hosted",
+  "test.yml/select": "light",
   "test.yml/shard-check": "light",
   "test.yml/sonar": "standard",
   "test.yml/split": "standard",
   "test.yml/stage-budget": "light",
   "test.yml/test-count": "light",
   "test.yml/unit": "standard",
+  "test.yml/unit-selected": "standard",
   "worker-resources.yml/measure": "batch"
 }
