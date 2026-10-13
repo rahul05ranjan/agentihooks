@@ -5,6 +5,7 @@ import threading
 import time
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -203,27 +204,39 @@ def test_two_tabs_share_one_channel_and_both_receive_a_change(live):
     two.close()
 
 
-def test_sampling_delivers_an_external_store_write_within_one_minute(live):
+def test_sampling_delivers_an_external_store_write_within_one_minute(live, monkeypatch):
     port, token = live
-    conn, response = connect(port, token)
+    conn, response = connect(port, token, timeout=60)
+    sampled = threading.Event()
+    seen = []
+
+    def status(slug, ledger=None):
+        seen.append(ledger["notes"])
+        sampled.set()
+        return {"config": {"state": "running"}}
+
+    monkeypatch.setattr(server, "itertools", SimpleNamespace(count=lambda: range(2)))
+    monkeypatch.setattr(server, "reloading", lambda: False)
+    monkeypatch.setattr(server, "swarm_status", status)
+    watcher = threading.Thread(target=server.watch_ledgers)
     try:
         reader = frames(response)
         _, snapshot, _ = next_of(reader, {"snapshot"})
-        seq = server.HUB.channels[SLUG].seq
+        watcher.start()
+        assert sampled.wait(30)
         started = time.monotonic()
         state, rejected = server.repository.inner.apply_ops(SLUG, ops=[comment(153)])
         assert rejected == []
-        assert server.HUB.wait(SLUG, seq, 0) == []
-        server.sample_streams()
-        events = server.HUB.wait(SLUG, seq, 0)
-        assert any(event[2] == "ledger" for event in events), "external write was not sampled"
         _, change, _ = next_of(reader, {"ledger"})
         assert apply(snapshot["ledger"], change["patch"])["notes"][-1]["text"] == "note 153"
         assert change["rev"] == state["_meta"]["rev"]
         assert time.monotonic() - started < 60
     finally:
+        watcher.join(60)
         response.close()
         conn.close()
+    assert not watcher.is_alive()
+    assert seen[-1][-1]["text"] == "note 153"
 
 
 def test_sampling_an_unchanged_watched_ledger_costs_one_select(live):
