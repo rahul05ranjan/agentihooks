@@ -233,12 +233,15 @@ def test_overwritten_metadata_cannot_claim_the_planted_tree_passed(full_source, 
 
 
 def test_the_required_workflow_uses_the_protected_canonical_aggregation():
-    from scripts import ci_reuse
+    from scripts import ci_reuse, gate_protected
 
-    workflow = yaml.safe_load((PROGRAM.parents[1] / ".github/workflows/test.yml").read_text())
+    root = PROGRAM.parents[1]
+    workflow = yaml.safe_load((root / ".github/workflows/test.yml").read_text())
+    policy = json.loads((root / ".github/workflows/trusted-actors.json").read_text())
     steps = workflow["jobs"]["gate-required"]["steps"]
     assert steps == ci_reuse.gate_steps(queue_coverage=True)
-    assert workflow["jobs"]["reuse"] == ci_reuse.reuse_job()
+    assert workflow["jobs"]["gate-required"]["runs-on"] in gate_protected.runners(policy)
+    assert workflow["jobs"]["reuse"] in gate_protected.reuse_jobs(policy)
 
 
 @pytest.mark.parametrize("reuse_repo", ["dynamic"], indirect=True)
@@ -834,6 +837,37 @@ def test_the_queue_coverage_gate_refuses_either_outcome_unless_it_succeeded(outc
     result = _gate(ci_reuse.gate_steps(queue_coverage=True), needs)
     assert result.returncode == 1
     assert f"::error::The queue coverage {outcome} did not succeed." in result.stdout
+
+
+@pytest.mark.parametrize("missing", ["job", "outputs"])
+def test_the_queue_coverage_gate_refuses_a_queue_baseline_that_reported_nothing(missing):
+    from scripts import ci_reuse
+
+    needs = _queue_needs()
+    if missing == "job":
+        del needs["queue-baseline"]
+    else:
+        del needs["queue-baseline"]["outputs"]
+    result = _gate(ci_reuse.gate_steps(queue_coverage=True), needs)
+    assert result.returncode == 1
+    assert "::error::The queue coverage baseline did not succeed." in result.stdout
+
+
+@pytest.mark.parametrize("reported", ["success", "failure"])
+def test_the_queue_coverage_gate_leaves_a_verified_reuse_as_the_canonical_gate_grades_it(reported):
+    from scripts import ci_reuse
+
+    needs = {name: {"result": "skipped"} for name in ("unit", "lint", "coverage-ratchet")}
+    needs["reuse"] = {"result": "success", "outputs": {"reused": "true", "run": "42"}}
+    needs["stage-budget"] = {"result": "success"}
+    needs["queue-baseline"] = {"result": "success", "outputs": {"baseline": reported, "ratchet": reported}}
+    env = dict(os.environ, NEEDS=json.dumps(needs), MUTATION="false", KIND="false", EVENT="merge_group", REUSED="true")
+    runs = [
+        subprocess.run(["bash", "-e", "-c", steps[0]["run"]], env=env, capture_output=True, text=True)
+        for steps in (ci_reuse.gate_steps(), ci_reuse.gate_steps(queue_coverage=True))
+    ]
+    assert runs[0].returncode == runs[1].returncode == 0, runs[1].stdout + runs[1].stderr
+    assert runs[0].stdout == runs[1].stdout
 
 
 @pytest.mark.parametrize("queue_job", ["failure", "skipped", "cancelled"])
