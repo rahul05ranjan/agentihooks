@@ -16,7 +16,7 @@ READS = ("tasks", "tasks/first", "tasks/first/comments", "metadata", "counts")
 @pytest.fixture
 def served(tmp_path, monkeypatch):
     store = SQLiteLedgerRepository(tmp_path / "reads.sqlite3")
-    store.import_document(SLUG, document())
+    store.import_document(SLUG, {**document(), "chat": []})
     hub, views = Hub(), []
     view = server.ledger_view
     monkeypatch.setattr(server, "HUB", hub)
