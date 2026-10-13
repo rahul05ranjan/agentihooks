@@ -6,17 +6,17 @@ from scripts.swarm_ledger import ledger_server as server
 from scripts.swarm_ledger.api.routes import ledger_read
 from scripts.swarm_ledger.events.hub import Hub
 from scripts.swarm_ledger.events.publishing import Publishing
-from scripts.swarm_ledger.repository.sqlite import SQLiteLedgerRepository
-from tests.swarm_ledger.test_sqlite import chat, document
+from tests.swarm_ledger.test_sqlite import CONTENT, chat
+from tests.swarm_ledger.test_sqlite import store as stored
 
 SLUG = "reads"
-READS = ("tasks", "tasks/first", "tasks/first/comments", "metadata", "counts")
+READS = ("tasks", "tasks/t1", "tasks/t1/comments", "metadata", "counts")
 
 
 @pytest.fixture
 def served(tmp_path, monkeypatch):
-    store = SQLiteLedgerRepository(tmp_path / "reads.sqlite3")
-    store.import_document(SLUG, {**document(), "chat": []})
+    store = stored(tmp_path)
+    store.create(SLUG, CONTENT)
     hub, views = Hub(), []
     view = server.ledger_view
     monkeypatch.setattr(server, "HUB", hub)
@@ -55,4 +55,4 @@ def test_a_collection_read_answers_without_decoding_the_whole_ledger(served, mon
 
     monkeypatch.setattr(store, "get_document", decoded)
     assert {path: ledger_read(host, SLUG, path, {}) for path in READS} == expected
-    assert [row["id"] for row in ledger_read(host, SLUG, "tasks", {})["data"]] == ["second", "first"]
+    assert [row["id"] for row in ledger_read(host, SLUG, "tasks", {})["data"]] == ["t1", "t2"]
