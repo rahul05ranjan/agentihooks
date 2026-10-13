@@ -78,7 +78,7 @@ def main(argv=None, stdin=None, environ=None, home=None):
 def _decide(gate, call, who, home, mode="enforce"):
     try:
         state = Verdicts(who.swarm, gate.name, home)
-        if isinstance(gate, IntentGate):
+        if isinstance(gate, (IntentGate,)):
             return gate.decide(call, who, state, mode)
         return gate.decide(call, who, state)
     except Exception as exc:  # a crashed gate lets the call through, counted in the gate log
