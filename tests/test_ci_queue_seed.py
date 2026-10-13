@@ -236,7 +236,6 @@ def base_run(tmp_path):
         runs="111 222",
         kept_by="222",
         after=0,
-        wait="600",
         fail_runs="",
         status="in_progress",
         dispatch="",
