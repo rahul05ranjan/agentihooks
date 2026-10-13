@@ -73,7 +73,6 @@ MOVED = {
     ("test.yml", "test-count"): LIGHT,
     ("test.yml", "unit"): STANDARD,
     ("worker-resources.yml", "measure"): BATCH,
->>>>>>> origin/dev
 }
 
 # These exchange a GitHub OIDC token, which the Anton runners have timed out fetching.
