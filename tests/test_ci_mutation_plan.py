@@ -58,6 +58,32 @@ def test_every_consumer_uses_the_same_measured_assignment(tmp_path, monkeypatch)
         shard_names([*names, "new"], (0, 2))
 
 
+@pytest.mark.parametrize("reason", ["", "over budget"])
+def test_reports_distinguish_complete_survivor_grades_from_budget_exhaustion(tmp_path, monkeypatch, reason):
+    from scripts.ci_mutation.runner import run_gate
+    from scripts.ci_mutation.stats import SharedStats
+
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "scripts/sample.py").write_text("def f():\n    return 1\n")
+    (tmp_path / "tests/test_sample.py").write_text("pass\n")
+    stats = tmp_path / "stats"
+    stats.mkdir()
+    name = "scripts.sample.x_f__mutmut_1"
+    (stats / "plan.json").write_text(json.dumps({"shards": 1, "assignments": {name: 0}, "costs": {name: 10}}))
+    row = {"name": name, "status": "survived", "lines": [2], "fingerprint": "abc", "diff": "changed"}
+    monkeypatch.setattr("scripts.ci_mutation.runner.mutate_files", lambda *args: ({"scripts/sample.py": [row]}, reason))
+    report = run_gate(tmp_path, {"scripts/sample.py": {2}}, tmp_path / "output", 1080, stats=SharedStats(stats, "head"))
+    assert report["failed"] is True
+    assert report["shard"]["budget_seconds"] == 1080
+    assert report["shard"]["expected"] == 1
+    assert report["shard"]["graded"] == (0 if reason else 1)
+    assert report["shard"]["complete"] is (not bool(reason))
+    assert report["shard"]["budget_exhausted"] is bool(reason)
+    assert report["shard"]["estimated_worker_seconds"] == 10
+    assert report["shard"]["wall_seconds"] >= 0
+
+
 @pytest.mark.parametrize(
     ("seconds", "mutants", "expected"),
     [
