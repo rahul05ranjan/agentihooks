@@ -151,7 +151,11 @@ def _histories(
                 histories[path][line].append(ran)
                 if old == sources[path]:
                     versions[path][line].append(ran)
-        if all(_flaky(history) for by_line in histories.values() for history in by_line.values()):
+        if all(
+            _flaky(history) and any(versions[path][line])
+            for path, by_line in histories.items()
+            for line, history in by_line.items()
+        ):
             break
     return histories, versions
 
