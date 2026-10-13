@@ -985,7 +985,7 @@ def test_a_required_gate_ends_checks_wait_beside_a_pending_jobless_workflow(tick
     ]
 
 
-@pytest.mark.parametrize("conclusion", ["FAILURE", "ERROR", "STARTUP_FAILURE", "ACTION_REQUIRED"])
+@pytest.mark.parametrize("conclusion", ["FAILURE", "ERROR", "STARTUP_FAILURE", "ACTION_REQUIRED", "TIMED_OUT"])
 @pytest.mark.parametrize("gate", [None, "SUCCESS"])
 def test_a_failed_required_check_ends_wait_beside_a_pending_jobless_workflow(tick, conclusion, gate):
     tick.hold("checks", URL)

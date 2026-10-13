@@ -756,7 +756,7 @@ def test_a_head_with_only_skipped_checks_keeps_waiting(suites, gated):
     assert pull.resolved is (gated and suites != [QUEUED_TESTS])
     assert pull.red is (gated and suites != [QUEUED_TESTS])
     raw["statusCheckRollup"] = SKIPPED_ONLY + [{"name": GATE, "conclusion": "SUCCESS"}]
-    assert ledger_events.pull_request(raw).resolved is (suites != [QUEUED_TESTS])
+    assert ledger_events.pull_request(raw).resolved is (gated or suites != [QUEUED_TESTS])
 
 
 @pytest.mark.parametrize("gate", [None, "PENDING", "CANCELLED", "TIMED_OUT"])
