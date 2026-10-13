@@ -115,7 +115,10 @@ def test_served_execution_runs_a_pump_that_resumes_and_delivers_then_retires(tmp
             server_thread = threading.Thread(target=server.serve_forever, daemon=True)
             server_thread.start()
             try:
-                assert serve.main(["serve"], child_env) == 0
+                assert (
+                    serve.main(["serve", "--cwd", spec.cwd, "--profile", "engineer", "--seat", agent.seat], child_env)
+                    == 0
+                )
             finally:
                 server.shutdown()
                 server_thread.join(timeout=5)
