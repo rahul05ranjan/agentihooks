@@ -270,7 +270,7 @@ class SQLiteLedgerRepository:
             connection.close()
 
     def _set_up(self, connection, path: Path) -> None:
-        with self._guard:
+        if True:
             if path in self._ready:
                 return
             connection.execute("PRAGMA journal_mode=WAL")
