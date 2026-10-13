@@ -174,3 +174,47 @@ def test_the_shell_guard_blocks_a_master_ruleset_call(master, monkeypatch):
     monkeypatch.setattr("hooks.context.branch_guard.check_commit_on_main", Mock())
     with pytest.raises(hook_manager.BlockAction, match="never changes rulesets or branch protection"):
         hook_manager._check_shell_guards({"tool_name": "Bash", "tool_input": {"command": "gh ruleset list"}})
+
+
+@pytest.fixture
+def worktrees(master, monkeypatch):
+    monkeypatch.setattr(config, "SERENA_EDIT_GUARD_ENABLED", True)
+    monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", "master@abcdef-0113")
+    monkeypatch.setattr(Path, "home", lambda: master)
+    made = {}
+    for name in ("master-abcdef-0113", "engineer-abcdef-0007"):
+        tree = master / "dev" / "worktrees" / "repo" / name
+        (tree / "pkg").mkdir(parents=True)
+        (tree / ".git").write_text("gitdir: elsewhere\n")
+        (tree / "pkg" / "mod.py").write_text("x = 1\n")
+        made[name] = tree / "pkg" / "mod.py"
+    return made["master-abcdef-0113"], made["engineer-abcdef-0007"]
+
+
+def serena_edit(file_path):
+    from hooks.context.serena_edit_guard import check
+
+    check({"tool_name": "Edit", "tool_input": {"file_path": str(file_path)}, "session_id": SID, "cwd": "/"})
+
+
+def test_the_open_window_lets_the_master_edit_python_in_its_own_worktree(worktrees):
+    own, _ = worktrees
+    master_coding.observe(SID, "allow-master-coding", typed=True)
+    serena_edit(own)
+
+
+def test_the_open_window_still_refuses_python_edits_in_another_worktree(worktrees):
+    _, other = worktrees
+    master_coding.observe(SID, "allow-master-coding", typed=True)
+    with pytest.raises(hook_manager.BlockAction, match="edited through Serena"):
+        serena_edit(other)
+
+
+def test_a_closed_window_refuses_python_edits_in_the_master_worktree(worktrees):
+    own, _ = worktrees
+    with pytest.raises(hook_manager.BlockAction, match="edited through Serena"):
+        serena_edit(own)
+    master_coding.observe(SID, "allow-master-coding", typed=True)
+    master_coding.observe(SID, "disallow-master-coding", typed=True)
+    with pytest.raises(hook_manager.BlockAction, match="edited through Serena"):
+        serena_edit(own)
