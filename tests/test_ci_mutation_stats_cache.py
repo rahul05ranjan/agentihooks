@@ -137,6 +137,7 @@ def test_collection_parts_reuse_stats_and_keep_the_new_head_identity(tmp_path, m
         "options",
         "runtime",
         "dependency",
+        "package_version",
     ],
 )
 def test_incompatible_source_fixture_and_runtime_stats_are_recollected(tmp_path, monkeypatch, changed):
@@ -169,7 +170,8 @@ def test_incompatible_source_fixture_and_runtime_stats_are_recollected(tmp_path,
     )
     if changed == "imported_fixture_through_helper":
         subprocess.run(["git", "add", "tests/helper.py"], cwd=root, check=True)
-    monkeypatch.setattr(metadata, "distributions", lambda: [SimpleNamespace(metadata={"Name": "sample"}, version="1")])
+    package = "agentihooks" if changed == "package_version" else "sample"
+    monkeypatch.setattr(metadata, "distributions", lambda: [SimpleNamespace(metadata={"Name": package}, version="1")])
     calls = []
     files = ["tests/test_sample.py"]
 
@@ -202,7 +204,7 @@ def test_incompatible_source_fixture_and_runtime_stats_are_recollected(tmp_path,
         monkeypatch.setattr(sys, "version", "changed")
     else:
         monkeypatch.setattr(
-            metadata, "distributions", lambda: [SimpleNamespace(metadata={"Name": "sample"}, version="2")]
+            metadata, "distributions", lambda: [SimpleNamespace(metadata={"Name": package}, version="2")]
         )
     collect_cached_stats(root, cache, changes, files, options, collect)
     assert calls == [files, files]
