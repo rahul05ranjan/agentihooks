@@ -69,8 +69,11 @@ class LedgerClient:
         try:
             return self._resource(slug, f"tasks/{quote(task_id, safe='')}")
         except urllib.error.HTTPError as exc:
-            if exc.code != 404:
-                raise
+            from scripts.swarm_ledger.api.client import failure
+
+            replay, error = failure(exc)
+            if error.get("code") != "resource_missing":
+                raise replay from None
             return None
 
     def events(self, slug):

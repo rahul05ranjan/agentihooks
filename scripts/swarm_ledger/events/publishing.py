@@ -1,5 +1,9 @@
 import json
 import threading
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from scripts.swarm_ledger.repository.sqlite import Entry
 
 
 class Publishing:
@@ -18,8 +22,10 @@ class Publishing:
         for publisher in self.publishers:
             publisher(slug, state)
 
-    def current(self, slug: str):
+    def current(self, slug: str) -> "Entry":
         entry = self.inner.current(slug)
+        if entry.generation <= self.published.get(slug, -1):
+            return entry
         with self.lock:
             if entry.generation > self.published.get(slug, -1):
                 self.publish(slug, entry.state)

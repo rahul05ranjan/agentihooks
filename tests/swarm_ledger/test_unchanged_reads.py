@@ -46,7 +46,7 @@ def test_a_change_made_outside_the_server_reaches_open_streams_at_the_next_read_
     assert hub.resource(SLUG, "ledger")["chat"][-1]["text"] == "message 1"
 
 
-def test_a_collection_read_answers_without_decoding_the_whole_ledger(served, monkeypatch):
+def test_reads_answer_from_the_stored_entry_never_a_decoded_copy(served, monkeypatch):
     store, _, _, host = served
     expected = {path: ledger_read(SimpleNamespace(repository=store), SLUG, path, {}) for path in READS}
 

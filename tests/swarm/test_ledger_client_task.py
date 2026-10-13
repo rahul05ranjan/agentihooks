@@ -1,4 +1,5 @@
 import io
+import json
 import urllib.error
 from types import SimpleNamespace
 
@@ -20,8 +21,9 @@ def served(monkeypatch, answer):
     return reads
 
 
-def refused(code):
-    return urllib.error.HTTPError("http://ledger", code, "refused", {}, io.BytesIO(b"{}"))
+def refused(code, error="resource_missing"):
+    body = json.dumps({"error": {"code": error, "message": "refused"}}).encode()
+    return urllib.error.HTTPError("http://ledger", code, "refused", {}, io.BytesIO(body))
 
 
 def test_a_task_read_names_one_task_and_returns_its_row(monkeypatch):
@@ -41,8 +43,10 @@ def test_a_task_the_ledger_does_not_hold_reads_as_none(monkeypatch):
     assert ledger_client.LedgerClient().task("demo", "t9") is None
 
 
-def test_any_other_refusal_of_a_task_read_is_raised(monkeypatch):
-    served(monkeypatch, refused(403))
+@pytest.mark.parametrize("code,error", [(404, "ledger_missing"), (403, "forbidden"), (500, "resource_missing")])
+def test_any_other_refusal_of_a_task_read_is_raised_with_its_body(monkeypatch, code, error):
+    served(monkeypatch, refused(code, error))
     with pytest.raises(urllib.error.HTTPError) as raised:
         ledger_client.LedgerClient().task("demo", "t2")
-    assert raised.value.code == 403
+    assert raised.value.code == code
+    assert json.loads(raised.value.read())["error"]["code"] == error

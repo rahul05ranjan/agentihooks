@@ -64,6 +64,14 @@ def test_a_generation_whose_publication_failed_is_published_at_the_next_read():
     assert seen == [1, 1]
 
 
+def test_a_read_of_a_published_generation_takes_no_lock():
+    _, published, repository = wrapped()
+    repository.current("s")
+    repository.lock = None
+    repository.current("s")
+    assert published == [("s", {"_meta": {"rev": 1}, "read": "s"})]
+
+
 def test_a_write_returns_state_and_refusals_and_publishes_the_stored_generation():
     store, published, repository = wrapped()
     assert repository.apply_ops("s", changes=["c"], ops=["o"], gate="g") == ({"_meta": {"rev": 2}}, ["refused"])
