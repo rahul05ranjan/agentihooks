@@ -157,6 +157,37 @@ def test_a_passing_pull_does_not_override_a_failed_command_in_the_same_call(tmp_
     assert "failed" in decision.reason
 
 
+def test_a_ready_earlier_pull_cannot_clear_the_main_pulls_draft_hold(tmp_path, monkeypatch):
+    from subprocess import CompletedProcess
+
+    task = split_task()
+    judged(tmp_path, task)
+    main = {**task, "pr_url": SECOND, "split_pulls": [FIRST, SECOND]}
+    intent.Check(
+        SLUG,
+        "enforce",
+        NOW,
+        Ledger(),
+        Mail(),
+        lambda url: {**VIEW, "draft": True},
+        lambda state: ("pass", "unused"),
+        home=tmp_path,
+    ).run({**DOC, "tasks": [main]})
+    monkeypatch.setattr(intent, "pr_head", lambda url: "abc")
+    looked_up = []
+
+    def ready(command, **kwargs):
+        looked_up.append(command)
+        return CompletedProcess(command, 0, "false\n", "")
+
+    gate = intent.IntentGate(clock=lambda: (NOW + intent.GRACE_MS + 1) / 1000, run=ready)
+    state = verdicts(tmp_path)
+    decision = gate.decide(bash(f"gh pr merge {FIRST}; agentihooks swarm {SLUG} ready handoff.md"), WHO, state)
+    assert not decision.allowed
+    assert state.read(TASK)["reason"] == intent.DRAFT
+    assert looked_up == []
+
+
 def test_a_reused_legacy_coach_verdict_can_queue_its_registered_pull(tmp_path, monkeypatch):
     from scripts.gates.verdicts import Verdicts
 
