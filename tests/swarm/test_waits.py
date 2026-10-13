@@ -1202,13 +1202,13 @@ def test_a_checked_wait_reads_only_the_task_it_names(started):
         raise AssertionError("a checked wait read the whole task collection")
 
     ledger.tasks = whole
-    ledger.task = lambda slug, task_id: read.append(task_id) or ledger.rows.get(task_id)
+    ledger.task = lambda slug, task_id: read.append((slug, task_id)) or ledger.rows.get(task_id)
     ledger.rows["t1"]["pr_url"] = URL
     assert run("sw", "--as", ME, "wait", "--on", "task", "t2") == 0
     assert run("sw", "--as", ME, "wait", "--on", "intent", URL) == 0
     assert run("sw", "--as", ME, "wait", "--on", "checks", URL) == 0
     assert run("sw", "--as", ME, "wait", "--on", "task", "t9") == 1
-    assert read == ["t2", "t1", "t9"]
+    assert read == [("sw", "t2"), ("sw", "t1"), ("sw", "t9")]
 
 
 def test_target_problem_takes_intent_only_on_the_own_tasks_pull_request():

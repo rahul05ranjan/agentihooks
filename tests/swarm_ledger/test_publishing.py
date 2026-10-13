@@ -72,6 +72,23 @@ def test_a_read_of_a_published_generation_takes_no_lock():
     assert published == [("s", {"_meta": {"rev": 1}, "read": "s"})]
 
 
+def test_a_generation_published_while_this_reader_waited_for_the_lock_is_not_published_again():
+    _, published, repository = wrapped()
+    lock = repository.lock
+
+    class Contended:
+        def __enter__(self):
+            repository.published["s"] = 0
+            return lock.__enter__()
+
+        def __exit__(self, *exc):
+            return lock.__exit__(*exc)
+
+    repository.lock = Contended()
+    assert repository.current("s").generation == 0
+    assert published == []
+
+
 def test_a_write_returns_state_and_refusals_and_publishes_the_stored_generation():
     store, published, repository = wrapped()
     assert repository.apply_ops("s", changes=["c"], ops=["o"], gate="g") == ({"_meta": {"rev": 2}}, ["refused"])
