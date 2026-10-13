@@ -27,7 +27,6 @@ MOVED = {
     ("brain-smoke.yml", "smoke"): STANDARD,
     ("coverage-stability.yml", "compare"): BATCH,
     ("equivalence.yml", "ledger-equivalence"): STANDARD,
-    ("github-access-audit.yml", "read-back"): LIGHT,
     ("helm-kind.yml", "kind"): STANDARD,
     ("ledger-load.yml", "load"): STANDARD,
     ("ledger-row-memory.yml", "replay"): BATCH,
@@ -36,10 +35,7 @@ MOVED = {
     ("mutation-preflight.yml", "plan"): LIGHT,
     ("mutation-preflight.yml", "pull-request"): LIGHT,
     ("mutation-preflight.yml", "stats"): BATCH,
-    ("pages.yml", "build"): STANDARD,
     ("proofs.yml", "tests"): STANDARD,
-    ("publish-pypi.yml", "verify"): LIGHT,
-    ("release.yml", "release"): LIGHT,
     ("semgrep.yml", "scan"): LIGHT,
     ("startup-stages.yml", "measure"): STANDARD,
     ("swarm-image.yml", "publish"): STANDARD,
@@ -87,7 +83,15 @@ ORG_TOKEN = {("access-audit.yml", "audit")}
 # Runner trust never admits a pull_request_target run to a private runner.
 TARGET = {("gate-protected.yml", "grade")}
 
-HOSTED = OIDC | PROTECTED | TARGET | ORG_TOKEN
+# The runner class table holds the release path and the access read back on hosted runners.
+CLASSED = {
+    ("pages.yml", "build"),
+    ("publish-pypi.yml", "verify"),
+    ("release.yml", "release"),
+    ("github-access-audit.yml", "read-back"),
+}
+
+HOSTED = OIDC | PROTECTED | TARGET | ORG_TOKEN | CLASSED
 
 
 def workflows():
@@ -206,7 +210,7 @@ def test_only_jobs_that_exchange_an_oidc_token_stay_hosted():
         permissions = {**workflows()[name].get("permissions", {}), **jobs[(name, job)].get("permissions", {})}
         assert permissions.get("id-token") == "write", f"{name}:{job}"
         assert jobs[(name, job)]["runs-on"] == "ubuntu-latest", f"{name}:{job}"
-    for name, job in PROTECTED | TARGET | ORG_TOKEN:
+    for name, job in PROTECTED | TARGET | ORG_TOKEN | CLASSED:
         assert jobs[(name, job)]["runs-on"] == "ubuntu-latest", f"{name}:{job}"
     assert set(jobs) == set(MOVED) | HOSTED
 
