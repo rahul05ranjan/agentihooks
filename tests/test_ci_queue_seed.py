@@ -263,7 +263,8 @@ def base_run(tmp_path):
             GITHUB_OUTPUT=str(output),
             GITHUB_REPOSITORY="the-cloud-clockwork/agentihooks",
         )
-        result = subprocess.run(["bash", "-e", "-c", find["run"]], env=env, capture_output=True, text=True)
+        script = find["run"].replace('sleep "${POLL_SECONDS:-30}"', "SECONDS=$((SECONDS + 301))")
+        result = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True, timeout=5)
         return result, output.read_text(), (tmp_path / "args").read_text().splitlines()
 
     return run
