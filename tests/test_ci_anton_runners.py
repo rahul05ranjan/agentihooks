@@ -24,6 +24,9 @@ def pool(label):
 LIGHT, STANDARD, BATCH = "anton-oss-light", "anton-oss", "anton-oss-batch"
 
 MOVED = {
+    ("hive-worker.yml", "contracts"): LIGHT,
+    ("hive-worker.yml", "kind"): STANDARD,
+    ("hive-worker.yml", "publish"): STANDARD,
     ("brain-smoke.yml", "smoke"): STANDARD,
     ("coverage-stability.yml", "compare"): BATCH,
     ("equivalence.yml", "ledger-equivalence"): STANDARD,
