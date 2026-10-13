@@ -1,13 +1,39 @@
 import hashlib
 import json
 import subprocess
+import sys
+from collections.abc import Callable
+from importlib import metadata
 from pathlib import Path
 
-from scripts.ci_mutation.scope import is_test_file
+from scripts.ci_mutation.scope import imported_names, is_test_file, module_name
+
+
+def test_inputs(root: Path, path: str, modules: dict[str, str]) -> dict[str, str]:
+    pending = {path}
+    inputs = {}
+    while pending:
+        current = pending.pop()
+        text = (root / current).read_text()
+        inputs[current] = hashlib.sha256(text.encode()).hexdigest()
+        package = tuple(Path(current).with_suffix("").parts[:-1])
+        imports = imported_names(text, package)
+        dependencies = (
+            set(modules.values())
+            if "importlib" in text or "__import__" in text
+            else {dependency for module, dependency in modules.items() if module in imports}
+        )
+        pending.update(dependencies - inputs.keys())
+    return inputs
 
 
 def collect_cached_stats(
-    root: Path, folder: Path, changes: dict, files: list[str], options: list[str], collect
+    root: Path,
+    folder: Path,
+    changes: dict,
+    files: list[str],
+    options: list[str],
+    collect: Callable[[list[str]], list[dict]],
 ) -> list[dict]:
     tracked = subprocess.run(
         ["git", "ls-files", "-z"], cwd=root, capture_output=True, text=True, check=True
@@ -17,14 +43,35 @@ def collect_cached_stats(
         for path in tracked
         if path and not is_test_file(path) and (root / path).is_file()
     }
-    context = json.dumps({"sources": sources, "changes": changes, "options": options}, sort_keys=True).encode()
+    versions = {
+        distribution.metadata["Name"]: distribution.version
+        for distribution in metadata.distributions()
+        if distribution.metadata["Name"].lower() != "agentihooks"
+    }
+    context = {
+        "schema": 1,
+        "sources": sources,
+        "changes": changes,
+        "options": options,
+        "runtime": [sys.version, sys.platform, versions],
+    }
+    modules = {module_name(Path(path)): path for path in tracked if path and is_test_file(path)}
     folder.mkdir(parents=True, exist_ok=True)
-    keys = {path: hashlib.sha256(context + path.encode() + (root / path).read_bytes()).hexdigest() for path in files}
+    keys = {
+        path: hashlib.sha256(
+            json.dumps({**context, "tests": test_inputs(root, path, modules)}, sort_keys=True).encode()
+        ).hexdigest()
+        for path in files
+    }
     reused, missing = [], []
     for path, key in keys.items():
         stored = folder / f"{key}.json"
         if stored.is_file():
-            reused.append(json.loads(stored.read_text()))
+            result = json.loads(stored.read_text())
+            if result["status"] == 0:
+                reused.append(result)
+            else:
+                missing.append(path)
         else:
             missing.append(path)
     print(f"Mutation stats cache: reused {len(reused)} test files; collect {len(missing)}", flush=True)
@@ -45,6 +92,13 @@ def collect_cached_stats(
             for function in {function for result in fresh for function in result["tests"]}
         }
         (folder / f"{keys[path]}.json").write_text(
-            json.dumps({"status": 0, "tests": tests, "durations": durations, "cpu": 0})
+            json.dumps(
+                {
+                    "status": 0,
+                    "tests": tests,
+                    "durations": durations,
+                    "cpu": sum(result["cpu"] for result in fresh) / len(missing),
+                }
+            )
         )
     return reused + fresh
