@@ -384,7 +384,8 @@ def test_coverage_ratchet_refuses_a_base_without_its_grader(tmp_path):
     assert result.returncode == 1
     assert "The base carries no tests/coverage_ratchet.py, so nothing trusted can grade." in result.stdout
     assert not (tmp_path / "head-graded").exists()
-    assert all("GITHUB_WORKSPACE" not in re.split(r"-m tests\.\w+", run)[0] for run in graders)
+    prefixes = [re.split(r"-m tests\.\w+", run)[0] for run in graders]
+    assert all("GITHUB_WORKSPACE" not in prefix and 'cd "$RUNNER_TEMP/base"' in prefix for prefix in prefixes)
 
 
 @pytest.mark.parametrize("unit", ["success", "failure", "skipped", "cancelled", "pending"])
