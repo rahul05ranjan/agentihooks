@@ -625,7 +625,7 @@ def test_an_unclaimed_task_missing_from_the_snapshot_is_named_from_its_lane():
     swarm.tick(START)
     swarm.tick(START + 15 * MINUTE)
     [item] = swarm.inbox()
-    assert item.text == _alert(**UNCLAIMED_ALERT, title="Ghost", task="t3")
+    assert item.text == _alert(**UNCLAIMED_ALERT, title="Ghost; eng lane: 1 ready tasks", task="t3")
 
 
 def test_two_unclaimed_tasks_alert_in_the_same_tick():
@@ -659,6 +659,19 @@ def test_an_operator_capped_lane_never_alerts_about_unclaimed_tasks():
     assert swarm.tick(START) == []
     assert swarm.tick(START + 180 * MINUTE) == []
     assert swarm.inbox() == []
+
+
+def test_an_existing_lane_alert_never_escalates_after_manual_caps_apply():
+    swarm = Swarm(RUNNING)
+    _full_lane(swarm)
+    swarm.tick(START)
+    swarm.tick(START + 15 * MINUTE)
+    [item] = swarm.inbox()
+    swarm.store.create(SwarmConfig(SLUG, "/repo", max_eng=1, max_ci=0, max_plan=0, scaling="manual"))
+    assert swarm.tick(START + 45 * MINUTE) == []
+    assert swarm.ledger.priorities == []
+    assert swarm.posted == []
+    assert InboxStore(swarm.store.redis).get(item.id).state == "done"
 
 
 def test_a_lane_alert_stays_open_when_its_first_task_is_taken():
