@@ -58,17 +58,29 @@ def thread_rows(doc: dict) -> list:
     ]
 
 
+def collection_revisions(rows: list) -> tuple[str, list]:
+    digest = hashlib.sha256(b"[")
+    items = []
+    for index, row in enumerate(rows):
+        encoded = json.dumps(row, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+        if index:
+            digest.update(b",")
+        digest.update(encoded)
+        items.append(hashlib.sha256(encoded).hexdigest() if isinstance(row, dict) else None)
+    digest.update(b"]")
+    return digest.hexdigest(), items
+
+
 def read(doc: dict, path: str, query: dict | None = None, cache: dict | None = None) -> dict:
     raw = value(doc, path)
     if isinstance(raw, list):
-        key = (resource_revision, path)
         if cache is None:
-            rev = resource_revision(doc, path)
-        else:
-            if key not in cache:
-                cache[key] = resource_revision(doc, path)
-            rev = cache[key]
-        return page(raw, rev, query or {})
+            return page(raw, resource_revision(doc, path), query or {})
+        key = (collection_revisions, path)
+        if key not in cache:
+            cache[key] = collection_revisions(raw)
+        rev, items = cache[key]
+        return page(raw, rev, query or {}, items)
     return bounded({"data": project(raw), "revision": resource_revision(doc, path)})
 
 
@@ -136,7 +148,7 @@ def project(raw: object) -> object:
     return result
 
 
-def page(rows: list, rev: str, query: dict) -> dict:
+def page(rows: list, rev: str, query: dict, revisions: list | None = None) -> dict:
     from .schemas import PAGINATION, validate
 
     validate(PAGINATION, query)
@@ -151,9 +163,9 @@ def page(rows: list, rev: str, query: dict) -> dict:
     size = reply_size({"data": [], "revision": rev, "next_cursor": None})
     for row in rows[offset : offset + query.get("limit", 50)]:
         item = project(row)
-        if isinstance(item, dict):
-            item = {**item, "revision": revision(row)}
         end = offset + len(selected) + 1
+        if isinstance(item, dict):
+            item = {**item, "revision": revisions[end - 1] if revisions is not None else revision(row)}
         next_cursor = f"{rev}:{end}" if end < len(rows) else None
         item_size = reply_size(item) + (2 if selected else 0)
         cursor_size = reply_size(next_cursor) - 4

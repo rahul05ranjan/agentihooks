@@ -62,3 +62,34 @@ def test_thousand_task_collection_bounds_page_encodes(tmp_path, monkeypatch):
     assert [row["id"] for row in rows] == [f"t{index}" for index in range(1000)]
     assert pages >= 10
     assert len(encodes) <= 2 * pages, report
+
+
+@pytest.mark.parametrize("path", ["tasks", "sources", "events"])
+def test_cached_collection_keeps_canonical_revisions_and_invalidates_on_write(tmp_path, path):
+    from scripts.swarm_ledger.api.errors import APIError
+
+    document = build_doc({"title": "Collection revisions"})
+    document["_meta"] = {"rev": 1, "events": [{"id": "a", "text": "é"}, {"id": "b", "text": 'quoted "'}]}
+    document["tasks"] = [
+        {"id": "a", "title": "First", "comments": [{"id": "c", "text": "é"}]},
+        {"id": "b", "title": "Second", "nested": {"b": 2, "a": 1}, "comments": []},
+    ]
+    document["sources"] = ["é", 'quoted "', False, 0, None]
+    repository = SQLiteLedgerRepository(tmp_path / "ledger.sqlite3")
+    repository.import_document("cpu", document)
+    host = SimpleNamespace(repository=repository)
+    first = ledger_read(host, "cpu", path, {"limit": 1})
+    assert first == resources.read(document, path, {"limit": 1})
+    query = {"limit": 100, "cursor": first["next_cursor"]}
+    assert ledger_read(host, "cpu", path, query) == resources.read(document, path, query)
+    document["tasks"][0]["comments"].append({"id": "new", "text": "Hidden comment changes revision"})
+    document["sources"].append("new")
+    document["_meta"]["events"].append({"id": "new", "text": "New event"})
+    document["_meta"]["rev"] += 1
+    repository.import_document("cpu", document, replace=True)
+    with pytest.raises(APIError) as error:
+        ledger_read(host, "cpu", path, query)
+    assert error.value.status == 409
+    changed = ledger_read(host, "cpu", path, {"limit": 100})
+    assert changed == resources.read(document, path, {"limit": 100})
+    assert changed["revision"] != first["revision"]
