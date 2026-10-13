@@ -8,7 +8,7 @@ from scripts.gates import Call, Who
 from scripts.gates.base import Decision
 from scripts.gates.claim_stop import ClaimStop
 from scripts.gates.verdicts import Verdicts
-from scripts.swarm import capacity, cli, merge_queue, ready, stack, tick, waits
+from scripts.swarm import capacity, claim_order, cli, merge_queue, ready, stack, tick, waits
 from scripts.swarm.ledger_events import PullRequest
 from scripts.swarm.store import RedisStore, SwarmError
 from tests.swarm.test_cli import HANDOFF, env
@@ -424,7 +424,15 @@ def test_a_pull_request_the_queue_keeps_refusing_reopens_the_task(merging):
         f"task t1 reopened, {URL} could not be queued: GraphQL: Pull request is not mergeable",
         f"removed the worktree {TOP}",
     ]
-    assert merging.rows["t1"]["state"] == "open"
+    assert merging.rows["t1"]["state"] == "open" and merging.rows["t1"]["awaiting"] == "fix"
+    assert merging.ledger.comments == [
+        (
+            "t1",
+            f"Reopened by the swarm: its pull request {URL} could not be queued: GraphQL: Pull request is not "
+            "mergeable. The next engineer continues it from the handoff its engineer left.",
+            "swarm",
+        ),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -446,7 +454,7 @@ def test_an_unknown_merge_error_reopens_the_task_with_its_reason(merging, error)
         f"removed the worktree {TOP}",
     ]
     assert merging.rows["t1"]["state"] == "open"
-    assert merging.rows["t1"]["claimed_by"] == "" and merging.rows["t1"]["awaiting"] == ""
+    assert merging.rows["t1"]["claimed_by"] == "" and merging.rows["t1"]["awaiting"] == "fix"
     assert error in merging.ledger.comments[0][1]
     assert merging.store.handoff("sw", "t1") == "the handoff"
     assert merging.store.claimant("sw", "t1") is None
@@ -568,7 +576,7 @@ def test_red_checks_or_a_closed_pull_request_reopen_the_task_for_the_next_engine
     merging.pulls[URL] = pull
     assert merging.run() == [f"task t1 reopened, {URL} {what}", f"removed the worktree {TOP}"]
     assert merging.rows["t1"]["state"] == "open" and merging.rows["t1"]["claimed_by"] == ""
-    assert merging.rows["t1"]["awaiting"] == ""
+    assert merging.rows["t1"]["awaiting"] == "fix"
     assert merging.ledger.comments == [
         (
             "t1",
@@ -581,6 +589,50 @@ def test_red_checks_or_a_closed_pull_request_reopen_the_task_for_the_next_engine
     assert merging.store.handoff("sw", "t1") == "the handoff"
     assert merging.store.claimant("sw", "t1") is None
     assert ready.record(merging.store, "sw", "t1") is None
+
+
+@pytest.mark.parametrize(
+    "pull, step",
+    [
+        (PullRequest("OPEN", None, 1, True, True, failed=("Tests", "Lint"), head=HEAD), "Tests, Lint"),
+        (PullRequest("OPEN", None, 1, True, True, head=HEAD, unpassed_gate="Gate"), "Gate"),
+    ],
+)
+def test_red_checks_reopen_the_task_awaiting_fix_with_the_failing_step_named(merging, pull, step):
+    merging.pulls[URL] = pull
+    assert merging.run()[0] == f"task t1 reopened, {URL} has red checks: {step}"
+    assert merging.rows["t1"]["awaiting"] == "fix"
+    assert merging.ledger.comments == [
+        (
+            "t1",
+            f"Reopened by the swarm: its pull request {URL} has red checks: {step}. The next engineer continues it "
+            "from the handoff its engineer left.",
+            "swarm",
+        ),
+    ]
+
+
+def test_a_pull_request_that_conflicts_with_dev_reopens_instead_of_waiting_on_checks(merging):
+    merging.pulls[URL] = PullRequest("OPEN", None, 1, False, False, head=HEAD, conflicting=True)
+    what = "conflicts with dev and needs an update the swarm cannot make"
+    assert merging.run() == [f"task t1 reopened, {URL} {what}", f"removed the worktree {TOP}"]
+    assert merging.rows["t1"]["state"] == "open" and merging.rows["t1"]["awaiting"] == "fix"
+    assert merging.queued == []
+    assert ready.record(merging.store, "sw", "t1") is None
+
+
+def test_a_conflict_while_queued_is_left_to_the_queue(merging):
+    queued_at_now(merging)
+    merging.pulls[URL] = PullRequest("OPEN", None, 1, False, True, head=HEAD, queued=True, conflicting=True)
+    assert merging.run(NOW + 60_000) == []
+    assert merging.rows["t1"]["state"] == "pr"
+
+
+def test_a_reopened_task_claims_ahead_of_fresh_work(merging):
+    merging.pulls[URL] = RED
+    merging.run()
+    rows = merging.rows
+    assert [t["id"] for t in sorted([rows["t2"], rows["t1"]], key=claim_order.key(rows))] == ["t1", "t2"]
 
 
 def test_a_pull_request_closed_while_queued_reopens_as_closed(merging):
