@@ -101,6 +101,7 @@ from scripts.swarm import (
     plan_review,
     priming_trace,
     prompt,
+    ready,
     reaper,
     review_rounds,
     snapshot,
@@ -175,6 +176,17 @@ def now_ms():
     return int(time.time() * 1000)
 
 
+def _publish_tick_status(store, slug, doc):
+    from scripts.swarm import command_runner
+
+    failure = sys.exception()
+    try:
+        timing.call(command_runner.publish, store, slug, doc)
+    except Exception:
+        if failure is None:
+            raise
+
+
 @timing.instrument_tick
 @outage.guard_tick
 def run_tick(store, slug, ledger=None, runtime=None, messenger=None, scheduled=False):
@@ -190,6 +202,7 @@ def run_tick(store, slug, ledger=None, runtime=None, messenger=None, scheduled=F
     if token is None:
         return ["another tick is running"]
     keeping = timing.BEFORE_STEP.set(lambda: controller.keep_tick(store, slug, held, token, TICK_LOCK_MS))
+    doc = {}
     try:
         outage.providers(store, slug, runtime, now_ms())
         if isinstance(ledger, ledger_client.LedgerClient) and not outage.ledger_health(
@@ -273,6 +286,9 @@ def run_tick(store, slug, ledger=None, runtime=None, messenger=None, scheduled=F
             actions += skip_refused(progress.checks_pass, store.redis, slug, doc["tasks"], view, now_ms())
             rows = {t["id"]: t for t in doc["tasks"]}
             actions += skip_refused(waits.end_pass, store, slug, rows, inbox, view, now_ms(), ledger_events.view)
+            actions += skip_refused(
+                ready.merge_pass, ready.Pass(store, slug, ledger, view, ledger_events.view, now_ms()), rows
+            )
             actions += skip_refused(quiet.quiet_pass, store, slug, rows, now_ms())
             actions += skip_refused(dispatcher.priorities, store, slug, doc, ledger, view, now_ms())
             if scheduled:
@@ -298,11 +314,14 @@ def run_tick(store, slug, ledger=None, runtime=None, messenger=None, scheduled=F
             )
             taken = timing.call(snapshot.auto, store, slug, now_ms(), os.environ)
             store.redis.set(store.key(slug, "last-tick"), now_ms())
-            timing.call(command_runner.publish, store, slug, timing.call(ledger.state, slug))
+            doc = timing.call(ledger.state, slug)
             return probed + controls + actions + ([f"took automatic snapshot {taken.name}"] if taken else [])
     finally:
-        timing.BEFORE_STEP.reset(keeping)
-        controller.release_tick_lock(store, slug, token)
+        try:
+            _publish_tick_status(store, slug, doc)
+        finally:
+            timing.BEFORE_STEP.reset(keeping)
+            controller.release_tick_lock(store, slug, token)
 
 
 def cmd_list(store, args):
@@ -352,6 +371,7 @@ def cmd_tick(store, args):
     if why := timer.installed_refusal():
         raise SwarmError(f"the tick refused to run: {why}")
     operator_env.fill(os.environ)
+    operator_env.classifier(os.environ)
     if os.environ.get("AGENTIHOOKS_CONTROLLER_TICK_SECONDS"):
         raise SwarmError(
             "the tick refused to run: AGENTIHOOKS_CONTROLLER_TICK_SECONDS is for controller installs, "
@@ -1141,9 +1161,33 @@ def cmd_pr(store, args):
     branch = {"branch": head, "branch_repo": repo} if head else {}
     fields = {"pr_url": args.url, "state": "pr", "awaiting": awaiting, **branch}
     ledger = LedgerClient()
-    checked = intent.stamp(args.slug, agent.task, args.url, ledger.state(args.slug), intent.mode_of(config), now_ms())
+    doc = ledger.state(args.slug)
+    row = next(t for t in doc["tasks"] if t.get("id") == agent.task)
+    fields.update(_split_binding(row, args.url, args.half))
+    checked = intent.stamp(args.slug, agent.task, args.url, doc, intent.mode_of(config), now_ms())
     ledger.update_task(args.slug, agent.task, fields, by=agent.name)
     print(json.dumps({"task": agent.task, "pr_url": args.url, **branch, "intent": checked}))
+
+
+def _split_binding(row, url, half):
+    pulls, halves = row.get("split_pulls") or [], row.get("split") or []
+    if not halves:
+        if half:
+            raise SwarmError("this task is not split: drop --half")
+        return {}
+    if url in pulls:
+        if half and half != pulls.index(url) + 1:
+            raise SwarmError(f"{url} is half {pulls.index(url) + 1} of this split task")
+        return {}
+    if len(pulls) >= len(halves):
+        raise SwarmError(f"every half of this split task has a pull request: {', '.join(pulls)}")
+    if not 1 <= half <= len(halves):
+        raise SwarmError(
+            f"this task is split in {len(halves)} halves: name this pull request's half with --half {len(pulls) + 1}"
+        )
+    if half != len(pulls) + 1:
+        raise SwarmError(f"half {len(pulls) + 1} of this split task is next: record it before half {half}")
+    return {"split_pulls": [*pulls, url]}
 
 
 def cmd_merge(store, args):
@@ -1197,7 +1241,7 @@ def cmd_done(store, args):
             on=waits.on("merge", url),
         )
         raise SwarmError(f"pull request {url} is in the merge queue; waiting for it to land before swarm done")
-    refused = done_gate.refusal(row, url, lambda target: pull)
+    refused = done_gate.refusal(row, url, _pull_reader(url, pull))
     if refused:
         raise SwarmError(refused)
     fields = {"state": "done", **({"pr_url": args.pr} if args.pr else {}), **({"proof": proof} if proof else {})}
@@ -1206,6 +1250,10 @@ def cmd_done(store, args):
     waits.settle_notices(InboxStore(store.redis), agent, "done")
     _retire(store, args.slug, agent, "finished its task and exited")
     print(json.dumps({"task": agent.task, "state": "done", "next": "stop now; the swarm closes this session"}))
+
+
+def _pull_reader(url, pull):
+    return lambda target: pull if target == url else ledger_events.view(target)
 
 
 def _dispatcher_done(store, slug, agent):
@@ -1317,10 +1365,10 @@ def cmd_wait(store, args):
         if problem := waits.target_problem(held["kind"], held["target"], agent.task, rows, get):
             raise SwarmError(problem)
         if held["kind"] == "checks":
-            pull = ledger_events.view(held["target"])
-            if pull is None or not pull.head:
+            head = ledger_events.head(held["target"])
+            if not head:
                 raise SwarmError("cannot read the pull request head; retry the checks wait")
-            held["head"] = pull.head
+            held["head"] = head
         if held["kind"] == "mutation":
             held["head"] = waits.mutation_wait.bind(held["target"])
     at = now_ms()
@@ -1403,6 +1451,37 @@ def cmd_park(store, args):
                 **fields,
                 "worktree_removed": removed,
                 "next": "stop now; the task waits on its branch",
+            }
+        )
+    )
+
+
+def cmd_ready(store, args):
+    agent = _worker(store, args)
+    if agent.state == "finished":
+        raise SwarmError(f"{agent.name} already handed off its seat; the swarm carries its pull request")
+    done_gate.require_local(store, args.slug, agent.task)
+    text = _read(args.doc, "handoff document")
+    ledger = LedgerClient()
+    row = next((t for t in ledger.tasks(args.slug) if t.get("id") == agent.task), {})
+    found = ready.check(row, agent, store.config(args.slug).autonomy, ledger_events.view, now_ms())
+    problems = handoff_check.problems(text, Resolver(args.slug, store.redis, ledger.state))
+    if problems:
+        raise SwarmError(handoff_check.refusal(problems))
+    ready.release(store, args.slug, agent.task, found, ledger, agent.name)
+    try:
+        _hand_off(store, args.slug, agent, text, "exit", ledger)
+    except Exception:
+        ready.withdraw(store, args.slug, agent.task, ledger, agent.name)
+        raise
+    print(
+        json.dumps(
+            {
+                "task": agent.task,
+                "pr_url": found["url"],
+                "head": found["head"],
+                "awaiting": ready.AWAITING,
+                "next": "stop now; the swarm carries the pull request to merge and closes this session",
             }
         )
     )
@@ -1631,8 +1710,10 @@ def build_parser():
     lift = sub.add_parser("lift")
     lift.add_argument("agent")
     lift.add_argument("gate")
-    for name in ("issue", "pr"):
-        sub.add_parser(name).add_argument("url")
+    sub.add_parser("issue").add_argument("url")
+    pr = sub.add_parser("pr")
+    pr.add_argument("url")
+    pr.add_argument("--half", type=int, default=0)
     merge = sub.add_parser("merge")
     merge.add_argument("action", choices=("queue", "dequeue", "state"))
     merge.add_argument("url")
@@ -1664,6 +1745,7 @@ def build_parser():
     reported.add_argument("--doing", required=True)
     reported.add_argument("--ends-when", required=True)
     sub.add_parser("park").add_argument("doc")
+    sub.add_parser("ready").add_argument("doc")
     sub.add_parser("restack")
     handoff = sub.add_parser("handoff")
     handoff.add_argument("doc")
