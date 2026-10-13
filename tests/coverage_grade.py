@@ -31,6 +31,7 @@ class Result:
     base: str
     lost: dict[str, list[int]]
     unstable: dict[str, list[int]] = field(default_factory=dict)
+    unconfirmed: dict[str, dict[int, int]] = field(default_factory=dict)
 
 
 def executed(shards: list[Path]) -> dict[str, set[int]]:
@@ -140,16 +141,56 @@ def _flaky(history: list[bool]) -> bool:
 
 def _histories(
     base: Measurement, lost: dict[str, list[int]], runs: Iterator[Measurement]
-) -> dict[str, dict[int, list[bool]]]:
+) -> tuple[dict[str, dict[int, list[bool]]], dict[str, dict[int, int]]]:
     histories = {path: {line: [] for line in lines} for path, lines in lost.items()}
+    misses = {path: {line: 0 for line in lines} for path, lines in lost.items()}
     sources = {path: base.source(path) for path in lost}
     for run in itertools.islice(runs, HISTORY):
         for path, lines in lost.items():
+            same_version = run.source(path) == sources[path]
             for line, ran in _statuses(sources[path], path, lines, run).items():
                 histories[path][line].append(ran)
+                if same_version and not ran:
+                    misses[path][line] += 1
         if all(_flaky(history) for by_line in histories.values() for history in by_line.values()):
             break
-    return histories
+    return histories, misses
+
+
+def _imports(source: str | None, path: str) -> set[str]:
+    names = set()
+    for node in ast.walk(ast.parse(source or "")):
+        if isinstance(node, ast.Import):
+            names.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            package = path.split("/")
+            parent = ".".join(package[: -node.level]) if node.level else ""
+            module = ".".join(part for part in (parent, node.module) if part)
+            names.add(module)
+            names.update(f"{module}.{alias.name}" for alias in node.names)
+    return names
+
+
+def _protected(
+    base: Measurement,
+    head_source: Source,
+    changed_tests: set[str],
+    paths: dict[str, list[int]],
+    renamed: dict[str, str | tuple[str, ...]],
+) -> set[str]:
+    imports = set()
+    for test in changed_tests:
+        imports.update(_imports(base.source(test), test))
+        imports.update(_imports(head_source(test), test))
+    protected = set()
+    for path in paths:
+        targets = renamed.get(path, path)
+        targets = (targets,) if isinstance(targets, str) else targets
+        for target in (path, *targets):
+            module = target.removesuffix(".py").replace("/", ".").removesuffix(".__init__")
+            if any(name == module or name.startswith(module + ".") for name in imports):
+                protected.add(path)
+    return protected
 
 
 def grade(
@@ -157,6 +198,8 @@ def grade(
     head_source: Source,
     runs: Iterator[Measurement],
     renamed: dict[str, str | tuple[str, ...]] | None = None,
+    *,
+    changed_tests: set[str] | None = None,
 ) -> Result:
     base = next(runs, None)
     if base is None:
@@ -164,9 +207,16 @@ def grade(
     lost = _lost(base, head, head_source, renamed or {})
     if not lost:
         return Result(base.commit, {})
-    result = Result(base.commit, {})
-    for path, by_line in _histories(base, lost, runs).items():
+    protected = _protected(base, head_source, changed_tests or set(), lost, renamed or {})
+    result = Result(base.commit, {path: lines for path, lines in lost.items() if path in protected})
+    eligible = {path: lines for path, lines in lost.items() if path not in protected}
+    histories, misses = _histories(base, eligible, runs)
+    for path, by_line in histories.items():
         for line, history in by_line.items():
-            bucket = result.unstable if _flaky(history) else result.lost
-            bucket.setdefault(path, []).append(line)
+            if _flaky(history):
+                result.unstable.setdefault(path, []).append(line)
+            elif misses[path][line] >= 2:
+                result.unconfirmed.setdefault(path, {})[line] = misses[path][line]
+            else:
+                result.lost.setdefault(path, []).append(line)
     return result
