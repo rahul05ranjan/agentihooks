@@ -729,7 +729,7 @@ def test_a_new_head_resets_checks_before_current_head_resolution(tick, red):
     assert tick.end() == []
     before = idle.wait(tick.store.redis, "sw", ME)
     assert before["on"]["head"] == "first"
-    tick.pulls[URL] = SimpleNamespace(state="OPEN", head="second", resolved=True, red=red, unpassed_gate="")
+    tick.pulls[URL] = SimpleNamespace(state="OPEN", head="second", resolved=True, red=red, unpassed_gate="", failed=())
     assert tick.end() == []
     after = idle.wait(tick.store.redis, "sw", ME)
     assert after == {**before, "on": {"kind": "checks", "target": URL, "head": "second"}}
