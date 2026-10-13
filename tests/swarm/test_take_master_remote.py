@@ -6,6 +6,7 @@ from hooks.context import account_sessions, broadcast
 from scripts.gates import base
 from scripts.swarm import take_master
 from scripts.swarm.ledger_client import LedgerRefused
+from scripts.swarm.store import AgentRecord
 from scripts.swarm_ledger import ledger as remote
 from scripts.swarm_ledger import ledger_authority as authority
 from scripts.swarm_ledger.api import client
@@ -113,16 +114,15 @@ def test_a_session_already_named_this_master_mints_its_token_with_the_hive_crede
     assert sent == [("sw", "agent-token", MINT), ("sw", "agent-token", MINT), ("sw", "metadata", PINNED)]
 
 
-def _started(store, rt, monkeypatch):
-    monkeypatch.setenv("AGENTIHOOKS_DEPLOYMENT", "local")
-    run("sw", "start")
-    monkeypatch.setenv("AGENTIHOOKS_DEPLOYMENT", "compose")
+def _started(store, rt):
+    store.put_agent("sw", AgentRecord(store.next_name("sw", "master"), "master", "master", seat="master@sw"))
+    rt.live.add(MASTER)
     assert (sorted(rt.live), _masters(store)) == ([MASTER], [(MASTER, "", {})])
 
 
 def test_replace_on_a_remote_host_retires_the_old_master_before_placing_the_new_one(remote_taker, monkeypatch):
     store, ledger, rt, _, _ = remote_taker
-    _started(store, rt, monkeypatch)
+    _started(store, rt)
     killed = []
     ledger.closed = lambda slug: killed.append(list(rt.killed)) or False
     assert run("sw", "take-master", "--replace") == 0
@@ -132,7 +132,7 @@ def test_replace_on_a_remote_host_retires_the_old_master_before_placing_the_new_
 
 def test_a_refused_replace_on_a_remote_host_leaves_the_old_master_retired_and_no_new_one(remote_taker, monkeypatch):
     store, ledger, rt, _, _ = remote_taker
-    _started(store, rt, monkeypatch)
+    _started(store, rt)
     ledger.closed = _unauthenticated
     assert _taken(["sw", "take-master", "--replace"]) == "unauthenticated: the ledger server refused the credential"
     assert rt.killed == [MASTER]
