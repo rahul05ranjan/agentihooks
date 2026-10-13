@@ -25,7 +25,7 @@ def age(path: Path, seconds: float) -> None:
         if log.exists():
             entries = []
             for line in log.read_text().splitlines():
-                header, message = line.split("\t", 1)
+                header, _, message = line.partition("\t")
                 identity, _, zone = header.rsplit(" ", 2)
                 entries.append(f"{identity} {int(stamp)} {zone}\t{message}\n")
             log.write_text("".join(entries))
