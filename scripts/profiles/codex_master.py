@@ -1,9 +1,5 @@
 import re
 
-PUSH_PERSONA = (
-    "When your launch prompt says new inbox items arrive in this thread on their own, end your turn when no work "
-    "remains instead of running wait --inbox."
-)
 REARM = r"\b[Rr]e[- ]?arm (?:your |a |an |the )?`?Monitors?`?(?: on (?:the )?ledger)?"
 MONITOR = r"`?\bMonitors?\b`?"
 
@@ -12,7 +8,8 @@ def waiting(slug: str, push: bool = False) -> str:
     if push:
         return (
             "Read agentihooks msg inbox and handle every open item. When no work remains, end your turn: new inbox "
-            f"items arrive in this thread on their own, so never run agentihooks swarm {slug} wait --inbox. "
+            f"items arrive in this thread on their own, so never run agentihooks swarm {slug} wait --inbox, even where "
+            "your profile instructions describe that loop. "
             "Use swarm wait --on checks, reply or task for a specific dependency."
         )
     return (
@@ -26,14 +23,14 @@ def waiting(slug: str, push: bool = False) -> str:
 
 def next_action(text: str, slug: str, push: bool = False) -> str:
     if push:
-        return re.sub(MONITOR, "`agentihooks msg inbox`", re.sub(REARM, "Read agentihooks msg inbox", text))
+        return re.sub(REARM, "Read agentihooks msg inbox", text)
     text = re.sub(REARM, f"Read agentihooks msg inbox and run agentihooks swarm {slug} wait --inbox", text)
     return re.sub(MONITOR, f"`agentihooks swarm {slug} wait --inbox`", text)
 
 
 def persona(text: str) -> str:
     text = text.replace("Monitor its checks", "Watch its checks")
-    return next_action(text, "<slug>") + "\n" + waiting("<slug>") + " " + PUSH_PERSONA + "\n"
+    return next_action(text, "<slug>") + "\n" + waiting("<slug>") + "\n"
 
 
 def handoff(task: dict, slug: str, push: bool = False) -> dict:

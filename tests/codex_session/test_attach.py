@@ -66,7 +66,7 @@ def test_the_viewer_waits_until_the_thread_is_connected():
     clock = Clock()
     found = attach.wait_attachable(reads(None, replace(RECORD, state=STARTING), RECORD), 10, clock, clock.sleep)
     assert found == RECORD
-    assert clock.slept == [attach.POLL_S, attach.POLL_S]
+    assert clock.slept == [0.5, 0.5]
 
 
 @pytest.mark.parametrize("state", [FAILED, EXITED])
@@ -91,7 +91,7 @@ def test_a_viewer_that_ran_and_closed_returns_without_another_attach():
 
     def run(command):
         ran.append(command)
-        clock.now += attach.EARLY_EXIT_S
+        clock.now += 5.0
         return 1
 
     assert attach.attach(reads(RECORD), run, "codex", 10, clock, clock.sleep) == 1
@@ -107,8 +107,8 @@ def test_a_closed_viewer_with_a_clean_exit_returns_at_once():
 def test_a_viewer_refused_before_the_first_rollout_is_retried_a_bounded_number_of_times():
     clock, ran = Clock(), []
     assert attach.attach(reads(RECORD), lambda command: ran.append(command) or 2, "codex", 10, clock, clock.sleep) == 2
-    assert len(ran) == attach.ATTEMPTS == 3
-    assert clock.slept == [attach.POLL_S] * 3
+    assert len(ran) == 3
+    assert clock.slept == [0.5] * 3
 
 
 def test_a_viewer_that_attaches_on_its_second_try_keeps_running():
@@ -140,15 +140,19 @@ def test_main_reports_a_refused_attach(capsys):
 
 def test_the_parser_defaults():
     args = attach._parser().parse_args(["--slug", "sw", "--agent", "a"])
-    assert (args.codex_bin, args.timeout) == ("codex", attach.READY_TIMEOUT_S)
+    assert (args.codex_bin, args.timeout) == ("codex", 120.0)
 
 
 def test_recorded_reads_the_named_agents_current_transport(monkeypatch):
     from types import SimpleNamespace
 
-    from scripts.swarm.store import AgentRecord
+    from scripts.swarm.store import APP_SERVER_TRANSPORT, AgentRecord
 
-    agents = [AgentRecord("other", "eng", "t1"), AgentRecord("sw-master-1", "master", "master")]
+    agents = [
+        AgentRecord("other", "eng", "t1", harness="codex", transport=APP_SERVER_TRANSPORT),
+        AgentRecord("sw-master-1", "master", "master", harness="codex", transport=APP_SERVER_TRANSPORT),
+        AgentRecord("legacy", "eng", "t2", harness="codex"),
+    ]
     store = SimpleNamespace(agents=lambda slug: agents if slug == "sw" else [])
     monkeypatch.setattr("scripts.swarm.store.connect", lambda: store)
     monkeypatch.setattr(
@@ -158,6 +162,9 @@ def test_recorded_reads_the_named_agents_current_transport(monkeypatch):
     assert attach.recorded("sw", "sw-master-1")() == RECORD
     assert attach.recorded("sw", "missing")() is None
     assert attach.recorded("other", "sw-master-1")() is None
+    with pytest.raises(attach.AttachError) as refused:
+        attach.recorded("sw", "legacy")()
+    assert str(refused.value) == "legacy runs no app-server a native terminal can attach to"
 
 
 def test_the_app_server_pane_runs_the_server_in_its_own_session_and_the_viewer_in_front(tmp_path):

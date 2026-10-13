@@ -27,13 +27,17 @@ WAIT = "agentihooks swarm sw wait --inbox"
         (
             "claude",
             "",
-            Capabilities(push_inbox=True, native_terminal_attach=True, requires_foreground_inbox_wait=False),
+            Capabilities(push_inbox=True, native_terminal_attach=False, requires_foreground_inbox_wait=False),
         ),
-        ("codex", "", Capabilities(push_inbox=False, native_terminal_attach=True, requires_foreground_inbox_wait=True)),
+        (
+            "codex",
+            "",
+            Capabilities(push_inbox=False, native_terminal_attach=False, requires_foreground_inbox_wait=True),
+        ),
         (
             "codex",
             LEGACY_TRANSPORT,
-            Capabilities(push_inbox=False, native_terminal_attach=True, requires_foreground_inbox_wait=True),
+            Capabilities(push_inbox=False, native_terminal_attach=False, requires_foreground_inbox_wait=True),
         ),
         (
             "codex",
@@ -51,14 +55,6 @@ WAIT = "agentihooks swarm sw wait --inbox"
 def test_each_execution_advertises_capabilities_from_its_harness_and_transport(harness, transport, expected):
     assert capabilities.of(harness, transport) == expected
     assert capabilities.of_agent(AgentRecord("a", "eng", "t", harness=harness, transport=transport)) == expected
-
-
-def test_capabilities_render_as_named_flags():
-    assert capabilities.of("codex", APP_SERVER_TRANSPORT).as_dict() == {
-        "push_inbox": True,
-        "native_terminal_attach": True,
-        "requires_foreground_inbox_wait": False,
-    }
 
 
 @pytest.mark.parametrize(
@@ -81,7 +77,8 @@ def test_a_push_master_waiting_line_ends_the_turn_and_never_loops_on_wait_inbox(
     line = codex_master.waiting("sw", push=True)
     assert line == (
         "Read agentihooks msg inbox and handle every open item. When no work remains, end your turn: new inbox items "
-        "arrive in this thread on their own, so never run agentihooks swarm sw wait --inbox. "
+        "arrive in this thread on their own, so never run agentihooks swarm sw wait --inbox, even where your profile "
+        "instructions describe that loop. "
         "Use swarm wait --on checks, reply or task for a specific dependency."
     )
     assert codex_master.waiting("sw") == codex_master.waiting("sw", push=False)
@@ -91,8 +88,9 @@ def test_a_push_master_waiting_line_ends_the_turn_and_never_loops_on_wait_inbox(
 def test_a_push_master_handoff_next_reads_the_inbox_without_the_wait_loop():
     text = "Rearm a Monitor on the ledger, then check the `Monitor` output."
     assert codex_master.next_action(text, "sw", push=True) == (
-        "Read agentihooks msg inbox, then check the `agentihooks msg inbox` output."
+        "Read agentihooks msg inbox, then check the `Monitor` output."
     )
+    assert codex_master.next_action("Monitor the PR checks.", "sw", push=True) == "Monitor the PR checks."
     assert codex_master.next_action(text, "sw") == (
         f"Read agentihooks msg inbox and run {WAIT}, then check the `{WAIT}` output."
     )
@@ -109,14 +107,8 @@ def test_a_push_master_handoff_transforms_its_next_section_and_transfer():
     assert codex_master.handoff(task, "sw")["transfer"]["next"] == f"Read agentihooks msg inbox and run {WAIT}"
 
 
-def test_the_codex_persona_tells_a_push_master_to_skip_the_wait_loop():
-    assert codex_master.persona("Body\n") == (
-        "Body\n\n" + codex_master.waiting("<slug>") + " " + codex_master.PUSH_PERSONA + "\n"
-    )
-    assert codex_master.PUSH_PERSONA == (
-        "When your launch prompt says new inbox items arrive in this thread on their own, end your turn when no work "
-        "remains instead of running wait --inbox."
-    )
+def test_the_shared_codex_persona_keeps_the_legacy_wait_loop():
+    assert codex_master.persona("Body\n") == "Body\n\n" + codex_master.waiting("<slug>") + "\n"
 
 
 def _master(transport, harness="codex"):

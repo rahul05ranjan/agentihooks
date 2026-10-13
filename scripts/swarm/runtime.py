@@ -524,7 +524,8 @@ class HerdrRuntime:
             saved = {key: value for key, value in saved.items() if key not in ("model", "account")}
         from scripts.swarm_v2.runtime import codex
 
-        task = {**task, "harness": agent, "transport": codex.transport(config, agent)}
+        transport = codex.transport(config, agent)
+        task = {**task, "harness": agent, **({"transport": transport} if transport else {})}
         text = timing.call(
             prompt.build,
             config.slug,
@@ -1088,7 +1089,7 @@ class HerdrRuntime:
                 from scripts.inbox.store import InboxStore
                 from scripts.inbox.wake import BY
 
-                InboxStore(connect().redis).send(BY, agent.name, text)
+                InboxStore(connect().redis).send(BY, agent.name, text, fyi=True)
                 return
             self.herdr(["agent", "prompt", pane_target(agent), marked(text)])
         except Exception as exc:
