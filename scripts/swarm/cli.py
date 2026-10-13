@@ -1202,9 +1202,9 @@ def cmd_pr(store, args):
     row = next(t for t in doc["tasks"] if t.get("id") == agent.task)
     fields.update(_split_binding(row, args.url, args.half))
     checked = intent.stamp(args.slug, agent.task, args.url, doc, intent.mode_of(config), now_ms())
-    ledger.update_task(args.slug, agent.task, fields, by=agent.name)
     if row.get("pr_url") != args.url:
         lift.drop_task(args.slug, agent.task)
+    ledger.update_task(args.slug, agent.task, fields, by=agent.name)
     print(json.dumps({"task": agent.task, "pr_url": args.url, **branch, "intent": checked}))
 
 
