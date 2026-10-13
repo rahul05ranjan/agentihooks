@@ -465,7 +465,11 @@ def test_command_keeps_changed_importing_tests_red(tmp_path, monkeypatch, change
         )
     if change != "unchanged":
         subprocess.run(["git", "-C", str(tmp_path), "add", "tests"], check=True, capture_output=True)
-        subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "change tests"], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "change tests"],
+            check=True,
+            capture_output=True,
+        )
     runs = [_measure(base, {"hooks/a.py": {1, 2, 3}}, sources)]
     runs += [_measure(f"older{n}", {"hooks/a.py": {1, 2}}, sources) for n in range(2)]
     monkeypatch.setattr(ratchet, "_cached_runs", lambda *args: iter(runs))

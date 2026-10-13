@@ -63,14 +63,7 @@ def _grade(args: argparse.Namespace, head_files: list[Path], scratch: Path) -> t
     if base is None or base.commit != wanted:
         raise Unmeasured(f"no passed Tests run with coverage holds the base {wanted}")
     moved = renamed(args.head, wanted)
-    changed_tests = {
-        path
-        for path in git(
-            "diff", "--name-only", "--no-renames", wanted, "HEAD", "--", "tests", cwd=args.head
-        ).splitlines()
-        if path.endswith(".py")
-    }
-    result = grade(head, lambda path: _read(args.head / path), _chain(base, runs), moved, changed_tests=changed_tests)
+    result = grade(head, lambda path: _read(args.head / path), _chain(base, runs), moved)
     return head, base, result
 
 
