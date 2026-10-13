@@ -3,6 +3,7 @@ import os
 import pytest
 
 from hooks.context import account_sessions, broadcast
+from hooks.proc import Process
 from scripts.gates import base
 from scripts.swarm import take_master
 from scripts.swarm.ledger_client import LedgerRefused
@@ -10,6 +11,7 @@ from scripts.swarm.store import AgentRecord, SwarmError
 from scripts.swarm_ledger import ledger as remote
 from scripts.swarm_ledger import ledger_authority as authority
 from scripts.swarm_ledger.api import client
+from scripts.swarm_v2.runtime import process
 from tests.swarm.test_cli import env, run  # noqa: F401
 from tests.swarm.test_take_master import taker  # noqa: F401
 
@@ -58,6 +60,10 @@ def remote_taker(taker, monkeypatch, tmp_path):  # noqa: F811
     monkeypatch.setattr(broadcast, "BROADCAST_FILE", str(tmp_path / "broadcast.json"))
     monkeypatch.setattr(account_sessions, "agent_pid", lambda: 4242)
     monkeypatch.setattr(take_master, "name_session", broadcast.name_session)
+    monkeypatch.setattr(process, "local_namespace", lambda: "boot/pidns")
+    monkeypatch.setattr(
+        take_master, "processes", lambda: {4242: Process(4242, 1, 4242, 4242, 100, "S", "codex", ("codex",))}
+    )
     broadcast.register_session("session", 4242, "/repo", "sol", name=CARRIED)
     monkeypatch.setattr(remote, "BASE", "")
     monkeypatch.setattr(remote.repository, "token", _operator_token)

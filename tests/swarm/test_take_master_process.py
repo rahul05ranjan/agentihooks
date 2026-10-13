@@ -20,8 +20,7 @@ pytestmark = pytest.mark.xdist_group("fakeredis")
 def native_taker(remote_taker, monkeypatch):  # noqa: F811
     store = remote_taker[0]
     table = {
-        pid: Process(pid, 1, pid, pid, start, "S", "codex", ("codex",))
-        for pid, start in ((4242, 100), (4343, 200))
+        pid: Process(pid, 1, pid, pid, start, "S", "codex", ("codex",)) for pid, start in ((4242, 100), (4343, 200))
     }
     monkeypatch.setattr(process, "local_namespace", lambda: "boot/pidns")
     monkeypatch.setattr(take_master, "processes", lambda: table, raising=False)
