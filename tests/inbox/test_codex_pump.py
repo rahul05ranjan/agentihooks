@@ -911,7 +911,8 @@ def test_stderr_writes_one_prefixed_line(capsys):
     assert (captured.out, captured.err) == ("", "[agentihooks codex-pump] degraded\n")
 
 
-def test_main_loads_the_bound_execution_and_stops_on_termination(rig, monkeypatch):
+@pytest.mark.parametrize(("status", "code"), [(codex.STOPPED, 0), (DEGRADED, 1)])
+def test_main_loads_the_bound_execution_and_stops_on_termination(rig, monkeypatch, status, code):
     import signal
 
     from scripts.inbox import store as inbox_store
@@ -931,13 +932,13 @@ def test_main_loads_the_bound_execution_and_stops_on_termination(rig, monkeypatc
         assert stop() is False
         handlers[signal.SIGTERM](signal.SIGTERM, None)
         assert stop() is True
-        return codex.STOPPED
+        return status
 
     monkeypatch.setattr(protocol, "connect", connect)
     monkeypatch.setattr(signal, "signal", lambda number, handler: handlers.update({number: handler}))
     monkeypatch.setattr(codex.Pump, "run", run)
     monkeypatch.setattr(codex.sys, "argv", ["codex-pump", SLUG, EXECUTION])
-    assert codex.main() == 0
+    assert codex.main() == code
     assert connections == [("/run/cx/s", 5.0)]
     assert set(handlers) == {signal.SIGTERM, signal.SIGHUP}
     [pump] = pumps
@@ -957,3 +958,13 @@ def test_main_refuses_a_retired_execution_before_opening_a_connection(rig, monke
     with pytest.raises(codex.StaleExecution) as refused:
         codex.main([SLUG, EXECUTION])
     assert str(refused.value) == "execution is no longer current"
+
+
+def test_main_reports_its_module_usage_when_execution_arguments_are_missing(capsys):
+    with pytest.raises(SystemExit) as refused:
+        codex.main([])
+    assert refused.value.code == 2
+    assert capsys.readouterr().err == (
+        "usage: python -m scripts.inbox.codex [-h] swarm execution\n"
+        "python -m scripts.inbox.codex: error: the following arguments are required: swarm, execution\n"
+    )

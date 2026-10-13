@@ -315,12 +315,13 @@ def test_main_supervises_the_server_until_it_exits(tmp_path, monkeypatch, capsys
     ]
 
 
-def test_an_exited_pump_retires_the_server_and_finishes_the_execution(tmp_path, monkeypatch):
+@pytest.mark.parametrize(("pump_code", "exit_code"), [(9, 9), (0, 3)])
+def test_an_exited_pump_retires_the_server_and_finishes_the_execution(tmp_path, monkeypatch, pump_code, exit_code):
     started, seen = supervised(monkeypatch, lambda: pytest.fail("server must not wait without its pump"))
-    seen["pump"].poll = lambda: 9
-    seen["pump"].returncode = 9
+    seen["pump"].poll = lambda: pump_code
+    seen["pump"].returncode = pump_code
     argv = ["serve", "--cwd", str(tmp_path), "--profile", "engineer", "--seat", "eng-1@sw"]
-    assert serve.main(argv, dict(SWARM_ENV)) == 9
+    assert serve.main(argv, dict(SWARM_ENV)) == exit_code
     assert seen["stopped"] == [seen["pump"], started.process]
     assert seen["finished"] == [("store", "sw", started, 1500)]
 
@@ -336,6 +337,22 @@ def test_a_failed_pump_spawn_retires_the_server_and_finishes_the_execution(tmp_p
     with pytest.raises(OSError, match="pump could not start"):
         serve.main(argv, dict(SWARM_ENV))
     assert seen["stopped"] == [started.process]
+    assert seen["finished"] == [("store", "sw", started, 1500)]
+
+
+def test_a_pump_dying_while_the_server_is_busy_ends_supervision(tmp_path, monkeypatch):
+    started, seen = supervised(monkeypatch, lambda: None)
+
+    def busy(timeout):
+        assert timeout == supervisor.POLL_S
+        seen["pump"].poll = lambda: 7
+        seen["pump"].returncode = 7
+        raise serve.subprocess.TimeoutExpired("server", timeout)
+
+    started.process.wait = busy
+    argv = ["serve", "--cwd", str(tmp_path), "--profile", "engineer", "--seat", "eng-1@sw"]
+    assert serve.main(argv, dict(SWARM_ENV)) == 7
+    assert seen["stopped"] == [seen["pump"], started.process]
     assert seen["finished"] == [("store", "sw", started, 1500)]
 
 
