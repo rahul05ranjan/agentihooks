@@ -62,7 +62,7 @@ def is_open(session_id: str, now: float | None = None) -> bool:
     return (time.time() if now is None else now) - opened < WINDOW_SEC
 
 
-def owns_worktree(session_id: str, root: Path) -> bool:
+def owns_worktree(session_id: str | None, root: Path) -> bool:
     """The window is open and root is this master's own worktree under ~/dev/worktrees."""
     from scripts.swarm.naming import NamingError, is_worktree
 

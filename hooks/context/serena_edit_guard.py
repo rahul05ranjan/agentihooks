@@ -68,7 +68,7 @@ def check(payload: dict) -> None:
     if tool_name in _FILE_TOOLS:
         path = Path(tool_input.get("file_path") or "")
         root = _guarded(path if path.is_absolute() else cwd / path)
-        if root and not owns_worktree(str(payload.get("session_id") or ""), root):
+        if root and not owns_worktree(payload.get("session_id"), root):
             _block(path, root)
         return
 
