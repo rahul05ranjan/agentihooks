@@ -127,8 +127,7 @@ def _lost(
     return lost
 
 
-def _statuses(base_source: str, path: str, lines: list[int], run: Measurement) -> dict[int, bool]:
-    old = run.source(path)
+def _statuses(base_source: str, path: str, lines: list[int], run: Measurement, old: str | None) -> dict[int, bool]:
     if old is None or path not in run.executed:
         return {}
     mapped = line_map(base_source, old)
@@ -141,20 +140,20 @@ def _flaky(history: list[bool]) -> bool:
 
 def _histories(
     base: Measurement, lost: dict[str, list[int]], runs: Iterator[Measurement]
-) -> tuple[dict[str, dict[int, list[bool]]], dict[str, dict[int, int]]]:
+) -> tuple[dict[str, dict[int, list[bool]]], dict[str, dict[int, list[bool]]]]:
     histories = {path: {line: [] for line in lines} for path, lines in lost.items()}
-    misses = {path: {line: 0 for line in lines} for path, lines in lost.items()}
+    versions = {path: {line: [] for line in lines} for path, lines in lost.items()}
     sources = {path: base.source(path) for path in lost}
     for run in itertools.islice(runs, HISTORY):
         for path, lines in lost.items():
-            same_version = run.source(path) == sources[path]
-            for line, ran in _statuses(sources[path], path, lines, run).items():
+            old = run.source(path)
+            for line, ran in _statuses(sources[path], path, lines, run, old).items():
                 histories[path][line].append(ran)
-                if same_version and not ran:
-                    misses[path][line] += 1
+                if old == sources[path]:
+                    versions[path][line].append(ran)
         if all(_flaky(history) for by_line in histories.values() for history in by_line.values()):
             break
-    return histories, misses
+    return histories, versions
 
 
 def _imports(source: str | None, path: str) -> set[str]:
@@ -210,13 +209,15 @@ def grade(
     protected = _protected(base, head_source, changed_tests or set(), lost, renamed or {})
     result = Result(base.commit, {path: lines for path, lines in lost.items() if path in protected})
     eligible = {path: lines for path, lines in lost.items() if path not in protected}
-    histories, misses = _histories(base, eligible, runs)
+    if not eligible:
+        return result
+    histories, versions = _histories(base, eligible, runs)
     for path, by_line in histories.items():
         for line, history in by_line.items():
             if _flaky(history):
                 result.unstable.setdefault(path, []).append(line)
-            elif misses[path][line] >= 2:
-                result.unconfirmed.setdefault(path, {})[line] = misses[path][line]
+            elif len(versions[path][line]) >= 2 and not any(versions[path][line]):
+                result.unconfirmed.setdefault(path, {})[line] = len(versions[path][line])
             else:
                 result.lost.setdefault(path, []).append(line)
     return result
