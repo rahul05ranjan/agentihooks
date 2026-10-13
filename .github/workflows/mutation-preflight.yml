@@ -102,7 +102,7 @@ jobs:
   # Each leg queues on its run's lane under its kind and index, so a lane holds one stats and one shard leg per index.
   stats:
     needs: [pull-request, plan]
-    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.changed != '0' }}
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.changed != '0' && needs.plan.outputs.shards != '[0]' }}
     runs-on: ${{ (github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.actor) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.triggering_actor) || (github.event_name == 'merge_group' || github.event_name == 'push' && github.ref == 'refs/heads/dev') && github.actor == 'github-merge-queue[bot]' && github.triggering_actor == 'github-merge-queue[bot]') && 'anton-oss-batch' || 'ubuntu-latest' }}
     timeout-minutes: 26
     concurrency:
@@ -114,6 +114,7 @@ jobs:
         part: ${{ fromJSON(needs.plan.outputs.stats_parts) }}
     env:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright
+      MUTATION_STATS_CACHE: ${{ github.workspace }}/.mutation-stats-cache
     steps:
       - uses: actions/checkout@v4
         with:
@@ -150,6 +151,13 @@ jobs:
           echo "::error::Chromium setup failed or exceeded its six minute timeout; mutation tests cannot run."
           exit 1
 
+      - name: Restore compatible test stats
+        uses: actions/cache/restore@v4
+        with:
+          path: .mutation-stats-cache
+          key: mutation-test-stats-v1-${{ runner.os }}-${{ hashFiles('uv.lock') }}-${{ matrix.part }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: mutation-test-stats-v1-${{ runner.os }}-${{ hashFiles('uv.lock') }}-${{ matrix.part }}-
+
       - name: Collect one stats part for every mutation shard
         env:
           BASES: ${{ needs.plan.outputs.bases }}
@@ -157,6 +165,12 @@ jobs:
           PART: ${{ matrix.part }}
           PARTS: ${{ strategy.job-total }}
         run: mkdir -p .mutation-stats && touch ".mutation-stats/collected-$PART" && python -m scripts.ci_mutation --bases "$BASES" --budget 1080 --stats .mutation-stats --stats-part "$PART" --stats-parts "$PARTS"
+
+      - name: Store successful test stats
+        uses: actions/cache/save@v4
+        with:
+          path: .mutation-stats-cache
+          key: mutation-test-stats-v1-${{ runner.os }}-${{ hashFiles('uv.lock') }}-${{ matrix.part }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Upload mutation stats part
         uses: actions/upload-artifact@v4
@@ -180,7 +194,7 @@ jobs:
 
   mutation-shard:
     needs: [plan, stats]
-    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.changed != '0' && needs.stats.result == 'success' }}
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.changed != '0' && (needs.stats.result == 'success' || (needs.stats.result == 'skipped' && needs.plan.outputs.shards == '[0]')) }}
     runs-on: ${{ (github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.actor) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.triggering_actor) || (github.event_name == 'merge_group' || github.event_name == 'push' && github.ref == 'refs/heads/dev') && github.actor == 'github-merge-queue[bot]' && github.triggering_actor == 'github-merge-queue[bot]') && 'anton-oss-batch' || 'ubuntu-latest' }}
     timeout-minutes: 26
     concurrency:
@@ -192,6 +206,7 @@ jobs:
         shard: ${{ fromJSON(needs.plan.outputs.shards) }}
     env:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright
+      MUTATION_STATS_CACHE: ${{ github.workspace }}/.mutation-stats-cache
     steps:
       - uses: actions/checkout@v4
         with:
@@ -228,7 +243,16 @@ jobs:
           echo "::error::Chromium setup failed or exceeded its six minute timeout; mutation tests cannot run."
           exit 1
 
+      - name: Restore compatible test stats
+        if: needs.plan.outputs.shards == '[0]'
+        uses: actions/cache/restore@v4
+        with:
+          path: .mutation-stats-cache
+          key: mutation-test-stats-v1-${{ runner.os }}-${{ hashFiles('uv.lock') }}-inline-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: mutation-test-stats-v1-${{ runner.os }}-${{ hashFiles('uv.lock') }}-inline-
+
       - name: Download the shared mutation stats
+        if: needs.plan.outputs.shards != '[0]'
         uses: actions/download-artifact@v4
         with:
           pattern: mutation-stats-*
@@ -236,12 +260,27 @@ jobs:
           merge-multiple: true
 
       - name: Mutate changed Python files
+        if: needs.plan.outputs.shards != '[0]'
         env:
           BASES: ${{ needs.plan.outputs.bases }}
           PYTHONUNBUFFERED: "1"
           SHARD: ${{ matrix.shard }}
           SHARDS: ${{ strategy.job-total }}
         run: python -m scripts.ci_mutation --bases "$BASES" --budget 1080 --shard "$SHARD" --shards "$SHARDS" --stats .mutation-stats
+
+      - name: Collect stats and mutate the only shard
+        if: needs.plan.outputs.shards == '[0]'
+        env:
+          BASES: ${{ needs.plan.outputs.bases }}
+          PYTHONUNBUFFERED: "1"
+        run: python -m scripts.ci_mutation --bases "$BASES" --budget 1080
+
+      - name: Store successful test stats
+        if: success() && needs.plan.outputs.shards == '[0]'
+        uses: actions/cache/save@v4
+        with:
+          path: .mutation-stats-cache
+          key: mutation-test-stats-v1-${{ runner.os }}-${{ hashFiles('uv.lock') }}-inline-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Upload shard mutation evidence
         if: always()
