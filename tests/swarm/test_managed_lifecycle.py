@@ -86,6 +86,10 @@ def test_managed_server_and_thread_are_live_without_a_viewer(rig):
     rig.herdr.assert_not_called()
 
 
+def test_a_legacy_session_without_transport_capability_is_not_managed():
+    assert not live_binding.managed(SimpleNamespace(runtime_backend="local"))
+
+
 def test_runtime_idle_is_distinct_from_productive_waiting(rig):
     idle.declare_wait(rig.store.redis, SLUG, rig.agent.name, 2000, "checks", 1000)
     assert rig.runner.status(rig.agent) == "idle"
