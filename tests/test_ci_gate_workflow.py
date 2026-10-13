@@ -203,7 +203,7 @@ def test_coverage_ratchet_grades_the_merged_shards_from_the_base_copy():
     download = next(step for step in job["steps"] if step.get("name") == "Download shard coverage")
     assert download["with"]["pattern"] == "coverage-3.12-*"
     grade = next(step for step in job["steps"] if step.get("name") == "Hold every line the base ran")
-    assert '[[ -f "$grader/tests/coverage_ratchet.py" ]] || grader="$GITHUB_WORKSPACE"' in grade["run"]
+    assert 'cd "$RUNNER_TEMP/base"\npython -m tests.coverage_ratchet' in grade["run"]
     assert f"--shards {jobs['unit']['strategy']['matrix']['shard'][-1]}" in grade["run"]
     report = job["steps"][-1]
     assert report["if"].startswith("always()")
