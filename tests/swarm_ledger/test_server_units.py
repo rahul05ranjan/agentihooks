@@ -92,23 +92,32 @@ def test_serve_runs_the_ledger_watch_on_a_daemon_thread(monkeypatch, tmp_path):
             pass
 
     class Server:
+        replacing = False
+
         def __init__(self, address, handler_class):
+            pass
+
+        def stop_on(self, signum):
             pass
 
         def serve_forever(self):
             pass
 
-        def server_close(self):
+        def drain(self, hub):
+            pass
+
+        def replace(self):
             pass
 
     monkeypatch.setattr(server.threading, "Thread", Thread)
-    monkeypatch.setattr(server, "ThreadingHTTPServer", Server)
+    monkeypatch.setattr(server, "DrainingServer", Server)
     monkeypatch.setattr(server.server_lifetime, "watch", lambda *args: threading.Event())
     adopted = []
     monkeypatch.setattr(server.legacy, "adopt", adopted.append)
     monkeypatch.setattr(server, "PIDFILE", tmp_path / ".server.pid")
     server.serve()
-    assert threads == [{"target": server.watch_ledgers, "daemon": True}]
+    assert len(threads) == 1 and threads[0]["target"] is server.watch_ledgers and threads[0]["daemon"] is True
+    assert threads[0]["kwargs"]["replace"].__func__ is Server.replace
     assert adopted == [server.stored]
 
 
