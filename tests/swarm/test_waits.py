@@ -1208,6 +1208,43 @@ def test_a_failed_required_check_ends_wait_beside_a_pending_jobless_workflow(tic
     assert idle.wait(tick.store.redis, "sw", ME) is None
 
 
+@pytest.mark.parametrize("conclusion", ["FAILURE", "ERROR", "STARTUP_FAILURE", "ACTION_REQUIRED", "TIMED_OUT"])
+def test_the_first_failed_job_ends_the_wait_and_names_it_while_siblings_run(tick, conclusion, capsys):
+    tick.hold("checks", URL)
+    tick.pulls[URL] = gated_probe(
+        [
+            {"name": "stats (1)", "conclusion": conclusion},
+            {"name": "stats (2)", "status": "IN_PROGRESS"},
+            {"name": "Gate — Required", "status": "IN_PROGRESS"},
+        ],
+        [QUEUED_TESTS],
+        workflows(GATE_WORKFLOW),
+    )
+    assert tick.end() == []
+    assert tick.end() == [f"ended the wait of {ME}: checks on {URL}, now red; failed: stats (1)"]
+    assert idle.wait(tick.store.redis, "sw", ME) is None
+    assert "now red; failed: stats (1) has ended" in tick.told()[0]
+    assert tick.end() == []
+    assert len(tick.told()) == 1
+    with capsys.disabled():
+        print(f"Scratch wait ended on {conclusion}: stats (1) failed; stats (2) and Gate Required still running; owner notified once.")
+
+
+def test_the_failure_notice_names_only_jobs_from_the_confirming_read(tick):
+    tick.hold("checks", URL)
+    replies = iter(
+        [
+            PullRequest("OPEN", None, 1, True, True, ("stats (1)",), head="first"),
+            PullRequest("OPEN", None, 1, True, True, ("stats (2)",), head="first"),
+        ]
+    )
+    assert waits.end_pass(tick.store, "sw", {}, tick.inbox, lambda url: next(replies), 5_000, None) == [
+        f"ended the wait of {ME}: checks on {URL}, now red; failed: stats (2)"
+    ]
+    assert "failed: stats (2) has ended" in tick.told()[0]
+    assert "stats (1)" not in tick.told()[0]
+
+
 @pytest.mark.parametrize(
     "done",
     [
