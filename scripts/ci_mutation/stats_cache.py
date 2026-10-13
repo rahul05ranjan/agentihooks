@@ -9,20 +9,28 @@ from pathlib import Path
 from scripts.ci_mutation.scope import imported_names, is_test_file, module_name
 
 
-def test_inputs(root: Path, path: str, modules: dict[str, str]) -> dict[str, str]:
+def test_inputs(
+    root: Path, path: str, modules: dict[str, str], records: dict[str, tuple[str, set[str]]]
+) -> dict[str, str]:
     pending = {path}
     inputs = {}
     while pending:
         current = pending.pop()
-        text = (root / current).read_text()
-        inputs[current] = hashlib.sha256(text.encode()).hexdigest()
-        package = tuple(Path(current).with_suffix("").parts[:-1])
-        imports = imported_names(text, package)
-        dependencies = (
-            set(modules.values())
-            if "importlib" in text or "__import__" in text
-            else {dependency for module, dependency in modules.items() if module in imports}
-        )
+        if current not in records:
+            text = (root / current).read_text()
+            package = tuple(Path(current).with_suffix("").parts[:-1])
+            imports = imported_names(text, package)
+            names = {
+                ".".join(name.split(".")[:index]) for name in imports for index in range(1, len(name.split(".")) + 1)
+            }
+            dependencies = (
+                set(modules.values())
+                if "importlib" in text or "__import__" in text
+                else {modules[name] for name in names if name in modules}
+            )
+            records[current] = (hashlib.sha256(text.encode()).hexdigest(), dependencies)
+        digest, dependencies = records[current]
+        inputs[current] = digest
         pending.update(dependencies - inputs.keys())
     return inputs
 
@@ -55,11 +63,12 @@ def collect_cached_stats(
         "options": options,
         "runtime": [sys.version, sys.platform, versions],
     }
-    modules = {module_name(Path(path)): path for path in tracked if path and is_test_file(path)}
+    modules = {module_name(Path(path)): path for path in tracked if path and Path(path).suffix == ".py"}
+    records = {}
     folder.mkdir(parents=True, exist_ok=True)
     keys = {
         path: hashlib.sha256(
-            json.dumps({**context, "tests": test_inputs(root, path, modules)}, sort_keys=True).encode()
+            json.dumps({**context, "tests": test_inputs(root, path, modules, records)}, sort_keys=True).encode()
         ).hexdigest()
         for path in files
     }
