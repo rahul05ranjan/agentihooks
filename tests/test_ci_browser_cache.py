@@ -30,9 +30,10 @@ def _setup(tmp_path, monkeypatch, *, cached, ready, recovery=True, stall_once=Fa
         '  echo install >> "$CALLS"\n'
         '  if [[ -f "$STALL" ]]; then rm "$STALL"; sleep 30; fi\n'
         '  [[ "$RECOVERY" == true ]] || exit 1\n'
-        '  touch "$READY"\n'
+        '  [[ "${BROWSER_CACHE_TEST_MISSING_AFTER_INSTALL:-false}" == true ]] || touch "$READY"\n'
         "else\n"
         '  echo launch >> "$CALLS"\n'
+        '  sleep "${BROWSER_CACHE_TEST_LAUNCH_SECONDS:-0}"\n'
         '  [[ -f "$READY" ]]\n'
         "fi\n"
     )
@@ -81,6 +82,20 @@ def test_missing_browser_or_os_dependencies_are_recovered(tmp_path, monkeypatch,
     result, calls = _setup(tmp_path, monkeypatch, cached=cached, ready=False)
     assert result.returncode == 0, result.stderr
     assert calls == (["launch"] if cached else []) + ["mirror", "install", "launch"]
+
+
+def test_slow_first_launch_after_install_passes(tmp_path, monkeypatch):
+    monkeypatch.setenv("BROWSER_CACHE_TEST_LAUNCH_SECONDS", "11")
+    result, calls = _setup(tmp_path, monkeypatch, cached=False, ready=False)
+    assert result.returncode == 0, result.stderr
+    assert calls == ["mirror", "install", "launch"]
+
+
+def test_missing_browser_after_successful_install_is_red(tmp_path, monkeypatch):
+    monkeypatch.setenv("BROWSER_CACHE_TEST_MISSING_AFTER_INSTALL", "true")
+    result, calls = _setup(tmp_path, monkeypatch, cached=False, ready=False)
+    assert result.returncode == 1
+    assert calls == ["mirror", "install", "launch"]
 
 
 def test_self_hosted_runner_recovers_without_the_hosted_mirror_edit(tmp_path, monkeypatch):
