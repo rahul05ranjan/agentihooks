@@ -13,7 +13,6 @@ import time
 import uuid
 from pathlib import Path
 
-
 SHUTDOWN_WAIT_SECONDS = 12
 
 
