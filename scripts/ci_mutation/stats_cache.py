@@ -29,6 +29,8 @@ def collect_cached_stats(
             missing.append(path)
     print(f"Mutation stats cache: reused {len(reused)} test files; collect {len(missing)}", flush=True)
     fresh = collect(missing) if missing else []
+    if any(result["status"] != 0 for result in fresh):
+        raise SystemExit(1)
     for path in missing:
         durations = {
             test: seconds
