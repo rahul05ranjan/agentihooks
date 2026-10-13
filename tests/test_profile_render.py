@@ -1246,6 +1246,8 @@ def test_codex_master_keeps_mixed_instruction_responsibilities():
         )
         + "\n"
         + codex_master.waiting("<slug>")
+        + " "
+        + codex_master.PUSH_PERSONA
         + "\n"
     )
 
