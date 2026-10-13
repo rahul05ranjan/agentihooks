@@ -41,6 +41,23 @@ def test_shared_statistics_replace_flat_costs_before_assigning_shards():
     assert len(set(expensive_shards)) == min(plan["shards"], 8)
 
 
+def test_every_consumer_uses_the_same_measured_assignment(tmp_path, monkeypatch):
+    from scripts.ci_mutation.mutant_shards import shard_names
+
+    monkeypatch.chdir(tmp_path)
+    names = ["a", "b", "c", "d"]
+    (tmp_path / "shard-plan.json").write_text(
+        json.dumps({"shards": 2, "assignments": {"a": 1, "b": 1, "c": 0, "d": 1}})
+    )
+    assert shard_names(names, (0, 2)) == {"c"}
+    assert shard_names(names[:3], (1, 2)) == {"a", "b"}
+    assert shard_names(reversed(names), (1, 2)) == {"a", "b", "d"}
+    with pytest.raises(ValueError, match="shard count"):
+        shard_names(names, (0, 3))
+    with pytest.raises(ValueError, match="missing mutant"):
+        shard_names([*names, "new"], (0, 2))
+
+
 @pytest.mark.parametrize(
     ("seconds", "mutants", "expected"),
     [

@@ -122,6 +122,25 @@ def test_preflight_sizes_its_stats_parts_and_shards_from_the_plan():
     }
 
 
+def test_mutation_matrix_and_merge_use_the_plan_refined_after_statistics():
+    jobs = _workflow()["jobs"]
+    refine = jobs["refine"]
+    assert refine["needs"] == ["plan", "stats"]
+    assert refine["outputs"]["shards"] == "${{ steps.refine.outputs.shards }}"
+    steps, names = _steps(refine)
+    measured = steps[names.index("Refine mutation shards from measured statistics")]
+    assert measured["run"] == 'python -m scripts.ci_mutation.measured --bases "$BASES" --stats .mutation-stats'
+    assert names.index("Download the shared mutation stats") < names.index(measured["name"])
+    assert jobs["mutation-shard"]["strategy"]["matrix"]["shard"] == "${{ fromJSON(needs.refine.outputs.shards) }}"
+    assert "refine" in jobs["mutation-shard"]["needs"]
+    assert "refine" in jobs["mutation"]["needs"]
+    shard_steps, shard_names = _steps(jobs["mutation-shard"])
+    artifact = shard_steps[shard_names.index("Download the measured mutation plan")]
+    assert artifact["with"] == {"name": "mutation-plan", "path": ".mutation-stats"}
+    merge_steps, merge_names = _steps(jobs["mutation"])
+    assert "needs.refine.outputs.shards" in merge_steps[merge_names.index("Merge the shard reports")]["env"]["SHARDS"]
+
+
 def test_preflight_collects_one_stats_part_per_leg_with_the_pull_request_budget():
     job = _workflow()["jobs"]["stats"]
     assert job["timeout-minutes"] == 26
