@@ -1656,7 +1656,10 @@ def queued_say(args, who) -> bool:
 def cmd_terminal(store, args):
     from scripts.codex_session import attach
 
-    opened = attach.local_terminal(store, args.slug, args.execution, dict(os.environ))
+    try:
+        opened = attach.local_terminal(store, args.slug, args.execution, dict(os.environ))
+    except attach.AttachError as exc:
+        raise SwarmError(str(exc)) from None
     if opened is not None:
         print(json.dumps(opened))
         return

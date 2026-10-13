@@ -45,6 +45,7 @@ AUTO = "auto"
 PICKED_LANES = ("eng", "ci")
 PLAN_MODE = ["--permission-mode", "plan"]
 REMOTE_PANE = "a remote agent's pane lives on its worker herdr server, never on the local one"
+MANAGED_RESUME = "unsupported resume: a managed Codex execution continues through its supervised server"
 
 
 def codex_plan_mode(environ):
@@ -607,6 +608,8 @@ class HerdrRuntime:
 
     def resume(self, config, agent, text):
         """Reopen the agent's own conversation in a new pane of the same name; SpawnError unless herdr shows it there."""
+        if live_binding.managed(agent):
+            raise SpawnError(MANAGED_RESUME, "unsupported")
         if not agent.profile:
             raise SpawnError("unsupported resume: original profile is missing", "unsupported")
         if agent.harness not in effort_range.EFFORTS:

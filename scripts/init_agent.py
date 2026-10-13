@@ -318,8 +318,7 @@ def _app_server_command(
 
 
 def _viewer_lines(serve: str, launcher: Path, name: str, environ: dict[str, str], inputs: list[str]) -> str:
-    """The supervised server runs in its own session so closing the pane ends only the native terminal viewer;
-    it removes its own launch inputs, which a viewer that exits first must not delete under it."""
+    """The supervised server runs in its own session and removes its own inputs; closing the pane ends only the viewer."""
     log = launcher.with_name(f"{launcher.stem}.serve.log")
     viewer = [
         sys.executable,
@@ -415,14 +414,7 @@ def _write_launcher(
         prompt_arg = f'"$(cat {shlex.quote(str(prompt_file))})"'
         held = f'set --; [ -n "${{{PROMPT_AFTER_START}:-}}" ] || set -- {prompt_arg}; unset {PROMPT_AFTER_START}; '
         command_text = f'{held}{command_text} "$@"' if spec.agent == "codex" else f"{command_text} {prompt_arg}"
-    cleanup = [
-        str(launcher),
-        *(
-            []
-            if app_server
-            else [str(_route_report(launcher)), *([str(prompt_file)] if prompt_file is not None else [])]
-        ),
-    ]
+    cleanup = [str(launcher), *([] if app_server else inputs)]
     shell = environ.get("SHELL") or "/bin/bash"
     launcher.write_text(
         "#!/usr/bin/env bash\n"
