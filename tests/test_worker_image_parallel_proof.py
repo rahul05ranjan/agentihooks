@@ -192,3 +192,37 @@ def test_a_failed_selected_worker_proof_never_reports_success(tmp_path, proof, f
     assert result.returncode == status, result.stderr
     assert not (output / "mode-result.json").exists()
     assert not list(output.glob("context-*"))
+
+
+@pytest.mark.parametrize("change", ["none", "inventory", "revision", "missing", "profile"])
+def test_parallel_worker_reports_require_equal_inventories_and_all_proofs(tmp_path, change):
+    evidence = tmp_path / "evidence"
+    report = {"manifest": {"source_revision": "checked-revision"}, "worker_image_build_validation_failures": 0}
+    for proof in ("startup", "rebuild", "profiles"):
+        folder = evidence / proof
+        folder.mkdir(parents=True)
+        (folder / "mode-result.json").write_text(
+            json.dumps({"proof": proof, "tested_commit": "checked-revision", "status": "passed"})
+        )
+    for name in ("first", "second", "rollback"):
+        (evidence / "startup" / f"{name}.json").write_text(json.dumps(report))
+    rebuild = report | ({"different": True} if change == "inventory" else {})
+    (evidence / "rebuild" / "rebuild.json").write_text(json.dumps(rebuild))
+    profiles = evidence / "profiles" / "SV2-IMG-02"
+    profiles.mkdir()
+    (profiles / "result.json").write_text(json.dumps({"status": "passed", "tested_commit": "checked-revision"}))
+    if change == "revision":
+        (evidence / "rebuild" / "mode-result.json").write_text(
+            json.dumps({"proof": "rebuild", "tested_commit": "other", "status": "passed"})
+        )
+    if change == "missing":
+        (evidence / "rebuild" / "rebuild.json").unlink()
+    if change == "profile":
+        (profiles / "result.json").write_text(json.dumps({"status": "failed", "tested_commit": "checked-revision"}))
+    done = subprocess.run(
+        ["bash", str(ROOT / "docker/swarm-node/compare-smoke.sh"), str(evidence), "checked-revision"],
+        capture_output=True,
+        text=True,
+    )
+    assert (done.returncode == 0) == (change == "none"), done.stderr
+    assert (evidence / "result.json").exists() == (change == "none")
