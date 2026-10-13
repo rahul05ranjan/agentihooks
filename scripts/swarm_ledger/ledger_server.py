@@ -26,7 +26,7 @@ import subprocess
 import sys
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -47,7 +47,8 @@ from scripts.swarm_ledger.events import Hub  # noqa: E402
 from scripts.swarm_ledger.events.publishing import publishing  # noqa: E402
 from scripts.swarm_ledger.repository import legacy  # noqa: E402
 from scripts.swarm_ledger.repository import repository as stored  # noqa: E402
-from scripts.swarm_ledger.server_code import CODE_DIRS, code_stamp  # noqa: E402
+from scripts.swarm_ledger.server_code import CODE_DIRS  # noqa: E402
+from scripts.swarm_ledger.server_drain import DrainingServer  # noqa: E402
 from scripts.swarm_v2 import ledger_writer, master_fence  # noqa: E402
 
 HOST, PORT = ledger_link.address()
@@ -66,7 +67,7 @@ LOGO = ROOT / "media" / "agentihooks-logo.png"
 
 HUB = Hub()
 BIN_SWEEP_EVERY = 15
-LOADED_STAMP = code_stamp()
+LOADED = server_code.loaded_code()
 
 
 @functools.cache
@@ -1050,23 +1051,29 @@ class Handler(BaseHTTPRequestHandler):
         return self.reply_state(slug, changes, allowed, refusals, ledger_task_duplicates.screen(state, allowed))
 
 
-def reload_if_changed(started, code_dirs=CODE_DIRS, execv=os.execv):
-    if code_stamp(code_dirs) == started:
-        return False
+def reexec(execv=os.execv):
     execv(sys.executable, [sys.executable, str(CODE_DIR / "ledger_server.py"), "--serve"])
-    return True
+
+
+def reload_if_changed(held, code_dirs=CODE_DIRS, replace=reexec):
+    stamp = held["stamp"]
+    if not server_code.same(held, code_dirs):
+        replace()
+        return True
+    if held["stamp"] != stamp:
+        server_code.record(PIDFILE.parent, os.getpid(), held, code_dirs)
+    return False
 
 
 def reloading(environ=os.environ) -> bool:
     return environ.get("SWARM_RELOAD") == "1"
 
 
-def watch_ledgers(interval=2.0):
-    started = code_stamp()
+def watch_ledgers(interval=2.0, replace=reexec):
     reload = reloading()
     for passes in itertools.count():
-        if reload:
-            reload_if_changed(started)
+        if reload and reload_if_changed(LOADED, replace=replace):
+            return
         try:
             ledger_bin.tidy()
         except OSError as exc:
@@ -1091,18 +1098,21 @@ def serve():
     except ledger_writer.WriterConflict as conflict:
         sys.exit(str(conflict))
     legacy.adopt(stored)
-    threading.Thread(target=watch_ledgers, daemon=True).start()
-    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    server = DrainingServer((HOST, PORT), Handler)
+    threading.Thread(target=watch_ledgers, kwargs={"replace": server.replace}, daemon=True).start()
+    server.stop_on(signal.SIGTERM)
     stopped = server_lifetime.watch(server, core.LEDGER_DIR, PORT)
-    server_code.record(PIDFILE.parent, os.getpid(), LOADED_STAMP)
+    server_code.record(PIDFILE.parent, os.getpid(), LOADED)
     PIDFILE.write_text(str(os.getpid()))
     print(f"ledger server on {BASE}, dir {core.LEDGER_DIR}", flush=True)
     try:
         server.serve_forever()
     finally:
         stopped.set()
-        server.server_close()
+        server.drain(HUB)
         writer.release()
+    if server.replacing:
+        reexec()
 
 
 def port_held() -> bool:

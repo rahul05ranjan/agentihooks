@@ -129,7 +129,6 @@ def test_the_ledger_watch_sleeps_two_seconds_between_passes(monkeypatch):
         raise StopIteration
 
     monkeypatch.setattr(server, "reloading", lambda: False)
-    monkeypatch.setattr(server, "code_stamp", lambda: 0)
     monkeypatch.setattr(server.ledger_bin, "tidy", lambda: None)
     monkeypatch.setattr(server, "bin_closed_without_swarm", lambda: None)
     monkeypatch.setattr(server, "sample_streams", lambda: None)

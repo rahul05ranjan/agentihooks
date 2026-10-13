@@ -63,7 +63,7 @@ class Reload(unittest.TestCase):
         self.assertEqual(calls[0][1][-2:], [str(server.CODE_DIR / "ledger_server.py"), "--serve"])
 
     def test_the_real_package_has_a_stamp(self):
-        self.assertGreater(server.code_stamp(), 0)
+        self.assertGreater(server.server_code.code_stamp(), 0)
 
 
 class ImportedCode(unittest.TestCase):

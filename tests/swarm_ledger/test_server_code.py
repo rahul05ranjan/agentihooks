@@ -22,7 +22,7 @@ def test_the_stamp_is_the_newest_code_file_and_ignores_other_files(tmp_path):
 
 def test_the_server_and_the_swarm_share_one_list_of_code_folders():
     assert ledger_server.CODE_DIRS is server_code.CODE_DIRS
-    assert ledger_server.code_stamp is server_code.code_stamp
+    assert ledger_server.server_code is server_code
     assert server_code.CODE_DIRS[0] == server_code.ROOT / "scripts" / "swarm_ledger"
     assert [d.name for d in server_code.CODE_DIRS[1:]] == [
         "inbox",
@@ -144,6 +144,9 @@ def test_serve_records_the_code_it_loaded_beside_its_pid_file(monkeypatch, tmp_p
             pass
 
         def drain(self, hub):
+            pass
+
+        def replace(self):
             pass
 
     monkeypatch.setattr(ledger_server.threading, "Thread", lambda **kw: type("T", (), {"start": lambda self: None})())
