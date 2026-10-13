@@ -41,6 +41,53 @@ def test_shared_statistics_replace_flat_costs_before_assigning_shards():
     assert len(set(expensive_shards)) == min(plan["shards"], 8)
 
 
+@pytest.mark.parametrize("stale", [False, True])
+def test_measured_cli_refines_complete_statistics_and_rejects_another_head(tmp_path, monkeypatch, stale):
+    from scripts.ci_mutation import measured
+    from scripts.ci_mutation.stats import stats_key, write_part
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("mutmut.configuration._config", None)
+    _project(tmp_path, {})
+    selected = {"scripts/sample.py": ({2}, ["tests/test_sample.py"])}
+    folder = tmp_path / "stats"
+    key = stats_key("other" if stale else "head", selected)
+    write_part(
+        folder / "group-0/part-0.json",
+        key,
+        (0, 1),
+        [{"tests": {"scripts.sample.x_f": ["test"]}, "durations": {"test": 40.0}}],
+    )
+    monkeypatch.setattr(
+        measured,
+        "discover_changes",
+        lambda root, bases, head: (
+            {"scripts/sample.py": {2}} if (root, bases, head) == (tmp_path, ["base", "earlier"], "HEAD") else {}
+        ),
+    )
+    monkeypatch.setattr(
+        measured.subprocess,
+        "check_output",
+        lambda args, text: "head\n" if args == ["git", "rev-parse", "HEAD"] and text else "wrong",
+    )
+    output = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    monkeypatch.setattr("sys.argv", ["measured", "--bases", "base,earlier", "--stats", str(folder)])
+    if stale:
+        with pytest.raises(ValueError, match="stats stale"):
+            measured.main()
+    else:
+        assert measured.main() == 0
+        plan = json.loads((folder / "plan.json").read_text())
+        assert plan["head"] == "head"
+        assert plan["keys"] == [key]
+        assert plan["assignments"]
+        assert all(name.startswith("scripts.sample.x_f__mutmut_") for name in plan["assignments"])
+        assert set(plan["costs"].values()) == {55.6}
+        assert plan["units"] == "worker seconds"
+        assert output.read_text() == "shards=[0]\n"
+
+
 def test_every_consumer_uses_the_same_measured_assignment(tmp_path, monkeypatch):
     from scripts.ci_mutation.mutant_shards import shard_names
 

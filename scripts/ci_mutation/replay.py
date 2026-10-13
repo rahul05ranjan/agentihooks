@@ -106,13 +106,15 @@ def verify(folder: Path) -> dict:
         and sum(shard["expected"] for shard in shards) == manifest["mutants"]
         and sum(shard["graded"] for shard in shards) == manifest["mutants"]
     )
+    survivors = sum(row["status"] in {"survived", "no tests"} for file in report["files"] for row in file["failures"])
     proof = {
         "case": manifest["case"],
         "expected": manifest["mutants"],
         "graded": sum(shard["graded"] for shard in shards),
         "exhausted_shards": sum(shard["budget_exhausted"] for shard in shards),
         "complete": complete,
-        "survivor_grade_failed": report["failed"],
+        "survivor_grade_failed": bool(survivors) and report["failed"],
+        "survivor_failures": survivors,
         "shards": shards,
         "files": report["files"],
     }
@@ -135,9 +137,9 @@ def main() -> int:
         return 0
     if args.mode == "verify":
         proof = verify(folder)
-        return int(not proof["complete"] or proof["exhausted_shards"] != 0)
+        return int(not proof["complete"] or proof["exhausted_shards"] != 0 or not proof["survivor_grade_failed"])
     report = grade(folder, args.shard, args.shards)
-    return int(not report["shard"]["complete"] or report["shard"]["budget_exhausted"])
+    return int(report["failed"] or not report["shard"]["complete"] or report["shard"]["budget_exhausted"])
 
 
 if __name__ == "__main__":
