@@ -155,7 +155,10 @@ jobs:
 
       - name: Install matched dependencies
         working-directory: measured
-        run: uv pip install --system --excludes .github/test-excludes.txt -e '.[dev,all]' 'fakeredis[lua]==2.39.0' 'redis==8.1.0' 'pytest==9.0.2'
+        run: |
+          uv venv .cpu-venv --python "$pythonLocation/bin/python"
+          uv pip install --python .cpu-venv/bin/python --excludes .github/test-excludes.txt -e '.[dev,all]' 'fakeredis[lua]==2.39.0' 'redis==8.1.0' 'pytest==9.1.1'
+          echo "$GITHUB_WORKSPACE/measured/.cpu-venv/bin" >> "$GITHUB_PATH"
 
       - name: Restore the complete recorded unit shard
         uses: actions/download-artifact@v4
