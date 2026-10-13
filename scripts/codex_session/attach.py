@@ -58,7 +58,6 @@ def attach(
     sleep: Callable[[float], None] = time.sleep,
 ) -> int:
     """A viewer that exits at once is retried: the thread accepts resume only after its first turn wrote a rollout."""
-    code = 0
     for _ in range(ATTEMPTS):
         record = wait_attachable(read, timeout, clock, sleep)
         started = clock()
