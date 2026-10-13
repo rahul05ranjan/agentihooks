@@ -76,7 +76,7 @@ def _fresh(path, now):
     at = record.get("at") if isinstance(record, dict) else None
     if not isinstance(at, (int, float)):
         return False
-    return LIFT_SECONDS > (time.time() if now is None else now) - at
+    return (time.time() if now is None else now) - at < LIFT_SECONDS
 
 
 def post(slug):
