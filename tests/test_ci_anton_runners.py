@@ -8,8 +8,8 @@ import yaml
 WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "workflows"
 
 TRUSTED = (
-    "((!startsWith(github.event_name, 'pull_request')"
-    " || github.event.pull_request.head.repo.full_name == github.repository)"
+    "(github.event_name != 'pull_request_target'"
+    " && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)"
     ' && contains(fromJSON(\'["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]\'), github.actor)'
     ' && contains(fromJSON(\'["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]\'), github.triggering_actor)'
     " || (github.event_name == 'merge_group' || github.event_name == 'push' && github.ref == 'refs/heads/dev')"
@@ -24,10 +24,10 @@ def pool(label):
 LIGHT, STANDARD, BATCH = "anton-oss-light", "anton-oss", "anton-oss-batch"
 
 MOVED = {
+    ("access-audit.yml", "audit"): LIGHT,
     ("brain-smoke.yml", "smoke"): STANDARD,
     ("coverage-stability.yml", "compare"): BATCH,
     ("equivalence.yml", "ledger-equivalence"): STANDARD,
-    ("gate-protected.yml", "grade"): LIGHT,
     ("github-access-audit.yml", "read-back"): LIGHT,
     ("helm-kind.yml", "kind"): STANDARD,
     ("ledger-load.yml", "load"): STANDARD,
@@ -60,7 +60,6 @@ MOVED = {
     ("test.yml", "coverage-ratchet"): STANDARD,
     ("test.yml", "durations"): LIGHT,
     ("test.yml", "flake-budget"): LIGHT,
-    ("test.yml", "gate-required"): LIGHT,
     ("test.yml", "kind-due"): LIGHT,
     ("test.yml", "lint"): STANDARD,
     ("test.yml", "mutation"): BATCH,
@@ -68,7 +67,6 @@ MOVED = {
     ("test.yml", "mutation-stats"): BATCH,
     ("test.yml", "queue-baseline"): STANDARD,
     ("test.yml", "refresh-durations"): STANDARD,
-    ("test.yml", "reuse"): LIGHT,
     ("test.yml", "shard-check"): LIGHT,
     ("test.yml", "sonar"): STANDARD,
     ("test.yml", "split"): STANDARD,
@@ -80,6 +78,14 @@ MOVED = {
 
 # These exchange a GitHub OIDC token, which the Anton runners have timed out fetching.
 OIDC = {("pages.yml", "deploy"), ("publish-pypi.yml", "publish")}
+
+# The protected grader refuses a head that changes these, so they move only through the gate change protocol.
+PROTECTED = {("test.yml", "gate-required"), ("test.yml", "reuse"), ("runner-trust.yml", "actors")}
+
+# Runner trust never admits a pull_request_target run to a private runner.
+TARGET = {("gate-protected.yml", "grade")}
+
+HOSTED = OIDC | PROTECTED | TARGET
 
 
 def workflows():
@@ -146,7 +152,6 @@ def event(name, actor="nestorcolt", triggering=None, head="the-cloud-clockwork/a
 TRUSTED_EVENTS = [
     event("push"),
     event("pull_request"),
-    event("pull_request_target"),
     event("workflow_dispatch"),
     event("schedule"),
     event("pull_request", actor="agenticore-app[bot]"),
@@ -157,6 +162,7 @@ TRUSTED_EVENTS = [
 UNTRUSTED_EVENTS = [
     event("pull_request", actor="stranger"),
     event("pull_request", head="stranger/agentihooks"),
+    event("pull_request_target"),
     event("pull_request_target", actor="stranger"),
     event("pull_request_target", triggering="stranger"),
     event("pull_request_target", head="stranger/agentihooks"),
@@ -175,7 +181,7 @@ def test_no_job_resolves_a_hosted_runner_for_a_trusted_actor():
     hosted = sorted(
         f"{name}:{job} on {github['event_name']} by {github['actor']}"
         for (name, job), spec in runner_jobs().items()
-        if (name, job) not in OIDC
+        if (name, job) not in HOSTED
         for github in TRUSTED_EVENTS
         if resolve(str(spec.get("runs-on", "")), **github) not in {LIGHT, STANDARD, BATCH}
     )
@@ -198,7 +204,9 @@ def test_only_jobs_that_exchange_an_oidc_token_stay_hosted():
         permissions = {**workflows()[name].get("permissions", {}), **jobs[(name, job)].get("permissions", {})}
         assert permissions.get("id-token") == "write", f"{name}:{job}"
         assert jobs[(name, job)]["runs-on"] == "ubuntu-latest", f"{name}:{job}"
-    assert set(jobs) == set(MOVED) | OIDC
+    for name, job in PROTECTED | TARGET:
+        assert jobs[(name, job)]["runs-on"] == "ubuntu-latest", f"{name}:{job}"
+    assert set(jobs) == set(MOVED) | HOSTED
 
 
 def test_jobs_with_service_or_job_containers_run_on_the_docker_pool():
@@ -208,6 +216,7 @@ def test_jobs_with_service_or_job_containers_run_on_the_docker_pool():
 
 
 def test_the_expression_reader_tells_trusted_from_untrusted_runs():
-    assert resolve(pool(LIGHT), **event("pull_request_target")) == LIGHT
-    assert resolve(pool(LIGHT), **event("pull_request_target", head="stranger/agentihooks")) == "ubuntu-latest"
+    assert resolve(pool(LIGHT), **event("pull_request")) == LIGHT
+    assert resolve(pool(LIGHT), **event("pull_request", head="stranger/agentihooks")) == "ubuntu-latest"
+    assert resolve(pool(LIGHT), **event("pull_request_target")) == "ubuntu-latest"
     assert resolve("ubuntu-latest", **event("push")) == "ubuntu-latest"
