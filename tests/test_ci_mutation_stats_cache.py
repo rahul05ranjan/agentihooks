@@ -1,6 +1,9 @@
 import subprocess
 
 
+import pytest
+
+
 def test_unchanged_test_stats_are_reused_and_only_the_changed_file_is_collected(tmp_path):
     from scripts.ci_mutation.stats_cache import collect_cached_stats
 
@@ -44,3 +47,25 @@ def test_unchanged_test_stats_are_reused_and_only_the_changed_file_is_collected(
     (root / files[1]).write_text("def test_sample():\n    assert True\n")
     collect_cached_stats(root, cache, changes, files, ["-q"], collect)
     assert calls == [files, ["tests/test_b.py"]]
+
+
+def test_failed_collection_never_populates_reusable_stats(tmp_path):
+    from scripts.ci_mutation.stats_cache import collect_cached_stats
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    test = root / "test_sample.py"
+    test.write_text("def test_sample():\n    pass\n")
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(["git", "add", "test_sample.py"], cwd=root, check=True)
+    cache = tmp_path / "cache"
+    with pytest.raises(SystemExit, match="1"):
+        collect_cached_stats(
+            root,
+            cache,
+            {},
+            ["test_sample.py"],
+            [],
+            lambda files: [{"status": 1, "tests": {}, "durations": {}, "cpu": 1}],
+        )
+    assert list(cache.glob("*.json")) == []
