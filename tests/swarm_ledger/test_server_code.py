@@ -122,6 +122,16 @@ def test_the_digest_follows_code_content_and_names_only(tmp_path):
     assert server_code.code_digest((code,)) != digest
 
 
+def test_the_digest_skips_an_unreadable_file_and_still_reads_the_ones_after_it(tmp_path):
+    code = tmp_path / "code"
+    code.mkdir()
+    (code / "a.py").symlink_to(tmp_path / "missing.py")
+    (code / "b.py").write_text("old")
+    before = server_code.code_digest((code,))
+    (code / "b.py").write_text("new")
+    assert server_code.code_digest((code,)) != before
+
+
 def test_the_same_content_moves_the_held_stamp_and_a_change_leaves_it(tmp_path):
     code = code_tree(tmp_path)
     held = server_code.loaded_code((code,))

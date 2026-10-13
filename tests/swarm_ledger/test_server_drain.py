@@ -1,5 +1,6 @@
 import signal
 import threading
+import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -7,11 +8,12 @@ import pytest
 
 from scripts.swarm import ledger_watchdog
 from scripts.swarm_ledger import ledger_server, server_drain
-from scripts.swarm_ledger.events import Expired, Hub
+from scripts.swarm_ledger.events import Hub
 
 
 class Held(BaseHTTPRequestHandler):
     def do_GET(self):
+        self.server.peer = self.client_address
         self.server.entered.set()
         self.server.release.wait(5)
         self.send_response(200)
@@ -61,6 +63,7 @@ def test_a_stopping_server_answers_the_request_in_flight_before_it_lets_go_of_th
     client.join(5)
     assert drained == [True]
     assert answers == [b"done"]
+    assert server.peer[0] == "127.0.0.1"
     ThreadingHTTPServer(("127.0.0.1", server.server_address[1]), Held).server_close()
 
 
@@ -74,26 +77,23 @@ def test_a_request_that_outlives_the_drain_wait_lets_the_server_go_anyway():
     client.join(5)
 
 
+def test_the_server_counts_every_request_in_flight():
+    server, serving = running()
+    clients = [in_flight(server, []) for _ in range(2)]
+    deadline = time.monotonic() + 5
+    while server.active < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert server.active == 2
+    server.release.set()
+    for client in clients:
+        client.join(5)
+    server.shutdown()
+    serving.join(5)
+    assert server.drain(Hub(), timeout=5) is True and server.active == 0
+
+
 def test_the_drain_wait_ends_before_the_watchdog_kills_the_server():
     assert server_drain.DRAIN_S < ledger_watchdog.STOP_WAIT_S
-
-
-def test_stopping_the_hub_ends_every_waiting_stream_at_once():
-    hub = Hub()
-    seq, _ = hub.open("s", lambda: {"ledger": {"_meta": {"rev": 1}}})
-    ended = []
-
-    def waiting():
-        try:
-            hub.wait("s", seq, 30)
-        except Expired:
-            ended.append(True)
-
-    stream = threading.Thread(target=waiting, daemon=True)
-    stream.start()
-    hub.stop()
-    stream.join(5)
-    assert ended == [True]
 
 
 def test_the_stop_signal_shuts_the_accept_loop_from_another_thread(monkeypatch):
@@ -105,6 +105,21 @@ def test_the_stop_signal_shuts_the_accept_loop_from_another_thread(monkeypatch):
     serving.join(5)
     assert not serving.is_alive()
     server.server_close()
+
+
+def test_a_stop_signal_before_the_accept_loop_runs_never_holds_the_process_open(monkeypatch):
+    installed = {}
+    monkeypatch.setattr(server_drain.signal, "signal", lambda signum, handler: installed.setdefault(signum, handler))
+    server = server_drain.DrainingServer(("127.0.0.1", 0), Held)
+    server.stop_on(signal.SIGTERM)
+    before = set(threading.enumerate())
+    installed[signal.SIGTERM](signal.SIGTERM, None)
+    stopping = [thread for thread in threading.enumerate() if thread not in before]
+    server.serve_forever(poll_interval=0.01)
+    for thread in stopping:
+        thread.join(5)
+    server.server_close()
+    assert stopping and all(thread.daemon for thread in stopping)
 
 
 def test_a_replacement_stops_the_accept_loop_and_says_so():

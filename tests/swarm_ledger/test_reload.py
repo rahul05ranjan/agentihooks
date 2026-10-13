@@ -8,9 +8,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from scripts.swarm_ledger import ledger_server as server
+
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts" / "swarm_ledger"
-sys.path.insert(0, str(SCRIPTS))
-import ledger_server as server  # noqa: E402
 
 
 class Reload(unittest.TestCase):
