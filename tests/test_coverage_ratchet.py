@@ -409,6 +409,92 @@ def test_the_report_lists_every_missed_line_and_every_lost_line(tmp_path):
     assert "hooks/a.py:3 ran on base b1 and no head test runs it" in text
 
 
+@pytest.mark.parametrize("snapshots", [0, 1, 2, 3])
+def test_command_reports_unconfirmed_history_counts(tmp_path, monkeypatch, snapshots):
+    sources = {"hooks/a.py": SOURCE}
+    _repo(tmp_path, sources)
+    base = coverage_history.git("rev-parse", "HEAD", cwd=tmp_path).strip()
+    runs = [_measure(base, {"hooks/a.py": {1, 2, 3}}, sources)]
+    runs += [_measure(f"older{n}", {"hooks/a.py": {1, 2}}, sources) for n in range(snapshots)]
+    monkeypatch.setattr(ratchet, "_cached_runs", lambda *args: iter(runs))
+    shards = tmp_path / "shards" / "coverage-3.12-1"
+    shards.mkdir(parents=True)
+    _shard(shards / ".coverage", {"hooks/a.py": [1, 2]})
+    out = tmp_path / "out"
+    status = ratchet.main(
+        [
+            "--base",
+            base,
+            "--head",
+            str(tmp_path),
+            "--shards",
+            "1",
+            "--head-shards",
+            str(shards.parent),
+            "--out",
+            str(out),
+            "--base-baseline",
+            "fixture.json",
+        ]
+    )
+    assert status == (1 if snapshots < 2 else 0)
+    text = (out / "report.txt").read_text()
+    if snapshots >= 2:
+        assert f"hooks/a.py:3 unconfirmed: {snapshots} measured history snapshots did not run it" in text
+    else:
+        assert "hooks/a.py:3 ran on base" in text
+
+
+@pytest.mark.parametrize("change", ["unchanged", "deleted", "removed", "added", "unrelated", "renamed"])
+def test_command_keeps_changed_importing_tests_red(tmp_path, monkeypatch, change):
+    test = "tests/test_a.py"
+    imports = "import hooks.a\nassert True\n"
+    base_test = "assert True\n" if change in {"added", "unrelated"} else imports
+    sources = {"hooks/a.py": SOURCE, test: base_test}
+    _repo(tmp_path, sources)
+    base = coverage_history.git("rev-parse", "HEAD", cwd=tmp_path).strip()
+    if change == "deleted":
+        (tmp_path / test).unlink()
+    elif change == "renamed":
+        (tmp_path / test).rename(tmp_path / "tests/test_renamed.py")
+    elif change != "unchanged":
+        (tmp_path / test).write_text(
+            "import hooks.b\n" if change == "unrelated" else imports if change == "added" else "assert True\n"
+        )
+    if change != "unchanged":
+        subprocess.run(["git", "-C", str(tmp_path), "add", "tests"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "change tests"], check=True, capture_output=True)
+    runs = [_measure(base, {"hooks/a.py": {1, 2, 3}}, sources)]
+    runs += [_measure(f"older{n}", {"hooks/a.py": {1, 2}}, sources) for n in range(2)]
+    monkeypatch.setattr(ratchet, "_cached_runs", lambda *args: iter(runs))
+    shards = tmp_path / "shards" / "coverage-3.12-1"
+    shards.mkdir(parents=True)
+    _shard(shards / ".coverage", {"hooks/a.py": [1, 2]})
+    out = tmp_path / "out"
+    status = ratchet.main(
+        [
+            "--base",
+            base,
+            "--head",
+            str(tmp_path),
+            "--shards",
+            "1",
+            "--head-shards",
+            str(shards.parent),
+            "--out",
+            str(out),
+            "--base-baseline",
+            "fixture.json",
+        ]
+    )
+    assert status == (0 if change in {"unchanged", "unrelated"} else 1)
+    text = (out / "report.txt").read_text()
+    if status:
+        assert "hooks/a.py:3 ran on base" in text
+    else:
+        assert "hooks/a.py:3 unconfirmed: 2 measured history snapshots did not run it" in text
+
+
 def test_the_report_lists_only_lines_no_head_shard_ran(tmp_path):
     (tmp_path / "hooks").mkdir()
     (tmp_path / "hooks/a.py").write_text(SOURCE)
