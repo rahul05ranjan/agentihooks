@@ -263,6 +263,7 @@ def test_every_merge_queue_job_but_the_watcher_is_graded():
         job_id
         for job_id, job in jobs.items()
         if "github.event_name == 'push'" not in str(job.get("if", ""))
+        or "merge_group" in str(job.get("if", ""))
         and job_id not in ("admission", "gate-required", "queue-fail-fast")
     }
     assert queued <= _gate_needs(jobs)
