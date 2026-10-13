@@ -69,7 +69,7 @@ def selected_tests(root: Path, changed: list[str]) -> set[str]:
     needles = set()
     for path in changed:
         needles.add(path)
-        if Path(path).suffix == ".py" and path.split("/", 1)[0] in (*SOURCES, TESTS):
+        if Path(path).suffix == ".py" and Path(path).parts[0] in (*SOURCES, TESTS):
             tests.update(select_tests(root, Path(path)))
         else:
             needles.add(Path(path).name)
@@ -80,7 +80,7 @@ def selected_tests(root: Path, changed: list[str]) -> set[str]:
 def file_seconds(durations: dict[str, float], files: set[str]) -> dict[str, float]:
     seconds = dict.fromkeys(files, 0.0)
     for node, duration in durations.items():
-        path = node.split("::", 1)[0]
+        path = node.partition("::")[0]
         if path in seconds:
             seconds[path] += duration
     return {path: total if total else UNKNOWN_SECONDS for path, total in seconds.items()}
@@ -115,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--event", required=True)
     parser.add_argument("--legs", type=int, required=True)
     parser.add_argument("--root", type=Path, default=Path("."))
-    parser.add_argument("--durations", type=Path, nargs="*", default=[])
+    parser.add_argument("--durations", type=Path, nargs="*")
     args = parser.parse_args(argv)
     scope, legs = FULL, []
     if args.event == PULL_REQUEST:
