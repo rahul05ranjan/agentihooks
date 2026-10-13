@@ -2,6 +2,8 @@ import signal
 import threading
 from http.server import ThreadingHTTPServer
 
+from scripts.swarm_ledger.events import Hub
+
 DRAIN_S = 8.0  # under the swarm watchdog's ten second kill wait
 
 
@@ -26,14 +28,14 @@ class DrainingServer(ThreadingHTTPServer):
                 self.active -= 1
                 self.idle.notify_all()
 
-    def stop_on(self, signum):
+    def stop_on(self, signum: int) -> None:
         signal.signal(signum, lambda *_: threading.Thread(target=self.shutdown, daemon=True).start())
 
-    def replace(self):
+    def replace(self) -> None:
         self.replacing = True
         self.shutdown()
 
-    def drain(self, hub, timeout=DRAIN_S) -> bool:
+    def drain(self, hub: Hub, timeout: float = DRAIN_S) -> bool:
         self.server_close()
         hub.stop()
         with self.idle:

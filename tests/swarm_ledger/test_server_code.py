@@ -1,6 +1,8 @@
 import json
 import os
 
+import pytest
+
 from scripts.swarm_ledger import ledger_server, server_code
 
 
@@ -89,12 +91,15 @@ def test_a_server_is_current_only_while_its_own_record_matches_the_code_on_disk(
     assert not server_code.stale(tmp_path, 4242)
 
 
-def test_file_times_that_move_without_a_content_change_keep_the_server_current(tmp_path):
+def test_file_times_that_move_without_a_content_change_keep_the_server_current(tmp_path, monkeypatch):
     code = code_tree(tmp_path)
     server_code.record(tmp_path, 4242, server_code.loaded_code((code,)), (code,))
     (code / "c.js").write_text("")
     os.utime(code / "a.py", ns=(99, 99))
     assert server_code.code_stamp((code,)) != server_code.loaded(tmp_path)["stamp"]
+    assert not server_code.stale(tmp_path, 4242)
+    assert server_code.loaded(tmp_path)["stamp"] == server_code.code_stamp((code,))
+    monkeypatch.setattr(server_code, "code_digest", lambda dirs: pytest.fail("digest read again"))
     assert not server_code.stale(tmp_path, 4242)
 
 

@@ -77,4 +77,10 @@ def stale(folder: Path, pid: int) -> bool:
     held = loaded(folder)
     if held is None or held.get("pid") != pid:
         return True
-    return not same(held, tuple(Path(d) for d in held.get("dirs", ())))
+    dirs = tuple(Path(d) for d in held.get("dirs", ()))
+    stamp = held.get("stamp")
+    if not same(held, dirs):
+        return True
+    if held["stamp"] != stamp:
+        record(folder, pid, held, dirs)
+    return False
