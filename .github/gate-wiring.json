@@ -1,5 +1,11 @@
 {
-  "not_gates": {},
+  "not_gates": {
+    "test.yml/queue-fail-fast": {
+      "reason": "Cancels a merge queue run the moment a graded job fails so the queue frees the entry's slot; it grades nothing, and Gate Required needing it would make the gate wait on the watcher.",
+      "owner": "ci-4@rig-grade-swarm",
+      "expires": "2027-04-13"
+    }
+  },
   "outside_gate": {
     "equivalence.yml/ledger-equivalence": {
       "reason": "Opt in replay of ledger storage and pages; the equivalence gate task wires it into the gate.",

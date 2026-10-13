@@ -21,6 +21,7 @@ BUDGETS = {
     "sonar": 240,
     "coverage-ratchet": 90,
     "queue-baseline": 180,
+    "queue-fail-fast": RUN_BUDGET_S,
     "mutation-plan": 60,
     "mutation-stats": 210,
     "mutation": 480,
