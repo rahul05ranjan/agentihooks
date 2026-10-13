@@ -30,6 +30,12 @@ def test_a_task_read_names_one_task_and_returns_its_row(monkeypatch):
     assert reads == [("demo", "tasks/t2", True, False)]
 
 
+def test_a_task_id_cannot_name_a_thread_or_another_resource(monkeypatch):
+    reads = served(monkeypatch, refused(404))
+    assert ledger_client.LedgerClient().task("demo", "t1/comments") is None
+    assert reads == [("demo", "tasks/t1%2Fcomments", False, False)]
+
+
 def test_a_task_the_ledger_does_not_hold_reads_as_none(monkeypatch):
     served(monkeypatch, refused(404))
     assert ledger_client.LedgerClient().task("demo", "t9") is None

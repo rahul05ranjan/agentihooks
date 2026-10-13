@@ -1,6 +1,8 @@
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from scripts.swarm_ledger.events.publishing import Publishing
 
 
@@ -44,6 +46,22 @@ def test_a_read_returns_the_stored_document_and_publishes_each_generation_once()
         ("t", {"_meta": {"rev": 1}, "read": "t"}),
         ("s", {"_meta": {"rev": 5}, "read": "s"}),
     ]
+
+
+def test_a_generation_whose_publication_failed_is_published_at_the_next_read():
+    seen = []
+
+    def flaky(slug, state):
+        seen.append(state["_meta"]["rev"])
+        if len(seen) == 1:
+            raise OSError("stream gone")
+
+    repository = Publishing(Store(), flaky)
+    with pytest.raises(OSError):
+        repository.current("s")
+    repository.current("s")
+    repository.current("s")
+    assert seen == [1, 1]
 
 
 def test_a_write_returns_state_and_refusals_and_publishes_the_stored_generation():

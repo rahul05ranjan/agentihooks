@@ -4,6 +4,7 @@ import sys
 import urllib.error
 import uuid
 from pathlib import Path
+from urllib.parse import quote
 
 from scripts.swarm import notice_text
 from scripts.swarm.store import SwarmError
@@ -66,7 +67,7 @@ class LedgerClient:
     def task(self, slug, task_id):
         """One task without its threads, or None when the ledger holds no such task."""
         try:
-            return self._resource(slug, f"tasks/{task_id}")
+            return self._resource(slug, f"tasks/{quote(task_id, safe='')}")
         except urllib.error.HTTPError as exc:
             if exc.code != 404:
                 raise

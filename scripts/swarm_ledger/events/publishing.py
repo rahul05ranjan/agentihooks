@@ -22,8 +22,8 @@ class Publishing:
         entry = self.inner.current(slug)
         with self.lock:
             if entry.generation > self.published.get(slug, -1):
-                self.published[slug] = entry.generation
                 self.publish(slug, entry.state)
+                self.published[slug] = entry.generation
         return entry
 
     def get_document(self, slug: str) -> dict:
