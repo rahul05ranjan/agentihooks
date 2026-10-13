@@ -23,6 +23,7 @@ NOT_READY = "the execution has no connected thread after {:g} seconds"
 NO_ATTACH = "{} runs no app-server a native terminal can attach to"
 NO_THREAD = "{} has no connected thread to reopen"
 LOCAL = "local"
+LAUNCHING_HARNESSES = ("codex", "")
 Read = Callable[[], TransportRecord | None]
 Run = Callable[[list[str]], int]
 Open = Callable[[str, list[str]], "Placement"]
@@ -85,7 +86,7 @@ def recorded(slug: str, name: str) -> Read:
 
     def read() -> TransportRecord | None:
         agent = next((agent for agent in store.agents(slug) if agent.name == name), None)
-        if agent is None or not agent.execution_id:
+        if agent is None or (not agent.execution_id and agent.harness in LAUNCHING_HARNESSES):
             return None
         if not capabilities.of_agent(agent).native_terminal_attach:
             raise AttachError(NO_ATTACH.format(name))
