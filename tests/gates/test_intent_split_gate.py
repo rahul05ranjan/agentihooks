@@ -143,6 +143,40 @@ def test_listed_intent_refuses_a_pull_without_its_own_judgment(tmp_path, monkeyp
         assert not intent.IntentGate().decide(bash(f"gh pr merge {url}"), WHO, verdicts(tmp_path)).allowed
 
 
+def test_recording_a_new_half_marks_it_registered_before_its_tick(tmp_path, monkeypatch):
+    task = split_task()
+    judged(tmp_path, task)
+    monkeypatch.setattr(intent, "stamp_body", lambda *args: True)
+    intent.stamp(SLUG, TASK, SECOND, {**DOC, "tasks": [task]}, "enforce", NOW + 1, home=tmp_path)
+    monkeypatch.setattr(intent, "pr_head", lambda url: "abc")
+    decision = intent.IntentGate().decide(bash(f"gh pr merge {SECOND}"), WHO, verdicts(tmp_path))
+    assert not decision.allowed
+    assert decision.reason == "Intent must be checked on this pull request head and contract before it can merge."
+    foreign = intent.IntentGate().decide(bash("gh pr merge 99"), WHO, verdicts(tmp_path))
+    assert not foreign.allowed
+    assert foreign.reason == "Intent requires a pull request registered on this task."
+
+
+def test_an_earlier_half_keeps_the_coach_shortfall_after_two_fix_rounds(tmp_path, monkeypatch):
+    task = split_task()
+    for index, head in enumerate(["first", "fixed once", "fixed twice"]):
+        intent.Check(
+            SLUG,
+            "coach",
+            NOW + index,
+            Ledger(),
+            Mail(),
+            lambda url: {**VIEW, "head": head},
+            lambda state: ("fail", "missing behavior"),
+            home=tmp_path,
+        ).run({**DOC, "tasks": [task]})
+    judged(tmp_path, {**task, "pr_url": SECOND, "split_pulls": [FIRST, SECOND]})
+    monkeypatch.setattr(intent, "pr_head", lambda url: "fixed twice" if url == FIRST else "abc")
+    monkeypatch.setattr(intent, "pr_merged", lambda url: False)
+    decision = intent.IntentGate().decide(bash(f"gh pr merge {FIRST}"), WHO, verdicts(tmp_path), "coach")
+    assert decision.allowed
+
+
 @pytest.mark.parametrize(
     "suffix", ["gh pr merge", f"agentihooks swarm {SLUG} ready handoff.md", f"agentihooks swarm {SLUG} done"]
 )
