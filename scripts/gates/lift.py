@@ -104,6 +104,10 @@ def active(rows, now_ms):
     return by_agent
 
 
+def current(slug, now_ms, home=None):
+    return active(log.since(slug, now_ms - LIFT_SECONDS * 1000, home), now_ms)
+
+
 def _fresh(path, now):
     return _alive(_record(path), now)
 
