@@ -239,6 +239,23 @@ def test_unconfirmed_counts_take_precedence_over_different_version_clearance():
     assert result.unconfirmed == {"hooks/a.py": {3: 2}}
 
 
+@pytest.mark.parametrize("history,count", [([False, True, False], 2), ([False, False, True, False], 3)])
+def test_other_version_coverage_does_not_truncate_same_version_snapshot_count(history, count):
+    runs = [_measure("base", {"hooks/a.py": {1, 2, 3}}, {"hooks/a.py": SOURCE})]
+    runs += [
+        _measure(
+            f"older{n}",
+            {"hooks/a.py": {1, 2, 3} if covered else {1, 2}},
+            {"hooks/a.py": SOURCE + "\n# different version\n" if covered else SOURCE},
+        )
+        for n, covered in enumerate(history)
+    ]
+    result = ratchet.grade({"hooks/a.py": {1, 2}}, lambda path: SOURCE, iter(runs))
+    assert result.lost == {}
+    assert result.unstable == {}
+    assert result.unconfirmed == {"hooks/a.py": {3: count}}
+
+
 @pytest.mark.parametrize("covered,snapshots", [(True, 20), (False, 1), (False, 2), (False, 20)])
 def test_ledger_stall_fixture_grades_each_history_case(covered, snapshots):
     fixture = json.loads((Path(__file__).parent / "fixtures" / "coverage_incidental.json").read_text())
