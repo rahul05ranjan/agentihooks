@@ -8,8 +8,8 @@ import yaml
 WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "workflows"
 
 TRUSTED = (
-    "((!startsWith(github.event_name, 'pull_request')"
-    " || github.event.pull_request.head.repo.full_name == github.repository)"
+    "(github.event_name != 'pull_request_target'"
+    " && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)"
     ' && contains(fromJSON(\'["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]\'), github.actor)'
     ' && contains(fromJSON(\'["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]\'), github.triggering_actor)'
     " || (github.event_name == 'merge_group' || github.event_name == 'push' && github.ref == 'refs/heads/dev')"
@@ -63,7 +63,6 @@ MOVED = {
     ("test.yml", "coverage-ratchet"): LIGHT,
     ("test.yml", "durations"): LIGHT,
     ("test.yml", "flake-budget"): LIGHT,
-    ("test.yml", "gate-required"): LIGHT,
     ("test.yml", "kind-due"): LIGHT,
     ("test.yml", "lint"): STANDARD,
     ("test.yml", "mutation"): BATCH,
@@ -71,7 +70,6 @@ MOVED = {
     ("test.yml", "mutation-stats"): BATCH,
     ("test.yml", "queue-baseline"): STANDARD,
     ("test.yml", "refresh-durations"): STANDARD,
-    ("test.yml", "reuse"): LIGHT,
     ("test.yml", "shard-check"): LIGHT,
     ("test.yml", "sonar"): STANDARD,
     ("test.yml", "split"): STANDARD,
