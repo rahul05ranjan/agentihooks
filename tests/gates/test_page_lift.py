@@ -125,15 +125,11 @@ class TestTaskLift:
         lift.lift_agent(Who(name="master@1-0", swarm=SLUG), "stub", tmp_path)
         assert self.run(tmp_path, None, agent="master@1-0", task="")[0] == 0
 
-    def test_an_agent_lifted_before_its_claim_keeps_the_lift_until_its_task_is_lifted(self, tmp_path):
-        lift.lift_agent(Who(name=ME, swarm=SLUG), "stub", tmp_path)
-        assert self.run(tmp_path, "a1", agent=ME)[0] == 0
-        lift.lift_agent(Who(name=SUCCESSOR, swarm=SLUG, task=TASK), "stub", tmp_path, pull={"url": URL, "head": "a1"})
-        assert self.run(tmp_path, "b2", agent=ME)[0] == 2
-
-    def test_a_dropped_task_lift_lifts_nothing(self, tmp_path):
+    def test_a_dropped_task_lift_lifts_nothing_even_for_the_lifted_agent(self, tmp_path):
         lift.lift_agent(WHO, "stub", tmp_path, pull={"url": URL, "head": "a1"})
         lift.drop_task(SLUG, TASK, tmp_path)
+        assert lift.agent_lifted(SLUG, ME, "stub", tmp_path)
+        assert self.run(tmp_path, "a1", agent=ME)[0] == 2
         assert self.run(tmp_path, "a1")[0] == 2
 
     def test_task_lift_path_sits_under_the_swarm_home_lifts_tasks_folder(self, tmp_path):

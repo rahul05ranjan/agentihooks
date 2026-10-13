@@ -73,7 +73,7 @@ def drop_task(slug, task, home=None):
 
 
 def held(slug, agent, task, gate, home=None):
-    if task and gate not in SERVER_GATES and task_lift_path(slug, task, gate, home).exists():
+    if task and gate not in SERVER_GATES:
         return task_lifted(slug, task, gate, home)
     return agent_lifted(slug, agent, gate, home)
 
