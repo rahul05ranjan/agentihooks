@@ -102,7 +102,7 @@ def test_take_master_on_a_remote_ledger_places_and_pins_the_new_master_before_it
 
 def test_a_session_already_named_this_master_mints_its_token_with_the_hive_credential(remote_taker, monkeypatch):
     store, ledger, _, _, sent = remote_taker
-    assert store.next_name("sw", "master") == MASTER
+    store.next_name("sw", "master")
     monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", MASTER)
     broadcast.name_session(4242, MASTER)
     seen = []
@@ -110,19 +110,43 @@ def test_a_session_already_named_this_master_mints_its_token_with_the_hive_crede
     assert run("sw", "take-master") == 0
     assert seen == [(PINNED, True)]
     assert "AGENTIHOOKS_LEDGER_AGENT_TOKEN" not in os.environ
-    assert sent[:2] == [("sw", "agent-token", MINT)] * 2
+    assert sent == [("sw", "agent-token", MINT), ("sw", "agent-token", MINT), ("sw", "metadata", PINNED)]
+
+
+def _started(store, rt, monkeypatch):
+    monkeypatch.setenv("AGENTIHOOKS_DEPLOYMENT", "local")
+    run("sw", "start")
+    monkeypatch.setenv("AGENTIHOOKS_DEPLOYMENT", "compose")
+    assert (sorted(rt.live), _masters(store)) == ([MASTER], [(MASTER, "", {})])
 
 
 def test_replace_on_a_remote_host_retires_the_old_master_before_placing_the_new_one(remote_taker, monkeypatch):
     store, ledger, rt, _, _ = remote_taker
-    monkeypatch.setenv("AGENTIHOOKS_DEPLOYMENT", "local")
-    run("sw", "start")
-    monkeypatch.setenv("AGENTIHOOKS_DEPLOYMENT", "compose")
+    _started(store, rt, monkeypatch)
     killed = []
     ledger.closed = lambda slug: killed.append(list(rt.killed)) or False
     assert run("sw", "take-master", "--replace") == 0
     assert killed == [[MASTER]]
     assert _masters(store) == [("master@a1b2c3-0002", HIVE_ID, {"host_id": HIVE_ID})]
+
+
+def test_a_refused_replace_on_a_remote_host_leaves_the_old_master_retired_and_no_new_one(remote_taker, monkeypatch):
+    store, ledger, rt, _, _ = remote_taker
+    _started(store, rt, monkeypatch)
+    ledger.closed = _unauthenticated
+    assert _taken(["sw", "take-master", "--replace"]) == "unauthenticated: the ledger server refused the credential"
+    assert rt.killed == [MASTER]
+    assert _masters(store) == []
+
+
+def test_a_remote_host_without_a_hive_id_is_refused_before_any_change(remote_taker, monkeypatch, capsys):
+    store, _, _, _, sent = remote_taker
+    monkeypatch.setenv("AGENTIHOOKS_HIVE_ID", "")
+    assert run("sw", "take-master") == 1
+    assert capsys.readouterr().err == (
+        "swarm: take-master on a remote host needs AGENTIHOOKS_HIVE_ID from agentihooks hive join\n"
+    )
+    assert (_masters(store), sent, broadcast.session_name(4242)) == ([], [], CARRIED)
 
 
 def test_a_local_ledger_keeps_the_session_unpinned(taker, monkeypatch):  # noqa: F811

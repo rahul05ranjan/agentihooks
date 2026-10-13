@@ -874,7 +874,6 @@ def session_name(pid: int) -> str:
 
 
 def pin_session(pid: int, swarm: str) -> int:
-    """Pin every live session of ``pid`` to a swarm; returns how many records carry it."""
     return _mark_session(pid, "swarm", swarm)
 
 

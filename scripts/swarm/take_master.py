@@ -59,7 +59,11 @@ def pin(slug, name, environ=os.environ):
 
 
 def hive_of(environ=os.environ):
-    return environ.get("AGENTIHOOKS_HIVE_ID", "") if ledger_link.remote(environ) else ""
+    if not ledger_link.remote(environ):
+        return ""
+    if not environ.get("AGENTIHOOKS_HIVE_ID"):
+        raise SwarmError("take-master on a remote host needs AGENTIHOOKS_HIVE_ID from agentihooks hive join")
+    return environ["AGENTIHOOKS_HIVE_ID"]
 
 
 def placed(store, slug, record, hive):
@@ -68,8 +72,7 @@ def placed(store, slug, record, hive):
     return store.start_execution(slug, record, previous.execution_id if previous else "")
 
 
-def admitted(store, slug, record, admit, pid):
-    hive = hive_of()
+def admitted(store, slug, record, admit, pid, hive):
     if hive:
         record = placed(store, slug, record, hive)
     pin(slug, record.name)
@@ -112,6 +115,7 @@ def master_record(slug, name, pid, now_ms):
 
 
 def take(store, slug, name, runtime, now_ms, replace_live=False, admit=lambda name: None):
+    hive = hive_of()
     live = runtime.live_names()
     carried, name = name, store.names.resolve(name)
     seated = _master_name(name, store.ensure_code(slug).code)
@@ -126,13 +130,12 @@ def take(store, slug, name, runtime, now_ms, replace_live=False, admit=lambda na
         name = store.next_name(slug, MASTER, now_ms)
     if not name_session(pid, name):
         raise SwarmError("this session is not registered with agentihooks, so the tick could not see it as master")
-    if hive_of():
-        retired(store, slug, runtime, others)
-        others = []
-    record = admitted(store, slug, master_record(slug, name, pid, now_ms), admit, pid)
+    before, after = (others, []) if hive else ([], others)
+    retired(store, slug, runtime, before)
+    record = admitted(store, slug, master_record(slug, name, pid, now_ms), admit, pid, hive)
     if not seated and carried and not store.names.entry(carried):
         store.names.alias(carried, name)
-    retired(store, slug, runtime, others)
+    retired(store, slug, runtime, after)
     for agent in masters:
         if agent.name in own and agent.name != name:
             store.drop_agent(slug, agent.name)
