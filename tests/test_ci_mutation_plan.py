@@ -17,6 +17,30 @@ def test_each_mutant_costs_the_measured_worker_seconds_whatever_its_tests_take(t
     assert plan.shard_count(412 * plan.MUTANT_SECONDS, 412, 240, 10) == 3
 
 
+def test_shared_statistics_replace_flat_costs_before_assigning_shards():
+    from scripts.ci_mutation.measured import measured_costs, plan_shards
+
+    names = [f"scripts.sample.x_expensive__mutmut_{i}" for i in range(8)]
+    names += [f"scripts.sample.x_cheap__mutmut_{i}" for i in range(8)]
+    stats = [
+        {
+            "tests": {"scripts.sample.x_expensive": ["slow"], "scripts.sample.x_cheap": ["fast"]},
+            "durations": {"slow": 200.0, "fast": 1.0},
+        }
+    ]
+    costs = measured_costs(names, stats)
+    assert costs[names[0]] >= 200.0
+    assert costs[names[-1]] >= 1.0
+    assert costs[names[0]] > costs[names[-1]]
+    plan = plan_shards(costs, target=100, limit=10)
+    assert plan["shards"] > 1
+    assert set(plan["assignments"]) == set(names)
+    assert plan["units"] == "worker seconds"
+    assert plan == plan_shards(dict(reversed(list(costs.items()))), target=100, limit=10)
+    expensive_shards = [plan["assignments"][name] for name in names[:8]]
+    assert len(set(expensive_shards)) == min(plan["shards"], 8)
+
+
 @pytest.mark.parametrize(
     ("seconds", "mutants", "expected"),
     [
