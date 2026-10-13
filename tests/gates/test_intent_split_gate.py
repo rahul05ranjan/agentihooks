@@ -108,3 +108,36 @@ def test_merge_target_reads_the_first_pull_request_operand():
     assert intent._merge_target(["git", "merge", "dev"]) is None
     assert intent._merge_target(["gh", "pr", "view", "12"]) is None
     assert intent._merge_target(["agentihooks", "swarm", SLUG, "merge", "state", SECOND]) is None
+
+
+@pytest.mark.parametrize("target", [FIRST, "9"])
+@pytest.mark.parametrize("head,allowed", [("abc", True), ("new", False), (None, False)])
+def test_the_tests_first_intent_survives_recording_the_main_pull(tmp_path, monkeypatch, target, head, allowed):
+    task = split_task(split=[], split_pulls=[], pr_urls=[FIRST])
+    judged(tmp_path, task)
+    monkeypatch.setattr(intent, "stamp_body", lambda *args: True)
+    intent.stamp(SLUG, TASK, SECOND, {**DOC, "tasks": [task]}, "enforce", NOW + 1, home=tmp_path)
+    monkeypatch.setattr(intent, "pr_head", lambda url: head if url == FIRST else "main")
+    state = verdicts(tmp_path)
+    decision = intent.IntentGate().decide(bash(f"agentihooks swarm {SLUG} merge queue {target}"), WHO, state)
+    assert decision.allowed is allowed
+    assert state.read(TASK)["verdict"] == "pending"
+
+
+def test_the_main_intent_does_not_override_a_failed_tests_first_pull(tmp_path, monkeypatch):
+    task = split_task(split=[], split_pulls=[], pr_urls=[FIRST])
+    judged(tmp_path, task, verdict="fail")
+    main = {**task, "pr_url": SECOND, "pr_urls": [FIRST, SECOND]}
+    judged(tmp_path, main)
+    monkeypatch.setattr(intent, "pr_head", lambda url: "abc")
+    decision = intent.IntentGate().decide(bash(f"gh pr merge {FIRST}"), WHO, verdicts(tmp_path))
+    assert not decision.allowed
+    assert "failed" in decision.reason
+
+
+def test_listed_intent_refuses_a_pull_without_its_own_judgment(tmp_path, monkeypatch):
+    task = split_task(split=[], split_pulls=[], pr_urls=[FIRST, SECOND])
+    judged(tmp_path, task)
+    monkeypatch.setattr(intent, "pr_head", lambda url: "abc")
+    for url in [SECOND, "https://github.com/o/r/pull/99"]:
+        assert not intent.IntentGate().decide(bash(f"gh pr merge {url}"), WHO, verdicts(tmp_path)).allowed
