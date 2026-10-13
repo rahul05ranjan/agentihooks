@@ -401,7 +401,7 @@ jobs:
     if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || needs.admission.result == 'success') && (github.event_name != 'merge_group' || needs.reuse.outputs.reused != 'true') }}
     needs: [reuse, admission]
     runs-on: ${{ (github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.actor) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.triggering_actor) || (github.event_name == 'merge_group' || github.event_name == 'push' && github.ref == 'refs/heads/dev') && github.actor == 'github-merge-queue[bot]' && github.triggering_actor == 'github-merge-queue[bot]') && 'anton-oss-light' || 'ubuntu-latest' }}
-    timeout-minutes: 3
+    timeout-minutes: 5
     permissions:
       contents: read
     outputs:
@@ -451,7 +451,7 @@ jobs:
             printf 'scope=full\nlegs=[]\ncount=0\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          durations=("$GITHUB_WORKSPACE/.test_durations")
+          durations=("$RUNNER_TEMP/grader/.test_durations")
           for file in ~/dev-durations/.test_durations ~/dev-durations/.test_durations-3.12; do
             [[ -f "$file" ]] && durations+=("$file")
           done
@@ -787,6 +787,7 @@ jobs:
       contents: read
     env:
       CODEX_RELEASE: rust-v0.160.0
+      UNIT_SOURCE: ""
       FILES: ${{ matrix.leg == 1 && needs.select.outputs.files_1 || matrix.leg == 2 && needs.select.outputs.files_2 || needs.select.outputs.files_3 }}
       LEG: ${{ matrix.leg }}
     strategy:
@@ -874,6 +875,8 @@ jobs:
           touch flakes.jsonl
           echo "Tests retried in place: $(wc -l < flakes.jsonl)" | tee -a "$GITHUB_STEP_SUMMARY"
           jq -r '"\(.outcome) after \(.attempts) attempts: \(.test)"' flakes.jsonl | tee -a "$GITHUB_STEP_SUMMARY"
+          jq -r 'select(.outcome == "flaky") | "::warning title=Flaky test::\(.test) passed on attempt \(.attempts) in run \(.run)"' flakes.jsonl
+          jq -r 'select(.crashes) | "::warning title=Worker crash::\(.test) crashed its worker \(.crashes) time(s) in run \(.run)"' flakes.jsonl
 
       - name: Upload coverage
         if: matrix.python-version == '3.12'

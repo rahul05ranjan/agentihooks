@@ -86,7 +86,26 @@ def test_a_python_source_is_not_selected_by_its_bare_file_name(repo):
 
 
 def test_a_deleted_test_file_is_not_selected(repo):
-    assert decide(repo, ["tests/test_gone.py"]) == ("none", [])
+    assert decide(repo, ["tests/test_gone.py"]) == ("full", [])
+
+
+def test_a_changed_test_helper_selects_the_tests_that_import_it(repo):
+    write(repo, {"tests/helpers.py": "VALUE = 1\n", "tests/test_helped.py": "from tests import helpers\n"})
+    assert decide(repo, ["tests/helpers.py"]) == ("selected", [["tests/test_helped.py"]])
+
+
+def test_a_nested_test_that_names_a_changed_file_is_selected(repo):
+    write(repo, {"tests/swarm/test_nested.py": "PAGE = 'ledger.js'\n", "scripts/static/ledger.js": "x\n"})
+    assert decide(repo, ["scripts/static/ledger.js"]) == (
+        "selected",
+        [["tests/swarm/test_nested.py", "tests/test_page.py"]],
+    )
+
+
+@pytest.mark.parametrize("name", ["tests/test_spaced name.py", "tests/test_split\nscope=none.py"])
+def test_a_test_file_whose_name_breaks_the_output_line_is_never_selected(repo, name):
+    write(repo, {name: "from hooks import sample\n"})
+    assert decide(repo, ["hooks/sample.py", name]) == ("selected", [["tests/test_sample.py"]])
 
 
 def test_a_change_no_test_reaches_outside_the_sources_runs_nothing(repo):
@@ -99,14 +118,27 @@ def test_a_covered_source_no_test_reaches_runs_the_full_suite(repo, name):
     assert decide(repo, [name]) == ("full", [])
 
 
-@pytest.mark.parametrize("name", ["hooks/new.css", "lib/new.py"])
-def test_an_unreached_file_outside_the_covered_sources_runs_nothing(repo, name):
+@pytest.mark.parametrize("name", ["hooks/new.css", "lib/new.py", "scripts/ci_reuse_job.yml", "profiles/a/SKILL.txt"])
+def test_an_unreached_file_that_is_not_documentation_runs_the_full_suite(repo, name):
     write(repo, {name: "x\n"})
-    assert decide(repo, [name]) == ("none", [])
+    assert decide(repo, [name]) == ("full", [])
 
 
-def test_a_deleted_covered_source_no_test_names_runs_nothing(repo):
-    assert decide(repo, ["hooks/removed.py"]) == ("none", [])
+def test_a_deleted_source_no_test_names_runs_the_full_suite(repo):
+    assert decide(repo, ["hooks/removed.py"]) == ("full", [])
+
+
+@pytest.mark.parametrize(
+    ("changed", "scope"),
+    [
+        (["docs/a.md", "README.md", "profiles/x/notes.md"], "none"),
+        (["docs/a.md", "hooks/new.py"], "full"),
+        (["hooks/new.py", "docs/a.md"], "full"),
+        (["docs/image.png"], "none"),
+    ],
+)
+def test_only_unreached_documentation_runs_nothing(repo, changed, scope):
+    assert decide(repo, changed) == (scope, [])
 
 
 def seconds(**files):
@@ -144,6 +176,16 @@ def test_a_selection_uses_one_leg_per_leg_budget_of_stored_time(heavy, total, co
     durations = seconds(test_sample=total / 4, test_heavy1=total / 4, test_heavy2=total / 4, test_heavy3=total / 4)
     _, legs = decide(heavy, ["hooks/sample.py"], durations)
     assert len(legs) == count
+
+
+def test_a_test_file_sums_the_stored_time_of_all_its_tests(heavy):
+    durations = {"tests/test_heavy1.py::test_a": 100.0, "tests/test_heavy1.py::test_b": 100.0}
+    _, legs = decide(heavy, ["hooks/sample.py"], durations)
+    assert len(legs) == 2
+
+
+def test_a_leg_with_no_file_is_dropped(repo):
+    assert decide(repo, ["hooks/sample.py"], seconds(test_sample=200.0)) == ("selected", [["tests/test_sample.py"]])
 
 
 def test_a_test_file_without_stored_time_counts_its_estimate(heavy):
