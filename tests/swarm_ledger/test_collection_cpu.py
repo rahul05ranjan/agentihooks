@@ -69,7 +69,10 @@ def test_cached_collection_keeps_canonical_revisions_and_invalidates_on_write(tm
     from scripts.swarm_ledger.api.errors import APIError
 
     document = build_doc({"title": "Collection revisions"})
-    document["_meta"] = {"rev": 1, "events": [{"id": "a", "text": "é"}, {"id": "b", "text": 'quoted "'}]}
+    document["_meta"] = {
+        "rev": 2,
+        "events": [{"id": "a", "rev": 1, "text": "é"}, {"id": "b", "rev": 2, "text": 'quoted "'}],
+    }
     document["tasks"] = [
         {"id": "a", "title": "First", "comments": [{"id": "c", "text": "é"}]},
         {"id": "b", "title": "Second", "nested": {"b": 2, "a": 1}, "comments": []},
@@ -84,7 +87,7 @@ def test_cached_collection_keeps_canonical_revisions_and_invalidates_on_write(tm
     assert ledger_read(host, "cpu", path, query) == resources.read(document, path, query)
     document["tasks"][0]["comments"].append({"id": "new", "text": "Hidden comment changes revision"})
     document["sources"].append("new")
-    document["_meta"]["events"].append({"id": "new", "text": "New event"})
+    document["_meta"]["events"].append({"id": "new", "rev": 3, "text": "New event"})
     document["_meta"]["rev"] += 1
     repository.import_document("cpu", document, replace=True)
     with pytest.raises(APIError) as error:
