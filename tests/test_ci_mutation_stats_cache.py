@@ -191,3 +191,48 @@ def test_incompatible_source_fixture_and_runtime_stats_are_recollected(tmp_path,
         )
     collect_cached_stats(root, cache, changes, files, options, collect)
     assert calls == [files, files]
+
+
+def test_persisted_stats_reuse_survives_a_new_python_process(tmp_path):
+    import json
+    import os
+    import sys
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "tests").mkdir()
+    (root / "tests/test_sample.py").write_text(
+        "\n".join(f"from tests.test_shared_{index} import value" for index in range(5)) + "\n"
+    )
+    for index in range(5):
+        (root / f"tests/test_shared_{index}.py").write_text("value = 1\n")
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(
+        ["git", "add", "tests/test_sample.py", *(f"tests/test_shared_{index}.py" for index in range(5))],
+        cwd=root,
+        check=True,
+    )
+    script = """
+import json
+import sys
+from pathlib import Path
+from scripts.ci_mutation.stats_cache import collect_cached_stats
+
+root, folder = map(Path, sys.argv[1:])
+calls = root / "collections.json"
+def collect(files):
+    calls.write_text(json.dumps(json.loads(calls.read_text()) + [files] if calls.exists() else [files]))
+    return [{"status": 0, "tests": {"scripts.sample.x_sample": ["tests/test_sample.py::test_sample"]}, "durations": {"tests/test_sample.py::test_sample": 1}, "cpu": 2}]
+results = collect_cached_stats(root, folder, {"scripts/sample.py": [2]}, ["tests/test_sample.py"], ["-q"], collect)
+assert sum(result["cpu"] for result in results) == 2
+assert {test for result in results for test in result["durations"]} == {"tests/test_sample.py::test_sample"}
+"""
+    for seed in ("0", "42"):
+        subprocess.run(
+            [sys.executable, "-c", script, str(root), str(tmp_path / "cache")],
+            env={**os.environ, "PYTHONHASHSEED": seed, "PYTHONPATH": str(Path(__file__).resolve().parents[1])},
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    assert json.loads((root / "collections.json").read_text()) == [["tests/test_sample.py"]]
