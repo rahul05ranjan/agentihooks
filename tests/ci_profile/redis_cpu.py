@@ -52,7 +52,10 @@ def main() -> int:
         "cpu_seconds": measured_cpu,
         "wall_seconds": elapsed,
         "python": platform.python_version(),
-        "dependencies": {name: importlib.metadata.version(name) for name in ("fakeredis", "redis", "pytest")},
+        "dependencies": {
+            re.sub(r"[-_.]+", "-", distribution.metadata["Name"]).lower(): distribution.version
+            for distribution in importlib.metadata.distributions()
+        },
         "manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
         "test_files": {
             name: hashlib.sha256(Path(name).read_bytes()).hexdigest()
@@ -65,7 +68,15 @@ def main() -> int:
         "exit_code": int(status),
     }
     (destination / "measurement.json").write_text(json.dumps(report, indent=2) + "\n")
-    print(json.dumps({key: value for key, value in report.items() if key not in {"arguments", "collected", "results"}}))
+    print(
+        json.dumps(
+            {
+                key: value
+                for key, value in report.items()
+                if key not in {"arguments", "collected", "results", "test_files"}
+            }
+        )
+    )
     if set(results.collected) != set(nodes):
         return 1
     return int(status)
