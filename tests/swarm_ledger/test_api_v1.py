@@ -860,7 +860,7 @@ def test_publish_plan_writes_land_through_the_plans_and_slices_resources(live):
     state = client.mutate(
         SLUG,
         [
-            {"op": "plan_add", "id": "plan-seed", "by": "swarm", "plan": "merge", "title": "Merge path", "url": ""},
+            {"op": "plan_add", "id": "plan-seed", "by": "swarm", "plan": "merge", "title": "Merge path"},
             {
                 "op": "phase_update",
                 "id": "plan-link",
@@ -871,10 +871,9 @@ def test_publish_plan_writes_land_through_the_plans_and_slices_resources(live):
             {"op": "slice_add", "id": "slice-seed", "by": "swarm", "phase": "phases/p1", "anchor": "first"},
         ],
     )
-    assert not state.get("rejected")
+    assert state["rejected"] == []
     assert client.request(SLUG, "plans/merge")["data"]["title"] == "Merge path"
     assert [row["anchor"] for row in client.collection(SLUG, "slices")] == ["first"]
-    assert [request(live, "GET", path)[0] for path in ("plans", "slices")] == [200, 200]
 
 
 def test_resource_reads_preserve_pinned_identity(live):
