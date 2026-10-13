@@ -223,7 +223,7 @@ def test_sampling_delivers_an_external_store_write_within_one_minute(live, monke
         reader = frames(response)
         _, snapshot, _ = next_of(reader, {"snapshot"})
         watcher.start()
-        assert sampled.wait(30)
+        assert sampled.wait(5)
         started = time.monotonic()
         state, rejected = server.repository.inner.apply_ops(SLUG, ops=[comment(153)])
         assert rejected == []
@@ -237,7 +237,7 @@ def test_sampling_delivers_an_external_store_write_within_one_minute(live, monke
         assert change["rev"] == state["_meta"]["rev"]
         assert time.monotonic() - started < 60
     finally:
-        watcher.join(60)
+        watcher.join(5)
         response.close()
         conn.close()
     assert not watcher.is_alive()
