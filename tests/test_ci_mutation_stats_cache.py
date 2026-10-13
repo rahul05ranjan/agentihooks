@@ -36,6 +36,7 @@ def test_unchanged_test_stats_are_reused_and_only_the_changed_file_is_collected(
     assert calls == [files]
     warm = collect_cached_stats(root, cache, changes, files, ["-q"], collect)
     assert calls == [files]
+    assert sum(result["cpu"] for result in warm) == sum(result["cpu"] for result in first)
     assert {test for result in warm for test in result["durations"]} == {
         "tests/test_a.py::test_sample",
         "tests/test_b.py::test_sample",
@@ -123,3 +124,70 @@ def test_collection_parts_reuse_stats_and_keep_the_new_head_identity(tmp_path, m
             )
         assert json.loads(output.read_text())["key"] == head
     assert calls == [[["test_sample.py"]]]
+
+
+@pytest.mark.parametrize(
+    "changed", ["source", "lines", "fixture", "imported_fixture", "options", "runtime", "dependency"]
+)
+def test_incompatible_source_fixture_and_runtime_stats_are_recollected(tmp_path, monkeypatch, changed):
+    import sys
+    from importlib import metadata
+    from types import SimpleNamespace
+
+    from scripts.ci_mutation.stats_cache import collect_cached_stats
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "scripts").mkdir()
+    (root / "tests").mkdir()
+    source = root / "scripts/sample.py"
+    source.write_text("def sample():\n    return 1\n")
+    test = root / "tests/test_sample.py"
+    test.write_text("from tests.test_shared import value\ndef test_sample():\n    assert value == 1\n")
+    fixture = root / "tests/conftest.py"
+    fixture.write_text("value = 1\n")
+    shared = root / "tests/test_shared.py"
+    shared.write_text("value = 1\n")
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(
+        ["git", "add", "scripts/sample.py", "tests/test_sample.py", "tests/conftest.py", "tests/test_shared.py"],
+        cwd=root,
+        check=True,
+    )
+    monkeypatch.setattr(metadata, "distributions", lambda: [SimpleNamespace(metadata={"Name": "sample"}, version="1")])
+    calls = []
+    files = ["tests/test_sample.py"]
+
+    def collect(chosen):
+        calls.append(chosen)
+        return [
+            {
+                "status": 0,
+                "tests": {"scripts.sample.x_sample": ["tests/test_sample.py::test_sample"]},
+                "durations": {"tests/test_sample.py::test_sample": 1},
+                "cpu": 2,
+            }
+        ]
+
+    changes = {"scripts/sample.py": [2]}
+    options = ["-q"]
+    cache = tmp_path / "cache"
+    collect_cached_stats(root, cache, changes, files, options, collect)
+    if changed == "source":
+        source.write_text("def sample():\n    return 2\n")
+    elif changed == "lines":
+        changes = {"scripts/sample.py": [1, 2]}
+    elif changed == "fixture":
+        fixture.write_text("value = 2\n")
+    elif changed == "imported_fixture":
+        shared.write_text("value = 2\n")
+    elif changed == "options":
+        options = ["-x"]
+    elif changed == "runtime":
+        monkeypatch.setattr(sys, "version", "changed")
+    else:
+        monkeypatch.setattr(
+            metadata, "distributions", lambda: [SimpleNamespace(metadata={"Name": "sample"}, version="2")]
+        )
+    collect_cached_stats(root, cache, changes, files, options, collect)
+    assert calls == [files, files]
