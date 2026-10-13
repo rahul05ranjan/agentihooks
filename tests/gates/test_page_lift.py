@@ -20,7 +20,6 @@ WHO = Who(name=ME, swarm=SLUG, task=TASK)
 HOUR_MS = lift.LIFT_SECONDS * 1000
 URL, SUCCESSOR = "https://github.com/o/r/pull/7", "engineer@2-2"
 LONG = "x" * 400
-URL, SUCCESSOR = "https://github.com/o/r/pull/7", "engineer@2-2"
 
 
 def saved():
