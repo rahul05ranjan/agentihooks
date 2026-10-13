@@ -276,15 +276,26 @@ def _open(inbox, item_id):
         return False
 
 
+def _unclaimed_moot(watch, rows, row, task, decision):
+    lane = row.get("lane") or task.get("lane")
+    if not _lane_full(watch, lane, decision):
+        return f"the {lane} lane is no longer full"
+    waiting = task.get("state", "open") == "open" and not task.get("claimed_by")
+    if not _lane_tasks(watch, rows, lane) and not waiting:
+        return f"task {row['task']} was claimed"
+    return ""
+
+
 def _escalate(watch, rows):
     inbox, key, actions = InboxStore(watch.store.redis), _key(watch, ALERTS), []
+    decision = capacity.read(watch.store, watch.slug)
     for tid, raw in watch.store.redis.hgetall(key).items():
         row = json.loads(raw)
         task = rows.get(tid, {})
-        moot = row["case"] == UNCLAIMED and not _lane_tasks(watch, rows, row.get("lane") or task.get("lane"))
+        moot = _unclaimed_moot(watch, rows, row, task, decision) if row["case"] == UNCLAIMED else ""
         is_open = _open(inbox, row["item"])
         if moot and is_open:
-            inbox.close(row["item"], SENDER, DONE, f"task {tid} was claimed")
+            inbox.close(row["item"], SENDER, DONE, moot)
         if moot or not is_open:
             watch.store.redis.hdel(key, tid)
             continue
