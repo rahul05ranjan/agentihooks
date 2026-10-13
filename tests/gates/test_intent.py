@@ -327,7 +327,7 @@ class TestStamp:
 
 
 class TestJudge:
-    def test_judge_asks_four_yes_no_questions_under_its_purpose(self):
+    def test_judge_asks_five_yes_no_questions_under_its_purpose(self):
         seen = []
         assert intent.judge({"s": 1}, decide=classifier(0.8, seen=seen)) == (
             "pass",
@@ -335,7 +335,7 @@ class TestJudge:
         )
         [(state, questions, purpose)] = seen
         assert (state, purpose) == ({"s": 1}, "intent-check")
-        assert list(questions) == ["usable", "delivers", "reachable", "weakens"]
+        assert list(questions) == ["usable", "aligned", "delivers", "reachable", "weakens"]
         assert all(isinstance(q, YesNo) for q in questions.values())
 
     def test_a_usable_change_that_weakens_the_phase_fails_with_that_reason(self):
