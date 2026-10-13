@@ -802,6 +802,14 @@ jobs:
           fetch-depth: 0
           filter: blob:none
 
+      - name: Require selected test paths
+        run: |
+          read -ra files <<< "$FILES"
+          [[ ${#files[@]} -gt 0 ]] || { echo "::error::Leg $LEG of the selection names no test file."; exit 1; }
+          for file in "${files[@]}"; do
+            [[ -f "$file" ]] || { echo "::error::Selected test path $file does not exist."; exit 1; }
+          done
+
       - *python
 
       - *day
@@ -866,7 +874,6 @@ jobs:
           JS_COVERAGE_DIR: ${{ matrix.python-version == '3.12' && format('{0}/js-coverage', github.workspace) || '' }}
         run: |
           read -ra files <<< "$FILES"
-          [[ ${#files[@]} -gt 0 ]] || { echo "::error::Leg $LEG of the selection names no test file."; exit 1; }
           python -c 'import os, shlex, sys, pytest; sys.exit(pytest.main(shlex.split(os.environ.pop("PYTEST_ADDOPTS", "")) + sys.argv[1:]))' "${files[@]}" -v -n auto --dist loadgroup -p tests.flake_ledger --reruns 2 --tb=short -o faulthandler_timeout=60 -p no:anyio -p no:xdist.looponfail -p no:legacypath -p no:doctest -p no:pastebin -p no:junitxml
 
       - name: Record flaky tests
