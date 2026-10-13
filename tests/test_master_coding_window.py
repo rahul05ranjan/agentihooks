@@ -40,6 +40,7 @@ def test_a_window_import_failure_denies_edits_through_the_condition_runner(maste
         f"raise SystemExit(runpy.run_path({str(guard)!r})['main']('master'))\n"
     )
     entry = {"file": condition.name, "path": str(condition), "ext": ".py", "async": False, "source": "project"}
+    monkeypatch.setattr("hooks.config.CONDITIONS_ENABLED", True)
     monkeypatch.setattr(conditions, "matching", lambda *args, **kwargs: [entry])
     payload = {
         "tool_name": "Edit",
