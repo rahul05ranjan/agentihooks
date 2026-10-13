@@ -55,7 +55,7 @@ def refusal(config: SwarmConfig, caps: dict, giver: str, taker: str, lanes: Lane
     return ""
 
 
-def switched(slug: str, config: SwarmConfig, would: str, now_ms: int | None = None) -> str:
+def gate_hold(slug: str, config: SwarmConfig, would: str, now_ms: int | None = None) -> str:
     chosen = modes.configured(LANE_SPLIT, config.gates)
     if chosen == "enforce":
         return ""
@@ -112,7 +112,7 @@ def lane_pass(slug: str, config: SwarmConfig, store: RedisStore, read: Callable[
         ci=moved["ci"],
         total=sum(moved.values()),
     )
-    reason = refusal(config, caps, giver, taker, lanes) or switched(slug, config, text, now_ms)
+    reason = refusal(config, caps, giver, taker, lanes) or gate_hold(slug, config, text, now_ms)
     if reason:
         return [HELD.format(named=current["named"], ticks=TICKS, reason=reason)]
     _apply(slug, config, store, moved, shift + (1 if taker == "ci" else -1))

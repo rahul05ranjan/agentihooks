@@ -196,8 +196,8 @@ def test_a_seat_shift_in_log_only_records_the_would_be_move(store, home, shipped
     assert run(store) == [proposed(CLAIM, why)]
     assert caps(store) == (2, 2)
     text = bottleneck_remedy.SHIFTED.format(giver="ci", taker="eng", targeted=CLAIM, eng=3, ci=1)
-    assert [row[1:] for row in logged(home) if row[1] == "lane-split"] == [
-        ("lane-split", "observe", "", "lane-split", text)
+    assert [row for row in logged(home) if row[1] == "lane-split"] == [
+        (NOW, "lane-split", "observe", "", "lane-split", text)
     ]
 
 

@@ -196,9 +196,13 @@ def test_caps_the_operator_or_master_set_stay_where_they_set_them(store, home):
     assert gate_log.recent(SLUG, None, home) == []
 
 
-def test_a_move_the_lane_split_makes_leaves_the_caps_unpinned(store, home):
-    ticks(store, "ci", 3)
-    assert store.config(SLUG).caps_pinned is False
+def test_caps_stored_before_the_pin_existed_stay_where_the_operator_set_them(store, home):
+    store.redis.hdel(store.key(SLUG, "config"), "caps_pinned")
+    assert store.config(SLUG).caps_pinned is True
+    assert ticks(store, "ci", 3) == [
+        lane_split.HELD.format(named="ci", ticks=3, reason="the operator or the master set the lane caps")
+    ]
+    assert caps(store) == (4, 1)
 
 
 @pytest.mark.parametrize("gates", [{}, {"lane-split": "observe"}])
