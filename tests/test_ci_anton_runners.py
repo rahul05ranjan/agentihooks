@@ -76,6 +76,8 @@ MOVED = {
     ("test.yml", "stage-budget"): LIGHT,
     ("test.yml", "test-count"): STANDARD,
     ("test.yml", "unit"): STANDARD,
+    ("test.yml", "select"): LIGHT,
+    ("test.yml", "unit-selected"): STANDARD,
     ("worker-resources.yml", "measure"): BATCH,
 }
 

@@ -234,3 +234,16 @@ def test_main_prints_without_a_github_output(repo, monkeypatch, capsys):
         ci_select.main(["--base", "HEAD", "--head", "HEAD", "--event", "push", "--legs", "3", "--root", str(repo)]) == 0
     )
     assert capsys.readouterr().out == "scope=full\nlegs=[]\ncount=0\n"
+
+
+def test_main_budgets_on_the_given_durations_with_later_files_winning(heavy, monkeypatch, tmp_path):
+    write(heavy, {"hooks/sample.py": "VALUE = 8\n"})
+    git(heavy, "commit", "-am", "change")
+    first, second = tmp_path / "first.json", tmp_path / "second.json"
+    first.write_text(json.dumps(seconds(test_sample=600.0, test_heavy1=170.0)))
+    second.write_text(json.dumps(seconds(test_sample=1.0)))
+    output = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    arguments = ["--base", "HEAD~1", "--head", "HEAD", "--event", "pull_request", "--legs", "3", "--root", str(heavy)]
+    assert ci_select.main([*arguments, "--durations", str(first), str(second)]) == 0
+    assert output.read_text().splitlines()[:3] == ["scope=selected", "legs=[1, 2]", "count=2"]
