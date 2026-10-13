@@ -74,7 +74,7 @@ if os.environ['FAILURE'] == 'profile-evidence':
 """
 
 
-def run_proof(tmp_path, failure):
+def run_proof(tmp_path, failure, proof="all"):
     state = tmp_path / "state"
     state.mkdir()
     commands = tmp_path / "bin"
@@ -118,7 +118,7 @@ def run_proof(tmp_path, failure):
         "FAILURE": failure,
     }
     result = subprocess.run(
-        ["bash", str(ROOT / "docker/swarm-node/smoke.sh"), str(output)],
+        ["bash", str(ROOT / "docker/swarm-node/smoke.sh"), str(output), proof],
         cwd=tmp_path,
         env=env,
         text=True,
@@ -159,3 +159,36 @@ def test_a_failed_background_worker_check_keeps_the_proof_red(tmp_path, failure,
     assert not (output / "result.json").exists()
     assert not list(output.glob("context-*"))
     assert calls[-1][:2] == ["image", "rm"]
+
+
+@pytest.mark.parametrize("proof,builds,runs", [("startup", 4, 5), ("rebuild", 1, 1), ("profiles", 1, 6)])
+def test_worker_proof_modes_run_only_their_independent_checks(tmp_path, proof, builds, runs):
+    result, calls, state, output = run_proof(tmp_path, "", proof)
+    assert result.returncode == 0, result.stderr
+    assert len([call for call in calls if call[0] == "build"]) == builds
+    assert len([call for call in calls if call[0] == "run"]) == runs
+    assert json.loads((output / "mode-result.json").read_text())["proof"] == proof
+    assert not list(output.glob("context-*"))
+    if proof == "rebuild":
+        build = next(call for call in calls if call[0] == "build")
+        assert build[build.index("--no-cache-filter") + 1] == "worker"
+    if proof == "profiles":
+        assert (state / "profile-evidence").exists()
+    else:
+        assert (state / "scan-agentihooks-worker-proof-finished").exists()
+
+
+@pytest.mark.parametrize(
+    "proof,failure,status",
+    [
+        ("startup", "scan", 17),
+        ("rebuild", "scan", 17),
+        ("profiles", "profile", 18),
+        ("profiles", "profile-evidence", 19),
+    ],
+)
+def test_a_failed_selected_worker_proof_never_reports_success(tmp_path, proof, failure, status):
+    result, calls, state, output = run_proof(tmp_path, failure, proof)
+    assert result.returncode == status, result.stderr
+    assert not (output / "mode-result.json").exists()
+    assert not list(output.glob("context-*"))

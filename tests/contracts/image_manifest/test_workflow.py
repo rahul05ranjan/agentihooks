@@ -321,3 +321,22 @@ def test_the_pull_request_smoke_scans_every_image_it_built():
 
     assert smoke.index('scan.sh" "$image" "$output/credential-scan"') > build
     assert smoke.index('scan.sh" "$rebuild" "$output/credential-scan-rebuild"') > rebuild
+
+
+def test_worker_smoke_runs_independent_proofs_in_parallel_and_compares_every_inventory():
+    workflow = yaml.safe_load((ROOT / ".github/workflows/swarm-node-smoke.yml").read_text())
+    image = workflow["jobs"]["worker-image"]
+    assert image["strategy"]["matrix"]["proof"] == ["startup", "rebuild", "profiles"]
+    assert image["strategy"]["fail-fast"] is False
+    assert "needs" not in image
+    run = next(step for step in image["steps"] if "smoke.sh" in step.get("run", ""))
+    assert run["env"]["WORKER_PROOF"] == "${{ matrix.proof }}"
+    assert run["run"].endswith(' "$WORKER_PROOF"')
+    upload = next(step for step in image["steps"] if step.get("uses", "").startswith("actions/upload-artifact@"))
+    assert upload["with"]["name"] == "swarm-worker-image-${{ matrix.proof }}"
+    compare = workflow["jobs"]["worker-image-compare"]
+    assert compare["needs"] == ["worker-image"]
+    assert compare["if"] == "always()"
+    assert compare["steps"][0]["env"]["PROOF_STATUS"] == "${{ needs.worker-image.result }}"
+    assert '[[ "$PROOF_STATUS" == success ]]' in compare["steps"][0]["run"]
+    assert any("compare-smoke.sh" in step.get("run", "") for step in compare["steps"])
