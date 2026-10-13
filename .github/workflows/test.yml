@@ -1060,7 +1060,7 @@ jobs:
 
   coverage-ratchet:
     needs: [durations, unit, queue-baseline, reuse]
-    if: ${{ !cancelled() && needs.unit.result == 'success' && (github.event_name != 'merge_group' || needs['queue-baseline'].result == 'success') }}
+    if: ${{ !cancelled() && needs.unit.result == 'success' && github.event_name != 'merge_group' }}
     runs-on: ${{ (github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.actor) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.triggering_actor) || (github.event_name == 'merge_group' || github.event_name == 'push' && github.ref == 'refs/heads/dev') && github.actor == 'github-merge-queue[bot]' && github.triggering_actor == 'github-merge-queue[bot]') && 'anton-oss' || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
@@ -1229,7 +1229,15 @@ jobs:
             fi
             exit 0
           fi
-          if ! jq -e --arg event "${EVENT:-}" --arg mutation "$MUTATION" --arg kind "${KIND:-}" 'all(to_entries[]; .value.result == "success" or ((.key == "mutation" or .key == "mutation-plan" or .key == "mutation-stats") and .value.result == "skipped" and $mutation == "false") or (.key == "helm-kind" and .value.result == "skipped" and $kind == "false") or (.key == "queue-baseline" and .value.result == "skipped" and $event != "merge_group"))' <<< "$NEEDS"; then
+          if [[ "${EVENT:-}" == merge_group ]]; then
+            for outcome in baseline ratchet; do
+              if ! jq -e --arg outcome "$outcome" '."queue-baseline".outputs[$outcome] == "success"' <<< "$NEEDS"; then
+                echo "::error::The queue coverage $outcome did not succeed."
+                exit 1
+              fi
+            done
+          fi
+          if ! jq -e --arg event "${EVENT:-}" --arg mutation "$MUTATION" --arg kind "${KIND:-}" 'all(to_entries[]; .value.result == "success" or ((.key == "mutation" or .key == "mutation-plan" or .key == "mutation-stats") and .value.result == "skipped" and $mutation == "false") or (.key == "helm-kind" and .value.result == "skipped" and $kind == "false") or (.key == "queue-baseline" and .value.result == "skipped" and $event != "merge_group") or (.key == "coverage-ratchet" and .value.result == "skipped" and $event == "merge_group"))' <<< "$NEEDS"; then
             echo "::error::Every required gate must succeed."
             exit 1
           fi
@@ -1418,6 +1426,9 @@ jobs:
     timeout-minutes: 13
     permissions:
       contents: read
+    outputs:
+      baseline: ${{ steps.record.outcome }}
+      ratchet: ${{ steps.ratchet.outcome }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -1460,6 +1471,7 @@ jobs:
 
       # Later queue entries wait on this upload, so it runs before Sonar and the gate rather than after them.
       - name: Record this run's coverage baseline
+        id: record
         run: python -m tests.coverage_baseline --shards 12 --head-shards .coverage-shards --out "$RUNNER_TEMP/own-baseline/baseline.json"
 
       - name: Publish this run's coverage baseline
@@ -1551,6 +1563,32 @@ jobs:
           name: queue-coverage-baseline
           path: ~/coverage-baseline/
           if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+
+      # The ratchet grades on this runner so a queue entry allocates one runner for both coverage checks.
+      - name: Hold every line the base ran
+        id: ratchet
+        if: needs.reuse.outputs.reused != 'true'
+        env:
+          BASE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          git fetch --no-tags --unshallow origin
+          base="$BASE"
+          git worktree add --detach "$RUNNER_TEMP/base" "$base"
+          grader="$RUNNER_TEMP/base"
+          [[ -f "$grader/tests/coverage_ratchet.py" ]] || grader="$GITHUB_WORKSPACE"
+          cd "$grader"
+          python -m tests.coverage_ratchet --base "$base" --head "$GITHUB_WORKSPACE" --shards 12 \
+            --head-shards "$GITHUB_WORKSPACE/.coverage-shards" --out "$GITHUB_WORKSPACE/coverage-ratchet" \
+            --base-baseline "$HOME/coverage-baseline/baseline.json"
+
+      - name: Upload the coverage ratchet report
+        if: always() && steps.ratchet.outcome != 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-ratchet
+          path: coverage-ratchet/report.txt
           retention-days: 7
           overwrite: true
 
