@@ -53,8 +53,7 @@ def _master_name(name, code):
 
 def pin(slug, name, environ=os.environ):
     if ledger_link.remote(environ):
-        if environ.get("AGENTIHOOKS_AGENT_NAME") != name:
-            environ.pop("AGENTIHOOKS_LEDGER_AGENT_TOKEN", None)
+        environ.pop("AGENTIHOOKS_LEDGER_AGENT_TOKEN", None)
         environ.update(AGENTIHOOKS_SWARM=slug, AGENTIHOOKS_AGENT_NAME=name)
 
 

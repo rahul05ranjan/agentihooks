@@ -76,7 +76,7 @@ def test_take_master_on_a_remote_ledger_pins_the_new_master_before_its_first_led
     assert store.seats.occupant("master@sw").occupant == MASTER
 
 
-def test_a_session_already_named_this_master_keeps_its_ledger_token(remote_taker, monkeypatch):
+def test_a_session_already_named_this_master_mints_its_token_with_the_hive_credential(remote_taker, monkeypatch):
     store, ledger, _, _, sent = remote_taker
     assert store.next_name("sw", "master") == MASTER
     monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", MASTER)
@@ -84,9 +84,10 @@ def test_a_session_already_named_this_master_keeps_its_ledger_token(remote_taker
     seen = []
     ledger.closed = lambda slug: seen.append(remote.credentials(slug)) or False
     assert run("sw", "take-master") == 0
-    assert seen == [{"X-Ledger-Token": "carried token", "X-Ledger-Agent": MASTER}]
-    assert os.environ["AGENTIHOOKS_LEDGER_AGENT_TOKEN"] == "carried token"
-    assert [path for _, path, _ in sent] == ["metadata"]
+    assert seen == [{"X-Ledger-Token": f"minted for {MASTER}", "X-Ledger-Agent": MASTER}]
+    assert "AGENTIHOOKS_LEDGER_AGENT_TOKEN" not in os.environ
+    hive = {"X-Hive-Credential": HIVE, "X-Ledger-Agent": MASTER}
+    assert [(path, credentials) for _, path, credentials in sent[:2]] == [("agent-token", hive)] * 2
 
 
 def test_a_local_ledger_keeps_the_session_unpinned(taker, monkeypatch):  # noqa: F811
