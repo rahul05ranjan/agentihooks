@@ -179,7 +179,7 @@ def test_a_selection_uses_one_leg_per_leg_budget_of_stored_time(heavy, total, co
 
 
 def test_a_test_file_sums_the_stored_time_of_all_its_tests(heavy):
-    durations = {"tests/test_heavy1.py::test_a": 100.0, "tests/test_heavy1.py::test_b": 100.0}
+    durations = {"tests/test_heavy1.py::Case::test_a": 100.0, "tests/test_heavy1.py::Case::test_b": 100.0}
     _, legs = decide(heavy, ["hooks/sample.py"], durations)
     assert len(legs) == 2
 
