@@ -1720,9 +1720,11 @@ jobs:
           git fetch --no-tags --unshallow origin
           base="$BASE"
           git worktree add --detach "$RUNNER_TEMP/base" "$base"
-          grader="$RUNNER_TEMP/base"
-          [[ -f "$grader/tests/coverage_ratchet.py" ]] || grader="$GITHUB_WORKSPACE"
-          cd "$grader"
+          if [[ ! -f "$RUNNER_TEMP/base/tests/coverage_ratchet.py" ]]; then
+            echo "::error::The base carries no tests/coverage_ratchet.py, so nothing trusted can grade."
+            exit 1
+          fi
+          cd "$RUNNER_TEMP/base"
           python -m tests.coverage_ratchet --base "$base" --head "$GITHUB_WORKSPACE" --shards 12 \
             --head-shards "$GITHUB_WORKSPACE/.coverage-shards" --out "$GITHUB_WORKSPACE/coverage-ratchet" \
             --base-baseline "$HOME/coverage-baseline/baseline.json"
