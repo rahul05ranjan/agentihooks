@@ -1,3 +1,5 @@
+import builtins
+import io
 import json
 import runpy
 from pathlib import Path
@@ -56,6 +58,37 @@ def test_the_window_record_lives_under_the_agentihooks_home_by_a_safe_session_na
 def guard(home, file_path):
     payload = {"tool_name": "Edit", "tool_input": {"file_path": str(file_path)}, "session_id": SID, "cwd": "/"}
     return GUARD["deny_reason"](payload, "master", home)
+
+
+@pytest.mark.parametrize("failed_import", ["hooks.context", "hooks.context.master_coding"])
+def test_a_window_import_failure_denies_the_edit(master, monkeypatch, capsys, failed_import):
+    from hooks.context import conditions
+
+    master_coding.observe(SID, "allow-master-coding", typed=True)
+    tree = master / "dev" / "worktrees" / "agentihooks" / "master-1"
+    payload = {"tool_name": "Edit", "tool_input": {"file_path": str(tree / "x.py")}, "session_id": SID}
+    real_import = builtins.__import__
+
+    def broken_import(name, *args, **kwargs):
+        if name == failed_import:
+            raise ImportError("window unavailable")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
+    monkeypatch.setattr(builtins, "__import__", broken_import)
+    code = GUARD["main"]("master")
+    output = capsys.readouterr()
+    assert code == 2
+    assert output.out == ""
+    assert output.err == "master cannot verify the hotfix window; edits are denied.\n"
+    entry = {"file": "pre-edit-no_code_edits.py"}
+    result = conditions.merge(
+        "pre", payload, [(entry, {"returncode": code, "stdout": output.out, "stderr": output.err})]
+    )
+    assert result.decision == "deny"
+    assert result.reasons == [
+        "[condition pre-edit-no_code_edits.py] master cannot verify the hotfix window; edits are denied."
+    ]
 
 
 def test_the_window_opens_worktree_edits_but_keeps_conditions_and_credentials_closed(master):
