@@ -39,7 +39,7 @@ def read_jobs(repo: str, run: str, attempt: str) -> list[dict]:
     return [json.loads(line) for line in out.splitlines() if line]
 
 
-def watch(read: Callable[[], list[dict]], sleep: Callable[[float], None] = time.sleep) -> str | None:
+def watch(read: Callable[[], list[dict]]) -> str | None:
     misses = 0
     while True:
         try:
@@ -55,7 +55,7 @@ def watch(read: Callable[[], list[dict]], sleep: Callable[[float], None] = time.
                 return name
             if settled(jobs):
                 return None
-        sleep(INTERVAL_S)
+        time.sleep(INTERVAL_S)
 
 
 def main(argv: list[str] | None = None, read: Callable[[str, str, str], list[dict]] = read_jobs) -> int:

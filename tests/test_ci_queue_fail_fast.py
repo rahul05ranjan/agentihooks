@@ -32,8 +32,11 @@ def _step(job, name):
     return next(step for step in job["steps"] if step.get("name") == name)
 
 
-def _never(_):
-    pytest.fail("polled again after the answer was known")
+@pytest.fixture
+def sleeps(monkeypatch):
+    slept = []
+    monkeypatch.setattr(fail_fast.time, "sleep", slept.append)
+    return slept
 
 
 def test_the_watcher_skips_its_own_job_and_waits_on_stage_budget():
@@ -75,27 +78,26 @@ def test_the_run_settles_only_once_stage_budget_completed(jobs, expected):
     assert fail_fast.settled(jobs) is expected
 
 
-def test_watch_polls_until_a_graded_job_fails():
+def test_watch_polls_until_a_graded_job_fails(sleeps):
     reads = iter(
         [[_job("unit (3.12, 1)")], [_job("unit (3.12, 1)"), _job("lint", "success")], [_job("lint", "failure")]]
     )
-    sleeps = []
-    assert fail_fast.watch(lambda: next(reads), sleeps.append) == "lint"
+    assert fail_fast.watch(lambda: next(reads)) == "lint"
     assert sleeps == [15, 15]
 
 
-def test_watch_names_a_failure_listed_beside_a_completed_stage_budget():
-    assert fail_fast.watch(lambda: [_job("stage-budget", "success"), _job("sonar", "failure")], _never) == "sonar"
+def test_watch_names_a_failure_listed_beside_a_completed_stage_budget(sleeps):
+    assert fail_fast.watch(lambda: [_job("stage-budget", "success"), _job("sonar", "failure")]) == "sonar"
+    assert sleeps == []
 
 
-def test_watch_stops_without_a_name_once_every_graded_job_settled():
+def test_watch_stops_without_a_name_once_every_graded_job_settled(sleeps):
     reads = iter([[_job("stage-budget")], [_job("unit (3.11, 1)", "success"), _job("stage-budget", "success")]])
-    sleeps = []
-    assert fail_fast.watch(lambda: next(reads), sleeps.append) is None
+    assert fail_fast.watch(lambda: next(reads)) is None
     assert sleeps == [15]
 
 
-def test_watch_keeps_polling_through_a_failed_read(capsys):
+def test_watch_keeps_polling_through_a_failed_read(capsys, sleeps):
     reads = iter([subprocess.CalledProcessError(1, ["gh"], stderr="HTTP 502 \n"), [_job("lint", "failure")]])
 
     def read():
@@ -104,13 +106,12 @@ def test_watch_keeps_polling_through_a_failed_read(capsys):
             raise answer
         return answer
 
-    sleeps = []
-    assert fail_fast.watch(read, sleeps.append) == "lint"
+    assert fail_fast.watch(read) == "lint"
     assert sleeps == [15]
     assert capsys.readouterr().out == "::warning::Reading this run's jobs failed: HTTP 502\n"
 
 
-def test_watch_gives_up_after_ten_failed_reads_in_a_row(capsys):
+def test_watch_gives_up_after_ten_failed_reads_in_a_row(capsys, sleeps):
     error = subprocess.CalledProcessError(1, ["gh"], stderr="HTTP 401")
     answers = iter([error] * 9 + [[_job("lint")]] + [error] * 10)
 
@@ -120,20 +121,21 @@ def test_watch_gives_up_after_ten_failed_reads_in_a_row(capsys):
             raise answer
         return answer
 
-    sleeps = []
     with pytest.raises(subprocess.CalledProcessError):
-        fail_fast.watch(read, sleeps.append)
+        fail_fast.watch(read)
     assert fail_fast.MISSES == 10
     assert len(sleeps) == 19
     assert capsys.readouterr().out.count("::warning::") == 19
 
 
-def test_watch_lets_any_other_read_error_end_the_watcher():
+@pytest.mark.parametrize("error", [ValueError("bad json"), FileNotFoundError("gh")])
+def test_watch_lets_any_other_read_error_end_the_watcher(error, sleeps):
     def read():
-        raise ValueError("bad json")
+        raise error
 
-    with pytest.raises(ValueError, match="bad json"):
-        fail_fast.watch(read, _never)
+    with pytest.raises(type(error)):
+        fail_fast.watch(read)
+    assert sleeps == []
 
 
 def test_read_jobs_lists_every_job_of_this_attempt(monkeypatch):
@@ -177,11 +179,9 @@ def test_main_names_the_failed_job_for_the_cancel_step(tmp_path, monkeypatch, ca
     assert capsys.readouterr().out == "::error::lint failed, so Gate Required cannot pass; cancelling this queue run.\n"
 
 
-def test_main_sleeps_between_polls_and_leaves_the_cancel_step_off_once_settled(tmp_path, monkeypatch, capsys):
+def test_main_sleeps_between_polls_and_leaves_the_cancel_step_off_once_settled(tmp_path, monkeypatch, capsys, sleeps):
     output = _output(tmp_path, monkeypatch)
     reads = iter([[_job("lint")], [_job("lint", "success"), _job("stage-budget", "success")]])
-    sleeps = []
-    monkeypatch.setattr(fail_fast.time, "sleep", sleeps.append)
     assert fail_fast.main(_ARGS, lambda *_: next(reads)) == 0
     assert sleeps == [15]
     assert output.read_text() == "keep=1\nfailed=\n"
@@ -219,7 +219,7 @@ def test_the_watcher_runs_only_on_merge_queue_runs_with_cancel_rights():
     assert job["if"] == "github.event_name == 'merge_group'"
     assert job["permissions"] == {"contents": "read", "actions": "write"}
     assert job["timeout-minutes"] == 60
-    assert job["runs-on"].endswith("&& 'anton-oss-light' || 'ubuntu-latest' }}")
+    assert job["runs-on"] == _jobs()["stage-budget"]["runs-on"]
     assert "needs" not in job
 
 
@@ -228,9 +228,19 @@ def test_the_watcher_reads_on_the_app_token_and_cancels_on_its_own_token():
     mint = _step(job, "Mint the tcc main ci App token")
     watch = _step(job, "Watch for the first failed graded job")
     cancel = _step(job, "Cancel this queue run so the queue drops the entry")
+    assert job["steps"][0] == {
+        "uses": "actions/checkout@v4",
+        "with": {"ref": "${{ github.sha }}", "persist-credentials": False},
+    }
     assert mint["id"] == "app-token"
-    assert mint["with"]["permission-actions"] == "read"
-    assert mint["with"]["permission-contents"] == "read"
+    assert mint["uses"] == "actions/create-github-app-token@v3.2.0"
+    assert mint["with"] == {
+        "client-id": "${{ secrets.TCC_CI_CLIENT_ID }}",
+        "private-key": "${{ secrets.TCC_CI_APP_PRIVATE_KEY }}",
+        "repositories": "${{ github.event.repository.name }}",
+        "permission-actions": "read",
+        "permission-contents": "read",
+    }
     assert watch["id"] == "watch"
     assert watch["env"] == {"GH_TOKEN": "${{ steps.app-token.outputs.token }}"}
     assert watch["run"] == (
@@ -252,7 +262,7 @@ def test_every_merge_queue_job_but_the_watcher_is_graded():
     queued = {
         job_id
         for job_id, job in jobs.items()
-        if not str(job.get("if", "")).startswith("${{ !cancelled() && github.event_name == 'push'")
+        if "github.event_name == 'push'" not in str(job.get("if", ""))
         and job_id not in ("admission", "gate-required", "queue-fail-fast")
     }
     assert queued <= _gate_needs(jobs)
