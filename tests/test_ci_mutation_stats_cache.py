@@ -127,7 +127,17 @@ def test_collection_parts_reuse_stats_and_keep_the_new_head_identity(tmp_path, m
 
 
 @pytest.mark.parametrize(
-    "changed", ["source", "lines", "fixture", "imported_fixture", "options", "runtime", "dependency"]
+    "changed",
+    [
+        "source",
+        "lines",
+        "fixture",
+        "imported_fixture",
+        "imported_fixture_through_helper",
+        "options",
+        "runtime",
+        "dependency",
+    ],
 )
 def test_incompatible_source_fixture_and_runtime_stats_are_recollected(tmp_path, monkeypatch, changed):
     import sys
@@ -148,12 +158,17 @@ def test_incompatible_source_fixture_and_runtime_stats_are_recollected(tmp_path,
     fixture.write_text("value = 1\n")
     shared = root / "tests/test_shared.py"
     shared.write_text("value = 1\n")
+    if changed == "imported_fixture_through_helper":
+        (root / "tests/helper.py").write_text("from tests.test_shared import value\n")
+        test.write_text("from tests.helper import value\ndef test_sample():\n    assert value == 1\n")
     subprocess.run(["git", "init", "-q", str(root)], check=True)
     subprocess.run(
         ["git", "add", "scripts/sample.py", "tests/test_sample.py", "tests/conftest.py", "tests/test_shared.py"],
         cwd=root,
         check=True,
     )
+    if changed == "imported_fixture_through_helper":
+        subprocess.run(["git", "add", "tests/helper.py"], cwd=root, check=True)
     monkeypatch.setattr(metadata, "distributions", lambda: [SimpleNamespace(metadata={"Name": "sample"}, version="1")])
     calls = []
     files = ["tests/test_sample.py"]
@@ -179,7 +194,7 @@ def test_incompatible_source_fixture_and_runtime_stats_are_recollected(tmp_path,
         changes = {"scripts/sample.py": [1, 2]}
     elif changed == "fixture":
         fixture.write_text("value = 2\n")
-    elif changed == "imported_fixture":
+    elif changed in ("imported_fixture", "imported_fixture_through_helper"):
         shared.write_text("value = 2\n")
     elif changed == "options":
         options = ["-x"]
