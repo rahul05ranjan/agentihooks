@@ -5,6 +5,7 @@ import pytest
 from hooks.proc import Process
 from scripts.swarm import take_master
 from scripts.swarm.runtime import HerdrRuntime
+from scripts.swarm.store import SwarmError
 from scripts.swarm_v2.runtime import process
 from scripts.swarm_v2.runtime.base import RuntimeRouter
 from scripts.swarm_v2.runtime.local import LocalHerdrRuntime
@@ -57,3 +58,61 @@ def test_a_gone_native_master_is_retired_and_replaced(native_taker, monkeypatch)
         "pid": 4343,
         "pid_start": 200,
     }
+
+
+def test_a_live_native_master_whose_retirement_refuses_still_blocks_replacement(native_taker, monkeypatch):
+    store, runtime, table, retired = native_taker
+    old, _ = take_master.take(store, "sw", "old-session", runtime, 1000)
+    runtime.herdr_runtime.live_names = lambda: {old.name}
+    monkeypatch.setattr(take_master, "agent_pid", lambda: 4343)
+
+    def refuse(name, pid, homes, start):
+        retired.append((pid, start))
+        return SimpleNamespace(process=pid, refusal="live process refused")
+
+    runtime.herdr_runtime.end = refuse
+    with pytest.raises(SwarmError, match="could not retire"):
+        take_master.take(store, "sw", "new-session", runtime, 2000, replace_live=True)
+
+    assert retired == [(4242, 100)]
+    assert store.agent("sw", old.name) == old
+    assert store.execution_occupants("sw")[old.seat].execution_id == old.execution_id
+    assert runtime.refusal(old)["refusal"] == "live process refused"
+
+
+def test_a_live_native_master_requires_replace_before_any_retirement(native_taker, monkeypatch):
+    store, runtime, table, retired = native_taker
+    old, _ = take_master.take(store, "sw", "old-session", runtime, 1000)
+    runtime.herdr_runtime.live_names = lambda: {old.name}
+    monkeypatch.setattr(take_master, "agent_pid", lambda: 4343)
+
+    with pytest.raises(SwarmError, match="is the live master"):
+        take_master.take(store, "sw", "new-session", runtime, 2000)
+
+    assert retired == []
+    assert store.agent("sw", old.name) == old
+
+
+def test_a_reused_native_master_pid_is_never_signalled_during_replacement(native_taker, monkeypatch):
+    store, runtime, table, retired = native_taker
+    old, _ = take_master.take(store, "sw", "old-session", runtime, 1000)
+    table[4242] = Process(4242, 1, 4242, 4242, 300, "S", "codex", ("codex",))
+    monkeypatch.setattr(take_master, "agent_pid", lambda: 4343)
+
+    new, _ = take_master.take(store, "sw", "new-session", runtime, 2000, replace_live=True)
+
+    assert retired == [(None, 100)]
+    assert store.agent("sw", old.name) is None
+    assert store.execution_occupants("sw")[new.seat].execution_id == new.execution_id
+
+
+def test_native_master_admission_without_process_identity_places_nothing(native_taker):
+    store, runtime, table, retired = native_taker
+    table.pop(4242)
+
+    with pytest.raises(SwarmError, match="start time could not be read"):
+        take_master.take(store, "sw", "old-session", runtime, 1000)
+
+    assert store.agents("sw") == []
+    assert store.execution_occupants("sw") == {}
+    assert retired == []
