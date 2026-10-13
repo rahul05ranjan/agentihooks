@@ -73,3 +73,15 @@ def test_lag_is_unknown_without_exporter_progress():
     local = {"generated_bytes": 10, "accepted_bytes": 4, "oldest_unaccepted": NOW - 9_000}
     assert measure.lag(local, NOW) == 9
     assert measure.lag({**local, "accepted_bytes": 10}, NOW) == 0
+
+
+def test_a_failed_spawn_count_reads_a_known_task_or_the_master():
+    failures = [found("failed spawn", "mu1", 2)]
+    assert measure.spawn_count("failed-spawn/mu1", failures, {"mu1"}) == 2
+    assert measure.spawn_count("failed-spawn/mu2", failures, {"mu2"}) == 0
+    assert measure.spawn_count("failed-spawn/master", [], set()) == 0
+
+
+def test_a_failed_spawn_count_refuses_a_task_the_ledger_lacks():
+    with pytest.raises(SwarmError, match="^failed-spawn/mu9 names no task on the watched ledger$"):
+        measure.spawn_count("failed-spawn/mu9", [], {"mu1"})

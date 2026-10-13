@@ -17,7 +17,8 @@ agentihooks doctor <slug> measure FINDING      run the detectors once and print 
                                                telemetry-stale and exporter-backlog the active bindings, unknown
                                                those with no exporter progress; for other classes the current
                                                findings, unknown the detectors that failed. failed-spawn ids
-                                               count the spawn journal's window, so 0 there is a real reading;
+                                               count the spawn journal's window, so 0 there is a reading for a
+                                               ledger task or the master, and other tasks are refused;
                                                master-launch-missed replays the last hour's (or --since to --until)
                                                failed master launches and counts those no finding put before the
                                                Doctor master, refusing when the journal is unreadable
@@ -280,7 +281,8 @@ def cmd_measure(store, args):
     if args.finding.startswith("failed-spawn/"):
         bounds = {"since": _at(window[0]), "until": _at(window[1])} if window else {}
         found = spawns.failed(spawn_read.records(store, slug, now, **bounds))
-        print(f"{args.finding} {next((f.measure for f in found if f.id == args.finding), 0)}")
+        tasks = {t["id"] for t in swarm.LedgerClient().tasks(slug)}
+        print(f"{args.finding} {measure.spawn_count(args.finding, found, tasks)}")
         return
     if "/" not in args.finding:
         print(_class_read(store, slug, doctor, now, args.finding).line(args.finding))

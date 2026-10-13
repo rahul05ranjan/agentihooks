@@ -47,6 +47,14 @@ def exact(finding_id: str, found: list[Finding], failed: list[str], seen: dict, 
     return 0
 
 
+def spawn_count(finding_id: str, found: list[Finding], tasks: set[str]) -> int:
+    """Failed spawns of a ledger task, or the master, in the journal window; 0 is a reading only for a known one."""
+    subject = finding_id.split("/", 1)[1]
+    if subject != "master" and subject not in tasks:
+        raise SwarmError(f"{finding_id} names no task on the watched ledger")
+    return next((f.measure for f in found if f.id == finding_id), 0)
+
+
 def _measures(name, found):
     return [f.measure for f in found if class_of(f.kind) == name]
 

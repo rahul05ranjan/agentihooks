@@ -139,3 +139,10 @@ def test_the_telemetry_stale_class_is_refused_when_the_trace_detector_fails(star
     assert (
         err == "doctor: exporter-backlog is unknown: the trace detector failed: ZeroDivisionError: division by zero\n"
     )
+
+
+def test_a_failed_spawn_id_for_a_task_the_ledger_lacks_is_refused(started, monkeypatch, capsys):
+    monkeypatch.setattr(doctor.spawn_read, "records", lambda *a, **kw: {"slug": WATCHED, "actions": []})
+    code, out, err = measured(capsys, "failed-spawn/mu9")
+    assert (code, out) == (1, "")
+    assert err == "doctor: failed-spawn/mu9 names no task on the watched ledger\n"
