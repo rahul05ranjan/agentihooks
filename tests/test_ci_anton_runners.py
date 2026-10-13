@@ -204,7 +204,7 @@ def test_untrusted_and_fork_runs_fall_back_to_hosted_runners():
     assert leaked == []
 
 
-def test_only_jobs_that_exchange_an_oidc_token_stay_hosted():
+def test_every_hosted_job_stays_on_a_hosted_runner():
     jobs = runner_jobs()
     for name, job in OIDC:
         permissions = {**workflows()[name].get("permissions", {}), **jobs[(name, job)].get("permissions", {})}
