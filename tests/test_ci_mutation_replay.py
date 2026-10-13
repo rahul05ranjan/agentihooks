@@ -22,6 +22,7 @@ def test_replay_preserves_sources_tests_and_selected_mutants(tmp_path, monkeypat
     with ZipFile(archive, "w") as zipfile:
         zipfile.writestr("unrelated.py.meta", json.dumps({"exit_code_by_key": {"foreign": None}}))
         zipfile.writestr(f"{prefix}/scripts/", "")
+        zipfile.writestr(f"{prefix}/data/deep/nested/extra.txt", "preserved")
         for path, content in {
             "changed-lines.json": json.dumps(scope),
             "shared-stats.json": json.dumps(stats),
@@ -146,13 +147,17 @@ def test_replay_accepts_complete_survivor_failures_and_rejects_incomplete_grades
         ("cleared", "", 0),
     ],
 )
-def test_replay_grade_keeps_the_normal_mutation_failure_exit(tmp_path, monkeypatch, capsys, status, reason, expected):
+@pytest.mark.parametrize("explicit", [False, True])
+def test_replay_grade_keeps_the_normal_mutation_failure_exit(
+    tmp_path, monkeypatch, capsys, status, reason, expected, explicit
+):
     source = tmp_path / "source"
     source.mkdir()
     stats = tmp_path / "stats"
     stats.mkdir()
     name = "scripts.sample.x_f__mutmut_1"
-    (stats / "plan.json").write_text(json.dumps({"assignments": {name: 0}, "costs": {name: 10}}))
+    index, total = (1, 3) if explicit else (0, 1)
+    (stats / "plan.json").write_text(json.dumps({"assignments": {name: index}, "costs": {name: 10}}))
     (tmp_path / "scope.json").write_text(
         json.dumps({"scripts/sample.py": {"lines": [2], "tests": ["tests/test_sample.py"]}})
     )
@@ -176,9 +181,10 @@ def test_replay_grade_keeps_the_normal_mutation_failure_exit(tmp_path, monkeypat
 
     monkeypatch.setattr(replay, "mutate_files", mutate)
     monkeypatch.setattr(replay.time, "monotonic", lambda: 100)
-    monkeypatch.setattr("sys.argv", ["replay", "grade", "--folder", str(tmp_path)])
+    arguments = ["--shard", "1", "--shards", "3"] if explicit else []
+    monkeypatch.setattr("sys.argv", ["replay", "grade", "--folder", str(tmp_path), *arguments])
     assert replay.main() == expected
-    report = json.loads((tmp_path / "grade-0/report.json").read_text())
+    report = json.loads((tmp_path / f"grade-{index}/report.json").read_text())
     assert json.loads(capsys.readouterr().out.splitlines()[-1]) == report
     assert report["failed"] is (bool(reason) or status == "survived")
     assert report["not_mutated"] == ([{"path": "scripts/sample.py", "reason": reason}] if reason else [])
@@ -189,9 +195,9 @@ def test_replay_grade_keeps_the_normal_mutation_failure_exit(tmp_path, monkeypat
     assert report["shard"]["graded"] == (0 if reason or status == "missing grade" else 1)
     assert len(calls) == 1
     assert calls[0][0] == source
-    assert calls[0][1] == tmp_path / "grade-0/work"
+    assert calls[0][1] == tmp_path / f"grade-{index}/work"
     assert calls[0][2] == {"scripts/sample.py": ({2}, ["tests/test_sample.py"])}
-    assert calls[0][3] == (0, 1)
+    assert calls[0][3] == (index, total)
     assert calls[0][4].folder == stats / "group-0"
     assert calls[0][4].head == "retained"
 
