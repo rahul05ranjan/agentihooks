@@ -125,6 +125,17 @@ class TestTaskLift:
         lift.lift_agent(Who(name="master@1-0", swarm=SLUG), "stub", tmp_path)
         assert self.run(tmp_path, None, agent="master@1-0", task="")[0] == 0
 
+    def test_an_agent_lifted_before_its_claim_keeps_the_lift_until_its_task_is_lifted(self, tmp_path):
+        lift.lift_agent(Who(name=ME, swarm=SLUG), "stub", tmp_path)
+        assert self.run(tmp_path, "a1", agent=ME)[0] == 0
+        lift.lift_agent(Who(name=SUCCESSOR, swarm=SLUG, task=TASK), "stub", tmp_path, pull={"url": URL, "head": "a1"})
+        assert self.run(tmp_path, "b2", agent=ME)[0] == 2
+
+    def test_a_dropped_task_lift_lifts_nothing(self, tmp_path):
+        lift.lift_agent(WHO, "stub", tmp_path, pull={"url": URL, "head": "a1"})
+        lift.drop_task(SLUG, TASK, tmp_path)
+        assert self.run(tmp_path, "a1")[0] == 2
+
     def test_task_lift_path_sits_under_the_swarm_home_lifts_tasks_folder(self, tmp_path):
         path = lift.task_lift_path(SLUG, TASK, "watch", tmp_path)
         assert path == tmp_path / SLUG / "gates" / "lifts" / "tasks" / TASK / "watch"
@@ -189,7 +200,7 @@ class TestStatus:
 
 class TestCommand:
     @pytest.fixture(autouse=True)
-    def heads(self, monkeypatch):
+    def read_heads(self, monkeypatch):
         read = []
         ledger = SimpleNamespace(task=lambda slug, task: {"id": task, "pr_url": URL} if task == TASK else None)
         monkeypatch.setattr(cli, "LedgerClient", lambda: ledger)
@@ -199,25 +210,36 @@ class TestCommand:
     def lift(self, store, gate="watch", agent=ME):
         cli.cmd_lift(store, SimpleNamespace(slug=SLUG, agent=agent, gate=gate))
 
-    def test_the_lift_binds_the_task_and_its_pull_request_head(self, monkeypatch, heads):
+    def test_the_lift_binds_the_task_and_its_pull_request_head(self, monkeypatch, read_heads):
         monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", "operator")
         self.lift(saved())
-        assert heads == [URL]
+        assert read_heads == [URL]
         assert lift.task_lifted(SLUG, TASK, "watch", now=time.time() + 2 * lift.LIFT_SECONDS)
         monkeypatch.setattr("scripts.gates.intent.pr_head", lambda url: "b2")
         assert not lift.task_lifted(SLUG, TASK, "watch")
 
+    def test_an_unreadable_head_refuses_the_lift_and_writes_nothing(self, monkeypatch):
+        monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", "operator")
+        monkeypatch.setattr("scripts.gates.intent.pr_head", lambda url: None)
+        with pytest.raises(SwarmError, match=f"^could not read the head of {URL}; lift again once GitHub answers$"):
+            self.lift(saved())
+        assert not lift.task_lift_path(SLUG, TASK, "watch").exists()
+        assert rows() == []
+
     def test_the_operator_lifts_a_gate_for_an_agent(self, monkeypatch, capsys):
         monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", "operator")
         self.lift(saved())
-        assert capsys.readouterr().out == json.dumps({"agent": ME, "gate": "watch", "minutes": 60}) + "\n"
+        assert capsys.readouterr().out == json.dumps({"agent": ME, "gate": "watch", "head": "a1"}) + "\n"
         assert lift.agent_lifted(SLUG, ME, "watch")
-        assert rows() == [("watch", "lift", ME, TASK, lift.LIFT_REASON)]
+        assert rows() == [("watch", "lift", ME, TASK, lift.HEAD_REASON)]
 
-    def test_the_server_gate_talk_can_be_lifted(self, monkeypatch):
+    def test_the_server_gate_talk_can_be_lifted(self, monkeypatch, capsys, read_heads):
         monkeypatch.delenv("AGENTIHOOKS_AGENT_NAME", raising=False)
         self.lift(saved(), gate="talk")
         assert lift.agent_lifted(SLUG, ME, "talk")
+        assert not lift.task_lift_path(SLUG, TASK, "talk").exists()
+        assert read_heads == []
+        assert json.loads(capsys.readouterr().out) == {"agent": ME, "gate": "talk", "minutes": 60}
 
     def test_an_agent_cannot_lift_a_gate(self, monkeypatch, capsys):
         monkeypatch.setattr(cli, "connect", saved)

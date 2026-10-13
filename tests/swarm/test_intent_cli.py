@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from scripts.gates import intent
+from scripts.gates import intent, lift
 from scripts.gates.verdicts import Verdicts
 from scripts.inbox.store import InboxStore
 from scripts.swarm import cli
@@ -51,6 +51,17 @@ def test_swarm_pr_with_the_intent_gate_off_arms_nothing(started, capsys, monkeyp
     assert run("sw", "pr", URL) == 0
     assert json.loads(capsys.readouterr().out.splitlines()[-1])["intent"] == {"verdict": "off", "body": True}
     assert Verdicts("sw", "intent").read("t1") is None
+
+
+def test_a_new_pull_request_drops_the_task_lift_and_the_same_one_keeps_it(started):
+    path = lift.task_lift_path("sw", "t1", "intent")
+    path.parent.mkdir(parents=True)
+    path.write_text("{}")
+    assert run("sw", "pr", URL) == 0
+    assert not path.exists()
+    path.write_text("{}")
+    assert run("sw", "pr", URL) == 0
+    assert path.exists()
 
 
 @pytest.mark.parametrize("mode", ["enforce", "observe", "off", "coach"])

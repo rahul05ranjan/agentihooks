@@ -1,4 +1,7 @@
-"""The operator's lift: 'lift the <name> gate' typed in an agent's pane lets that gate's denies through for one hour."""
+"""The operator's lift: 'lift the <name> gate' typed in an agent's pane lets that gate's denies through for one hour.
+
+A swarm lift on an agent holding a task binds the task: every agent on it passes until its pull request head moves.
+"""
 
 import json
 import re
@@ -11,6 +14,7 @@ from scripts.gates.log import safe_name
 LIFT_SECONDS = 3600
 SERVER_GATES = frozenset({"talk"})
 LIFT_REASON = "the operator lifted it for one hour"
+HEAD_REASON = "the operator lifted it for this task until its pull request head moves"
 SIGNAL = re.compile(r"\blift\s+(?:the\s+)?([a-z][a-z0-9-]*)\s+gate\b", re.IGNORECASE)
 
 
@@ -44,27 +48,32 @@ def agent_lifted(slug, agent, gate, home=None, now=None):
     return _fresh(agent_lift_path(slug, agent, gate, home), now)
 
 
+def task_lifts_dir(slug, task, home=None):
+    return log.gates_dir(slug, home) / "lifts" / "tasks" / safe_name(task)
+
+
 def task_lift_path(slug, task, gate, home=None):
-    return log.gates_dir(slug, home) / "lifts" / "tasks" / safe_name(task) / safe_name(gate)
+    return task_lifts_dir(slug, task, home) / safe_name(gate)
 
 
 def task_lifted(slug, task, gate, home=None, now=None):
     if not (slug and task):
         return False
-    path = task_lift_path(slug, task, gate, home)
-    try:
-        record = json.loads(path.read_text())
-    except (OSError, ValueError):
-        return False
-    if not (isinstance(record, dict) and record.get("head")):
-        return _fresh(path, now)
+    record = _record(task_lift_path(slug, task, gate, home))
+    if not record.get("url"):
+        return _alive(record, now)
     from scripts.gates.intent import pr_head
 
-    return pr_head(record.get("url") or "") == record["head"]
+    return bool(record.get("head")) and pr_head(record["url"]) == record["head"]
+
+
+def drop_task(slug, task, home=None):
+    for path in task_lifts_dir(slug, task, home).glob("*"):
+        path.unlink(missing_ok=True)
 
 
 def held(slug, agent, task, gate, home=None):
-    if task and gate not in SERVER_GATES:
+    if task and gate not in SERVER_GATES and task_lift_path(slug, task, gate, home).exists():
         return task_lifted(slug, task, gate, home)
     return agent_lifted(slug, agent, gate, home)
 
@@ -74,11 +83,12 @@ def lift_agent(who, gate, home=None, now=None, pull=None):
     path = agent_lift_path(who.swarm, who.name, gate, home)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"at": at}))
-    if who.swarm and who.task:
+    if who.swarm and who.task and gate not in SERVER_GATES:
         path = task_lift_path(who.swarm, who.task, gate, home)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"at": at, **(pull or {})}))
-    log.append(who.swarm, log.Row.of(gate, "lift", who, reason=LIFT_REASON), home)
+    reason = HEAD_REASON if pull and gate not in SERVER_GATES else LIFT_REASON
+    log.append(who.swarm, log.Row.of(gate, "lift", who, reason=reason), home)
 
 
 def active(rows, now_ms):
@@ -95,11 +105,19 @@ def active(rows, now_ms):
 
 
 def _fresh(path, now):
+    return _alive(_record(path), now)
+
+
+def _record(path):
     try:
         record = json.loads(path.read_text())
     except (OSError, ValueError):
-        return False
-    at = record.get("at") if isinstance(record, dict) else None
+        return {}
+    return record if isinstance(record, dict) else {}
+
+
+def _alive(record, now):
+    at = record.get("at")
     if not isinstance(at, (int, float)):
         return False
     return (time.time() if now is None else now) - at < LIFT_SECONDS
