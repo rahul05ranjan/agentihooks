@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
+from scripts.swarm import ledger_watchdog
 from scripts.swarm_ledger import ledger_server, server_drain
 from scripts.swarm_ledger.events import Expired, Hub
 
@@ -71,6 +72,10 @@ def test_a_request_that_outlives_the_drain_wait_lets_the_server_go_anyway():
     assert server.drain(Hub(), timeout=0.05) is False
     server.release.set()
     client.join(5)
+
+
+def test_the_drain_wait_ends_before_the_watchdog_kills_the_server():
+    assert server_drain.DRAIN_S < ledger_watchdog.STOP_WAIT_S
 
 
 def test_stopping_the_hub_ends_every_waiting_stream_at_once():
