@@ -158,7 +158,7 @@ def test_red_checks_in_the_merge_queue_never_reopen_the_task():
     assert swarm.inbox() == []
 
 
-@pytest.mark.parametrize("pull,live", [(replace(CONFLICTING, draft=True), False), (CONFLICTING, True)])
+@pytest.mark.parametrize("pull,live", [(replace(CONFLICTING, draft=True), True), (CONFLICTING, True)])
 def test_unmergeable_drafts_and_live_working_owners_stay_held(pull, live):
     swarm = Swarm(pull, live=live)
     assert swarm.tick(START) == []
@@ -634,6 +634,30 @@ def test_two_unclaimed_tasks_alert_in_the_same_tick():
     swarm.ready["eng"].append(swarm.ledger.rows["t3"])
     swarm.tick(START)
     assert len(swarm.tick(START + 15 * MINUTE)) == 2
+
+
+def test_many_ready_tasks_send_one_lane_alert_with_the_ready_count():
+    swarm = Swarm(RUNNING)
+    _full_lane(swarm)
+    for index in range(3, 56):
+        task = {"id": f"t{index}", "state": "open", "claimed_by": "", "lane": "eng"}
+        swarm.ledger.rows[task["id"]] = task
+        swarm.ready["eng"].append(task)
+    swarm.tick(START)
+    assert len(swarm.tick(START + 15 * MINUTE)) == 1
+    [item] = swarm.inbox()
+    assert "54 ready tasks" in item.text
+    assert "eng lane" in item.text
+    assert swarm.tick(START + 16 * MINUTE) == []
+
+
+def test_an_operator_capped_lane_never_alerts_about_unclaimed_tasks():
+    swarm = Swarm(RUNNING)
+    _full_lane(swarm)
+    swarm.store.create(SwarmConfig(SLUG, "/repo", max_eng=1, max_ci=0, max_plan=0, scaling="manual"))
+    assert swarm.tick(START) == []
+    assert swarm.tick(START + 180 * MINUTE) == []
+    assert swarm.inbox() == []
 
 
 @pytest.mark.parametrize(
