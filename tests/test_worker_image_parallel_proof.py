@@ -39,6 +39,8 @@ if args[0] == 'build':
         sys.exit(1)
 elif args[:2] == ['image', 'inspect']:
     sys.exit(1)
+elif args[0] == 'info':
+    print(os.environ.get('DRIVER', '[]'))
 elif args[0] == 'run':
     if '/opt/probe/profile-probe.sh' in args:
         if args[-1] == 'positive':
@@ -54,6 +56,10 @@ elif args[0] == 'run':
 """
 SCAN = """#!/usr/bin/env bash
 set -euo pipefail
+if [[ "$1" == --pull-scanner ]]; then
+    touch "$STATE/scanner-pulled"
+    exit 0
+fi
 if [[ "$1" == agentihooks-worker-proof:* ]]; then
     touch "$STATE/scan-started"
     for ((attempt=0; attempt<300; attempt++)); do
@@ -74,7 +80,7 @@ if os.environ['FAILURE'] == 'profile-evidence':
 """
 
 
-def run_proof(tmp_path, failure, proof="all"):
+def run_proof(tmp_path, failure, proof="all", driver="[]"):
     state = tmp_path / "state"
     state.mkdir()
     if proof != "all":
@@ -88,7 +94,8 @@ def run_proof(tmp_path, failure, proof="all"):
         if proof == "all"
         else (
             "#!/usr/bin/env bash\nset -euo pipefail\n"
-            'touch "$STATE/scan-agentihooks-worker-proof-finished"\n'
+            'if [[ "$1" == --pull-scanner ]]; then touch "$STATE/scanner-pulled"; exit 0; fi\n'
+            'touch "$STATE/scan-${1%%:*}-finished"\n'
             'if [[ "$FAILURE" == scan ]]; then exit 17; fi\n'
         )
     )
@@ -128,6 +135,7 @@ def run_proof(tmp_path, failure, proof="all"):
         "REPO": str(tmp_path),
         "ARCHIVE": str(archive),
         "FAILURE": failure,
+        "DRIVER": driver,
     }
     result = subprocess.run(
         ["bash", str(ROOT / "docker/swarm-node/smoke.sh"), str(output), proof],
@@ -186,8 +194,21 @@ def test_worker_proof_modes_run_only_their_independent_checks(tmp_path, proof, b
         assert build[build.index("--no-cache-filter") + 1] == "worker"
     if proof == "profiles":
         assert (state / "profile-evidence").exists()
-    else:
-        assert (state / "scan-agentihooks-worker-proof-finished").exists()
+    assert (state / "scanner-pulled").exists()
+    assert (state / "scan-agentihooks-worker-proof-finished").exists()
+
+
+@pytest.mark.parametrize(
+    "driver,exported", [("[[driver-type io.containerd.snapshotter.v1]]", True), ("[[Backing Filesystem extfs]]", False)]
+)
+def test_containerd_store_exports_worker_layers_uncompressed(tmp_path, driver, exported):
+    result, calls, state, output = run_proof(tmp_path, "", "rebuild", driver)
+    assert result.returncode == 0, result.stderr
+    build = next(call for call in calls if call[0] == "build")
+    output_flag = "--output" in build and build[build.index("--output") + 1] == "type=image,compression=uncompressed"
+    assert output_flag is exported
+    assert ("--provenance=false" in build) is exported
+    assert build[build.index("-t") + 1].startswith("agentihooks-worker-proof:")
 
 
 @pytest.mark.parametrize(
@@ -206,31 +227,41 @@ def test_a_failed_selected_worker_proof_never_reports_success(tmp_path, proof, f
     assert not list(output.glob("context-*"))
 
 
-@pytest.mark.parametrize("change", ["none", "inventory", "revision", "missing", "profile"])
+@pytest.mark.parametrize(
+    "change", ["none", "inventory", "rollback", "profiles", "revision", "status", "missing", "profile"]
+)
 def test_parallel_worker_reports_require_equal_inventories_and_all_proofs(tmp_path, change):
     evidence = tmp_path / "evidence"
-    report = {"manifest": {"source_revision": "checked-revision"}, "worker_image_build_validation_failures": 0}
+    report = {
+        "manifest": {"source_revision": "checked-revision", "declared": {"lock_sha256": "locked"}},
+        "worker_image_build_validation_failures": 0,
+    }
+    different = report | {"different": True}
     for proof in ("startup", "rebuild", "profiles"):
         folder = evidence / proof
         folder.mkdir(parents=True)
         (folder / "mode-result.json").write_text(
             json.dumps({"proof": proof, "tested_commit": "checked-revision", "status": "passed"})
         )
-    for name in ("first", "second", "rollback"):
+    for name in ("first", "second"):
         (evidence / "startup" / f"{name}.json").write_text(json.dumps(report))
-    (evidence / "profiles" / "profiles.json").write_text(json.dumps(report))
+    (evidence / "startup" / "rollback.json").write_text(json.dumps(different if change == "rollback" else report))
+    (evidence / "profiles" / "profiles.json").write_text(json.dumps(different if change == "profiles" else report))
     for case in ("a", "b"):
         (evidence / "startup" / f"{case}-result.json").write_text(
-            json.dumps({"package": "SV2-IMG-01", "tested_commit": "checked-revision"})
+            json.dumps({"package": "SV2-IMG-01", "fixture": "startup-fixture", "tested_commit": "checked-revision"})
         )
-    rebuild = report | ({"different": True} if change == "inventory" else {})
-    (evidence / "rebuild" / "rebuild.json").write_text(json.dumps(rebuild))
+    (evidence / "rebuild" / "rebuild.json").write_text(json.dumps(different if change == "inventory" else report))
     profiles = evidence / "profiles" / "SV2-IMG-02"
     profiles.mkdir()
     (profiles / "result.json").write_text(json.dumps({"status": "passed", "tested_commit": "checked-revision"}))
     if change == "revision":
         (evidence / "rebuild" / "mode-result.json").write_text(
             json.dumps({"proof": "rebuild", "tested_commit": "other", "status": "passed"})
+        )
+    if change == "status":
+        (evidence / "startup" / "mode-result.json").write_text(
+            json.dumps({"proof": "startup", "tested_commit": "checked-revision", "status": "failed"})
         )
     if change == "missing":
         (evidence / "rebuild" / "rebuild.json").unlink()
@@ -243,3 +274,10 @@ def test_parallel_worker_reports_require_equal_inventories_and_all_proofs(tmp_pa
     )
     assert (done.returncode == 0) == (change == "none"), done.stderr
     assert (evidence / "result.json").exists() == (change == "none")
+    if change == "none":
+        recovery = json.loads((evidence / "c-result.json").read_text())
+        assert recovery["fixture"] == "startup-fixture"
+        assert recovery["lock_sha256"] == "locked"
+        assert recovery["uncached_rebuild_inventory_equal"] is True
+        assert recovery["retained_image_started_after_rejected_builds"] is True
+        assert "retained_previous_image_started" not in recovery
