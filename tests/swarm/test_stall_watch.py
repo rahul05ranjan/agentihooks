@@ -674,6 +674,90 @@ def test_an_existing_lane_alert_never_escalates_after_manual_caps_apply():
     assert InboxStore(swarm.store.redis).get(item.id).state == "done"
 
 
+@pytest.mark.parametrize("pull,limit", [(GREEN, 10), (CONFLICTING, 5)])
+@pytest.mark.parametrize("clock", ["pushed_at", "red_at"])
+def test_a_new_pull_request_event_restarts_the_stall_limit(pull, limit, clock):
+    swarm = Swarm(pull, live=False)
+    swarm.tick(START)
+    event = START + 3 * MINUTE
+    swarm.pulls[URL] = replace(pull, **{clock: event})
+    assert swarm.tick(event + (limit - 1) * MINUTE) == []
+    swarm.tick(event + limit * MINUTE)
+    assert _reopened(swarm)
+
+
+def test_another_task_record_cannot_extend_the_current_claim_limit():
+    swarm = Swarm(CONFLICTING, live=False)
+    swarm.store.put_agent(SLUG, AgentRecord(OWNER, "eng", "another", started_at=START + 180 * MINUTE))
+    swarm.tick(START)
+    swarm.tick(START + 5 * MINUTE)
+    assert _reopened(swarm)
+
+
+def test_a_new_push_does_not_extend_the_missing_owner_limit():
+    swarm = Swarm(RUNNING, live=False)
+    swarm.tick(START)
+    swarm.pulls[URL] = replace(RUNNING, pushed_at=START + 9 * MINUTE)
+    swarm.tick(START + 10 * MINUTE)
+    assert _reopened(swarm)
+
+
+@pytest.mark.parametrize("state,owner", [("claimed", ""), ("open", OWNER), ("blocked", "")])
+def test_stale_ready_candidates_are_not_counted_or_alerted(state, owner):
+    swarm = Swarm(RUNNING)
+    _full_lane(swarm)
+    swarm.ledger.rows["t1"].update(state=state, claimed_by=owner)
+    assert swarm.tick(START) == []
+    assert swarm.tick(START + 180 * MINUTE) == []
+    assert swarm.inbox() == []
+
+
+def test_a_lane_alert_without_a_snapshot_task_survives_a_ready_list_gap():
+    swarm = Swarm(RUNNING)
+    _full_lane(swarm)
+    swarm.ready["eng"] = [{"id": "t3"}]
+    swarm.tick(START)
+    swarm.tick(START + 15 * MINUTE)
+    [item] = swarm.inbox()
+    assert "no title; eng lane: 1 ready tasks" in item.text
+    assert item.state != "done"
+    swarm.ready["eng"] = []
+    assert swarm.tick(START + 16 * MINUTE) == []
+    assert InboxStore(swarm.store.redis).get(item.id).state != "done"
+    swarm.tick(START + 45 * MINUTE)
+    assert [target for target, _ in swarm.ledger.priorities] == ["tasks/t3"]
+
+
+def test_a_legacy_lane_alert_reads_its_lane_from_the_task():
+    swarm = Swarm(RUNNING)
+    _full_lane(swarm)
+    swarm.tick(START)
+    swarm.tick(START + 15 * MINUTE)
+    [item] = swarm.inbox()
+    key = swarm.store.key(SLUG, "stall-alerts")
+    row = json.loads(swarm.store.redis.hget(key, "t1"))
+    del row["lane"]
+    swarm.store.redis.hset(key, "t1", json.dumps(row))
+    assert swarm.tick(START + 16 * MINUTE) == []
+    assert InboxStore(swarm.store.redis).get(item.id).state != "done"
+    swarm.tick(START + 45 * MINUTE)
+    assert [target for target, _ in swarm.ledger.priorities] == ["tasks/t1"]
+
+
+def test_each_full_lane_alerts_once_in_the_same_tick():
+    swarm = Swarm(RUNNING)
+    _full_lane(swarm)
+    swarm.store.put_agent(SLUG, AgentRecord("ci", "ci", "t3"))
+    swarm.ledger.rows["t4"] = {"id": "t4", "state": "open", "claimed_by": "", "lane": "ci"}
+    swarm.ready["ci"] = [swarm.ledger.rows["t4"]]
+    swarm.tick(START)
+    assert len(swarm.tick(START + 15 * MINUTE)) == 2
+    items = swarm.inbox()
+    assert len(items) == 2
+    assert any("eng lane: 1 ready tasks" in item.text for item in items)
+    assert any("ci lane: 1 ready tasks" in item.text for item in items)
+
+
 def test_a_lane_alert_stays_open_when_its_first_task_is_taken():
     swarm = Swarm(RUNNING)
     _full_lane(swarm)
