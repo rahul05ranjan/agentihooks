@@ -362,6 +362,30 @@ def test_test_count_refuses_a_base_without_its_grader(tmp_path):
     assert "nothing trusted can grade" in result.stdout
 
 
+def test_coverage_ratchet_refuses_a_base_without_its_grader(tmp_path):
+    ratchets = [
+        step["run"]
+        for job in _workflow()["jobs"].values()
+        for step in job.get("steps", [])
+        if "python -m tests.coverage_ratchet" in step.get("run", "")
+    ]
+    assert ratchets
+    git = ["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "init", "-q"], check=True)
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "base"], check=True)
+    base = subprocess.run([*git, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "coverage_ratchet.py").write_text("from pathlib import Path\nPath('head-graded').touch()\n")
+    (tmp_path / "runner").mkdir()
+    env = dict(os.environ, BASE=base, RUNNER_TEMP=str(tmp_path / "runner"), GITHUB_WORKSPACE=str(tmp_path))
+    step = _step("coverage-ratchet", "Hold every line the base ran")
+    result = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert result.returncode == 1
+    assert "The base carries no tests/coverage_ratchet.py, so nothing trusted can grade." in result.stdout
+    assert not (tmp_path / "head-graded").exists()
+    assert all('"$GITHUB_WORKSPACE"' not in run.split("python -m tests.coverage_ratchet")[0] for run in ratchets)
+
+
 @pytest.mark.parametrize("unit", ["success", "failure", "skipped", "cancelled", "pending"])
 @pytest.mark.parametrize("lint", ["success", "failure", "skipped", "cancelled", "pending"])
 def test_required_gate_rejects_every_non_success_result(unit, lint):
