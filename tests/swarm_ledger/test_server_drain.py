@@ -138,8 +138,15 @@ def test_serve_drains_and_releases_the_writer_before_it_re_execs(monkeypatch, tm
     calls = []
 
     class Server:
-        def __init__(self, address, handler):
+        def __init__(self, address, handler, bind_and_activate):
             self.replacing = replacing
+            calls.append(("bind_and_activate", bind_and_activate))
+
+        def server_bind(self):
+            calls.append(("bind", self.request_queue_size))
+
+        def server_activate(self):
+            calls.append("activate")
 
         def stop_on(self, signum):
             calls.append(("stop_on", signum))
@@ -172,6 +179,12 @@ def test_serve_drains_and_releases_the_writer_before_it_re_execs(monkeypatch, tm
     monkeypatch.setattr(ledger_server.server_code, "record", lambda *args: None)
     monkeypatch.setattr(ledger_server, "reexec", lambda: calls.append("reexec"))
     ledger_server.serve()
-    assert calls == [("stop_on", signal.SIGTERM), "serve", ("drain", ledger_server.HUB), "release"] + (
-        ["reexec"] if replacing else []
-    )
+    assert calls == [
+        ("bind_and_activate", False),
+        ("bind", 128),
+        "activate",
+        ("stop_on", signal.SIGTERM),
+        "serve",
+        ("drain", ledger_server.HUB),
+        "release",
+    ] + (["reexec"] if replacing else [])

@@ -25,6 +25,9 @@ def listening(monkeypatch, ledger_port, tmp_path):
             super().server_activate()
             created.put(self)
 
+        def stop_on(self, signum):
+            pass
+
         def get_request(self):
             assert admitted.wait(15), "accept gate was never released"
             return super().get_request()
