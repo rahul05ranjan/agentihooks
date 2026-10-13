@@ -258,7 +258,7 @@ def base_run(tmp_path):
             FAKE_STATUS=status,
             FAKE_DISPATCH=dispatch,
             FAKE_REMOVED_AFTER=str(removed_after),
-            WAIT_SECONDS=wait,
+            WAIT_SECONDS="600",
             BASE_SHA="b" * 40,
             GITHUB_OUTPUT=str(output),
             GITHUB_REPOSITORY="the-cloud-clockwork/agentihooks",
@@ -306,7 +306,7 @@ def test_a_failed_runs_listing_is_red_at_once_instead_of_waiting(base_run):
 
 @pytest.mark.parametrize("removed_after", [0, 2])
 def test_the_base_run_is_red_when_the_predecessor_is_removed(base_run, removed_after):
-    result, output, _ = base_run(kept_by="333", removed_after=removed_after, wait="0")
+    result, output, _ = base_run(kept_by="333", removed_after=removed_after)
     assert result.returncode != 0
     assert "::error::" in result.stdout
     assert output == ""
