@@ -41,6 +41,14 @@ def _mtime(path: Path) -> float:
         return 0.0
 
 
+def _reflog_time(path: Path) -> float:
+    try:
+        entries = path.read_text(encoding="utf-8").splitlines()
+        return max(int(line.split("\t", 1)[0].rsplit(" ", 2)[1]) for line in entries)
+    except (OSError, ValueError, IndexError):
+        return _mtime(path)
+
+
 def _dirty(path: Path) -> tuple[str, ...] | None:
     result = git(path, "status", "--porcelain", "--untracked-files=normal")
     if result.returncode != 0:
@@ -57,7 +65,8 @@ def inspect(path: Path, now: float) -> TreeState | None:
     admin = admin_dir(path)
     if admin is None or not admin.is_dir():
         return None
-    touched = [_mtime(admin / name) for name in ("index", "HEAD", "logs/HEAD")]
+    touched = [_mtime(admin / name) for name in ("index", "HEAD")]
+    touched.append(_reflog_time(admin / "logs" / "HEAD"))
     try:
         dirty, unpushed = _dirty(path), _unpushed(path)
     except (OSError, subprocess.TimeoutExpired):
