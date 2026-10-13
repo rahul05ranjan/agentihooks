@@ -113,7 +113,7 @@ def seconds_of(found):
 def test_every_task_second_of_a_recorded_task_lands_in_exactly_one_named_stage():
     found = stages.report(every_stage(), [TASK], NOW)
     assert seconds_of(found) == {
-        ("claim_wait", ""): 1500.0,
+        ("seat_wait", ""): 1500.0,
         ("quota_hold", ""): 900.0,
         ("launch_failure", "claude"): 600.0,
         ("launch", "codex"): 600.0,
@@ -136,7 +136,7 @@ def test_stages_are_ordered_by_seconds_then_name_and_label():
     assert [(row["stage"], row["label"]) for row in found["stages"][:3]] == [
         ("build", ""),
         ("ci_run", ""),
-        ("claim_wait", ""),
+        ("seat_wait", ""),
     ]
 
 
@@ -166,7 +166,7 @@ def test_host_held_claim_wait_is_host_hold():
     )
     assert seconds_of(found) == {
         ("host_hold", ""): 300.0,
-        ("claim_wait", ""): 3300.0,
+        ("seat_wait", ""): 3300.0,
         ("build", ""): 7200.0,
     }
 
@@ -174,7 +174,7 @@ def test_host_held_claim_wait_is_host_hold():
 def test_an_open_ready_task_waits_for_its_claim_until_now():
     tasks = [{"id": "t0", "state": "done"}, {"id": "t3", "state": "open", "depends_on": ["t0"]}]
     found = stages.report(rows(ledger_events=[ledger("task done", at(8), "tasks/t0")]), tasks, NOW)
-    assert seconds_of(found) == {("claim_wait", ""): 7200.0}
+    assert seconds_of(found) == {("seat_wait", ""): 7200.0}
 
 
 def test_an_open_task_with_an_unfinished_dependency_is_not_waiting():
@@ -234,12 +234,12 @@ def test_a_task_the_tick_would_claim_waits_from_its_ready_time():
         phases=[{"id": "p1"}, {"id": "p2", "depends_on": ["p1"]}],
         freezes=[{"verb": "freeze", "target": "tasks/t4"}],
     )
-    assert found == {("claim_wait", ""): 7200.0}
+    assert found == {("seat_wait", ""): 7200.0}
 
 
 def test_a_task_stacked_on_a_claimed_branch_waits_like_the_tick_would_claim_it():
     tasks = [{"id": "t0", "state": "claimed", "branch": "b0"}, {"id": "t3", "state": "open", "depends_on": ["t0"]}]
-    assert waiting_of(tasks) == {("claim_wait", ""): 7200.0}
+    assert waiting_of(tasks) == {("seat_wait", ""): 7200.0}
 
 
 def test_without_a_ledger_doc_the_tick_readiness_still_skips_out_of_scope_and_parked_tasks():
@@ -250,7 +250,7 @@ def test_without_a_ledger_doc_the_tick_readiness_still_skips_out_of_scope_and_pa
         {"id": "t3", "state": "open"},
     ]
     found = stages.report(rows(ledger_events=[ledger("added", at(8), f"tasks/{t['id']}") for t in tasks]), tasks, NOW)
-    assert seconds_of(found) == {("claim_wait", ""): 7200.0}
+    assert seconds_of(found) == {("seat_wait", ""): 7200.0}
     assert stages.observations(rows(ledger_events=[ledger("added", at(8), "tasks/t1")]), tasks, NOW, 4 * H) == {}
 
 
@@ -272,7 +272,7 @@ def test_a_reopen_after_the_claim_does_not_move_the_ready_time():
         [{**TASK, "state": "claimed"}],
         NOW,
     )
-    assert seconds_of(found)[("claim_wait", "")] == 1800.0 + 5400.0
+    assert seconds_of(found)[("seat_wait", "")] == 1800.0 + 5400.0
 
 
 def test_time_before_the_window_is_not_counted():
@@ -355,7 +355,7 @@ def test_events_of_other_items_do_not_move_the_ready_time():
         [{**TASK, "state": "claimed"}],
         at(8),
     )
-    assert seconds_of(found) == {("claim_wait", ""): 3600.0}
+    assert seconds_of(found) == {("seat_wait", ""): 3600.0}
 
 
 def test_launch_ends_at_the_agents_own_join_not_another_agents():
@@ -438,7 +438,7 @@ def test_adjacent_host_and_quota_holds_stay_apart_and_empty_samples_hold_nothing
         [{**TASK, "state": "claimed"}],
         at(8),
     )
-    assert seconds_of(found) == {("host_hold", ""): 300.0, ("quota_hold", ""): 300.0, ("claim_wait", ""): 3000.0}
+    assert seconds_of(found) == {("host_hold", ""): 300.0, ("quota_hold", ""): 300.0, ("seat_wait", ""): 3000.0}
 
 
 def test_holds_separated_by_a_sample_gap_do_not_cover_the_gap():
@@ -455,7 +455,7 @@ def test_holds_separated_by_a_sample_gap_do_not_cover_the_gap():
         [{**TASK, "state": "claimed"}],
         at(8),
     )
-    assert seconds_of(found) == {("quota_hold", ""): 600.0, ("claim_wait", ""): 3000.0}
+    assert seconds_of(found) == {("quota_hold", ""): 600.0, ("seat_wait", ""): 3000.0}
 
 
 def test_quota_holds_carry_the_held_harness_and_split_where_it_changes():
@@ -478,7 +478,7 @@ def test_quota_holds_carry_the_held_harness_and_split_where_it_changes():
         ("quota_hold", "codex"): 600.0,
         ("quota_hold", "claude"): 300.0,
         ("host_hold", ""): 300.0,
-        ("claim_wait", ""): 2400.0,
+        ("seat_wait", ""): 2400.0,
     }
 
 
@@ -525,7 +525,7 @@ def test_a_life_whose_spawn_waited_for_room_is_claim_wait_not_launch():
         [{**TASK, "state": "claimed"}],
         NOW,
     )
-    assert seconds_of(found) == {("claim_wait", ""): 3600.0}
+    assert seconds_of(found) == {("seat_wait", ""): 3600.0}
 
 
 def test_the_merge_queue_starts_at_the_first_tick_that_saw_the_pull_request_queued():
@@ -570,7 +570,7 @@ def test_ci_after_the_agent_left_stays_ci_and_every_over_budget_job_gets_its_ove
     )
     assert seconds_of(found) == {
         ("build", ""): 3600.0,
-        ("claim_wait", ""): 1800.0,
+        ("seat_wait", ""): 1800.0,
         ("ci_queue", "anton-k3s"): 600.0,
         ("ci_overrun", "unit"): 780.0,
         ("ci_overrun", "lint"): 50.0,
@@ -653,7 +653,7 @@ def test_read_is_empty_before_any_record(store):
 def test_the_line_names_the_top_three_stages_with_task_hours():
     found = stages.report(every_stage(), [TASK], NOW)
     assert stages.line(found, NOW + 5 * M) == (
-        "top stages in the last 4 hours: build 1.0 task hours, ci run 0.9 task hours, claim wait 0.4 task hours;"
+        "top stages in the last 4 hours: build 1.0 task hours, ci run 0.9 task hours, seat wait 0.4 task hours;"
         " 3.8 task hours in all, measured 5 minutes ago"
     )
 
@@ -679,6 +679,133 @@ def test_the_line_says_when_nothing_was_measured():
     assert stages.line({}, NOW) == "top stages not measured yet: the metrics sink is off or no tick has run"
     empty = {"at": NOW, "window_hours": 4.0, "total": 0.0, "stages": []}
     assert stages.line(empty, NOW) == "top stages none: no task time in the last 4 hours"
+
+
+def opened(kind, ts, target, **extra):
+    return {**ledger(kind, ts, target), "payload": json.dumps({"kind": kind, "target": target, **extra})}
+
+
+def waited(task, *events, **doc):
+    found = stages.report(
+        rows(ledger_events=[ledger("added", at(7), f"tasks/{task['id']}"), *events]),
+        [task],
+        NOW,
+        ready=stages.claimable({"tasks": [task], **doc}, ""),
+    )
+    return seconds_of(found)
+
+
+OPEN_TASK = {"id": "t3", "state": "open", "phase": "p1"}
+PHASES = [{"id": "p1"}]
+
+
+@pytest.mark.parametrize(
+    "events,doc,seconds",
+    [
+        ([opened("unfrozen", at(9), "tasks/t3", cleared=["tasks/t3"])], {}, 3600.0),
+        ([opened("unfrozen", at(9), "phases/p1", cleared=["phases/p1", "tasks/t3"])], {}, 3600.0),
+        ([opened("unfrozen", at(9), "tasks/t8", cleared=["tasks/t8"])], {}, 10800.0),
+        ([opened("unfrozen", at(9), "phases/p1")], {}, 3600.0),
+        (
+            [ledger("focused", at(8), "phases/p1")],
+            {"freezes": [{"verb": "focus", "target": "phases/p1"}]},
+            7200.0,
+        ),
+        (
+            [ledger("focused", at(8), "tasks/t9"), opened("unfrozen", at(9), "tasks/t9", cleared=["tasks/t9"])],
+            {},
+            3600.0,
+        ),
+        ([ledger("back in scope", at(9), "tasks/t3")], {}, 3600.0),
+        ([ledger("task open", at(8, 30), "tasks/t3")], {}, 5400.0),
+        ([ledger("review changed", at(9), "phases/p1")], {}, 3600.0),
+        ([ledger("planning changed", at(9), "phases/p1")], {}, 3600.0),
+        ([ledger("review changed", at(9), "phases/p9")], {}, 10800.0),
+        ([ledger("checked", at(9), "phases/p9")], {}, 10800.0),
+    ],
+)
+def test_a_task_waits_from_the_latest_event_that_made_it_claimable(events, doc, seconds):
+    assert waited(OPEN_TASK, *events, phases=PHASES, **doc) == {("seat_wait", ""): seconds}
+
+
+def test_a_task_waits_from_the_check_that_opened_its_phase():
+    task = {"id": "t3", "state": "open", "phase": "p2"}
+    phases = [{"id": "p1", "done": True}, {"id": "p2", "depends_on": ["p1"]}]
+    assert waited(task, ledger("checked", at(9), "phases/p1"), phases=phases) == {("seat_wait", ""): 3600.0}
+
+
+def test_a_task_waits_from_the_approval_of_its_planned_phase():
+    task = {"id": "t3", "state": "open", "phase": "p1"}
+    plan = {"id": "tp", "state": "done", "kind": "plan", "phase": "p1"}
+    phases = [{"id": "p1", "planning": "auto", "review": {"state": "approved"}}]
+    events = (ledger("task done", at(8), "tasks/tp"), ledger("review changed", at(9), "phases/p1"))
+    assert waited(task, *events, phases=phases, tasks=[plan, task]) == {("seat_wait", ""): 3600.0}
+
+
+def lane_rows(added, *extra):
+    return rows(
+        agent_events=[agent("claim", "t1", at(5)), agent("spawn", "t1", at(5), "e1", "claude"), *extra],
+        ledger_events=[
+            ledger("joined", at(5), by="e1"),
+            *(ledger("added", ts, f"tasks/{t}") for t, ts in added.items()),
+        ],
+    )
+
+
+def lane_tasks(t2="eng", t3="eng"):
+    return [
+        {"id": "t1", "state": "claimed", "branch": "b1", "lane": "eng"},
+        {"id": "t2", "state": "open", "lane": t2},
+        {"id": "t3", "state": "open", "lane": t3},
+    ]
+
+
+def split(source, tasks, seats):
+    return seconds_of(stages.report(source, tasks, NOW, ready=stages.claimable({"tasks": tasks}, "", seats)))
+
+
+TWO_READY = {"t2": at(8), "t3": at(8)}
+
+
+def test_only_as_many_ready_tasks_as_the_lane_has_seats_wait_for_a_seat_while_every_seat_is_busy():
+    assert split(lane_rows(TWO_READY), lane_tasks(), {"eng": 1, "ci": 1}) == {
+        ("build", ""): 14400.0,
+        ("seat_wait", ""): 7200.0,
+        ("queue_wait", ""): 7200.0,
+    }
+
+
+def test_ready_tasks_with_a_free_seat_are_queue_wait():
+    assert split(lane_rows(TWO_READY), lane_tasks(), {"eng": 2, "ci": 1}) == {
+        ("build", ""): 14400.0,
+        ("queue_wait", ""): 14400.0,
+    }
+
+
+def test_a_lane_with_no_seats_holds_only_queue_wait():
+    assert split(lane_rows(TWO_READY), lane_tasks(), {"eng": 0, "ci": 1}) == {
+        ("build", ""): 14400.0,
+        ("queue_wait", ""): 14400.0,
+    }
+
+
+def test_seat_wait_ends_when_the_busy_seat_frees():
+    found = split(lane_rows(TWO_READY, agent("retire", "t1", at(9), "e1", "claude")), lane_tasks(), {"eng": 1})
+    assert found == {("build", ""): 10800.0, ("seat_wait", ""): 3600.0, ("queue_wait", ""): 14400.0}
+
+
+def test_the_earliest_ready_task_takes_the_seat_demand():
+    found = split(lane_rows({"t2": at(8), "t3": at(7)}), lane_tasks(), {"eng": 1})
+    assert found == {("build", ""): 14400.0, ("seat_wait", ""): 10800.0, ("queue_wait", ""): 7200.0}
+
+
+def test_each_lane_counts_its_own_seats():
+    found = split(lane_rows(TWO_READY), lane_tasks(t2="ci"), {"eng": 1, "ci": 1})
+    assert found == {("build", ""): 14400.0, ("seat_wait", ""): 7200.0, ("queue_wait", ""): 7200.0}
+    tasks = lane_tasks(t2="ci")
+    ready = stages.claimable({"tasks": tasks}, "", {"eng": 1, "ci": 1})
+    episodes = stages.observations(lane_rows(TWO_READY), tasks, NOW, 4 * H, ready)
+    assert (episodes["seat_wait"], episodes["queue_wait"]) == ([f"seat_wait:t3:{at(8)}"], [f"queue_wait:t2:{at(8)}"])
 
 
 def test_swarm_status_lists_the_top_stages(monkeypatch, capsys, store):
