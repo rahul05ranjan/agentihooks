@@ -227,7 +227,12 @@ def test_sampling_delivers_an_external_store_write_within_one_minute(live, monke
         started = time.monotonic()
         state, rejected = server.repository.inner.apply_ops(SLUG, ops=[comment(153)])
         assert rejected == []
-        _, change, _ = next_of(reader, {"ledger"})
+        for name, change, _ in reader:
+            assert time.monotonic() - started < 60, "external write missed the stream deadline"
+            if name == "ledger":
+                break
+        else:
+            raise AssertionError("stream ended before the external write")
         assert apply(snapshot["ledger"], change["patch"])["notes"][-1]["text"] == "note 153"
         assert change["rev"] == state["_meta"]["rev"]
         assert time.monotonic() - started < 60
