@@ -152,7 +152,7 @@ def test_a_folder_other_than_the_shared_one_may_serve_on_8765(monkeypatch, tmp_p
     monkeypatch.setattr(server, "ThreadingHTTPServer", Mock(return_value=Mock(replacing=False)))
     monkeypatch.setattr(server.threading, "Thread", Mock())
     server.serve()
-    server.DrainingServer.assert_called_once_with((server.HOST, 8765), server.Handler, bind_and_activate=False)
+    server.ThreadingHTTPServer.assert_called_once_with((server.HOST, 8765), server.Handler, bind_and_activate=False)
 
 
 def test_files_under_the_agentihooks_home_never_configure_the_server(tmp_path):

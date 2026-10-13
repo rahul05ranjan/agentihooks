@@ -328,7 +328,7 @@ def test_a_second_server_on_a_held_folder_exits_before_touching_it(serving, leas
         f"ledger folder {serving} already has an active writer, pid 4242 on writer-a; a second writer is refused"
     )
     server.legacy.adopt.assert_not_called()
-    server.DrainingServer.assert_not_called()
+    server.ThreadingHTTPServer.assert_not_called()
     assert not (serving / ".server.pid").exists()
 
 
@@ -340,7 +340,7 @@ def test_the_server_holds_the_lease_while_it_serves_and_releases_it_after(servin
         with pytest.raises(ledger_writer.WriterConflict):
             ledger_writer.WriterLease(serving).acquire(OTHER)
 
-    server.DrainingServer.return_value.serve_forever.side_effect = serve_forever
+    server.ThreadingHTTPServer.return_value.serve_forever.side_effect = serve_forever
     server.serve()
     assert seen == [os.getpid()]
     server.legacy.adopt.assert_called_once_with(server.stored)
