@@ -132,8 +132,7 @@ def test_the_queue_baseline_holds_the_exact_base_tree_on_the_app_token():
     assert [steps.index(s) for s in (mint, find, download, hold, upload)] == sorted(
         steps.index(s) for s in (mint, find, download, hold, upload)
     )
-    assert 'wait="${WAIT_SECONDS:-600}"' in find["run"]
-    assert job["timeout-minutes"] * 60 > 600
+    assert job["timeout-minutes"] in {13, 60}
 
 
 @pytest.mark.parametrize(("measured", "fails"), [("abc", False), ("old", True)])
@@ -219,7 +218,9 @@ def base_run(tmp_path):
         'printf "%s\\n" "$@" >> "$ARGS"\n'
         'case "$2" in\n'
         '  */commits/*) printf "tree-of-base" ;;\n'
-        '  */runs\\?head_sha=*) [[ -z "$FAIL_RUNS" ]] || exit 1; for r in $FAKE_RUNS; do e=pull_request; s=$FAKE_STATUS;'
+        '  */runs\\?head_sha=*) [[ -z "$FAIL_RUNS" ]] || exit 1; '
+        '[[ "$FAKE_REMOVED_AFTER" -lt 0 || $(cat "$POLLS") -lt "$FAKE_REMOVED_AFTER" ]] || exit 0; '
+        "for r in $FAKE_RUNS; do e=pull_request; s=$FAKE_STATUS;"
         ' [[ " $FAKE_DISPATCH " == *" $r "* ]] && { e=workflow_dispatch; s=in_progress; };'
         ' jq -n --argjson id "$r" --arg s "$s" --arg e "$e" \'{id: $id, status: $s, event: $e}\'; done'
         " | jq -s '{workflow_runs: .}' | jq -r \"$4\" ;;\n"
@@ -231,7 +232,16 @@ def base_run(tmp_path):
     (tools / "sleep").write_text("#!/usr/bin/env bash\ntrue\n")
     (tools / "sleep").chmod(0o755)
 
-    def run(runs="111 222", kept_by="222", after=0, wait="600", fail_runs="", status="in_progress", dispatch=""):
+    def run(
+        runs="111 222",
+        kept_by="222",
+        after=0,
+        wait="600",
+        fail_runs="",
+        status="in_progress",
+        dispatch="",
+        removed_after=-1,
+    ):
         output = tmp_path / "output"
         output.write_text("")
         polls = tmp_path / "polls"
@@ -247,6 +257,7 @@ def base_run(tmp_path):
             FAIL_RUNS=fail_runs,
             FAKE_STATUS=status,
             FAKE_DISPATCH=dispatch,
+            FAKE_REMOVED_AFTER=str(removed_after),
             WAIT_SECONDS=wait,
             BASE_SHA="b" * 40,
             GITHUB_OUTPUT=str(output),
@@ -278,8 +289,9 @@ def test_the_base_run_ignores_dispatched_runs_that_wait_on_a_hosted_lane(base_ru
     assert output == ""
 
 
-def test_the_base_run_waits_for_an_earlier_queue_entry_to_publish(base_run):
-    result, output, _ = base_run(after=5)
+@pytest.mark.parametrize("status", ["queued", "in_progress"])
+def test_the_base_run_waits_past_ten_minutes_for_an_earlier_queue_entry_to_publish(base_run, status):
+    result, output, _ = base_run(after=5, status=status)
     assert result.returncode == 0, result.stderr
     assert output == "id=222\ntree=tree-of-base\n"
 
@@ -291,9 +303,9 @@ def test_a_failed_runs_listing_is_red_at_once_instead_of_waiting(base_run):
     assert not [arg for arg in args if "/artifacts" in arg]
 
 
-@pytest.mark.parametrize("runs", ["111 222", ""])
-def test_the_base_run_is_red_once_the_bounded_wait_ends(base_run, runs):
-    result, output, _ = base_run(runs=runs, kept_by="333", wait="0")
+@pytest.mark.parametrize("removed_after", [0, 2])
+def test_the_base_run_is_red_when_the_predecessor_is_removed(base_run, removed_after):
+    result, output, _ = base_run(kept_by="333", removed_after=removed_after, wait="0")
     assert result.returncode != 0
     assert "::error::" in result.stdout
     assert output == ""
