@@ -1,4 +1,5 @@
 import argparse
+import ast
 import json
 import os
 import subprocess
@@ -46,14 +47,24 @@ def plan_shards(costs: dict[str, float], target: float = 240, limit: int = 10) -
 
 
 def refine_plan(root: Path, selected: dict, stats: SharedStats) -> dict:
-    costs = {}
+    costs, keys = {}, []
+    selected = {
+        path: value
+        for path, value in selected.items()
+        if any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            for node in ast.walk(ast.parse((root / path).read_text()))
+        )
+    }
     groups = [
         [path for path in selected if path != "scripts/ci_mutation/identity.py"],
         [path for path in selected if path == "scripts/ci_mutation/identity.py"],
     ]
     for index, group in enumerate(group for group in groups if group):
         scope = {path: selected[path] for path in group}
-        results, reason = load_parts(stats.group(index).folder, stats_key(stats.head, scope))
+        key = stats_key(stats.head, scope)
+        keys.append(key)
+        results, reason = load_parts(stats.group(index).folder, key)
         if reason:
             raise ValueError(reason)
         names = []
@@ -61,7 +72,7 @@ def refine_plan(root: Path, selected: dict, stats: SharedStats) -> dict:
             _, generated = selected_mutants(path, (root / path).read_text(), lines)
             names.extend(get_mutant_name(Path(path), name) for name in generated)
         costs.update(measured_costs(names, results))
-    return plan_shards(costs)
+    return {**plan_shards(costs), "keys": keys, "head": stats.head}
 
 
 def main() -> int:
