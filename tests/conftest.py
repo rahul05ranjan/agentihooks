@@ -159,6 +159,7 @@ def _isolate_real_user_paths(tmp_path, monkeypatch, request):
     reappeared last time.
     """
     real_home = Path.home()
+    resolved_tmp_path = tmp_path.resolve()
     fake_home = tmp_path / "_home"
     (fake_home / ".claude").mkdir(parents=True)
     (fake_home / ".agentihooks").mkdir(parents=True)
@@ -175,7 +176,7 @@ def _isolate_real_user_paths(tmp_path, monkeypatch, request):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(fake_home / ".config"))
     monkeypatch.setenv("KUBECONFIG", str(tmp_path / "_kube" / "config"))
     monkeypatch.delenv("VAULT_ROOT", raising=False)
-    monkeypatch.setattr(swarm_v2_isolation, "FIXTURE_ROOT", tmp_path.resolve())
+    monkeypatch.setattr(swarm_v2_isolation, "FIXTURE_ROOT", resolved_tmp_path)
     # CI has no herdr; a test that needs one installs a fake.
     monkeypatch.setattr("scripts.herdr_host.binary", lambda: None)
     monkeypatch.setattr("scripts.herdr_setup.binary", lambda: None)
@@ -314,10 +315,10 @@ def _isolate_real_user_paths(tmp_path, monkeypatch, request):
     for module in (install, package_install):
         for name, value in installer_paths.items():
             monkeypatch.setattr(module, name, value)
-            assert Path(getattr(module, name)).resolve().is_relative_to(tmp_path.resolve()), (
+            assert Path(getattr(module, name)).resolve().is_relative_to(resolved_tmp_path), (
                 f"{module.__name__}.{name} escapes the test directory — refusing to run"
             )
-    monkeypatch.setattr(installer_isolation, "WRITE_ROOT", tmp_path.resolve())
+    monkeypatch.setattr(installer_isolation, "WRITE_ROOT", resolved_tmp_path)
     monkeypatch.setattr(installer_isolation, "PROTECTED_PATHS", swarm_v2_isolation.LIVE_ROOTS)
     monkeypatch.setattr("scripts.deps_preflight.manifest_path", lambda: None)
     # Same reasoning for the env-var bundle: `_managed_roots()` takes it verbatim,
@@ -349,7 +350,8 @@ def _isolate_real_user_paths(tmp_path, monkeypatch, request):
         ("herdr config", herdr_config_path()),
         ("kubeconfig", Path(os.environ["KUBECONFIG"])),
     ):
-        assert not any(value.resolve().is_relative_to(root) for root in installer_isolation.PROTECTED_PATHS), (
+        resolved_value = value.resolve()
+        assert not any(resolved_value.is_relative_to(root) for root in installer_isolation.PROTECTED_PATHS), (
             f"{label}() still resolves to a live install path ({value}) — refusing to run"
         )
         swarm_v2_isolation.confine(tmp_path, label, value)
