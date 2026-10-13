@@ -59,6 +59,7 @@ MOVED = {
     ("test.yml", "coverage-ratchet"): STANDARD,
     ("test.yml", "durations"): LIGHT,
     ("test.yml", "flake-budget"): LIGHT,
+    ("test.yml", "gate-required"): LIGHT,
     ("test.yml", "kind-due"): LIGHT,
     ("test.yml", "lint"): STANDARD,
     ("test.yml", "mutation"): BATCH,
@@ -66,6 +67,7 @@ MOVED = {
     ("test.yml", "mutation-stats"): BATCH,
     ("test.yml", "queue-baseline"): STANDARD,
     ("test.yml", "refresh-durations"): STANDARD,
+    ("test.yml", "reuse"): LIGHT,
     ("test.yml", "shard-check"): LIGHT,
     ("test.yml", "sonar"): STANDARD,
     ("test.yml", "split"): STANDARD,
@@ -78,8 +80,8 @@ MOVED = {
 # These exchange a GitHub OIDC token, which the Anton runners have timed out fetching.
 OIDC = {("pages.yml", "deploy"), ("publish-pypi.yml", "publish")}
 
-# The protected grader refuses a head that changes these, so they move only through the gate change protocol.
-PROTECTED = {("test.yml", "gate-required"), ("test.yml", "reuse"), ("runner-trust.yml", "actors")}
+# The runner trust loader contract fixes this job's runner.
+PROTECTED = {("runner-trust.yml", "actors")}
 
 # Runner trust never admits a pull_request_target run to a private runner.
 TARGET = {("gate-protected.yml", "grade")}
