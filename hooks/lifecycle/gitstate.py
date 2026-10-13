@@ -1,3 +1,4 @@
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,12 @@ BUSY_MARKERS = (
     "REVERT_HEAD",
     "BISECT_LOG",
     "index.lock",
+)
+
+
+_REFLOG_ENTRY = re.compile(
+    r"(?:[0-9a-f]{40}|[0-9a-f]{64}) (?:[0-9a-f]{40}|[0-9a-f]{64}) "
+    r"[^\t]* <[^<>]*> ([0-9]+) [+-][0-9]{4}(?:\t.*)?"
 )
 
 
@@ -43,9 +50,14 @@ def _mtime(path: Path) -> float:
 
 def _reflog_time(path: Path) -> float:
     try:
-        entries = path.read_text(encoding="utf-8").splitlines()
-        return max(int(line.split("\t", 1)[0].rsplit(" ", 2)[1]) for line in entries)
-    except (OSError, ValueError, IndexError):
+        stamps = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            entry = _REFLOG_ENTRY.fullmatch(line)
+            if entry is None:
+                return _mtime(path)
+            stamps.append(int(entry[1]))
+        return max(stamps)
+    except (OSError, ValueError):
         return _mtime(path)
 
 
