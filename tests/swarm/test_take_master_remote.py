@@ -52,6 +52,7 @@ def remote_taker(taker, monkeypatch, tmp_path):  # noqa: F811
     monkeypatch.setattr(account_sessions, "agent_pid", lambda: 4242)
     monkeypatch.setattr(take_master, "name_session", broadcast.name_session)
     broadcast.register_session("session", 4242, "/repo", "sol", name=CARRIED)
+    monkeypatch.setattr(remote, "BASE", "")
     monkeypatch.setattr(remote.repository, "token", _operator_token)
     sent = []
     monkeypatch.setattr(client, "ResourceClient", _hive_client(sent))
