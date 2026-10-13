@@ -339,4 +339,7 @@ def test_worker_smoke_runs_independent_proofs_in_parallel_and_compares_every_inv
     assert compare["if"] == "always()"
     assert compare["steps"][0]["env"]["PROOF_STATUS"] == "${{ needs.worker-image.result }}"
     assert '[[ "$PROOF_STATUS" == success ]]' in compare["steps"][0]["run"]
-    assert any("compare-smoke.sh" in step.get("run", "") for step in compare["steps"])
+    assert any(
+        'smoke.sh "$RUNNER_TEMP/worker-image-evidence" compare "$GITHUB_SHA"' in step.get("run", "")
+        for step in compare["steps"]
+    )

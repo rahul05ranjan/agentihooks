@@ -77,6 +77,9 @@ if os.environ['FAILURE'] == 'profile-evidence':
 def run_proof(tmp_path, failure, proof="all"):
     state = tmp_path / "state"
     state.mkdir()
+    if proof != "all":
+        for name in ("scan-started", "profile-started", "rebuild"):
+            (state / name).touch()
     commands = tmp_path / "bin"
     commands.mkdir()
     archive = tmp_path / "source.tar"
@@ -234,7 +237,7 @@ def test_parallel_worker_reports_require_equal_inventories_and_all_proofs(tmp_pa
     if change == "profile":
         (profiles / "result.json").write_text(json.dumps({"status": "failed", "tested_commit": "checked-revision"}))
     done = subprocess.run(
-        ["bash", str(ROOT / "docker/swarm-node/compare-smoke.sh"), str(evidence), "checked-revision"],
+        ["bash", str(ROOT / "docker/swarm-node/smoke.sh"), str(evidence), "compare", "checked-revision"],
         capture_output=True,
         text=True,
     )

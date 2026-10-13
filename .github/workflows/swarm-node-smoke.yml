@@ -61,7 +61,7 @@ jobs:
           name: swarm-worker-image-profiles
           path: ${{ runner.temp }}/worker-image-evidence/profiles
       - name: Compare independent startup and rebuild inventories
-        run: bash docker/swarm-node/compare-smoke.sh "$RUNNER_TEMP/worker-image-evidence" "$GITHUB_SHA"
+        run: bash docker/swarm-node/smoke.sh "$RUNNER_TEMP/worker-image-evidence" compare "$GITHUB_SHA"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
