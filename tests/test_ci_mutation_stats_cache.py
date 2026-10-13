@@ -1,4 +1,5 @@
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -68,3 +69,57 @@ def test_failed_collection_never_populates_reusable_stats(tmp_path):
             lambda files: [{"status": 1, "tests": {}, "durations": {}, "cpu": 1}],
         )
     assert list(cache.glob("*.json")) == []
+
+
+def test_collection_parts_reuse_stats_and_keep_the_new_head_identity(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    from scripts.ci_mutation.selection import load_or_collect_stats
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "scripts").mkdir()
+    (root / "scripts/sample.py").write_text("def sample():\n    return 1\n")
+    (root / "test_sample.py").write_text("def test_sample():\n    pass\n")
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(["git", "add", "scripts/sample.py", "test_sample.py"], cwd=root, check=True)
+    (root / "changed-lines.json").write_text(
+        json.dumps({"scripts/sample.py": {"lines": [2], "tests": ["test_sample.py"]}})
+    )
+    monkeypatch.chdir(root)
+    monkeypatch.setenv("MUTATION_STATS_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setenv("MUTATION_STATS_ROOT", str(root))
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.setattr("os.sched_getaffinity", lambda pid: {0})
+    config = SimpleNamespace(source_paths=[Path("scripts")], pytest_add_cli_args_test_selection=["test_sample.py"])
+    runner = SimpleNamespace(
+        SourceFileMutationData=lambda **kwargs: SimpleNamespace(load=lambda: None, exit_code_by_key={"m": None}),
+        Config=SimpleNamespace(get=lambda: config),
+    )
+    calls = []
+    result = {
+        "status": 0,
+        "tests": {"scripts.sample.x_sample": ["test_sample.py::test_sample"]},
+        "durations": {"test_sample.py::test_sample": 1},
+        "cpu": 2,
+    }
+
+    def collect(engine, test_runner, buckets, work):
+        calls.append(buckets)
+        return [result]
+
+    monkeypatch.setattr("scripts.ci_mutation.selection.run_stats_buckets", collect)
+    monkeypatch.setattr("scripts.ci_mutation.selection.stats_shards", lambda root, files, workers: [files])
+    for head in ("old", "new"):
+        output = root / f"{head}.json"
+        with pytest.raises(SystemExit, match="0"):
+            load_or_collect_stats(
+                runner,
+                SimpleNamespace(_pytest_add_cli_args=["-q"]),
+                ["scripts/sample.py"],
+                "collect",
+                (str(output), head, "0", "1"),
+            )
+        assert json.loads(output.read_text())["key"] == head
+    assert calls == [[["test_sample.py"]]]
