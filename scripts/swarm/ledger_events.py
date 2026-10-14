@@ -131,13 +131,15 @@ def pull_request(raw):
 
 def _newest(checks):
     latest = {}
-    for order, check in enumerate(checks):
+    for order, check in sorted(enumerate(checks), key=_mark):
         run = ((check.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}
-        key = (run.get("name"), check.get("name"), check.get("context"))
-        mark = (check.get("databaseId") or 0, check.get("createdAt") or "", order)
-        if key not in latest or mark > latest[key][0]:
-            latest[key] = (mark, check)
-    return [check for _, check in sorted(latest.values(), key=lambda pair: pair[0][2])]
+        latest[(run.get("name"), check.get("name"), check.get("context"))] = (order, check)
+    return [check for _, check in sorted(latest.values())]
+
+
+def _mark(item):
+    order, check = item
+    return check.get("databaseId") or 0, check.get("createdAt") or "", order
 
 
 def red_window(pushed_at, red_at, now_ms):
