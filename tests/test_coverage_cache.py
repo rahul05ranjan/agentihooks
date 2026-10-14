@@ -116,9 +116,16 @@ def test_queue_grading_consumes_the_restored_exact_base():
 
 
 @pytest.mark.parametrize(
-    ("first", "second", "expected"), [(False, True, "22"), (True, False, "11"), (False, False, "11")]
+    ("first", "second", "cached", "expected"),
+    [
+        (False, True, False, "22"),
+        (True, False, False, "11"),
+        (False, False, False, "11"),
+        (False, True, True, "22"),
+        (False, False, True, None),
+    ],
 )
-def test_base_lookup_prefers_history_and_keeps_an_exact_base_fallback(tmp_path, first, second, expected):
+def test_base_lookup_prefers_history_and_keeps_an_exact_base_fallback(tmp_path, first, second, cached, expected):
     import json
     import os
     import subprocess
@@ -151,6 +158,7 @@ def test_base_lookup_prefers_history_and_keeps_an_exact_base_fallback(tmp_path, 
         os.environ,
         PATH=f"{tools}:{os.environ['PATH']}",
         BASE="dev",
+        CACHED=str(cached).lower(),
         RUNNER_TEMP=str(tmp_path),
         FIRST=json.dumps([{"commit": "older"}] if first else []),
         SECOND=json.dumps([{"commit": "older"}] if second else []),
@@ -159,6 +167,32 @@ def test_base_lookup_prefers_history_and_keeps_an_exact_base_fallback(tmp_path, 
     )
     result = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=tmp_path, env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    assert output.read_text() == f"id={expected}\n"
+    assert output.read_text() == (f"id={expected}\n" if expected else "")
+    if cached:
+        mint = next(s for s in workflow["jobs"]["coverage-ratchet"]["steps"] if s.get("id") == "app-token")
+        assert "steps.cached-history.outputs.retained" in mint["if"]
     if "gh run download" in step["run"]:
         assert '-R "$GITHUB_REPOSITORY"' in step["run"]
+
+
+@pytest.mark.parametrize("retained", [False, True])
+def test_cache_skips_lookup_only_when_history_is_retained(tmp_path, retained):
+    import json
+    import os
+    import subprocess
+    from pathlib import Path
+
+    import yaml
+
+    workflow = yaml.safe_load((Path(__file__).parents[1] / ".github/workflows/test.yml").read_text())
+    step = next(s for s in workflow["jobs"]["coverage-ratchet"]["steps"] if s.get("id") == "cached-history")
+    folder = tmp_path / "coverage-baseline"
+    folder.mkdir()
+    (folder / "baseline.json").write_text(json.dumps({"history": [{"commit": "older"}] if retained else []}))
+    output = tmp_path / "output"
+    output.write_text("")
+    env = dict(os.environ, HOME=str(tmp_path), GITHUB_OUTPUT=str(output))
+    result = subprocess.run(["bash", "-e", "-c", step["run"]], env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert output.read_text() == f"retained={str(retained).lower()}\n"
+    assert step["if"] == "steps.cached.outputs.cache-hit == 'true'"
