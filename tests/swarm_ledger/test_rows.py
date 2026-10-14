@@ -186,3 +186,28 @@ def test_diff_treats_a_root_type_change_as_position_zero():
     before, after = diff({"a": 1}, [1])
     assert before[encode([])][3] == 0
     assert after[encode([])][3] == 0
+
+
+def test_changed_list_scalar_keeps_literal_stored_row_fields():
+    old = {"values": [1, 2]}
+    new = {"values": [1, 3]}
+    before, after = diff(old, new)
+    path = '["values",["index",1,0]]'
+    assert before == {path: ("fields", '["values"]', "1", 1, "value", "2")}
+    assert after == {path: ("fields", '["values"]', "1", 1, "value", "3")}
+    stored = flatten(old)
+    stored.update(after)
+    assert assemble(stored) == new
+
+
+def test_numeric_list_ids_keep_distinct_literal_occurrence_paths():
+    stored = flatten([{"id": True}, {"id": 1}])
+    assert set(stored) == {
+        "[]",
+        '[["id",true,0]]',
+        '[["id",true,0],"id"]',
+        '[["id",1,0]]',
+        '[["id",1,0],"id"]',
+    }
+    assert stored['[["id",true,0]]'][3] == 0
+    assert stored['[["id",1,0]]'][3] == 1

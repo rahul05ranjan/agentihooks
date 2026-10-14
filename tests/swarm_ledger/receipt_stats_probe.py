@@ -47,6 +47,7 @@ def main():
             "1",
         ],
         cwd=work,
+        env={**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTHONDONTWRITEBYTECODE": "1"},
     )
 
 
