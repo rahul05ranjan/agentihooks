@@ -19,6 +19,41 @@ def measured(tmp_path, monkeypatch):
     return tmp_path, state, [tmp_path / ".coverage"]
 
 
+@pytest.mark.parametrize("invalid", [0, 4, 5, 6, 99])
+def test_impossible_lines_cannot_replace_a_baseline(measured, invalid, capsys):
+    root, _, shards = measured
+    source = root / "hooks/example.py"
+    source.parent.mkdir()
+    source.write_text('value = 1\nscript = """\nconst example = 1;\nconst other = 2;\n"""\n# comment\nvalue += 1\n')
+    data = CoverageData(basename=str(shards[0]))
+    data.erase()
+    data.add_lines({"hooks/example.py": {1, 2, 7, invalid}})
+    data.write()
+    target = root / "baseline.json"
+    target.write_text("existing baseline")
+    with pytest.raises(ValueError, match="not executable"):
+        cache.record(root, shards, target)
+    assert f"hooks/example.py:{invalid}" in capsys.readouterr().out
+    assert target.read_text() == "existing baseline"
+
+
+def test_publication_reports_every_impossible_line(measured, capsys):
+    root, _, shards = measured
+    source = root / "hooks/example.py"
+    source.parent.mkdir()
+    source.write_text("value = 1\nvalue += 1\n")
+    data = CoverageData(basename=str(shards[0]))
+    data.erase()
+    data.add_lines({"hooks/example.py": {1, 2, 99, 100}})
+    data.write()
+    with pytest.raises(ValueError, match="not executable"):
+        cache.record(root, shards, root / "baseline.json")
+    output = capsys.readouterr().out
+    assert "hooks/example.py:99" in output
+    assert "hooks/example.py:100" in output
+    assert not (root / "baseline.json").exists()
+
+
 def test_record_computes_the_baseline_from_coverage(measured):
     root, _, shards = measured
     target = root / "baseline.json"
