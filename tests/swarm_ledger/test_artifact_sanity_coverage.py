@@ -46,6 +46,7 @@ def test_only_browser_test_files_track_greenlets_and_record_only_executable_arti
 
             def test_page_code_runs_with_greenlet_tracking():
                 assert sys.gettrace().concur_id_func is greenlet.getcurrent
+                sys.gettrace().concur_id_func = None
                 files = sorted(Path(os.environ["ARTIFACT_FIXTURES"]).iterdir())
                 with sync_playwright() as playwright:
                     browser = playwright.chromium.launch()
