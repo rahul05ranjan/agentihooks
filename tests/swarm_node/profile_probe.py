@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -37,6 +38,31 @@ def sessions(home: Path) -> dict:
     return {session: entry["cwd"] for session, entry in registered.items()}
 
 
+def codex_session_start(home: Path) -> None:
+    document = json.loads((home / ".codex/hooks.json").read_text(encoding="utf-8"))
+    commands = [hook["command"] for group in document["hooks"]["SessionStart"] for hook in group["hooks"]]
+    assert commands, "the rendered Codex profile has no SessionStart hook"
+    payload = json.dumps(
+        {
+            "hook_event_name": "SessionStart",
+            "session_id": "worker-profile-codex",
+            "cwd": str(Path.cwd()),
+            "source": "startup",
+        }
+    )
+    for command in commands:
+        subprocess.run(
+            command,
+            shell=True,
+            input=payload,
+            text=True,
+            env=os.environ | {"HOME": str(home), "CODEX_HOME": str(home / ".codex")},
+            check=True,
+            timeout=60,
+        )
+    assert sessions(home) == {"worker-profile-codex": str(Path.cwd())}
+
+
 def positive(attempt: Path) -> dict:
     record = json.loads(Path("/tmp/record.json").read_text(encoding="utf-8"))
     docs = configuration(attempt)
@@ -49,6 +75,7 @@ def positive(attempt: Path) -> dict:
     return {
         "record": record,
         "cli_session_start_hook_registrations": {target: len(found) for target, found in loaded.items()},
+        "session_start_invocation": {"claude": "native CLI", "codex": "rendered hook replay"},
         "cli_mcp_list": listed,
         "configuration": docs,
     }
@@ -167,6 +194,8 @@ def main() -> None:
     mode, path = sys.argv[1], Path(sys.argv[2])
     if mode == "snapshot":
         print(json.dumps(snapshot(path)))
+    elif mode == "codex-session-start":
+        codex_session_start(path)
     elif mode == "crash":
         crash(path, sys.argv[3])
     else:
