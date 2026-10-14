@@ -122,6 +122,7 @@ def test_base_lookup_prefers_history_and_keeps_an_exact_base_fallback(tmp_path, 
     import json
     import os
     import subprocess
+    from pathlib import Path
 
     import yaml
 
