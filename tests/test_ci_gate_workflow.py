@@ -418,6 +418,9 @@ def test_the_missed_baseline_comes_from_the_first_passed_run_that_kept_it(tmp_pa
     first, second = kept.split()
     (bin_dir / "gh").write_text(
         "#!/usr/bin/env bash\n"
+        'if [[ "$1" == run && "$2" == download ]]; then\n'
+        '  mkdir -p "$7"; printf \'{"history":[{}]}\' > "$7/baseline.json"; exit 0\n'
+        "fi\n"
         'case "$2" in\n'
         '  */runs\\?*) [[ $2 == *"?head_sha=base&status=success&"* ]] && printf "run-1\\nrun-2\\n" ;;\n'
         f"  */run-1/*) echo {first} ;;\n"
@@ -427,7 +430,13 @@ def test_the_missed_baseline_comes_from_the_first_passed_run_that_kept_it(tmp_pa
     (bin_dir / "gh").chmod(0o755)
     output = tmp_path / "output"
     output.write_text("")
-    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", BASE="base", GITHUB_REPOSITORY="o/r")
+    env = dict(
+        os.environ,
+        PATH=f"{bin_dir}:{os.environ['PATH']}",
+        BASE="base",
+        GITHUB_REPOSITORY="o/r",
+        RUNNER_TEMP=str(tmp_path),
+    )
     env["GITHUB_OUTPUT"] = str(output)
     step = _step("coverage-ratchet", "Find the run that published the base baseline")
     result = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=tmp_path, env=env, capture_output=True, text=True)
