@@ -83,7 +83,11 @@ def test_no_queue_run_carries_a_baseline_from_the_latest_dev_run():
 
 @pytest.mark.parametrize(("dev_run", "kept", "expected"), [("101", "101", "101"), ("", "202", "202"), ("", "", None)])
 def test_queue_history_uses_the_durations_source_or_a_completed_dev_push(tmp_path, dev_run, kept, expected):
-    step = _step(_jobs()["queue-baseline"]["steps"], "Find the previous dev coverage baseline")
+    jobs = _jobs()
+    step = _step(jobs["queue-baseline"]["steps"], "Find the previous dev coverage baseline")
+    assert "durations" in jobs["queue-baseline"]["needs"]
+    assert step["env"]["DEV_RUN"] == "${{ needs.durations.outputs.dev }}"
+    assert jobs["durations"]["outputs"]["dev"] == "${{ steps.dev-run.outputs.id }}"
     tools = tmp_path / "bin"
     tools.mkdir()
     (tools / "gh").write_text(
