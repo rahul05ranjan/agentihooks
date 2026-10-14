@@ -26,6 +26,10 @@ def corpus():
     return json.loads(gzip.decompress(Path(__file__).with_name("operations_corpus.json.gz").read_bytes()))
 
 
+def fingerprint(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
 def replay(tmp_path, monkeypatch, profiled=False):
     recorded = corpus()
     core = server.core
@@ -35,12 +39,13 @@ def replay(tmp_path, monkeypatch, profiled=False):
     monkeypatch.setattr(server, "served_version", lambda: "replay")
     monkeypatch.setattr("hooks._redis.get_redis", lambda: None)
     monkeypatch.setattr("scripts.gates.talk.Budget._marks", lambda self: None)
-    for name in ("relay_to_inbox", "doctor_phrase", "deliver_alerts"):
-        monkeypatch.setattr(server, name, Mock())
+    deliveries = {name: Mock() for name in ("relay_to_inbox", "doctor_phrase", "deliver_alerts")}
+    for name, callback in deliveries.items():
+        monkeypatch.setattr(server, name, callback)
     repository = SQLiteLedgerRepository(tmp_path / "ledger.sqlite3", domain=core)
     repository.import_document(SLUG, recorded["state"])
     monkeypatch.setattr(server, "repository", Publishing(repository, server.publish_ledger))
-    server.HUB.open(SLUG, lambda: {"ledger": server.ledger_view(repository.get_document(SLUG))})
+    sequence, _ = server.HUB.open(SLUG, lambda: {"ledger": server.ledger_view(repository.get_document(SLUG))})
     outputs, seconds = [], []
     profiler = cProfile.Profile(timer=time.thread_time)
     for index, op in enumerate(recorded["ops"]):
@@ -62,9 +67,22 @@ def replay(tmp_path, monkeypatch, profiled=False):
         if profiled:
             profiler.disable()
         persisted = repository.get_document(SLUG)
+        frames = server.HUB.wait(SLUG, sequence, 0)
+        if frames:
+            sequence = frames[-1][0]
+        relays = {
+            name: [fingerprint(call.args) for call in callback.call_args_list] for name, callback in deliveries.items()
+        }
         outputs.append(
-            {"reply": reply, "state": hashlib.sha256(json.dumps(persisted, sort_keys=True).encode()).hexdigest()}
+            {
+                "reply": reply,
+                "state": fingerprint(persisted),
+                "stream": fingerprint([(seq, name, data) for seq, _, name, data in frames]),
+                "relays": relays,
+            }
         )
+        for callback in deliveries.values():
+            callback.reset_mock()
     stream = io.StringIO()
     if profiled:
         pstats.Stats(profiler, stream=stream).sort_stats("cumulative").print_stats(25)

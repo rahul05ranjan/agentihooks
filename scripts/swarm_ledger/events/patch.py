@@ -12,7 +12,7 @@ def same(a, b):
     """JSON equality: unlike ==, true is not 1 and 1.0 is not 1."""
     if type(a) is not type(b) or a != b:
         return False
-    if isinstance(a, (dict, list)):
+    if isinstance(a, list) and len(a) >= 16:
         try:
             if json.dumps(a, sort_keys=True, allow_nan=False) == json.dumps(b, sort_keys=True, allow_nan=False):
                 return True

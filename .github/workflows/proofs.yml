@@ -38,18 +38,14 @@ jobs:
     if: inputs.proof == 'operations-cpu'
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        revision: [base, head]
     steps:
       - uses: actions/checkout@v4
         with:
-          path: proof
+          path: head
       - uses: actions/checkout@v4
         with:
-          ref: ${{ matrix.revision == 'base' && inputs.base || github.sha }}
-          path: replay
+          ref: ${{ inputs.base }}
+          path: base
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -57,25 +53,32 @@ jobs:
         with:
           version: '0.12.23'
           enable-cache: false
-      - name: Install the revision under measurement
-        working-directory: replay
+      - name: Install dependencies shared by both revisions
+        working-directory: head
         run: uv pip install --system --excludes .github/test-excludes.txt -e '.[dev,all]'
-      - name: Replay identical recorded operation payloads
-        working-directory: replay
+      - name: Replay base on the shared runner
+        working-directory: base
         env:
-          OPERATIONS_CPU_REPORT: ${{ github.workspace }}/operations-${{ matrix.revision }}.json
-          OPERATIONS_CPU_BASELINE: ${{ matrix.revision == 'base' && 'true' || '' }}
+          OPERATIONS_CPU_REPORT: ${{ github.workspace }}/operations-base.json
+          OPERATIONS_CPU_BASELINE: 'true'
           PYTHONUNBUFFERED: '1'
         run: |
-          cp ../proof/tests/swarm_ledger/test_operations_cpu.py tests/swarm_ledger/test_operations_cpu.py
-          cp ../proof/tests/swarm_ledger/operations_corpus.json.gz tests/swarm_ledger/operations_corpus.json.gz
+          cp ../head/tests/swarm_ledger/test_operations_cpu.py tests/swarm_ledger/test_operations_cpu.py
+          cp ../head/tests/swarm_ledger/operations_corpus.json.gz tests/swarm_ledger/operations_corpus.json.gz
+          python -m pytest tests/swarm_ledger/test_operations_cpu.py -n 0 --tb=short
+      - name: Replay head on the same runner
+        working-directory: head
+        env:
+          OPERATIONS_CPU_REPORT: ${{ github.workspace }}/operations-head.json
+          PYTHONUNBUFFERED: '1'
+        run: |
           python -m pytest tests/swarm_ledger/test_operations_cpu.py -n 0 --tb=short
       - name: Retain the CPU profile and every outcome
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: operations-${{ matrix.revision }}
-          path: operations-${{ matrix.revision }}.json
+          name: operations-cpu
+          path: operations-*.json
           if-no-files-found: error
 
   operations-compare:
