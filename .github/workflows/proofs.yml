@@ -36,7 +36,7 @@ permissions:
 jobs:
   operations-receipts:
     if: inputs.proof == 'operations-receipts'
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.actor) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.triggering_actor) || (github.event_name == 'merge_group' || github.event_name == 'push' && github.ref == 'refs/heads/dev') && github.actor == 'github-merge-queue[bot]' && github.triggering_actor == 'github-merge-queue[bot]') && 'anton-oss-batch' || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -68,7 +68,7 @@ jobs:
 
   operations-cpu:
     if: inputs.proof == 'operations-cpu'
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.actor) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.triggering_actor) || (github.event_name == 'merge_group' || github.event_name == 'push' && github.ref == 'refs/heads/dev') && github.actor == 'github-merge-queue[bot]' && github.triggering_actor == 'github-merge-queue[bot]') && 'anton-oss-batch' || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -92,7 +92,6 @@ jobs:
         working-directory: base
         env:
           OPERATIONS_CPU_REPORT: ${{ github.workspace }}/operations-base.json
-          OPERATIONS_CPU_BASELINE: 'true'
           PYTHONUNBUFFERED: '1'
         run: |
           cp ../head/tests/swarm_ledger/operations_cpu_replay.py tests/swarm_ledger/operations_cpu_replay.py
@@ -128,27 +127,11 @@ jobs:
         working-directory: fault
         env:
           OPERATIONS_CPU_REPORT: ${{ github.workspace }}/operations-fault.json
-          OPERATIONS_CPU_BASELINE: 'true'
           PYTHONUNBUFFERED: '1'
         run: python -m pytest tests/swarm_ledger/operations_cpu_replay.py -n 0 --tb=short
-      - name: Retain the CPU profile and every outcome
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: operations-cpu
-          path: operations-*.json
-          if-no-files-found: error
-
-  operations-compare:
-    if: always() && inputs.proof == 'operations-cpu'
-    needs: operations-cpu
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: operations-*
-          merge-multiple: true
       - name: Compare acceptance, revision and persistence on the same corpus
+        if: always()
+        working-directory: ${{ github.workspace }}
         run: |
           python - <<'PY'
           import json
@@ -172,6 +155,13 @@ jobs:
           assert head['mean_cpu_seconds'] <= base['mean_cpu_seconds'] / 2
           assert head['peak_rss_kib_after_replay'] <= base['peak_rss_kib_after_replay'] * 1.1
           PY
+      - name: Retain the CPU profile and every outcome
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operations-cpu
+          path: operations-*.json
+          if-no-files-found: error
 
   mutation-replay:
     if: inputs.proof == 'mutation-replay'

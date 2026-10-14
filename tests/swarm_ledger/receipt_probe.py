@@ -2,7 +2,8 @@ import json
 import time
 
 from tests.swarm_ledger import test_api_v1 as cases
-from tests.swarm_ledger.test_ledger_authority import live as live
+from tests.swarm_ledger.test_api_v1 import authority_live as authority_live
+from tests.swarm_ledger.test_api_v1 import live as live
 
 
 def test_record_the_original_receipt_case_requests(live, monkeypatch):
