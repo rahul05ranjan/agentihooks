@@ -1,0 +1,6 @@
+{
+  "scripts/swarm_ledger/events/patch.py:scripts.swarm_ledger.events.patch.x_same__mutmut_22:db2434eddb5f6d496b2440d5dbe8a9773bbd18a6a2257c9e421adb1b8d7ed21c": {
+    "reader": "Spec second reader",
+    "reason": "For finite JSON, allow_nan=True on the left serializes identically. For nonfinite input the right encoding raises and the legacy recursive path runs."
+  }
+}
