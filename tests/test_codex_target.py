@@ -288,6 +288,43 @@ class TestHooksJson:
         assert capsys.readouterr().out.count("run /hooks") == 1
         assert "SessionStart" in json.loads(path.read_text())["hooks"]
 
+    def test_install_trusts_every_entry_including_foreign_groups(self, adapter):
+        import tomllib
+
+        from tests.codex_hook_fixtures import CODEX_HOOK_HASHES, CODEX_HOOKS
+
+        home = codex_home()
+        home.mkdir(parents=True, exist_ok=True)
+        hooks = home / "hooks.json"
+        foreign = {"Interrupt": CODEX_HOOKS["hooks"]["Interrupt"], "Stop": CODEX_HOOKS["hooks"]["Stop"][1:]}
+        hooks.write_text(json.dumps({"hooks": foreign}))
+        (home / "config.toml").write_text(f'[hooks.state."{hooks}:interrupt:0:0"]\nenabled = false\n')
+
+        adapter.write_settings({})
+
+        doc = json.loads(hooks.read_text())["hooks"]
+        label = {event: "".join(f"_{c.lower()}" if c.isupper() else c for c in event)[1:] for event in doc}
+        entries = {
+            f"{hooks}:{label[event]}:{g}:{h}"
+            for event, groups in doc.items()
+            for g, group in enumerate(groups)
+            for h, _ in enumerate(group["hooks"])
+        }
+        state = tomllib.loads((home / "config.toml").read_text())["hooks"]["state"]
+        assert set(state) == entries
+        assert state[f"{hooks}:interrupt:0:0"] == {"enabled": False, "trusted_hash": CODEX_HOOK_HASHES["interrupt:0:0"]}
+        assert state[f"{hooks}:interrupt:1:0"] == {"trusted_hash": CODEX_HOOK_HASHES["interrupt:1:0"]}
+        assert state[f"{hooks}:stop:1:0"] == {"trusted_hash": CODEX_HOOK_HASHES["stop:1:0"]}
+
+    def test_reinstall_over_trusted_hooks_leaves_config_untouched(self, adapter, capsys):
+        adapter.write_settings({})
+        config = codex_home() / "config.toml"
+        assert f"[OK] Trusted {len(CODEX_HOOK_EVENTS)} Codex hook entries in {config}" in capsys.readouterr().out
+        text = config.read_text()
+        adapter.write_settings({})
+        assert "Trusted" not in capsys.readouterr().out
+        assert config.read_text() == text
+
     @pytest.mark.parametrize("ours_first", [True, False])
     def test_reinstall_keeps_own_group_first_so_codex_trust_positions_hold(self, adapter, ours_first):
         """Codex keys hook trust by `hooks.json:<event>:<group>:<hook>`; moving a group voids its approval."""
