@@ -81,4 +81,4 @@ def test_health_pass_reports_stalled_merge_queue_and_notifies_master(rig):
     inbox = InboxStore(store.redis)
     sent = ledger_events.findings_pass(inbox, store, "proof", found)
     assert len(sent) == 1
-    assert "Queue length: 3" in sent[0]
+    assert "Queue length: 3" in inbox.inbox("master@proof")[0].text
