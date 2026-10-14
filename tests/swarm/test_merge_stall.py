@@ -52,6 +52,8 @@ def rig(monkeypatch):
                     }
                 }
             }
+            if not state.get("history", True):
+                data["data"]["repository"]["pullRequests"]["nodes"] = []
         elif "/actions/runs?" in command[2]:
             data = {"workflow_runs": [{"id": 11, "conclusion": "failure"}, {"id": 12, "conclusion": "failure"}]}
         elif "/actions/runs/11/jobs?" in command[2]:
@@ -382,3 +384,17 @@ def test_a_merge_stall_does_not_suppress_later_health_notices(rig):
     inbox = InboxStore(store.redis)
     assert len(ledger_events.findings_pass(inbox, store, "proof", found)) == 2
     assert len(inbox.inbox("master@proof")) == 2
+
+
+def test_a_queue_without_observed_merge_history_has_no_invented_merge_time_or_finding(rig):
+    from scripts.inbox.store import InboxStore
+    from scripts.swarm import ledger_events, status
+    from scripts.swarm.health import merge_stall
+
+    store, config, state = rig
+    state["history"] = False
+    assert merge_stall.queue(config.repo, REPO) == (3, 0)
+    assert status.findings(store, "proof", config, [], []) == []
+    inbox = InboxStore(store.redis)
+    assert ledger_events.findings_pass(inbox, store, "proof", []) == []
+    assert inbox.inbox("master@proof") == []
