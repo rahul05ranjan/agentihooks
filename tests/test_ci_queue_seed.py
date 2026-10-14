@@ -233,7 +233,7 @@ def base_run(tmp_path):
     (tools / "sleep").write_text("#!/usr/bin/env bash\ntrue\n")
     (tools / "sleep").chmod(0o755)
 
-    def run(runs="111 222", kept_by="222", after=0, wait="600", fail_runs="", status="in_progress", dispatch=""):
+    def run(runs="111 222", kept_by="222", after=0, wait="5", fail_runs="", status="in_progress", dispatch=""):
         output = tmp_path / "output"
         output.write_text("")
         polls = tmp_path / "polls"
