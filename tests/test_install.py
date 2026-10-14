@@ -412,6 +412,44 @@ class TestClaudeRouting:
         assert lines[2].split()[:8] == ["-", "claude", "home", "MASTER", "max", "interactive", "MASTERS", "3/-"]
         assert len(lines) == 3
 
+    def test_cmd_balance_lists_every_account_the_router_knows_from_a_one_token_session(self, monkeypatch, capsys):
+        import os
+
+        from scripts import agents_quota, operator_env
+        from scripts import claude_quota_balancer as balancer
+
+        names = [f"AH_CC_TOKEN_acct{n}" for n in range(1, 8)]
+        for name in [key for key in os.environ if key.startswith("AH_CC_TOKEN_")]:
+            monkeypatch.delenv(name)
+        monkeypatch.setenv(names[0], "token-1")
+        monkeypatch.setattr(install, "_load_claude_runtime_env", lambda: None)
+        monkeypatch.setattr(install.shutil, "which", lambda name: "/usr/bin/claude")
+        monkeypatch.setattr(operator_env, "block_tokens", lambda: {})
+        monkeypatch.setattr(
+            operator_env,
+            "fill",
+            lambda environ: [monkeypatch.setenv(name, f"token-{n}") for n, name in enumerate(names, 1)],
+        )
+        windows = (balancer.QuotaWindow(used=20), balancer.QuotaWindow(used=30))
+        monkeypatch.setattr(
+            balancer,
+            "collect_results",
+            lambda credentials, **kwargs: (
+                [balancer.ProbeResult(c.account, "allowed", "NORMAL", 70, *windows) for c in credentials],
+                "probe",
+            ),
+        )
+        monkeypatch.setattr(agents_quota, "_codex", lambda now: [])
+        monkeypatch.setattr(agents_quota, "api_rows", lambda source, harness, now: [])
+        monkeypatch.setattr(agents_quota, "_masters", lambda harness="": {})
+        monkeypatch.setattr("hooks.context.account_sessions.sessions_by_account", lambda: {"acct1": 1, "acct7": 2})
+        monkeypatch.setattr("hooks.context.account_sessions.codex_sessions_by_account", lambda: {})
+
+        assert install.cmd_balance(include_fable=False, refresh=False, timeout=10) == 0
+        lines = capsys.readouterr().out.splitlines()
+        assert sorted(line.split()[2] for line in lines[2:]) == [f"acct{n}" for n in range(1, 8)]
+        assert len(lines) == 9
+
     def test_cmd_balance_lists_the_claude_api_slot_with_kind_weight_and_cap(self, monkeypatch, tmp_path, capsys):
         from scripts import agents_quota
         from scripts import claude_quota_balancer as balancer
