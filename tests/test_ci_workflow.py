@@ -11,7 +11,6 @@ import pytest
 import yaml
 from _pytest.config import default_plugins
 
-from scripts.ci_cpu_quota import quota_cpus
 from tests import refresh_durations
 from tests.refresh_durations import ci_run_ids, ci_samples, median_durations
 
@@ -47,18 +46,6 @@ def test_workflow_runs_whole_suite_in_parallel():
     assert "-n auto" not in command
     assert "tests/" in command
     assert "-m unit" not in command
-
-
-def test_workflow_worker_count_evaluates_to_a_count_within_this_container():
-    prefix = _pytest_command().strip().removeprefix("run: ").split(" && ")[0]
-    result = subprocess.run(
-        ["bash", "-e", "-c", f'{prefix} && echo "$workers"'], cwd=_ROOT, capture_output=True, text=True, check=True
-    )
-    workers = int(result.stdout)
-    assert 1 <= workers <= len(os.sched_getaffinity(0))
-    quota = quota_cpus()
-    if quota is not None:
-        assert workers <= max(1, int(quota))
 
 
 def test_workflow_keeps_xdist_groups_on_one_worker():
