@@ -60,6 +60,35 @@ def test_a_publish_appends_a_patch_that_rebuilds_the_new_value():
     assert hub.resource(SLUG, "ledger") == ledger(2, tasks=[{"id": "t1"}])
 
 
+def test_immutable_snapshot_publication_keeps_names_revisions_and_replay():
+    hub = Hub()
+    old = ledger(1, tasks=[{"id": "t1", "title": "first"}])
+    hub.open(SLUG, lambda: {"ledger": old})
+    new = ledger(2, tasks=[{"id": "t1", "title": "second"}])
+    assert hub.publish_snapshot(SLUG, "ledger", new)
+    assert hub.resource(SLUG, "ledger") is new
+    frames = hub.wait(SLUG, 0, 0)
+    assert len(frames) == 1
+    assert frames[0][2] == "ledger"
+    assert frames[0][3]["rev"] == 2
+    assert apply(old, frames[0][3]["patch"]) == new
+    assert not hub.publish_snapshot(SLUG, "ledger", old)
+    assert not hub.publish_snapshot(SLUG, "ledger", new)
+    assert hub.channels[SLUG].seq == 1
+
+
+def test_immutable_snapshot_baseline_and_unwatched_resources():
+    hub = Hub()
+    state = ledger(1)
+    assert not hub.publish_snapshot(SLUG, "ledger", state)
+    assert not hub.has(SLUG)
+    hub.open(SLUG, lambda: {"ledger": state})
+    other = {"config": {"state": "running"}}
+    assert not hub.publish_snapshot(SLUG, "swarm", other)
+    assert hub.resource(SLUG, "swarm") is other
+    assert hub.channels[SLUG].seq == 0
+
+
 def test_publishing_an_unchanged_value_or_an_unwatched_ledger_adds_nothing():
     hub = Hub()
     assert not hub.publish(SLUG, "ledger", ledger(1))

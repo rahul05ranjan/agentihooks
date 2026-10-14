@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from scripts.swarm_ledger.events import patch
+import scripts.swarm_ledger.events.patch as patch
 
 
 @pytest.mark.parametrize(
