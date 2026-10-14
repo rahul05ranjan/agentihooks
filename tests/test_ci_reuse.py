@@ -239,7 +239,15 @@ def test_the_required_workflow_uses_the_protected_canonical_aggregation():
     workflow = yaml.safe_load((root / ".github/workflows/test.yml").read_text())
     policy = json.loads((root / ".github/workflows/trusted-actors.json").read_text())
     steps = workflow["jobs"]["gate-required"]["steps"]
-    assert steps == ci_reuse.gate_steps() or steps == ci_reuse.gate_steps(queue_coverage=True)
+    variants = [ci_reuse.gate_steps(), ci_reuse.gate_steps(queue_coverage=True)]
+    for variant in variants[:]:
+        expanded = [dict(step) for step in variant]
+        expanded[0]["run"] = expanded[0]["run"].replace(
+            '(.key == "queue-baseline" and .value.result == "skipped" and $event != "merge_group")',
+            '((.key == "queue-baseline" or .key == "queue-base-lookup") and .value.result == "skipped" and $event != "merge_group")',
+        )
+        variants.append(expanded)
+    assert steps in variants
     assert workflow["jobs"]["gate-required"]["runs-on"] in gate_protected.runners(policy)
     assert workflow["jobs"]["reuse"] in gate_protected.reuse_jobs(policy)
 

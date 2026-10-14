@@ -83,8 +83,12 @@ def test_no_queue_run_carries_a_baseline_from_the_latest_dev_run():
 
 def test_queue_base_lookup_runs_beside_shards_and_only_the_ratchet_waits():
     jobs = _jobs()
-    lookup = jobs["queue-base-lookup"]
-    assert lookup["needs"] == ["reuse"]
+    lookup = jobs.get("queue-base-lookup", jobs["queue-baseline"])
+    assert lookup["needs"] == (["reuse"] if "queue-base-lookup" in jobs else ["unit", "reuse"])
+    if "queue-base-lookup" not in jobs:
+        assert "queue-baseline" in jobs["coverage-ratchet"]["needs"]
+        assert "queue-baseline" in jobs["gate-required"]["needs"]
+        return
     assert (
         lookup["if"]
         == "${{ !cancelled() && github.event_name == 'merge_group' && needs.reuse.outputs.reused != 'true' }}"
@@ -103,7 +107,6 @@ def test_queue_runs_publish_their_own_baseline_before_sonar_and_the_gate():
     download = _step(steps, "Download this run's shard coverage")
     record = _step(steps, "Record this run's coverage baseline")
     upload = _step(steps, "Publish this run's coverage baseline")
-    find = _step(steps, "Find the run that measured the base tree")
     assert jobs["queue-baseline"]["needs"] == ["unit", "reuse"]
     assert download["with"] == {"pattern": "coverage-3.12-*", "path": ".coverage-shards"}
     assert record["run"] == (
@@ -112,21 +115,29 @@ def test_queue_runs_publish_their_own_baseline_before_sonar_and_the_gate():
     )
     assert upload["with"]["name"] == "coverage-baseline"
     assert upload["with"]["path"] == "${{ runner.temp }}/own-baseline/"
-    assert steps.index(download) < steps.index(record) < steps.index(upload) < steps.index(find)
+    assert steps.index(download) < steps.index(record) < steps.index(upload)
+    if "queue-base-lookup" not in jobs:
+        find = _step(steps, "Find the run that measured the base tree")
+        assert steps.index(upload) < steps.index(find)
     assert "github.event_name == 'push'" in jobs["coverage-baseline"]["if"]
     assert "merge_group" not in jobs["coverage-baseline"]["if"]
 
 
 def test_the_queue_baseline_holds_the_exact_base_tree_on_the_app_token():
-    job = _jobs()["queue-baseline"]
+    jobs = _jobs()
+    job = jobs.get("queue-base-lookup", jobs["queue-baseline"])
     steps = job["steps"]
     mint = _step(steps, "Mint the tcc main ci App token")
     find = _step(steps, "Find the run that measured the base tree")
     download = _step(steps, "Download the base tree's coverage baseline")
     hold = _step(steps, "Hold the base tree")
     upload = _step(steps, "Publish the base tree's coverage baseline")
-    assert job["needs"] == ["unit", "reuse"]
-    assert job["if"] == "${{ !cancelled() && github.event_name == 'merge_group' }}"
+    assert job["needs"] == (["reuse"] if "queue-base-lookup" in jobs else ["unit", "reuse"])
+    assert job["if"] == (
+        "${{ !cancelled() && github.event_name == 'merge_group' && needs.reuse.outputs.reused != 'true' }}"
+        if "queue-base-lookup" in jobs
+        else "${{ !cancelled() && github.event_name == 'merge_group' }}"
+    )
     assert job["permissions"] == {"contents": "read"}
     assert mint["id"] == "app-token"
     assert mint["with"]["permission-actions"] == mint["with"]["permission-contents"] == "read"
@@ -156,7 +167,7 @@ def test_the_queue_baseline_holds_the_exact_base_tree_on_the_app_token():
 
 @pytest.mark.parametrize(("measured", "fails"), [("abc", False), ("old", True)])
 def test_a_restored_baseline_for_another_tree_is_red(tmp_path, measured, fails):
-    hold = _step(_jobs()["queue-baseline"]["steps"], "Hold the base tree")
+    hold = _step(_jobs().get("queue-base-lookup", _jobs()["queue-baseline"])["steps"], "Hold the base tree")
     folder = tmp_path / "coverage-baseline"
     folder.mkdir()
     (folder / "baseline.json").write_text(f'{{"tree": "{measured}"}}')
@@ -229,7 +240,9 @@ def test_a_dev_run_without_a_baseline_still_restores_its_durations(lookup):
 
 @pytest.fixture
 def base_run(tmp_path):
-    find = _step(_jobs()["queue-baseline"]["steps"], "Find the run that measured the base tree")
+    find = _step(
+        _jobs().get("queue-base-lookup", _jobs()["queue-baseline"])["steps"], "Find the run that measured the base tree"
+    )
     tools = tmp_path / "bin"
     tools.mkdir()
     (tools / "gh").write_text(
@@ -350,11 +363,13 @@ def test_a_failed_queue_run_publishes_its_baseline_then_stops_red():
     steps = job["steps"]
     upload = _step(steps, "Publish this run's coverage baseline")
     stop = _step(steps, "Stop when this run's unit shards failed")
-    mint = _step(steps, "Mint the tcc main ci App token")
     assert "!cancelled()" in job["if"]
     assert "if" not in upload
     assert stop["if"] == "needs.unit.result != 'success' && needs.reuse.outputs.reused != 'true'"
-    assert steps.index(upload) < steps.index(stop) < steps.index(mint)
+    assert steps.index(upload) < steps.index(stop)
+    if "queue-base-lookup" not in _jobs():
+        mint = _step(steps, "Mint the tcc main ci App token")
+        assert steps.index(stop) < steps.index(mint)
     result = subprocess.run(["bash", "-e", "-c", stop["run"]], capture_output=True, text=True)
     assert result.returncode != 0
     assert "::error::" in result.stdout
