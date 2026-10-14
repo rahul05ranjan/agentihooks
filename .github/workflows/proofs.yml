@@ -8,7 +8,7 @@ on:
         type: choice
         required: true
         default: tests
-        options: [tests, mutation, semgrep, worker-image, swarm-image, brain-smoke, helm-kind, github-access, row-memory, operations-cpu]
+        options: [tests, mutation, mutation-replay, semgrep, worker-image, swarm-image, brain-smoke, helm-kind, github-access, row-memory, operations-cpu]
       base:
         description: Base revision for mutation or Semgrep scope
         required: true
@@ -133,6 +133,12 @@ jobs:
           assert head['mean_cpu_seconds'] <= 0.268092752
           assert head['mean_cpu_seconds'] <= base['mean_cpu_seconds'] / 2
           PY
+
+  mutation-replay:
+    if: inputs.proof == 'mutation-replay'
+    uses: ./.github/workflows/mutation-replay.yml
+    with:
+      case: ${{ inputs.base }}
 
   row-memory:
     if: inputs.proof == 'row-memory'
