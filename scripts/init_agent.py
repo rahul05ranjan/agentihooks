@@ -369,6 +369,14 @@ def _agent_command(
     return _profile_command(command, spec), before
 
 
+def _opening_prompt(prompt: str, path: Path) -> str:
+    if len(prompt.encode("utf-8")) < PROMPT_ARGUMENT_LIMIT:
+        return prompt
+    from scripts.profiles import binding
+
+    return f"{binding.PROMPT}\n\n{OPENING_FILE_INSTRUCTION}{path}"
+
+
 def _write_launcher(
     directory: Path,
     name: str,
@@ -396,7 +404,10 @@ def _write_launcher(
     command, before = _agent_command(spec, _route_report(launcher), name, claude_args, environ, directory, opening)
     command_text = shlex.join(command)
     if prompt_file is not None and not app_server:
-        prompt_arg = f'"$(cat {shlex.quote(str(prompt_file))})"'
+        opening_prompt = _opening_prompt(prompt, prompt_file)
+        prompt_arg = (
+            f'"$(cat {shlex.quote(str(prompt_file))})"' if opening_prompt == prompt else shlex.quote(opening_prompt)
+        )
         held = f'set --; [ -n "${{{PROMPT_AFTER_START}:-}}" ] || set -- {prompt_arg}; unset {PROMPT_AFTER_START}; '
         command_text = f'{held}{command_text} "$@"' if spec.agent == "codex" else f"{command_text} {prompt_arg}"
     cleanup = [
@@ -724,10 +735,16 @@ def _start_herdr(launcher: Path, directory: Path, name: str, args, agent: str, e
 def _held_prompt(launcher: Path, agent: str) -> str:
     """The opening prompt a Codex pane gets after its rename: typed at launch, the rename would wait behind its turn."""
     prompt_file = launcher.with_suffix(".prompt")
-    return prompt_file.read_bytes().decode() if agent == "codex" and prompt_file.exists() else ""
+    return (
+        _opening_prompt(prompt_file.read_bytes().decode(), prompt_file)
+        if agent == "codex" and prompt_file.exists()
+        else ""
+    )
 
 
 CHANNEL_WARNING_MS = 60_000
+PROMPT_ARGUMENT_LIMIT = 131_072
+OPENING_FILE_INSTRUCTION = "Read the complete opening instructions in this file and follow them: "
 
 
 def _inbox_channel_args() -> list[str]:
