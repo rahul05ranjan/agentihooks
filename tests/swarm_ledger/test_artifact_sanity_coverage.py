@@ -21,7 +21,7 @@ def test_browser_callbacks_record_only_executable_artifact_sanity_lines(tmp_path
         from scripts.swarm_ledger import artifact_sanity as sanity
 
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(channel="chromium")
+            browser = playwright.chromium.launch()
             try:
                 files = sorted((root / 'tests/fixtures/artifacts').iterdir())
                 assert sanity.run(browser, files) == {path.name: [] for path in files}
@@ -41,6 +41,7 @@ def test_browser_callbacks_record_only_executable_artifact_sanity_lines(tmp_path
         assert not (impossible := recorded - executable), sorted(impossible)
     """)
     env = {key: value for key, value in os.environ.items() if not key.startswith(("COV_CORE_", "COVERAGE_"))}
+    env["PYTHONPATH"] = os.pathsep.join(sys.path)
     result = subprocess.run(
         [sys.executable, "-c", script], cwd=root, env=env, capture_output=True, text=True, timeout=60
     )
