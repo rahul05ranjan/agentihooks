@@ -114,7 +114,7 @@ def _hosted(runner: object) -> bool:
     )
 
 
-def selector(policy: dict, pool: str) -> str:
+def selector(policy: dict, pool: str, *, trusted_reruns: bool = False) -> str:
     members = json.dumps(policy["actors"], separators=(",", ":"))
     queue = policy["queue_actor"]
     condition = (
@@ -124,6 +124,11 @@ def selector(policy: dict, pool: str) -> str:
         "(github.event_name == 'merge_group' || github.event_name == 'push' && github.ref == 'refs/heads/dev') && "
         f"github.actor == '{queue}' && github.triggering_actor == '{queue}')"
     )
+    if trusted_reruns:
+        condition = condition.replace(
+            f"github.triggering_actor == '{queue}'",
+            f"(github.triggering_actor == '{queue}' || contains(fromJSON('{members}'), github.triggering_actor))",
+        )
     return "${{ " + condition + " && '" + pool + "' || 'ubuntu-latest' }}"
 
 
@@ -131,8 +136,9 @@ def _selector(runner: object, policy: object) -> bool:
     if not isinstance(runner, str) or not isinstance(policy, dict):
         return False
     return any(
-        _compact(runner) == _compact(selector(policy, pool))
+        _compact(runner) == _compact(selector(policy, pool, trusted_reruns=reruns))
         for pool in ("anton-oss", "anton-oss-light", "anton-oss-batch")
+        for reruns in (False, True)
     )
 
 

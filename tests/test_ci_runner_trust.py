@@ -263,8 +263,15 @@ def test_safe_queue_rerun_selector_passes_without_job_admission_skip(pool):
 
 
 @pytest.mark.parametrize("replace", ["actor", "trigger", "target", "fork", "queue-ref", "outsider", "fallback", "pool"])
-def test_selector_cannot_loosen_actor_or_event_policy(replace):
+@pytest.mark.parametrize("reruns", [False, True])
+def test_selector_cannot_loosen_actor_or_event_policy(replace, reruns):
     runner = selector()
+    if reruns:
+        runner = runner.replace(
+            "github.triggering_actor == 'github-merge-queue[bot]'",
+            "(github.triggering_actor == 'github-merge-queue[bot]' || "
+            'contains(fromJSON(\'["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]\'), github.triggering_actor))',
+        )
     changes = {
         "actor": (
             'contains(fromJSON(\'["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]\'), github.actor) && ',
