@@ -48,7 +48,7 @@ CONTEXT_NODES = (
 )
 SUITE_NODES = "nodes{status conclusion workflowRun{databaseId createdAt}} pageInfo{hasNextPage endCursor}"
 PULL_QUERY = (
-    "query($url:URI!){resource(url:$url){...on PullRequest{state mergedAt headRefOid mergeQueueEntry{id} "
+    "query($url:URI!){resource(url:$url){...on PullRequest{state mergedAt headRefOid mergeQueueEntry{id state} "
     "mergeable isDraft "
     "commits(last:1){nodes{commit{id committedDate "
     'file(path:".github/workflows"){object{...on Tree{entries{object{...on Blob{text}}}}}} '
@@ -82,6 +82,7 @@ class PullRequest:
     unpassed_gate: str = ""
     queued: bool = False
     gate_passed: bool = False
+    merge_problem: str = ""
     mergeable: str = ""
     draft: bool = False
     latest_run_cancelled: bool = False
@@ -125,6 +126,11 @@ def pull_request(raw):
         unpassed_gate,
         raw.get("mergeQueueEntry") is not None,
         bool(raw.get("gated")) and set(_gate(checks, results)) == {"SUCCESS"},
+        "has a merge conflict"
+        if raw.get("mergeable") == "CONFLICTING"
+        else "is marked unmergeable by GitHub"
+        if (raw.get("mergeQueueEntry") or {}).get("state") == "UNMERGEABLE"
+        else "",
         raw.get("mergeable") or "",
         bool(raw.get("isDraft")),
         _latest_run_cancelled(suites),
