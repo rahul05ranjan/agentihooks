@@ -948,6 +948,21 @@ def test_spawn_routes_to_the_planned_account_then_rotates_the_next_automatic_pic
     assert seen == [("p1", "claude", "b"), ("p2", "claude", "a")]
 
 
+def test_spawn_places_only_the_lead_master_past_the_session_cap(tmp_path, monkeypatch):
+    from scripts.swarm import runtime as module
+
+    runtime, config, seen = _runtime_probe(
+        tmp_path, monkeypatch, [account("full", sessions=3), account("cx", harness="codex")]
+    )
+    monkeypatch.setattr(module.prompt, "build", lambda *args, **kwargs: "prompt")
+    config = replace(config, lanes={"master": {"agent": "claude"}})
+    with pytest.raises(SpawnError, match="no claude account has placeable quota seats"):
+        runtime.spawn(config, "master", "master@a1b2c3-0002", {"id": "master-2", "profile": "master"})
+    runtime.spawn(config, "master", "master@a1b2c3-0001", {"id": "master", "profile": "master"})
+    assert seen == [("master", "claude", "full")]
+    assert runtime._quota_accounts[0].sessions == 4
+
+
 def test_failed_launch_does_not_consume_account_or_reserved_slots(tmp_path, monkeypatch):
     from scripts.swarm.tick import SpawnError
 
