@@ -1,13 +1,13 @@
 import os
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 CGROUP = Path("/sys/fs/cgroup")
 
 
 def _v2_limit(path: Path) -> float | None:
     try:
-        quota, period = (path / "cpu.max").read_text().split()[:2]
+        quota, period = (path / "cpu.max").read_text().split()
     except (OSError, ValueError):
         return None
     return None if quota == "max" else int(quota) / int(period)
@@ -23,9 +23,9 @@ def _v1_limit(path: Path) -> float | None:
 
 
 def _chain(root: Path, relative: str) -> list[Path]:
-    path = root / relative.lstrip("/")
+    path = root / PurePosixPath(relative).relative_to("/")
     chain = [path]
-    while path != root and root in path.parents:
+    while root in path.parents:
         path = path.parent
         chain.append(path)
     return chain

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts import ci_cpu_quota
 from scripts.ci_cpu_quota import quota_cpus, worker_count
 
 pytestmark = pytest.mark.unit
@@ -62,6 +63,71 @@ def test_v1_unlimited_has_no_quota(tmp_path):
 def test_malformed_cpu_max_has_no_quota(tmp_path):
     root, proc = _tree(tmp_path, "0::/\n", {"cpu.max": "garbage\n"})
     assert quota_cpus(root, proc) is None
+
+
+def test_v2_path_may_hold_a_colon(tmp_path):
+    root, proc = _tree(tmp_path, "0::/pod:a\n", {"pod:a/cpu.max": "200000 100000\n"})
+    assert quota_cpus(root, proc) == 2
+
+
+@pytest.mark.parametrize(("quota", "cpus"), [("0", None), ("1", 0.00001)])
+def test_v1_only_a_positive_quota_limits(tmp_path, quota, cpus):
+    root, proc = _tree(
+        tmp_path,
+        "4:cpu:/\n",
+        {"cpu/cpu.cfs_quota_us": f"{quota}\n", "cpu/cpu.cfs_period_us": "100000\n"},
+    )
+    assert quota_cpus(root, proc) == cpus
+
+
+def test_v1_other_controllers_are_not_read(tmp_path):
+    root, proc = _tree(
+        tmp_path,
+        "4:cpu:/pod\n2:memory:/other\n",
+        {
+            "cpu/pod/cpu.cfs_quota_us": "300000\n",
+            "cpu/pod/cpu.cfs_period_us": "100000\n",
+            "cpu/other/cpu.cfs_quota_us": "100000\n",
+            "cpu/other/cpu.cfs_period_us": "100000\n",
+        },
+    )
+    assert quota_cpus(root, proc) == 3
+
+
+def test_v1_reads_a_joined_controller_mount(tmp_path):
+    root, proc = _tree(
+        tmp_path,
+        "4:cpu,cpuacct:/pod\n",
+        {"cpu,cpuacct/pod/cpu.cfs_quota_us": "200000\n", "cpu,cpuacct/pod/cpu.cfs_period_us": "100000\n"},
+    )
+    assert quota_cpus(root, proc) == 2
+
+
+@pytest.mark.parametrize(
+    "proc",
+    ["0::/v2\n4:cpu:/v1\n", "4:cpu:/v1\n0::/v2\n"],
+)
+@pytest.mark.parametrize(("v1", "v2", "cpus"), [("200000", "300000", 2), ("300000", "200000", 2)])
+def test_every_hierarchy_counts_toward_the_tightest_limit(tmp_path, proc, v1, v2, cpus):
+    root, proc_file = _tree(
+        tmp_path,
+        proc,
+        {
+            "v2/cpu.max": f"{v2} 100000\n",
+            "cpu/v1/cpu.cfs_quota_us": f"{v1}\n",
+            "cpu/v1/cpu.cfs_period_us": "100000\n",
+        },
+    )
+    assert quota_cpus(root, proc_file) == cpus
+
+
+def test_main_prints_the_count_and_explains_it(monkeypatch, capsys):
+    monkeypatch.setattr(ci_cpu_quota, "quota_cpus", lambda: 2.5)
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(range(16)))
+    ci_cpu_quota.main()
+    out, err = capsys.readouterr()
+    assert out == "2\n"
+    assert err == "pytest workers 2: cpu quota 2.5, affinity 16\n"
 
 
 def test_unreadable_cgroup_has_no_quota(tmp_path):
