@@ -49,9 +49,12 @@ def test_a_classed_job_accepts_hosted_and_its_routed_runner(cls):
         assert classes({"b.yml": workflow(runner)}, {"b.yml/build": cls}) == []
 
 
-@pytest.mark.parametrize("cls", ["light", "standard", "batch"])
-def test_a_classed_job_accepts_a_trusted_queue_rerun_selector(cls):
-    runner = routed(ci_runner_classes.LABELS[cls]).replace(
+@pytest.mark.parametrize(
+    ("cls", "queue"), [("light", False), ("standard", False), ("batch", False), ("standard", True)]
+)
+def test_a_classed_job_accepts_a_trusted_queue_rerun_selector(cls, queue):
+    label = ci_runner_classes.LABELS[cls]
+    runner = (queue_routed(label=label) if queue else routed(label)).replace(
         "github.triggering_actor == 'github-merge-queue[bot]'",
         "(github.triggering_actor == 'github-merge-queue[bot]' || "
         'contains(fromJSON(\'["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]\'), github.triggering_actor))',
