@@ -62,7 +62,12 @@ def _aggregator_problems(base: tuple[str, str, dict], head: tuple[str, str, dict
             field == "steps"
             and base_id == "gate-required"
             and head_job.get("steps")
-            in [ci_reuse.gate_steps(queue, selected) for queue in (False, True) for selected in (False, True)]
+            in [
+                ci_reuse.gate_steps(queue, selected, lookup)
+                for queue in (False, True)
+                for selected in (False, True)
+                for lookup in (False, True)
+            ]
         )
         and not (field == "runs-on" and head_job.get(field) in runners(policy))
     ]
