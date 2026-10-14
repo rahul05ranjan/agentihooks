@@ -113,3 +113,51 @@ def test_queue_grading_consumes_the_restored_exact_base():
     assert download["with"]["name"] == "queue-coverage-baseline"
     assert download["with"]["path"] == "~/coverage-baseline"
     assert "git merge-base" not in steps["Hold every line the base ran"]["run"]
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "expected"), [(False, True, "22"), (True, False, "11"), (False, False, "11")]
+)
+def test_base_lookup_prefers_history_and_keeps_an_exact_base_fallback(tmp_path, first, second, expected):
+    import json
+    import os
+    import subprocess
+
+    import yaml
+
+    workflow = yaml.safe_load((Path(__file__).parents[1] / ".github/workflows/test.yml").read_text())
+    step = next(s for s in workflow["jobs"]["coverage-ratchet"]["steps"] if s.get("id") == "base-run")
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    (tools / "gh").write_text(
+        "#!/usr/bin/env bash\n"
+        'if [[ "$1" == run && "$2" == download ]]; then\n'
+        '  mkdir -p "$7"\n'
+        '  history="$SECOND"; [[ "$3" != 11 ]] || history="$FIRST"\n'
+        '  printf \'{"history":%s}\\n\' "$history" > "$7/baseline.json"\n'
+        "  exit 0\n"
+        "fi\n"
+        'case "$2" in\n'
+        '  */runs\\?head_sha=dev\\&status=success\\&per_page=20) printf "11\\n22\\n" ;;\n'
+        "  */artifacts*) echo 1 ;;\n"
+        "  *) exit 7 ;;\n"
+        "esac\n"
+    )
+    (tools / "gh").chmod(0o755)
+    output = tmp_path / "output"
+    output.write_text("")
+    env = dict(
+        os.environ,
+        PATH=f"{tools}:{os.environ['PATH']}",
+        BASE="dev",
+        RUNNER_TEMP=str(tmp_path),
+        FIRST=json.dumps([{"commit": "older"}] if first else []),
+        SECOND=json.dumps([{"commit": "older"}] if second else []),
+        GITHUB_REPOSITORY="the-cloud-clockwork/agentihooks",
+        GITHUB_OUTPUT=str(output),
+    )
+    result = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert output.read_text() == f"id={expected}\n"
+    if "gh run download" in step["run"]:
+        assert '-R "$GITHUB_REPOSITORY"' in step["run"]
