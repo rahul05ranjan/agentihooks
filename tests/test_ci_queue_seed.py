@@ -360,6 +360,13 @@ def test_queue_lookup_stops_without_polling_an_unpublished_predecessor(base_run,
     assert (tmp_path / "polls").read_text().strip() == "2"
 
 
+@pytest.mark.parametrize(("first", "second", "expected"), [(0, 1, "222"), (1, 0, "111"), (0, 0, "111")])
+def test_queue_base_prefers_dev_history_over_a_newer_empty_measurement(base_run, first, second, expected):
+    result, output, _ = base_run(kept_by={"111": first, "222": second})
+    assert result.returncode == 0, result.stderr
+    assert output == f"id={expected}\ntree=tree-of-base\n"
+
+
 def test_a_failed_runs_listing_is_red_at_once_instead_of_waiting(base_run):
     result, output, args = base_run(fail_runs="1")
     assert result.returncode != 0
