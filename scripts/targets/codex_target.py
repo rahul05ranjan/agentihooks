@@ -195,6 +195,8 @@ def restore_hook_order(home: Path) -> list[str]:
     if moved:
         _atomic_write(path, json.dumps(doc, indent=2))
         trust_hooks(home)
+        if path.parent != home.resolve():
+            trust_hooks(path.parent)
     return moved
 
 

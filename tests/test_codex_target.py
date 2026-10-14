@@ -1173,6 +1173,11 @@ class TestRestoreHookOrder:
         assert restore_hook_order(rendered) == ["SessionStart"]
         assert (rendered / "hooks.json").is_symlink()
         assert json.loads(path.read_text())["hooks"]["SessionStart"] == [_own_group(operator), _HERDR]
+        for home, hooks in ((rendered, rendered / "hooks.json"), (path.parent, path)):
+            state = CodexAdapter._load_toml(home / "config.toml")["hooks"]["state"]
+            assert sorted(state) == sorted(
+                f"{hooks}:{event}:{group}:0" for event in ("session_start", "stop") for group in (0, 1)
+            )
 
     @pytest.mark.parametrize("text", [None, "{not json", '{"hooks": []}'])
     def test_a_missing_or_unreadable_file_is_left_alone(self, adapter, text):
