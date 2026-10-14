@@ -46,7 +46,7 @@ CONTEXT_NODES = (
     "nodes{...on CheckRun{databaseId name conclusion completedAt checkSuite{workflowRun{workflow{name}}}} "
     "...on StatusContext{context state createdAt}} pageInfo{hasNextPage endCursor}"
 )
-SUITE_NODES = "nodes{status workflowRun{databaseId createdAt}} pageInfo{hasNextPage endCursor}"
+SUITE_NODES = "nodes{status conclusion workflowRun{databaseId createdAt}} pageInfo{hasNextPage endCursor}"
 PULL_QUERY = (
     "query($url:URI!){resource(url:$url){...on PullRequest{state mergedAt headRefOid mergeQueueEntry{id} "
     "mergeable isDraft "
@@ -84,6 +84,7 @@ class PullRequest:
     gate_passed: bool = False
     mergeable: str = ""
     draft: bool = False
+    latest_run_cancelled: bool = False
 
 
 def iso_ms(text):
@@ -126,6 +127,7 @@ def pull_request(raw):
         bool(raw.get("gated")) and set(_gate(checks, results)) == {"SUCCESS"},
         raw.get("mergeable") or "",
         bool(raw.get("isDraft")),
+        _latest_run_cancelled(suites),
     )
 
 
@@ -142,6 +144,16 @@ def _mark(item):
     return check.get("databaseId") or 0, check.get("createdAt") or "", order
 
 
+def _latest_run_cancelled(suites):
+    runs = [suite for suite in suites if (suite.get("workflowRun") or {}).get("createdAt")]
+    latest = max(
+        runs,
+        key=lambda suite: (suite["workflowRun"]["createdAt"], suite["workflowRun"].get("databaseId", 0)),
+        default={},
+    )
+    return latest.get("conclusion") == "CANCELLED"
+
+
 def red_window(pushed_at, red_at, now_ms):
     start = max((mark for mark in (pushed_at, red_at) if mark is not None), default=None)
     return start if start is not None and now_ms - start >= RED_QUIET_MS else None
@@ -155,14 +167,11 @@ def _unpassed_gate(gated, checks, results, running):
 
 
 def _resolved(gated, checks, results, running):
+    if gated:
+        return any(result in FINAL_RED | {"TIMED_OUT"} for result in results) or "SUCCESS" in _gate(checks, results)
     if not running and any(result in FINAL_RED for result in results):
         return True
-    if not gated:
-        return not running and "SUCCESS" in results and all(result in PASSED for result in results)
-    gate = _gate(checks, results)
-    if any(result in FINAL_RED for result in gate):
-        return True
-    return "SUCCESS" in gate and not running and not any(result in PENDING for result in results)
+    return not running and "SUCCESS" in results and all(result in PASSED for result in results)
 
 
 def _gate(checks, results):
