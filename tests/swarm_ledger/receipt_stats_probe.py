@@ -19,14 +19,15 @@ def main():
     ]
     work = root / ".receipt-stats"
     work.mkdir()
-    prepare_workspace(root, work, paths, ["tests/swarm_ledger/receipt_probe.py"])
+    tests = os.environ.get("RECEIPT_STATS_TESTS", "tests/swarm_ledger/receipt_probe.py").split()
+    prepare_workspace(root, work, paths, tests)
     selection = work / "selection.json"
     selection.write_text(
         json.dumps(
             {
                 path: {
                     "lines": list(range(1, len((root / path).read_text().splitlines()) + 1)),
-                    "tests": ["tests/swarm_ledger/receipt_probe.py"],
+                    "tests": tests,
                 }
                 for path in paths
             }

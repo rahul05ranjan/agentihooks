@@ -40,6 +40,7 @@ jobs:
     timeout-minutes: 15
     env:
       RECEIPT_STATS_BASE: ${{ inputs.base }}
+      RECEIPT_STATS_TESTS: ${{ inputs.tests || 'tests/swarm_ledger/receipt_probe.py' }}
     steps:
       - uses: actions/checkout@v4
         with:
