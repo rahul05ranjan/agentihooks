@@ -46,7 +46,7 @@ def jobs_for(event, base_ref="dev"):
                 continue
             needs = {dependency: completed[dependency] for dependency in dependencies}
             condition = job.get("if", "")
-            if condition:
+            if "if" in job:
                 runs = enabled(condition, event, needs, base_ref)
             else:
                 runs = all(need.result == "success" for need in needs.values())
