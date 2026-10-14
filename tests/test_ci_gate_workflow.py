@@ -307,11 +307,9 @@ def test_the_merge_queue_grades_the_ratchet_on_the_queue_baseline_runner():
     assert steps.index(record) < steps.index(published) < steps.index(grade) < steps.index(report)
     assert grade["name"] == "Hold every line the base ran"
     assert grade["if"] == "needs.reuse.outputs.reused != 'true'"
-    assert grade["env"] == {"BASE": "${{ github.event.merge_group.base_sha }}"}
+    assert grade["env"] == {"BASE": "${{ steps.base-run.outputs.commit }}"}
     original = _step("coverage-ratchet", "Hold every line the base ran")["run"]
-    assert grade["run"] == "git fetch --no-tags --unshallow origin\n" + original.replace(
-        '"$GITHUB_WORKSPACE/head-coverage"', '"$GITHUB_WORKSPACE/.coverage-shards"'
-    )
+    assert grade["run"] == original.replace('"$GITHUB_WORKSPACE/head-coverage"', '"$GITHUB_WORKSPACE/.coverage-shards"')
     shards = next(step for step in steps if step.get("name") == "Download this run's shard coverage")
     assert shards["with"]["pattern"] == _step("coverage-ratchet", "Download shard coverage")["with"]["pattern"]
     assert report["if"] == "always() && steps.ratchet.outcome != 'skipped'"
@@ -424,6 +422,35 @@ def test_the_missed_baseline_comes_from_the_first_passed_run_that_kept_it(tmp_pa
     result = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=tmp_path, env=env, capture_output=True, text=True)
     assert (result.returncode == 0) == (found is not None)
     assert output.read_text() == (found or "")
+
+
+def test_the_missed_baseline_prefers_a_dev_push_run_whose_baseline_carries_history(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    listed = {
+        "workflow_runs": [
+            {"id": 1, "event": "merge_group"},
+            {"id": 2, "event": "pull_request"},
+            {"id": 3, "event": "push"},
+            {"id": 4, "event": "merge_group"},
+        ]
+    }
+    (bin_dir / "gh").write_text(
+        "#!/usr/bin/env bash\n"
+        'case "$2" in\n'
+        f"  */runs\\?*) jq -r \"$4\" <<< '{json.dumps(listed)}' ;;\n"
+        "  */artifacts*) echo 1 ;;\n"
+        "esac\n"
+    )
+    (bin_dir / "gh").chmod(0o755)
+    output = tmp_path / "output"
+    output.write_text("")
+    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", BASE="base", GITHUB_REPOSITORY="o/r")
+    env["GITHUB_OUTPUT"] = str(output)
+    step = _step("coverage-ratchet", "Find the run that published the base baseline")
+    result = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert output.read_text() == "id=3\n"
 
 
 def test_coverage_ratchet_grades_a_batched_dev_push_against_the_previous_tip(tmp_path):

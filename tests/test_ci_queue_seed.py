@@ -81,22 +81,24 @@ def test_no_queue_run_carries_a_baseline_from_the_latest_dev_run():
     assert "dev-coverage-baseline" not in (_ROOT / ".github/workflows/test.yml").read_text()
 
 
-def test_queue_runs_publish_their_own_baseline_before_sonar_and_the_gate():
+def test_queue_runs_record_their_baseline_on_the_dev_history_they_grade_on():
     jobs = _jobs()
     steps = jobs["queue-baseline"]["steps"]
     download = _step(steps, "Download this run's shard coverage")
+    find = _step(steps, "Find the passed dev baseline under the queue head")
+    dev = _step(steps, "Download the base tree's coverage baseline")
     record = _step(steps, "Record this run's coverage baseline")
     upload = _step(steps, "Publish this run's coverage baseline")
-    find = _step(steps, "Find the run that measured the base tree")
     assert jobs["queue-baseline"]["needs"] == ["unit", "reuse"]
     assert download["with"] == {"pattern": "coverage-3.12-*", "path": ".coverage-shards"}
     assert record["run"] == (
         "python -m tests.coverage_baseline --shards 12 --head-shards .coverage-shards"
-        ' --out "$RUNNER_TEMP/own-baseline/baseline.json"'
+        ' --out "$RUNNER_TEMP/own-baseline/baseline.json" --previous "$HOME/coverage-baseline/baseline.json"'
     )
+    assert "if" not in find and "if" not in dev
     assert upload["with"]["name"] == "coverage-baseline"
     assert upload["with"]["path"] == "${{ runner.temp }}/own-baseline/"
-    assert steps.index(download) < steps.index(record) < steps.index(upload) < steps.index(find)
+    assert steps.index(download) < steps.index(find) < steps.index(dev) < steps.index(record) < steps.index(upload)
     assert "github.event_name == 'push'" in jobs["coverage-baseline"]["if"]
     assert "merge_group" not in jobs["coverage-baseline"]["if"]
 
@@ -104,20 +106,19 @@ def test_queue_runs_publish_their_own_baseline_before_sonar_and_the_gate():
 def test_the_queue_baseline_holds_the_exact_base_tree_on_the_app_token():
     job = _jobs()["queue-baseline"]
     steps = job["steps"]
+    checkout = steps[0]
     mint = _step(steps, "Mint the tcc main ci App token")
-    find = _step(steps, "Find the run that measured the base tree")
+    find = _step(steps, "Find the passed dev baseline under the queue head")
     download = _step(steps, "Download the base tree's coverage baseline")
     hold = _step(steps, "Hold the base tree")
     upload = _step(steps, "Publish the base tree's coverage baseline")
     assert job["needs"] == ["unit", "reuse"]
     assert job["if"] == "${{ !cancelled() && github.event_name == 'merge_group' }}"
     assert job["permissions"] == {"contents": "read"}
+    assert checkout["with"] == {"ref": "${{ github.sha }}", "fetch-depth": 0}
     assert mint["id"] == "app-token"
     assert mint["with"]["permission-actions"] == mint["with"]["permission-contents"] == "read"
-    assert find["env"] == {
-        "GH_TOKEN": "${{ steps.app-token.outputs.token }}",
-        "BASE_SHA": "${{ github.event.merge_group.base_sha }}",
-    }
+    assert find["env"] == {"GH_TOKEN": "${{ steps.app-token.outputs.token }}"}
     assert download["with"] == {
         "name": "coverage-baseline",
         "path": "~/coverage-baseline",
@@ -132,8 +133,9 @@ def test_the_queue_baseline_holds_the_exact_base_tree_on_the_app_token():
     assert [steps.index(s) for s in (mint, find, download, hold, upload)] == sorted(
         steps.index(s) for s in (mint, find, download, hold, upload)
     )
-    assert 'wait="${WAIT_SECONDS:-600}"' in find["run"]
-    assert job["timeout-minutes"] * 60 > 600
+    script = "\n".join(str(s.get("run", "")) for s in steps)
+    assert "merge_group.base_sha" not in str(job)
+    assert "sleep" not in script and "WAIT_SECONDS" not in script and "--unshallow" not in script
 
 
 @pytest.mark.parametrize(("measured", "fails"), [("abc", False), ("old", True)])
@@ -211,106 +213,108 @@ def test_a_dev_run_without_a_baseline_still_restores_its_durations(lookup):
 
 @pytest.fixture
 def base_run(tmp_path):
-    find = _step(_jobs()["queue-baseline"]["steps"], "Find the run that measured the base tree")
+    find = _step(_jobs()["queue-baseline"]["steps"], "Find the passed dev baseline under the queue head")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "init", "-q", "-b", "dev"], check=True)
+    commits = {}
+    for name in ("old", "dev", "ahead", "queue"):
+        subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", name], check=True)
+        commits[name] = subprocess.run([*git, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    subprocess.run([*git, "checkout", "-q", "-b", "side", commits["old"]], check=True)
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "side"], check=True)
+    commits["side"] = subprocess.run([*git, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    subprocess.run([*git, "checkout", "-q", commits["queue"]], check=True)
+    commits["missing"] = "f" * 40
     tools = tmp_path / "bin"
     tools.mkdir()
     (tools / "gh").write_text(
         "#!/usr/bin/env bash\n"
         'printf "%s\\n" "$@" >> "$ARGS"\n'
         'case "$2" in\n'
-        '  */commits/*) printf "tree-of-base" ;;\n'
-        '  */runs\\?head_sha=*) [[ -z "$FAIL_RUNS" ]] || exit 1; for r in $FAKE_RUNS; do e=pull_request; s=$FAKE_STATUS;'
-        ' [[ " $FAKE_DISPATCH " == *" $r "* ]] && { e=workflow_dispatch; s=in_progress; };'
-        ' jq -n --argjson id "$r" --arg s "$s" --arg e "$e" \'{id: $id, status: $s, event: $e}\'; done'
+        '  */workflows/test.yml/runs\\?*) [[ -z "$FAIL_RUNS" ]] || exit 1;'
+        ' for r in $FAKE_RUNS; do jq -n --argjson id "${r%%:*}" --arg sha "${r#*:}" \'{id: $id, head_sha: $sha}\'; done'
         " | jq -s '{workflow_runs: .}' | jq -r \"$4\" ;;\n"
-        '  */artifacts*) n=$(cat "$POLLS"); echo $((n + 1)) > "$POLLS"; '
-        '[[ "$2" == *"/$FAKE_KEPT_BY/"* && $n -ge $FAKE_AFTER ]] && printf 1 || printf 0 ;;\n'
+        '  */artifacts*) run="${2#*/runs/}"; run="${run%%/*}"; [[ " $FAKE_KEPT " == *" $run "* ]] && printf 1 || printf 0 ;;\n'
         "esac\n"
     )
     (tools / "gh").chmod(0o755)
-    (tools / "sleep").write_text("#!/usr/bin/env bash\ntrue\n")
+    (tools / "sleep").write_text('#!/usr/bin/env bash\necho slept >> "$ARGS"\n')
     (tools / "sleep").chmod(0o755)
 
-    def run(runs="111 222", kept_by="222", after=0, wait="600", fail_runs="", status="in_progress", dispatch=""):
+    def run(runs, kept, fail_runs=""):
         output = tmp_path / "output"
         output.write_text("")
-        polls = tmp_path / "polls"
-        polls.write_text("0")
+        args = tmp_path / "args"
+        args.write_text("")
         env = dict(
             os.environ,
             PATH=f"{tools}:{os.environ['PATH']}",
-            ARGS=str(tmp_path / "args"),
-            POLLS=str(polls),
-            FAKE_RUNS=runs,
-            FAKE_KEPT_BY=kept_by,
-            FAKE_AFTER=str(after),
+            ARGS=str(args),
+            FAKE_RUNS=" ".join(f"{run}:{commits[name]}" for run, name in runs),
+            FAKE_KEPT=" ".join(kept),
             FAIL_RUNS=fail_runs,
-            FAKE_STATUS=status,
-            FAKE_DISPATCH=dispatch,
-            WAIT_SECONDS=wait,
-            BASE_SHA="b" * 40,
             GITHUB_OUTPUT=str(output),
             GITHUB_REPOSITORY="the-cloud-clockwork/agentihooks",
         )
-        result = subprocess.run(["bash", "-e", "-c", find["run"]], env=env, capture_output=True, text=True)
-        return result, output.read_text(), (tmp_path / "args").read_text().splitlines()
+        result = subprocess.run(["bash", "-e", "-c", find["run"]], cwd=repo, env=env, capture_output=True, text=True)
+        return result, output.read_text(), args.read_text().splitlines(), commits
 
     return run
 
 
-def test_the_base_run_is_any_tests_run_on_the_base_commit_that_kept_a_baseline(base_run):
-    result, output, args = base_run()
-    assert result.returncode == 0, result.stderr
-    assert output == "id=222\ntree=tree-of-base\n"
-    assert "repos/the-cloud-clockwork/agentihooks/commits/" + "b" * 40 in args
-    assert (
-        "repos/the-cloud-clockwork/agentihooks/actions/workflows/test.yml/runs?head_sha=" + "b" * 40 + "&per_page=20"
-    ) in args
+def _tree(commits, name, tmp_path):
+    return subprocess.run(
+        ["git", "-C", str(tmp_path / "repo"), "rev-parse", f"{commits[name]}^{{tree}}"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def test_the_queue_grades_on_the_newest_passed_dev_baseline_under_its_head(base_run, tmp_path):
+    result, output, args, commits = base_run([(333, "missing"), (222, "dev"), (111, "old")], ["222", "111"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert output == f"id=222\ncommit={commits['dev']}\ntree={_tree(commits, 'dev', tmp_path)}\n"
+    assert args[:2] == [
+        "api",
+        "repos/the-cloud-clockwork/agentihooks/actions/workflows/test.yml/runs"
+        "?branch=dev&event=push&status=success&per_page=20",
+    ]
     assert "repos/the-cloud-clockwork/agentihooks/actions/runs/222/artifacts?name=coverage-baseline" in args
     assert "[.artifacts[] | select(.expired | not)] | length" in args
-    assert "tree-of-base" in result.stdout
+    assert not [arg for arg in args if "/runs/333/" in arg]
+    assert "slept" not in args
 
 
-def test_the_base_run_ignores_dispatched_runs_that_wait_on_a_hosted_lane(base_run):
-    result, output, _ = base_run(dispatch="111", kept_by="333", status="completed", wait="5")
-    assert result.returncode != 0
-    assert "finished without a coverage baseline" in result.stdout
-    assert output == ""
+def test_a_dev_run_off_the_queue_head_history_never_grades_it(base_run, tmp_path):
+    result, output, args, commits = base_run([(444, "side"), (111, "old")], ["444", "111"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert output == f"id=111\ncommit={commits['old']}\ntree={_tree(commits, 'old', tmp_path)}\n"
+    assert not [arg for arg in args if "/runs/444/" in arg]
 
 
-def test_the_base_run_waits_for_an_earlier_queue_entry_to_publish(base_run):
-    result, output, _ = base_run(after=5)
-    assert result.returncode == 0, result.stderr
-    assert output == "id=222\ntree=tree-of-base\n"
+def test_a_dev_run_whose_baseline_expired_is_skipped(base_run, tmp_path):
+    result, output, _, commits = base_run([(222, "dev"), (111, "old")], ["111"])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert output == f"id=111\ncommit={commits['old']}\ntree={_tree(commits, 'old', tmp_path)}\n"
 
 
-def test_a_failed_runs_listing_is_red_at_once_instead_of_waiting(base_run):
-    result, output, args = base_run(fail_runs="1")
-    assert result.returncode != 0
-    assert output == ""
-    assert not [arg for arg in args if "/artifacts" in arg]
-
-
-@pytest.mark.parametrize("runs", ["111 222", ""])
-def test_the_base_run_is_red_once_the_bounded_wait_ends(base_run, runs):
-    result, output, _ = base_run(runs=runs, kept_by="333", wait="0")
+@pytest.mark.parametrize(("runs", "kept"), [([], []), ([(222, "dev"), (444, "side")], ["444"])])
+def test_no_passed_dev_baseline_under_the_queue_head_is_red_at_once(base_run, runs, kept):
+    result, output, args, _ = base_run(runs, kept)
     assert result.returncode != 0
     assert "::error::" in result.stdout
     assert output == ""
+    assert "slept" not in args
 
 
-def test_a_finished_base_without_a_baseline_is_red_at_once(base_run, tmp_path):
-    result, output, _ = base_run(kept_by="333", status="completed")
+def test_a_failed_runs_listing_is_red_at_once(base_run):
+    result, output, args, _ = base_run([(222, "dev")], ["222"], fail_runs="1")
     assert result.returncode != 0
-    assert "finished without a coverage baseline" in result.stdout
     assert output == ""
-    assert (tmp_path / "polls").read_text().strip() == "2"
-
-
-def test_a_finished_base_that_kept_its_baseline_is_restored(base_run):
-    result, output, _ = base_run(status="completed")
-    assert result.returncode == 0, result.stderr
-    assert output == "id=222\ntree=tree-of-base\n"
+    assert not [arg for arg in args if "/artifacts" in arg]
 
 
 def test_a_failed_queue_run_publishes_its_baseline_then_stops_red():
@@ -318,11 +322,11 @@ def test_a_failed_queue_run_publishes_its_baseline_then_stops_red():
     steps = job["steps"]
     upload = _step(steps, "Publish this run's coverage baseline")
     stop = _step(steps, "Stop when this run's unit shards failed")
-    mint = _step(steps, "Mint the tcc main ci App token")
+    hold = _step(steps, "Hold the base tree")
     assert "!cancelled()" in job["if"]
     assert "if" not in upload
     assert stop["if"] == "needs.unit.result != 'success' && needs.reuse.outputs.reused != 'true'"
-    assert steps.index(upload) < steps.index(stop) < steps.index(mint)
+    assert steps.index(upload) < steps.index(stop) < steps.index(hold)
     result = subprocess.run(["bash", "-e", "-c", stop["run"]], capture_output=True, text=True)
     assert result.returncode != 0
     assert "::error::" in result.stdout
