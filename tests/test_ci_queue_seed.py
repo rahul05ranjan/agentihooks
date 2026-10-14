@@ -81,6 +81,22 @@ def test_no_queue_run_carries_a_baseline_from_the_latest_dev_run():
     assert "dev-coverage-baseline" not in (_ROOT / ".github/workflows/test.yml").read_text()
 
 
+def test_queue_base_lookup_runs_beside_shards_and_only_the_ratchet_waits():
+    jobs = _jobs()
+    lookup = jobs["queue-base-lookup"]
+    assert lookup["needs"] == ["reuse"]
+    assert (
+        lookup["if"]
+        == "${{ !cancelled() && github.event_name == 'merge_group' && needs.reuse.outputs.reused != 'true' }}"
+    )
+    assert "queue-base-lookup" in jobs["coverage-ratchet"]["needs"]
+    assert "needs['queue-base-lookup'].result == 'success'" in jobs["coverage-ratchet"]["if"]
+    for name in ("durations", "split", "unit", "queue-baseline", "shard-check", "sonar"):
+        assert "queue-base-lookup" not in jobs[name]["needs"]
+    assert "queue-base-lookup" in jobs["gate-required"]["needs"]
+    assert "queue-base-lookup" in jobs["stage-budget"]["needs"]
+
+
 def test_queue_runs_publish_their_own_baseline_before_sonar_and_the_gate():
     jobs = _jobs()
     steps = jobs["queue-baseline"]["steps"]
