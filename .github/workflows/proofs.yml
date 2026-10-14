@@ -8,7 +8,7 @@ on:
         type: choice
         required: true
         default: tests
-        options: [tests, mutation, mutation-replay, semgrep, worker-image, swarm-image, brain-smoke, helm-kind, github-access, row-memory, operations-cpu]
+        options: [tests, mutation, mutation-replay, semgrep, worker-image, swarm-image, brain-smoke, helm-kind, github-access, row-memory, operations-cpu, operations-receipts]
       base:
         description: Base revision for mutation or Semgrep scope
         required: true
@@ -34,6 +34,38 @@ permissions:
   actions: read
 
 jobs:
+  operations-receipts:
+    if: inputs.proof == 'operations-receipts'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: head
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.base }}
+          path: base
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          version: '0.12.23'
+          enable-cache: false
+      - name: Install shared dependencies
+        working-directory: head
+        run: uv pip install --system --excludes .github/test-excludes.txt -e '.[dev,all]'
+      - name: Observe base receipt request times
+        working-directory: base
+        run: |
+          cp ../head/tests/swarm_ledger/receipt_probe.py tests/swarm_ledger/receipt_probe.py
+          python -m pytest tests/swarm_ledger/receipt_probe.py -n 0 -s --tb=short
+      - name: Observe head receipt request times on the same runner
+        if: always()
+        working-directory: head
+        run: python -m pytest tests/swarm_ledger/receipt_probe.py -n 0 -s --tb=short
+
   operations-cpu:
     if: inputs.proof == 'operations-cpu'
     runs-on: ubuntu-latest
