@@ -97,4 +97,6 @@ def test_only_browser_test_files_track_greenlets_and_record_only_executable_arti
     assert account_names.codex_token_env.__code__.co_firstlineno + 1 in threaded, threaded
     recorded = set(data.lines(measured[source]) or [])
     assert artifact_sanity.run.__code__.co_firstlineno + 1 in recorded, recorded
+    viewer = {line for _, line in dis.findlinestarts(artifact_sanity._view.__code__)}
+    assert not (missing := viewer - recorded), sorted(missing)
     assert not (impossible := recorded - executable), sorted(impossible)
