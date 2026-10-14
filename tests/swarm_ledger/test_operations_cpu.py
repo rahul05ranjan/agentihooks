@@ -14,7 +14,7 @@ import pytest
 from scripts.swarm_ledger import ledger_server as server
 from scripts.swarm_ledger.api import mutations, resources, schemas
 from scripts.swarm_ledger.api.errors import APIError
-from scripts.swarm_ledger.events import Hub
+from scripts.swarm_ledger.events import Hub, patch
 from scripts.swarm_ledger.events.publishing import Publishing
 from scripts.swarm_ledger.repository.sqlite import SQLiteLedgerRepository
 
@@ -30,8 +30,21 @@ def fingerprint(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
+def timed(method, name, phases):
+    def invoke(*args, **kwargs):
+        started = time.thread_time()
+        try:
+            return method(*args, **kwargs)
+        finally:
+            phases[name] = phases.get(name, 0.0) + time.thread_time() - started
+
+    return invoke
+
+
 def replay(tmp_path, monkeypatch, profiled=False):
     recorded = corpus()
+    implementation = Path(patch.__file__).resolve().parents[3]
+    assert implementation == Path.cwd().resolve(), "Replay imported a different revision"
     core = server.core
     monkeypatch.setattr(core, "LEDGER_DIR", tmp_path)
     monkeypatch.setattr(core, "now_ms", lambda: 1791939600000)
@@ -46,6 +59,14 @@ def replay(tmp_path, monkeypatch, profiled=False):
     repository.import_document(SLUG, recorded["state"])
     monkeypatch.setattr(server, "repository", Publishing(repository, server.publish_ledger))
     sequence, _ = server.HUB.open(SLUG, lambda: {"ledger": server.ledger_view(repository.get_document(SLUG))})
+    phases = {}
+    for instance, method, name in (
+        (server.repository, "get_document", "request_read"),
+        (server.repository, "apply_ops", "write_and_publish"),
+        (repository, "_write", "storage_write"),
+        (server.HUB, "publish", "stream_publish"),
+    ):
+        monkeypatch.setattr(instance, method, timed(getattr(instance, method), name, phases))
     outputs, seconds = [], []
     profiler = cProfile.Profile(timer=time.thread_time)
     for index, op in enumerate(recorded["ops"]):
@@ -88,9 +109,11 @@ def replay(tmp_path, monkeypatch, profiled=False):
         pstats.Stats(profiler, stream=stream).sort_stats("cumulative").print_stats(25)
     return {
         "source": recorded["source"],
+        "implementation": str(implementation),
         "requests": len(seconds),
         "mean_cpu_seconds": sum(seconds) / len(seconds),
         "cpu_seconds": seconds,
+        "phase_cpu_seconds_per_request": {name: value / len(seconds) for name, value in phases.items()},
         "outputs": outputs,
         "profile": stream.getvalue(),
     }
@@ -99,11 +122,12 @@ def replay(tmp_path, monkeypatch, profiled=False):
 def test_operations_write_cpu_is_at_most_half_the_production_baseline(tmp_path, monkeypatch):
     with monkeypatch.context() as isolated:
         measured = replay(tmp_path / "measured", isolated)
-    with monkeypatch.context() as isolated:
-        profiled = replay(tmp_path / "profiled", isolated, profiled=True)
-    assert measured["outputs"] == profiled["outputs"]
     report = dict(measured)
-    report["profile"] = profiled["profile"]
+    if os.environ.get("OPERATIONS_CPU_PROFILE"):
+        with monkeypatch.context() as isolated:
+            profiled = replay(tmp_path / "profiled", isolated, profiled=True)
+        assert measured["outputs"] == profiled["outputs"]
+        report["profile"] = profiled["profile"]
     if destination := os.environ.get("OPERATIONS_CPU_REPORT"):
         Path(destination).write_text(json.dumps(report, indent=2) + "\n")
     if not os.environ.get("OPERATIONS_CPU_BASELINE"):

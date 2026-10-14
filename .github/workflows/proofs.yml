@@ -73,6 +73,26 @@ jobs:
           PYTHONUNBUFFERED: '1'
         run: |
           python -m pytest tests/swarm_ledger/test_operations_cpu.py -n 0 --tb=short
+      - name: Plant a comparator that drops every stream update
+        if: always()
+        run: |
+          cp -a head fault
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('fault/scripts/swarm_ledger/events/patch.py')
+          source = path.read_text()
+          needle = 'if type(a) is not type(b) or a != b:\n        return False'
+          assert source.count(needle) == 1
+          path.write_text(source.replace(needle, 'if True:\n        return True'))
+          PY
+      - name: Replay the dropped stream control
+        if: always()
+        working-directory: fault
+        env:
+          OPERATIONS_CPU_REPORT: ${{ github.workspace }}/operations-fault.json
+          OPERATIONS_CPU_BASELINE: 'true'
+          PYTHONUNBUFFERED: '1'
+        run: python -m pytest tests/swarm_ledger/test_operations_cpu.py -n 0 --tb=short
       - name: Retain the CPU profile and every outcome
         if: always()
         uses: actions/upload-artifact@v4
@@ -97,8 +117,10 @@ jobs:
           from pathlib import Path
           base = json.loads(Path('operations-base.json').read_text())
           head = json.loads(Path('operations-head.json').read_text())
+          fault = json.loads(Path('operations-fault.json').read_text())
           assert base['source'] == head['source']
           assert base['outputs'] == head['outputs'], 'Operation or persisted-state outcomes changed'
+          assert head['outputs'] != fault['outputs'], 'Dropped stream update escaped the comparison'
           print(json.dumps({
               'requests': head['requests'],
               'base_cpu_seconds_per_request': base['mean_cpu_seconds'],
