@@ -58,9 +58,6 @@ def bind(ledgers, session, slug="rig-grade-swarm", name="master@323133-0001"):
     (ledgers / ".sessions" / f"{session}.json").write_text(json.dumps({"slug": slug, "name": name}), encoding="utf-8")
 
 
-# Seam one: a session not bound to a ledger or swarm gets nothing, ever.
-
-
 def test_an_unbound_claude_session_accepting_a_plan_gets_nothing(capsys, monkeypatch):
     assert MARK not in run(recorded("claude_plan_accept"), capsys, "claude", monkeypatch)
 
@@ -85,6 +82,19 @@ def test_an_unbound_session_with_a_four_item_task_list_gets_nothing(capsys, monk
     assert MARK not in run(todos(12), capsys, "claude", monkeypatch)
 
 
+def test_an_unbound_session_adding_four_tasks_gets_nothing(capsys, monkeypatch):
+    for i in range(4):
+        payload = {
+            "session_id": "s1",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "TaskCreate",
+            "tool_input": {"subject": f"step {i}", "description": f"do step {i}"},
+            "tool_response": {"task": {"id": str(i)}},
+            "cwd": "/",
+        }
+        assert MARK not in run(payload, capsys, "claude", monkeypatch)
+
+
 @pytest.mark.parametrize(
     "text",
     [
@@ -107,7 +117,7 @@ def test_a_codex_prompt_naming_a_plan_but_not_accepting_one_gets_nothing(capsys,
     assert MARK not in run(recorded("codex_plan_prompt"), capsys, "codex", monkeypatch)
 
 
-def test_a_non_plan_tool_call_on_an_unbound_session_gets_nothing(capsys, monkeypatch, isolated):
+def test_a_non_plan_tool_call_on_an_unbound_session_gets_nothing(capsys, monkeypatch):
     payload = {
         "session_id": "s1",
         "hook_event_name": "PostToolUse",
@@ -117,9 +127,6 @@ def test_a_non_plan_tool_call_on_an_unbound_session_gets_nothing(capsys, monkeyp
         "cwd": "/",
     }
     assert MARK not in run(payload, capsys, "claude", monkeypatch)
-
-
-# Seam two: a session already bound to a ledger or swarm keeps its ledger duty.
 
 
 def test_a_swarm_agent_appends_its_plan_to_the_swarm_ledger(capsys, monkeypatch):
@@ -171,7 +178,7 @@ def test_the_acceptance_signal_follows_the_harness(isolated, monkeypatch):
     assert decision.directive(recorded("claude_plan_accept", session_id="b")) == ""
 
 
-def test_a_plan_without_a_session_id_gets_nothing(isolated, monkeypatch):
+def test_a_plan_without_a_session_id_gets_nothing(monkeypatch):
     monkeypatch.setenv("AGENTIHOOKS_TARGET", "claude")
     assert decision.directive(recorded("claude_plan_accept", session_id="")) == ""
 
@@ -204,9 +211,6 @@ def test_an_unreadable_binding_falls_back_to_the_swarm(isolated, monkeypatch):
     (isolated / ".sessions" / "s1.json").write_text("[1]", encoding="utf-8")
     out = decision.directive(recorded("claude_plan_accept", session_id="s1"))
     assert "--slug env-swarm --as master@2 plan phases" in out
-
-
-# Seam three: the toolbelt rule states this plainly.
 
 
 def test_the_toolbelt_rule_bars_automatic_creation():
