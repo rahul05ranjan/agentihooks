@@ -7,6 +7,7 @@ import functools
 import hashlib
 import json
 import os
+import sys
 import uuid
 from pathlib import Path
 
@@ -114,15 +115,10 @@ def track_greenlets(config, path: Path) -> None:
     import greenlet
 
     # Greenlet tracking runs a Python lookup on every call and return, so only test files that drive Playwright get it.
-    wanted = (
-        greenlet.getcurrent if drives_browser(config.rootpath, path.relative_to(config.rootpath).as_posix()) else None
-    )
-    collector = controller.cov._collector
-    if collector.concur_id_func is not wanted:
-        # A tracer reads its id function when it starts, so restart between tests where no measured frame is live.
-        controller.cov.stop()
-        collector.concur_id_func = wanted
-        controller.cov.start()
+    browser = drives_browser(config.rootpath, path.relative_to(config.rootpath).as_posix())
+    # Only this thread's tracer changes: restarting coverage would stop tracing threads that are already running.
+    # Each item starts at the same depth with no measured frame live, so each mode resumes a stack that still matches.
+    sys.gettrace().concur_id_func = greenlet.getcurrent if browser else None
 
 
 @pytest.hookimpl(tryfirst=True)

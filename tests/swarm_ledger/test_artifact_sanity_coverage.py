@@ -9,20 +9,31 @@ from pathlib import Path
 import pytest
 from coverage import CoverageData
 
+from scripts import account_names
 from scripts.swarm_ledger import artifact_sanity
 
 
 @pytest.mark.skipif(sys.version_info[:2] != (3, 12), reason="Browser coverage runs on Python 3.12")
 def test_only_browser_test_files_track_greenlets_and_record_only_executable_artifact_sanity_lines(tmp_path):
     root = Path(__file__).parents[2]
-    plain = """
-        import sys
-
-        def test_plain_code_runs_without_greenlet_tracking():
-            assert sys.gettrace().concur_id_func is None
-    """
     tests = {
-        "test_1_plain.py": plain,
+        "shared.py": """
+            import threading
+
+            from scripts import account_names
+
+            release = threading.Event()
+            thread = threading.Thread(target=lambda: release.wait() and account_names.codex_token_env("a@b"), daemon=True)
+        """,
+        "test_1_plain.py": """
+            import sys
+
+            import shared
+
+            def test_plain_code_runs_without_greenlet_tracking_and_starts_a_thread():
+                assert sys.gettrace().concur_id_func is None
+                shared.thread.start()
+        """,
         "test_2_page.py": """
             import os
             import sys
@@ -43,7 +54,17 @@ def test_only_browser_test_files_track_greenlets_and_record_only_executable_arti
                     finally:
                         browser.close()
         """,
-        "test_3_plain.py": plain,
+        "test_3_plain.py": """
+            import sys
+
+            import shared
+
+            def test_a_thread_started_before_a_page_test_is_still_traced():
+                assert sys.gettrace().concur_id_func is None
+                shared.release.set()
+                shared.thread.join(10)
+                assert not shared.thread.is_alive()
+        """,
     }
     for name, body in tests.items():
         (tmp_path / name).write_text(textwrap.dedent(body))
@@ -58,7 +79,7 @@ def test_only_browser_test_files_track_greenlets_and_record_only_executable_arti
         "ARTIFACT_FIXTURES": str(root / "tests/fixtures/artifacts"),
     }
     command = [sys.executable, "-m", "pytest", "-p", "tests.browser_coverage", "--cov=scripts", "--cov-report="]
-    command += [f"--cov-config={root}/.github/coverage/coverage.ini", "-p", "no:cacheprovider", *tests]
+    command += [f"--cov-config={root}/.github/coverage/coverage.ini", "-p", "no:cacheprovider", *sorted(tests)[1:]]
     result = subprocess.run(command, cwd=tmp_path, env=env, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -71,7 +92,9 @@ def test_only_browser_test_files_track_greenlets_and_record_only_executable_arti
         pending.extend(value for value in code.co_consts if isinstance(value, types.CodeType))
     data = CoverageData(str(tmp_path / ".coverage"))
     data.read()
-    (measured,) = [name for name in data.measured_files() if Path(name).resolve() == source]
-    recorded = set(data.lines(measured) or [])
+    measured = {Path(name).resolve(): name for name in data.measured_files()}
+    threaded = set(data.lines(measured[Path(account_names.__file__).resolve()]) or [])
+    assert account_names.codex_token_env.__code__.co_firstlineno + 1 in threaded, threaded
+    recorded = set(data.lines(measured[source]) or [])
     assert artifact_sanity.run.__code__.co_firstlineno + 1 in recorded, recorded
     assert not (impossible := recorded - executable), sorted(impossible)
