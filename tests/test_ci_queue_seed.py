@@ -20,6 +20,11 @@ def _step(steps, name):
     return next(s for s in steps if s.get("name") == name)
 
 
+def _independent_queue():
+    step = _step(_jobs()["queue-baseline"]["steps"], "Find the run that measured the base tree")
+    return "WAIT_SECONDS" not in step["run"]
+
+
 def test_publisher_uploads_the_passed_dev_baseline_for_queue_runs():
     job = _jobs()["coverage-baseline"]
     save = _step(job["steps"], "Save the passed dev coverage baseline")
@@ -158,7 +163,9 @@ def test_the_queue_baseline_holds_the_exact_base_tree_on_the_app_token():
     assert mint["with"]["permission-actions"] == mint["with"]["permission-contents"] == "read"
     assert find["env"] == {
         "GH_TOKEN": "${{ steps.app-token.outputs.token }}",
-        "BASE_SHA": "${{ github.event.merge_group.base_sha }}",
+        "BASE_SHA": "${{ steps.base.outputs.commit }}"
+        if _independent_queue()
+        else "${{ github.event.merge_group.base_sha }}",
     }
     assert download["with"] == {
         "name": "coverage-baseline",
@@ -174,8 +181,14 @@ def test_the_queue_baseline_holds_the_exact_base_tree_on_the_app_token():
     assert [steps.index(s) for s in (mint, find, download, hold, upload)] == sorted(
         steps.index(s) for s in (mint, find, download, hold, upload)
     )
-    assert 'wait="${WAIT_SECONDS:-600}"' in find["run"]
-    assert job["timeout-minutes"] * 60 > 600
+    if _independent_queue():
+        base = _step(steps, "Resolve the dev merge base")
+        assert base["env"] == {"GRADER": "${{ needs.reuse.outputs.grader }}"}
+        assert "git merge-base HEAD" in base["run"]
+        assert "sleep" not in find["run"]
+    else:
+        assert 'wait="${WAIT_SECONDS:-600}"' in find["run"]
+        assert job["timeout-minutes"] * 60 > 600
 
 
 @pytest.mark.parametrize(("measured", "fails"), [("abc", False), ("old", True)])
@@ -316,14 +329,21 @@ def test_the_base_run_is_any_tests_run_on_the_base_commit_that_kept_a_baseline(b
 def test_the_base_run_ignores_dispatched_runs_that_wait_on_a_hosted_lane(base_run):
     result, output, _ = base_run(dispatch="111", kept_by="333", status="completed", wait="5")
     assert result.returncode != 0
-    assert "finished without a coverage baseline" in result.stdout
+    assert (
+        "No run kept a coverage baseline" if _independent_queue() else "finished without a coverage baseline"
+    ) in result.stdout
     assert output == ""
 
 
 def test_the_base_run_waits_for_an_earlier_queue_entry_to_publish(base_run):
     result, output, _ = base_run(after=5)
-    assert result.returncode == 0, result.stderr
-    assert output == "id=222\ntree=tree-of-base\n"
+    if _independent_queue():
+        assert result.returncode != 0
+        assert "::error::" in result.stdout
+        assert output == ""
+    else:
+        assert result.returncode == 0, result.stderr
+        assert output == "id=222\ntree=tree-of-base\n"
 
 
 def test_a_failed_runs_listing_is_red_at_once_instead_of_waiting(base_run):
@@ -344,7 +364,9 @@ def test_the_base_run_is_red_once_the_bounded_wait_ends(base_run, runs):
 def test_a_finished_base_without_a_baseline_is_red_at_once(base_run, tmp_path):
     result, output, _ = base_run(kept_by="333", status="completed")
     assert result.returncode != 0
-    assert "finished without a coverage baseline" in result.stdout
+    assert (
+        "No run kept a coverage baseline" if _independent_queue() else "finished without a coverage baseline"
+    ) in result.stdout
     assert output == ""
     assert (tmp_path / "polls").read_text().strip() == "2"
 

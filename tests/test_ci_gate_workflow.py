@@ -307,11 +307,20 @@ def test_the_merge_queue_grades_the_ratchet_on_the_queue_baseline_runner():
     assert steps.index(record) < steps.index(published) < steps.index(grade) < steps.index(report)
     assert grade["name"] == "Hold every line the base ran"
     assert grade["if"] == "needs.reuse.outputs.reused != 'true'"
-    assert grade["env"] == {"BASE": "${{ github.event.merge_group.base_sha }}"}
-    original = _step("coverage-ratchet", "Hold every line the base ran")["run"]
-    assert grade["run"] == "git fetch --no-tags --unshallow origin\n" + original.replace(
-        '"$GITHUB_WORKSPACE/head-coverage"', '"$GITHUB_WORKSPACE/.coverage-shards"'
-    )
+    if "GRADER" in grade["env"]:
+        assert grade["env"] == {
+            "BASE": "${{ steps.base.outputs.commit }}",
+            "GRADER": "${{ needs.reuse.outputs.grader }}",
+        }
+        assert 'git worktree add --detach "$RUNNER_TEMP/grader" "$GRADER"' in grade["run"]
+        assert 'cd "$RUNNER_TEMP/grader"' in grade["run"]
+        assert 'python -m tests.coverage_ratchet --base "$BASE"' in grade["run"]
+    else:
+        assert grade["env"] == {"BASE": "${{ github.event.merge_group.base_sha }}"}
+        original = _step("coverage-ratchet", "Hold every line the base ran")["run"]
+        assert grade["run"] == "git fetch --no-tags --unshallow origin\n" + original.replace(
+            '"$GITHUB_WORKSPACE/head-coverage"', '"$GITHUB_WORKSPACE/.coverage-shards"'
+        )
     shards = next(step for step in steps if step.get("name") == "Download this run's shard coverage")
     assert shards["with"]["pattern"] == _step("coverage-ratchet", "Download shard coverage")["with"]["pattern"]
     assert report["if"] == "always() && steps.ratchet.outcome != 'skipped'"
