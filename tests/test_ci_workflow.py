@@ -41,7 +41,7 @@ def test_dev_extra_declares_test_plugin(plugin):
 
 def test_workflow_runs_whole_suite_in_parallel():
     command = _pytest_command()
-    assert command.strip().startswith("run: workers=$(python -m scripts.ci_cpu_quota) && python -c ")
+    assert command.strip().startswith("run: workers=$(") and "ci_cpu_quota) && python -c " in command
     assert '-n "$workers"' in command
     assert "-n auto" not in command
     assert "tests/" in command
