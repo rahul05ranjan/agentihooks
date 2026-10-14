@@ -126,6 +126,8 @@ jobs:
               'base_cpu_seconds_per_request': base['mean_cpu_seconds'],
               'head_cpu_seconds_per_request': head['mean_cpu_seconds'],
               'ratio': head['mean_cpu_seconds'] / base['mean_cpu_seconds'],
+              'base_peak_rss_kib': base['peak_rss_kib_after_replay'],
+              'head_peak_rss_kib': head['peak_rss_kib_after_replay'],
               'operation_mix': head['source']['operation_mix'],
           }, indent=2))
           assert head['mean_cpu_seconds'] <= 0.268092752

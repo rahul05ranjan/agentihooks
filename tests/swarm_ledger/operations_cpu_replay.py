@@ -5,6 +5,7 @@ import io
 import json
 import os
 import pstats
+import resource
 import time
 from pathlib import Path
 from unittest.mock import Mock
@@ -57,7 +58,8 @@ def replay(tmp_path, monkeypatch, profiled=False):
         monkeypatch.setattr(server, name, callback)
     repository = SQLiteLedgerRepository(tmp_path / "ledger.sqlite3", domain=core)
     repository.import_document(SLUG, recorded["state"])
-    monkeypatch.setattr(server, "repository", Publishing(repository, server.publish_ledger))
+    publisher = getattr(server, "publish_snapshot", server.publish_ledger)
+    monkeypatch.setattr(server, "repository", Publishing(repository, publisher))
     sequence, _ = server.HUB.open(SLUG, lambda: {"ledger": server.ledger_view(repository.get_document(SLUG))})
     phases = {"request_read": 0.0}
     for instance, method, name in (
@@ -65,9 +67,10 @@ def replay(tmp_path, monkeypatch, profiled=False):
         (server.repository, "current", "current_snapshot"),
         (server.repository, "apply_ops", "write_and_publish"),
         (repository, "_write", "storage_write"),
-        (server.HUB, "publish", "stream_publish"),
+        (server.HUB, "publish_snapshot" if hasattr(server.HUB, "publish_snapshot") else "publish", "stream_publish"),
     ):
         monkeypatch.setattr(instance, method, timed(getattr(instance, method), name, phases))
+    memory_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     outputs, seconds = [], []
     profiler = cProfile.Profile(timer=time.thread_time)
     for index, op in enumerate(recorded["ops"]):
@@ -113,6 +116,8 @@ def replay(tmp_path, monkeypatch, profiled=False):
         "implementation": str(implementation),
         "requests": len(seconds),
         "mean_cpu_seconds": sum(seconds) / len(seconds),
+        "peak_rss_kib_before_replay": memory_before,
+        "peak_rss_kib_after_replay": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
         "cpu_seconds": seconds,
         "phase_cpu_seconds_per_request": {name: value / len(seconds) for name, value in phases.items()},
         "outputs": outputs,

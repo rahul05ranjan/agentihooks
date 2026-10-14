@@ -9,6 +9,7 @@ from scripts.swarm_ledger import request_metrics
 
 from . import hierarchy
 from .events import append_events, read_events, trim_events, write_events
+from .fragments import document
 from .rows import TABLES, assemble, diff, encode, flatten, read_rows, write_rows
 from .seeds import read_seeds, sync_values, write_seeds
 
@@ -48,8 +49,9 @@ class Missing(KeyError, ValueError):
 class Entry:
     """One ledger as last stored: its generation, canonical text, a parsed copy callers only read and views of it."""
 
-    def __init__(self, generation, text, state):
+    def __init__(self, generation, text, state, fragments=None):
         self.generation, self.text, self.state, self.views = generation, text, state, {}
+        self.fragments = fragments
 
 
 def summarize(slug: str, state: dict) -> dict:
@@ -303,7 +305,8 @@ class SQLiteLedgerRepository:
             state = assemble(read_rows(connection, slug))
             if "events" in state["_meta"]:
                 state["_meta"]["events"] = read_events(connection, slug)
-            entry = Entry(row[0], encode(state), state)
+            fragments = document(state)
+            entry = Entry(row[0], fragments.text, fragments.value, fragments)
             self._remember(slug, entry)
         return entry
 
@@ -377,7 +380,9 @@ class SQLiteLedgerRepository:
         return (json.loads(written.text) if copy_state else written.state), rejected
 
     def _write(self, connection, slug: str, entry: Entry, state: dict, events: list) -> Entry:
-        before, after = diff(*(without_events(document) for document in (entry.state, state)))
+        fragments = document(state, entry.fragments)
+        state = fragments.value
+        before, after = diff(*(without_events(value) for value in (entry.state, state)))
         write_rows(connection, slug, before, after)
         hierarchy.sync(connection, slug, state)
         kept = len(state["_meta"].get("events", []))
@@ -389,7 +394,7 @@ class SQLiteLedgerRepository:
             UPDATE,
             (state["_meta"]["rev"], generation, encode(summarize(slug, state)), self.domain.now_ms(), slug),
         )
-        return Entry(generation, encode(state), state)
+        return Entry(generation, fragments.text, state, fragments)
 
     def _insert(self, connection, slug: str, state: dict, token: str, seeds: dict | None = None) -> None:
         previous = connection.execute(GENERATION, (slug,)).fetchone()
