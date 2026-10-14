@@ -87,9 +87,6 @@ OIDC = {("pages.yml", "deploy"), ("publish-pypi.yml", "publish")}
 # The runner trust loader contract fixes this job's runner.
 PROTECTED = {("runner-trust.yml", "actors")}
 
-# The one job holding the organization token stays off every shared runner.
-ORG_TOKEN = {("access-audit.yml", "audit")}
-
 # Runner trust never admits a pull_request_target run to a private runner.
 TARGET = {("gate-protected.yml", "grade")}
 
@@ -228,12 +225,6 @@ def test_every_hosted_job_stays_on_a_hosted_runner():
     for name, job in PROTECTED | TARGET | CLASSED:
         assert jobs[(name, job)]["runs-on"] == "ubuntu-latest", f"{name}:{job}"
     assert set(jobs) == set(MOVED) | HOSTED
-
-
-def test_jobs_with_service_or_job_containers_run_on_the_docker_pool():
-    for (name, job), spec in runner_jobs().items():
-        if "services" in spec or "container" in spec:
-            assert MOVED.get((name, job)) == STANDARD, f"{name}:{job}"
 
 
 def test_jobs_with_service_or_job_containers_run_on_the_docker_pool():
