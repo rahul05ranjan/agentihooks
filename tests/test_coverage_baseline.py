@@ -22,7 +22,7 @@ def measured(tmp_path, monkeypatch):
     return tmp_path, state, [tmp_path / ".coverage"]
 
 
-@pytest.mark.parametrize("invalid", [0, 4, 5, 6, 99])
+@pytest.mark.parametrize("invalid", [0, 6, 99])
 def test_impossible_lines_cannot_replace_a_baseline(measured, invalid, capsys):
     root, state, shards = measured
     source = root / "hooks/example.py"
@@ -59,6 +59,20 @@ def test_publication_reports_every_impossible_line(measured, capsys):
     assert "hooks/example.py:99" in output
     assert "hooks/example.py:100" in output
     assert cache.read(target)["executed"] == {"hooks/example.py": [1, 2]}
+
+
+def test_continuation_lines_publish_as_their_statement(measured, capsys):
+    root, _, shards = measured
+    source = root / "hooks/example.py"
+    source.write_text('value = max(\n    1,\n    2,\n)\nscript = """\nconst a = 1;\n"""\n')
+    data = CoverageData(basename=str(shards[0]))
+    data.erase()
+    data.add_lines({"hooks/example.py": {2, 3, 6}})
+    data.write()
+    target = root / "baseline.json"
+    cache.record(root, shards, target)
+    assert "hooks/example.py" not in capsys.readouterr().out
+    assert cache.read(target)["executed"] == {"hooks/example.py": [1, 5]}
 
 
 def test_record_computes_the_baseline_from_coverage(measured):
