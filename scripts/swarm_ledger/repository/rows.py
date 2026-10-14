@@ -65,9 +65,16 @@ def _list_paths(children):
     return paths if all(path[0] == "index" or type(path[1]) is str for path in paths) else None
 
 
+def _dict_paths_match(left, right):
+    return (
+        all(type(key) is str for key in left)
+        and all(type(key) is str for key in right)
+        and list(left) == list(right)[: len(left)]
+    )
+
 def _child_paths_match(left, right, old_children, new_children):
-    if type(left) is dict and all(type(key) is str for key in left) and all(type(key) is str for key in right):
-        return list(left) == list(right)[: len(left)]
+    if type(left) is dict and _dict_paths_match(left, right):
+        return True
     if type(left) is list:
         old_paths, new_paths = _list_paths(old_children), _list_paths(new_children)
         if old_paths is not None and new_paths is not None:
@@ -80,11 +87,28 @@ def diff(old: object, new: object) -> tuple[dict, dict]:
     """The stored rows of `old` and `new` under every path that differs, descending only into changed values."""
     before, after = {}, {}
 
+    def dictionary(left, right, parts, table):
+        encoded_parent = encode(parts)
+        for index, (name, child) in enumerate(right.items()):
+            if index < len(left) and left[name] is child and type(child) is not float:
+                continue
+            bucket = THREADS if name in ("comments", "answers") else table
+            if not parts and name in COLLECTIONS:
+                bucket = RESOURCES
+            child_parts = [*parts, name]
+            if index < len(left):
+                walk(left[name], child, child_parts, encoded_parent, name, index, bucket)
+            else:
+                visit(after, child, child_parts, encoded_parent, name, index, bucket)
+
     def walk(left, right, parts, parent, key, position, table):
         if type(left) is type(right) and left == right:
             return
         same_shape = type(left) is type(right) and isinstance(left, (dict, list))
         if same_shape:
+            if type(left) is dict and _dict_paths_match(left, right):
+                dictionary(left, right, parts, table)
+                return
             old_children = list(children(left, parts, table))
             new_children = list(children(right, parts, table))
             if _child_paths_match(left, right, old_children, new_children):

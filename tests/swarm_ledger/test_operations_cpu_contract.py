@@ -50,5 +50,8 @@ def test_small_replay_keeps_acceptance_refusal_and_reports_real_phases(tmp_path,
         "stream_publish",
         "write_and_publish",
     }
+    assert measured["outputs"][1]["relay_outcomes"]["items"]
+    assert measured["outputs"][1]["relay_outcomes"]["receipts"]
+    assert measured["outputs"][1]["relay_outcomes"]["unrelayed"] == {}
     assert measured["profile"] == ""
     assert "function calls" in profiled["profile"]

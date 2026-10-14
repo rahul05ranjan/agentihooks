@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import orjson
@@ -10,17 +11,18 @@ class Fragment:
     value: object
     text: str
     parts: dict | tuple | None = None
-    signature: bytes | str | None = None
+    signature: str | None = None
 
 
 def leaf(value: object, previous: Fragment | None = None) -> Fragment:
     try:
-        signature = orjson.dumps(value)
+        signature = orjson.dumps(value).decode()
     except orjson.JSONEncodeError:
         signature = encode(value)
     if previous is not None and value == previous.value and signature == previous.signature:
         return previous
-    return Fragment(value, encode(value), signature=signature)
+    text = encode(value)
+    return Fragment(value, text, signature=text if signature == text else signature)
 
 
 def sequence(value: list, previous: Fragment | None = None) -> Fragment:
@@ -32,7 +34,9 @@ def sequence(value: list, previous: Fragment | None = None) -> Fragment:
     return Fragment([item.value for item in parts], text, parts)
 
 
-def mapping(value: dict, previous: Fragment | None, make) -> Fragment:
+def mapping(
+    value: dict, previous: Fragment | None, make: Callable[[str, object, Fragment | None], Fragment]
+) -> Fragment:
     old = previous.parts if previous is not None and isinstance(previous.parts, dict) else {}
     parts = {key: make(key, item, old.get(key)) for key, item in value.items()}
     text = "{" + ",".join(encode(key) + ":" + item.text for key, item in parts.items()) + "}"
@@ -41,7 +45,7 @@ def mapping(value: dict, previous: Fragment | None, make) -> Fragment:
     return Fragment({key: item.value for key, item in parts.items()}, text, parts)
 
 
-def meta_part(key, value, previous):
+def meta_part(key: str, value: object, previous: Fragment | None) -> Fragment:
     if key == "events" and isinstance(value, list):
         return sequence(value, previous)
     if key == "stamps" and isinstance(value, dict):
@@ -49,7 +53,7 @@ def meta_part(key, value, previous):
     return leaf(value, previous)
 
 
-def document_part(key, value, previous):
+def document_part(key: str, value: object, previous: Fragment | None) -> Fragment:
     if key == "_meta" and isinstance(value, dict):
         return mapping(value, previous, meta_part)
     if isinstance(value, list):

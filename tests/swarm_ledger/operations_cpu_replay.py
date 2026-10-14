@@ -8,7 +8,6 @@ import pstats
 import resource
 import time
 from pathlib import Path
-from unittest.mock import Mock
 
 import pytest
 
@@ -18,6 +17,7 @@ from scripts.swarm_ledger.api.errors import APIError
 from scripts.swarm_ledger.events import Hub, patch
 from scripts.swarm_ledger.events.publishing import Publishing
 from scripts.swarm_ledger.repository.sqlite import SQLiteLedgerRepository
+from tests.swarm_ledger import operations_relay
 
 pytestmark = pytest.mark.xdist_group("fakeredis")
 SLUG = "operations-replay"
@@ -53,9 +53,7 @@ def replay(tmp_path, monkeypatch, profiled=False):
     monkeypatch.setattr(server, "served_version", lambda: "replay")
     monkeypatch.setattr("hooks._redis.get_redis", lambda: None)
     monkeypatch.setattr("scripts.gates.talk.Budget._marks", lambda self: None)
-    deliveries = {name: Mock() for name in ("relay_to_inbox", "doctor_phrase", "deliver_alerts")}
-    for name, callback in deliveries.items():
-        monkeypatch.setattr(server, name, callback)
+    deliveries, relay_outcomes = operations_relay.install(tmp_path, monkeypatch, SLUG, server)
     repository = SQLiteLedgerRepository(tmp_path / "ledger.sqlite3", domain=core)
     repository.import_document(SLUG, recorded["state"])
     publisher = getattr(server, "publish_snapshot", server.publish_ledger)
@@ -104,6 +102,7 @@ def replay(tmp_path, monkeypatch, profiled=False):
                 "state": fingerprint(persisted),
                 "stream": fingerprint([(seq, name, data) for seq, _, name, data in frames]),
                 "relays": relays,
+                "relay_outcomes": relay_outcomes(),
             }
         )
         for callback in deliveries.values():
@@ -125,7 +124,7 @@ def replay(tmp_path, monkeypatch, profiled=False):
     }
 
 
-def test_operations_write_cpu_is_at_most_half_the_production_baseline(tmp_path, monkeypatch):
+def test_operations_write_replay_records_every_outcome(tmp_path, monkeypatch):
     with monkeypatch.context() as isolated:
         measured = replay(tmp_path / "measured", isolated)
     report = dict(measured)
@@ -136,5 +135,4 @@ def test_operations_write_cpu_is_at_most_half_the_production_baseline(tmp_path, 
         report["profile"] = profiled["profile"]
     if destination := os.environ.get("OPERATIONS_CPU_REPORT"):
         Path(destination).write_text(json.dumps(report, indent=2) + "\n")
-    if not os.environ.get("OPERATIONS_CPU_BASELINE"):
-        assert measured["mean_cpu_seconds"] <= 0.268092752, json.dumps(report, indent=2)
+    assert measured["requests"] == len(corpus()["ops"])

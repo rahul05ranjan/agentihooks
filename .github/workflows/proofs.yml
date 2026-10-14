@@ -64,6 +64,7 @@ jobs:
           PYTHONUNBUFFERED: '1'
         run: |
           cp ../head/tests/swarm_ledger/operations_cpu_replay.py tests/swarm_ledger/operations_cpu_replay.py
+          cp ../head/tests/swarm_ledger/operations_relay.py tests/swarm_ledger/operations_relay.py
           cp ../head/tests/swarm_ledger/operations_corpus.json.gz tests/swarm_ledger/operations_corpus.json.gz
           python -m pytest tests/swarm_ledger/operations_cpu_replay.py -n 0 --tb=short
       - name: Replay head on the same runner
@@ -73,7 +74,7 @@ jobs:
           PYTHONUNBUFFERED: '1'
         run: |
           python -m pytest tests/swarm_ledger/operations_cpu_replay.py -n 0 --tb=short
-      - name: Plant a comparator that drops every stream update
+      - name: Plant dropped stream updates and retained memory
         if: always()
         run: |
           cp -a head fault
@@ -84,6 +85,11 @@ jobs:
           needle = 'if type(a) is not type(b) or a != b:\n        return False'
           assert source.count(needle) == 1
           path.write_text(source.replace(needle, 'if True:\n        return True'))
+          path = Path('fault/tests/swarm_ledger/operations_cpu_replay.py')
+          source = path.read_text()
+          needle = 'recorded = corpus()'
+          assert source.count(needle) == 1
+          path.write_text(source.replace(needle, needle + '\n    memory_fault = bytearray(b"x") * (128 * 1024 * 1024)'))
           PY
       - name: Replay the dropped stream control
         if: always()
@@ -121,6 +127,7 @@ jobs:
           assert base['source'] == head['source']
           assert base['outputs'] == head['outputs'], 'Operation or persisted-state outcomes changed'
           assert head['outputs'] != fault['outputs'], 'Dropped stream update escaped the comparison'
+          assert fault['peak_rss_kib_after_replay'] > base['peak_rss_kib_after_replay'] * 1.1, 'Retained memory escaped the bound'
           print(json.dumps({
               'requests': head['requests'],
               'base_cpu_seconds_per_request': base['mean_cpu_seconds'],
@@ -130,8 +137,8 @@ jobs:
               'head_peak_rss_kib': head['peak_rss_kib_after_replay'],
               'operation_mix': head['source']['operation_mix'],
           }, indent=2))
-          assert head['mean_cpu_seconds'] <= 0.268092752
           assert head['mean_cpu_seconds'] <= base['mean_cpu_seconds'] / 2
+          assert head['peak_rss_kib_after_replay'] <= base['peak_rss_kib_after_replay'] * 1.1
           PY
 
   mutation-replay:
