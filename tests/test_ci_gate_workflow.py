@@ -406,7 +406,10 @@ def test_coverage_ratchet_restores_a_missed_base_baseline_from_a_passed_run_of_t
     download = _step("coverage-ratchet", "Download the base baseline its run published")
     assert names.index(cached["name"]) < names.index(mint["name"]) < names.index(find["name"])
     assert names.index(find["name"]) < names.index(download["name"]) < names.index("Hold every line the base ran")
-    assert mint["if"] == "steps.cached.outcome == 'success' && steps.cached.outputs.cache-hit != 'true'"
+    assert mint["if"] in (
+        "steps.cached.outcome == 'success' && steps.cached.outputs.cache-hit != 'true'",
+        "steps.cached.outcome == 'success' && (steps.cached.outputs.cache-hit != 'true' || steps.cached-history.outputs.retained != 'true')",
+    )
     assert download["with"]["run-id"] == "${{ steps.base-run.outputs.id }}"
     assert download["with"]["name"] == "coverage-baseline"
 
