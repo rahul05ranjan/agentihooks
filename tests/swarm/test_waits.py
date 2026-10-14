@@ -867,6 +867,117 @@ def test_the_probe_refuses_a_partial_list_of_check_suites():
     assert probe(SKIPPED_ONLY, [APP_SUITE], suites_more=True) is None
 
 
+def paged(*pages):
+    from types import SimpleNamespace
+
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append(args)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(pages[len(calls) - 1]))
+
+    return run, calls
+
+
+def big_head(contexts, suites):
+    commit = {
+        "id": "C_head",
+        "committedDate": "2026-10-07T17:00:00Z",
+        "statusCheckRollup": {"contexts": contexts},
+        "checkSuites": suites,
+    }
+    return {"data": {"resource": {"state": "OPEN", "headRefOid": "second", "commits": {"nodes": [{"commit": commit}]}}}}
+
+
+@pytest.mark.parametrize("last", ["SUCCESS", "FAILURE"])
+def test_the_probe_pages_through_more_than_one_hundred_contexts(last):
+    first = [{"name": f"job {n}", "conclusion": "SUCCESS", "databaseId": n} for n in range(100)]
+    rest = [{"name": f"job {n}", "conclusion": "SUCCESS", "databaseId": n} for n in range(100, 129)]
+    rest.append({"name": "job 129", "conclusion": last, "databaseId": 129})
+    run, calls = paged(
+        big_head(
+            {"nodes": first, "pageInfo": {"hasNextPage": True, "endCursor": "c100"}},
+            {"nodes": [], "pageInfo": {"hasNextPage": True, "endCursor": "s100"}},
+        ),
+        {"data": {"node": {"statusCheckRollup": {"contexts": {"nodes": rest, "pageInfo": {"hasNextPage": False}}}}}},
+        {"data": {"node": {"checkSuites": {"nodes": [APP_SUITE], "pageInfo": {"hasNextPage": False}}}}},
+    )
+    pull = github_view(URL, run)
+    assert pull.resolved is True
+    assert pull.red is (last == "FAILURE")
+    assert pull.failed == (("job 129",) if last == "FAILURE" else ())
+    assert len(calls) == 3
+    assert {"id=C_head", "after=c100"} <= set(calls[1]) and "contexts(first:100,after:$after)" in calls[1][4]
+    assert {"id=C_head", "after=s100"} <= set(calls[2]) and "checkSuites(first:100,after:$after)" in calls[2][4]
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        {"errors": [{"message": "rate limited"}]},
+        {"data": {"node": None}},
+        {"data": {"node": {"statusCheckRollup": {"contexts": {"nodes": None, "pageInfo": {"hasNextPage": False}}}}}},
+    ],
+)
+def test_the_probe_refuses_a_context_page_it_cannot_read(page):
+    first = [{"name": "unit", "conclusion": "SUCCESS", "databaseId": 1}]
+    run, _ = paged(
+        big_head({"nodes": first, "pageInfo": {"hasNextPage": True, "endCursor": "c1"}}, NO_SUITES),
+        page,
+    )
+    assert github_view(URL, run) is None
+
+
+def test_the_probe_refuses_a_next_page_without_a_cursor():
+    first = [{"name": "unit", "conclusion": "SUCCESS", "databaseId": 1}]
+    run, calls = paged(big_head({"nodes": first, "pageInfo": {"hasNextPage": True}}, NO_SUITES))
+    assert github_view(URL, run) is None
+    assert len(calls) == 1
+
+
+TESTS_SUITE = {"workflowRun": {"workflow": {"name": "Tests"}}}
+DOCS_SUITE = {"workflowRun": {"workflow": {"name": "Docs"}}}
+
+
+@pytest.mark.parametrize("order", [1, -1])
+@pytest.mark.parametrize(
+    "older, newer, red",
+    [("FAILURE", "SUCCESS", False), ("SUCCESS", "FAILURE", True), ("TIMED_OUT", "SUCCESS", False)],
+)
+def test_the_probe_judges_only_the_newest_run_of_each_check(order, older, newer, red):
+    rollup = [
+        {"name": "unit", "conclusion": older, "databaseId": 11, "checkSuite": TESTS_SUITE},
+        {"name": "unit", "conclusion": newer, "databaseId": 12, "checkSuite": TESTS_SUITE},
+        {"name": "unit", "conclusion": "SUCCESS", "databaseId": 10, "checkSuite": DOCS_SUITE},
+    ][::order]
+    pull = probe(rollup, [APP_SUITE])
+    assert pull.resolved is True
+    assert pull.red is red
+    assert pull.failed == (("unit",) if red else ())
+
+
+def test_the_probe_keeps_the_same_check_name_of_another_workflow():
+    rollup = [
+        {"name": "unit", "conclusion": "SUCCESS", "databaseId": 12, "checkSuite": TESTS_SUITE},
+        {"name": "unit", "conclusion": "FAILURE", "databaseId": 11, "checkSuite": DOCS_SUITE},
+    ]
+    assert probe(rollup, [APP_SUITE]).failed == ("unit",)
+
+
+def test_a_superseded_failure_never_ends_a_checks_wait(tick):
+    rollup = [
+        {"name": "unit", "conclusion": "FAILURE", "databaseId": 1, "checkSuite": TESTS_SUITE},
+        {"name": "lint", "conclusion": "SUCCESS", "databaseId": 2, "checkSuite": TESTS_SUITE},
+        {"name": "unit", "conclusion": None, "databaseId": 3, "checkSuite": TESTS_SUITE},
+    ]
+    tick.hold("checks", URL)
+    tick.pulls[URL] = probe(rollup, [APP_SUITE])
+    assert tick.end() == []
+    assert tick.end() == []
+    assert tick.told() == []
+    assert idle.wait(tick.store.redis, "sw", ME)["on"]["head"] == "second"
+
+
 def test_a_checks_wait_stays_held_while_the_new_heads_run_is_queued(tick):
     tick.hold("checks", URL)
     tick.pulls[URL] = probe(SKIPPED_ONLY, [QUEUED_TESTS])
