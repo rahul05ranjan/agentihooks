@@ -81,6 +81,37 @@ def test_no_queue_run_carries_a_baseline_from_the_latest_dev_run():
     assert "dev-coverage-baseline" not in (_ROOT / ".github/workflows/test.yml").read_text()
 
 
+@pytest.mark.parametrize(("dev_run", "kept", "expected"), [("101", "101", "101"), ("", "202", "202"), ("", "", None)])
+def test_queue_history_uses_the_durations_source_or_a_completed_dev_push(tmp_path, dev_run, kept, expected):
+    step = _step(_jobs()["queue-baseline"]["steps"], "Find the previous dev coverage baseline")
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    (tools / "gh").write_text(
+        "#!/usr/bin/env bash\n"
+        'case "$2" in\n'
+        '  */runs\\?branch=dev\\&event=push\\&status=success\\&per_page=20) printf "101\\n202\\n" ;;\n'
+        '  */artifacts*) [[ -n "$KEPT" && "$2" == *"/$KEPT/"* ]] && echo 1 || echo 0 ;;\n'
+        "  *) exit 7 ;;\n"
+        "esac\n"
+    )
+    (tools / "gh").chmod(0o755)
+    output = tmp_path / "output"
+    output.write_text("")
+    env = dict(
+        os.environ,
+        PATH=f"{tools}:{os.environ['PATH']}",
+        DEV_RUN=dev_run,
+        KEPT=kept,
+        GITHUB_REPOSITORY="the-cloud-clockwork/agentihooks",
+        GITHUB_OUTPUT=str(output),
+    )
+    result = subprocess.run(["bash", "-e", "-c", step["run"]], env=env, capture_output=True, text=True)
+    assert (result.returncode == 0) is (expected is not None), result.stderr
+    assert output.read_text() == (f"id={expected}\n" if expected else "")
+    if expected is None:
+        assert "::error::" in result.stdout
+
+
 def test_queue_runs_publish_their_own_baseline_before_sonar_and_the_gate():
     jobs = _jobs()
     steps = jobs["queue-baseline"]["steps"]
