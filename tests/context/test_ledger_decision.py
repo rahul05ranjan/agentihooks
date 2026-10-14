@@ -99,6 +99,29 @@ def test_an_unbound_session_asked_to_troubleshoot_gets_nothing(text, capsys, mon
     assert MARK not in run(prompt(text), capsys, "claude", monkeypatch)
 
 
+@pytest.mark.parametrize("target", ["claude", "codex", "copilot"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "troubleshoot why the ledger page is blank",
+        "Debug the failing shard",
+        "investigate the slow Redis test",
+        "refactor the inbox module",
+        "we have a bug, start debugging it",
+    ],
+)
+def test_no_harness_offers_a_ledger_to_an_unbound_troubleshoot_prompt(target, text, monkeypatch):
+    monkeypatch.setenv("AGENTIHOOKS_TARGET", target)
+    assert decision.directive(prompt(text)) == ""
+
+
+@pytest.mark.parametrize("target", ["claude", "codex", "copilot"])
+@pytest.mark.parametrize("count", [3, 4, 5, 12])
+def test_no_harness_offers_a_ledger_to_an_unbound_task_list(target, count, monkeypatch):
+    monkeypatch.setenv("AGENTIHOOKS_TARGET", target)
+    assert decision.directive(todos(count)) == ""
+
+
 def test_an_unbound_trivial_prompt_gets_nothing(capsys, monkeypatch):
     assert MARK not in run(prompt("rename the helper to build_block"), capsys, "claude", monkeypatch)
 
