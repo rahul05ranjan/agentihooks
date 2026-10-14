@@ -101,6 +101,10 @@ def test_queue_base_lookup_runs_beside_shards_and_only_the_ratchet_waits():
     assert "queue-base-lookup" in jobs["stage-budget"]["needs"]
 
 
+def test_queue_base_lookup_is_a_separate_job():
+    assert _jobs()["queue-base-lookup"]["needs"] == ["reuse"]
+
+
 def test_queue_runs_publish_their_own_baseline_before_sonar_and_the_gate():
     jobs = _jobs()
     steps = jobs["queue-baseline"]["steps"]
