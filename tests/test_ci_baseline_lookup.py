@@ -85,7 +85,25 @@ def lookup(tmp_path):
             "jobs": jobs,
             "artifacts": ["coverage-baseline", "durations-merged"],
         }
-        if fault == "unit":
+        if fault in {"reuse", "reuse-failed", "reuse-decision-failed"}:
+            jobs[:] = [
+                jobs[-2],
+                jobs[-1],
+                {"name": "unit", "conclusion": "skipped"},
+                {
+                    "name": "reuse",
+                    "conclusion": "failure" if fault == "reuse-failed" else "success",
+                    "steps": [
+                        {
+                            "name": "Decide from protected code and record the tested tree",
+                            "conclusion": "failure" if fault == "reuse-decision-failed" else "success",
+                        }
+                    ],
+                },
+            ]
+        elif fault == "publisher-job":
+            jobs[-2]["conclusion"] = "failure"
+        elif fault == "unit":
             jobs[0]["conclusion"] = "failure"
         elif fault == "missing-unit":
             jobs.pop(0)
@@ -131,15 +149,36 @@ def lookup(tmp_path):
     return run
 
 
-@pytest.mark.parametrize("selector", _SELECTORS)
-@pytest.mark.parametrize("event", ["push", "merge_group"])
+@pytest.mark.parametrize(
+    ("selector", "event"),
+    [
+        (selector, event)
+        for selector in _SELECTORS
+        for event in ("push", "merge_group")
+        if selector[0] != "durations" or event == "push"
+    ],
+)
 def test_lookup_accepts_measured_publication_when_its_ratchet_failed(lookup, selector, event):
-    if selector[0] == "durations" and event == "merge_group":
-        return
     result, output, requests = lookup(selector, event=event)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "id=222\n" in output
     assert "/runs/222/jobs" in requests
+
+
+@pytest.mark.parametrize("selector", _SELECTORS[:2])
+@pytest.mark.parametrize("fault", ["reuse", "publisher-job"])
+def test_lookup_accepts_queue_publication_before_unrelated_jobs_pass(lookup, selector, fault):
+    result, output, _ = lookup(selector, event="merge_group", fault=fault)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "id=222\n" in output
+
+
+@pytest.mark.parametrize("selector", _SELECTORS[:2])
+@pytest.mark.parametrize("fault", ["reuse-failed", "reuse-decision-failed"])
+def test_lookup_rejects_unverified_queue_reuse(lookup, selector, fault):
+    result, output, _ = lookup(selector, event="merge_group", fault=fault)
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert output == ""
 
 
 @pytest.mark.parametrize("selector", _SELECTORS)
@@ -151,6 +190,7 @@ def test_lookup_accepts_measured_publication_when_its_ratchet_failed(lookup, sel
         "measure",
         "publish",
         "missing-publisher",
+        "publisher-job",
         "outside-dev",
         "event",
         "branch",
