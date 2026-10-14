@@ -1111,6 +1111,35 @@ class TestRestoreHookOrder:
         assert restore_hook_order(home) == ["SessionStart", "Stop"]
         assert json.loads(path.read_text())["hooks"]["Stop"] == [_own_group(home), _HERDR]
 
+    def test_a_restored_order_is_trusted_at_its_new_positions(self, adapter):
+        import tomllib
+
+        from scripts.targets.codex_hook_trust import hook_hash
+        from scripts.targets.codex_target import restore_hook_order
+
+        home = codex_home()
+        path = _hooks_file(home, [_HERDR, _own_group(home)])
+        (home / "config.toml").write_text(f'[hooks.state."{path}:session_start:0:0"]\nenabled = true\n')
+
+        assert restore_hook_order(home) == ["SessionStart"]
+        state = tomllib.loads((home / "config.toml").read_text())["hooks"]["state"]
+        ours, herdr = _own_group(home)["hooks"][0], _HERDR["hooks"][0]
+        assert state == {
+            f"{path}:session_start:0:0": {"enabled": True, "trusted_hash": hook_hash("SessionStart", None, ours)},
+            f"{path}:session_start:1:0": {"trusted_hash": hook_hash("SessionStart", None, herdr)},
+            f"{path}:stop:0:0": {"trusted_hash": hook_hash("Stop", None, ours)},
+            f"{path}:stop:1:0": {"trusted_hash": hook_hash("Stop", None, herdr)},
+        }
+
+    def test_an_approved_order_writes_no_trust(self, adapter):
+        from scripts.targets.codex_target import restore_hook_order
+
+        home = codex_home()
+        _hooks_file(home, [_own_group(home), _HERDR])
+
+        assert restore_hook_order(home) == []
+        assert "hooks" not in CodexAdapter._load_toml(home / "config.toml")
+
     @pytest.mark.parametrize(
         ("environ", "expected"),
         [

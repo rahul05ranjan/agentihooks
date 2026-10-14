@@ -120,7 +120,9 @@ def test_configure_trusts_the_codex_hooks_herdr_installed(monkeypatch, runner, t
     assert state == {f"{home / 'hooks.json'}:interrupt:0:0": {"trusted_hash": CODEX_HOOK_HASHES["interrupt:0:0"]}}
 
 
-def test_a_failed_codex_integration_records_no_hook_trust(monkeypatch, runner, tmp_path):
+def test_a_failed_codex_integration_still_trusts_what_it_wrote(monkeypatch, runner, tmp_path):
+    from tests.codex_hook_fixtures import CODEX_HOOK_HASHES
+
     home = _herdr_hooks(monkeypatch, tmp_path)
 
     def failing(command, **kwargs):
@@ -129,7 +131,8 @@ def test_a_failed_codex_integration_records_no_hook_trust(monkeypatch, runner, t
 
     monkeypatch.setattr(herdr_setup.subprocess, "run", failing)
     assert herdr_setup.configure() == 1
-    assert not (home / "config.toml").exists()
+    state = tomllib.loads((home / "config.toml").read_text())["hooks"]["state"]
+    assert state == {f"{home / 'hooks.json'}:interrupt:0:0": {"trusted_hash": CODEX_HOOK_HASHES["interrupt:0:0"]}}
 
 
 def test_integration_files_reads_each_installed_file_from_the_status_paths(runner, tmp_path):

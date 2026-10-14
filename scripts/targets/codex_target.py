@@ -173,7 +173,7 @@ def _is_ours(group: object, wrapper: Path) -> bool:
 def restore_hook_order(home: Path) -> list[str]:
     """Events whose agentihooks group drifted behind a foreign one; the hooks file is rewritten only when one did.
 
-    Codex keys hook trust by group position, so this restores the order `init` writes and never touches trust.
+    Codex keys hook trust by group position, so this restores the order `init` writes and trusts the new positions.
     """
     path = (home / "hooks.json").resolve()
     try:
@@ -194,6 +194,7 @@ def restore_hook_order(home: Path) -> list[str]:
             moved.append(event)
     if moved:
         _atomic_write(path, json.dumps(doc, indent=2))
+        trust_hooks(home)
     return moved
 
 

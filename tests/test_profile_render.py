@@ -1601,8 +1601,20 @@ def test_codex_render_links_state_back_to_the_operator_home(world):
 
 def _hooks_entries(hooks: Path) -> list[str]:
     doc = json.loads(hooks.read_text())["hooks"]
-    labels = {"Interrupt": "interrupt", "Stop": "stop", "UserPromptSubmit": "user_prompt_submit"}
-    labels |= {"PreToolUse": "pre_tool_use", "SessionEnd": "session_end", "SessionStart": "session_start"}
+    labels = {
+        "PreToolUse": "pre_tool_use",
+        "PermissionRequest": "permission_request",
+        "PostToolUse": "post_tool_use",
+        "PreCompact": "pre_compact",
+        "PostCompact": "post_compact",
+        "SessionStart": "session_start",
+        "SessionEnd": "session_end",
+        "UserPromptSubmit": "user_prompt_submit",
+        "SubagentStart": "subagent_start",
+        "SubagentStop": "subagent_stop",
+        "Stop": "stop",
+        "Interrupt": "interrupt",
+    }
     return [
         f"{labels[event]}:{g}:{h}"
         for event, groups in doc.items()
