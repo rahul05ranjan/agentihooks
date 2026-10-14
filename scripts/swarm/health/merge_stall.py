@@ -3,6 +3,7 @@ import subprocess
 from collections import Counter
 from datetime import datetime
 
+from scripts.swarm import timing
 from scripts.swarm.health.findings import Finding
 from scripts.swarm.store import SwarmError
 
@@ -24,6 +25,7 @@ query($owner:String!,$name:String!,$cursor:String){
 
 
 def request(repo: str, args: list[str]) -> dict:
+    timing.keep()
     result = subprocess.run(["gh", *args], cwd=repo, capture_output=True, text=True, timeout=20)
     if result.returncode:
         raise SwarmError(result.stderr.strip() or "GitHub API failed")

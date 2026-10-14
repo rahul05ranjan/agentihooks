@@ -247,3 +247,25 @@ def test_failed_jobs_in_cancelled_or_running_queue_runs_are_counted(monkeypatch,
 
     monkeypatch.setattr(subprocess, "run", run)
     assert merge_stall.failed_checks("/repo", REPO) == "Tests (1 runs)"
+
+
+def test_every_github_request_renews_the_tick_before_waiting(monkeypatch):
+    from scripts.swarm import timing
+    from scripts.swarm.health import merge_stall
+
+    order = []
+    monkeypatch.setattr(timing, "keep", lambda: order.append("renew"))
+
+    def run(command, **kwargs):
+        order.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, '{"nameWithOwner":"owner/repo"}', "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    assert merge_stall.request("/repo", ["repo", "view", "--json", "nameWithOwner"]) == {"nameWithOwner": REPO}
+    assert order == [
+        "renew",
+        (
+            ["gh", "repo", "view", "--json", "nameWithOwner"],
+            {"cwd": "/repo", "capture_output": True, "text": True, "timeout": 20},
+        ),
+    ]
