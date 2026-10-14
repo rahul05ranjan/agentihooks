@@ -605,10 +605,12 @@ def test_queue_base_resolves_to_dev_without_the_predecessor_measurement(queue_gr
 
 
 def test_queue_uses_the_dev_grader_when_its_head_replaces_the_grader(queue_grader_repo):
-    repo, dev, _, runner = queue_grader_repo
+    repo, dev, predecessor, runner = queue_grader_repo
     step = _step("queue-baseline", "Hold every line the base ran")
-    env = dict(os.environ, GRADER=dev, BASE=dev, RUNNER_TEMP=str(runner), GITHUB_WORKSPACE=str(repo))
-    result = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=repo, env=env, capture_output=True, text=True)
+    base = dev if "GRADER" in step["env"] else predecessor
+    env = dict(os.environ, GRADER=dev, BASE=base, RUNNER_TEMP=str(runner), GITHUB_WORKSPACE=str(repo))
+    command = step["run"].removeprefix("git fetch --no-tags --unshallow origin\n")
+    result = subprocess.run(["bash", "-e", "-c", command], cwd=repo, env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert "DEV_GRADER" in result.stdout
     assert "QUEUE_GRADER" not in result.stdout
