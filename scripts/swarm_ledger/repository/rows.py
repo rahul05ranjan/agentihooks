@@ -21,8 +21,11 @@ COLLECTIONS = frozenset(
 )
 
 
+ENCODER = json.JSONEncoder(ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+
+
 def encode(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    return ENCODER.encode(value)
 
 
 def children(item, parts, table):
