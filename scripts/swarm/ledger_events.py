@@ -52,16 +52,19 @@ PULL_QUERY = (
     "mergeable isDraft "
     "commits(last:1){nodes{commit{id committedDate "
     'file(path:".github/workflows"){object{...on Tree{entries{object{...on Blob{text}}}}}} '
-    "statusCheckRollup{contexts(first:100){" + CONTEXT_NODES + "}} "
-    "checkSuites(first:100){" + SUITE_NODES + "}}}}}}}"
+    + "statusCheckRollup{contexts(first:100){"
+    + CONTEXT_NODES
+    + "}} checkSuites(first:100){"
+    + SUITE_NODES
+    + "}}}}}}}"
 )
-PAGE = "query($id:ID!,$after:String!){node(id:$id){...on Commit{"
+PAGE_PREFIX = "query($id:ID!,$after:String!){node(id:$id){...on Commit{"
 PAGES = {
     "contexts": (
-        PAGE + "statusCheckRollup{contexts(first:100,after:$after){" + CONTEXT_NODES + "}}}}}",
+        PAGE_PREFIX + "statusCheckRollup{contexts(first:100,after:$after){" + CONTEXT_NODES + "}}}}}",
         ("statusCheckRollup", "contexts"),
     ),
-    "checkSuites": (PAGE + "checkSuites(first:100,after:$after){" + SUITE_NODES + "}}}}", ("checkSuites",)),
+    "checkSuites": (PAGE_PREFIX + "checkSuites(first:100,after:$after){" + SUITE_NODES + "}}}}", ("checkSuites",)),
 }
 MAX_PAGES = 20
 

@@ -808,8 +808,10 @@ def test_the_view_records_whether_the_required_gate_passed_beside_a_red_job(gate
     other = {"workflowRun": {"workflow": {"name": "CI Validate"}}}
     raw["statusCheckRollup"] = rollup + [{"name": GATE, "conclusion": "SUCCESS", "checkSuite": other}]
     assert ledger_events.pull_request(raw).gate_passed is passed
-    raw["statusCheckRollup"] = rollup + [{"name": GATE, "conclusion": "SUCCESS"}]
-    assert ledger_events.pull_request(raw).gate_passed is gated
+    raw["statusCheckRollup"] = [rollup[0], {"name": GATE, "conclusion": "FAILURE"}, {"name": GATE, "conclusion": gate}]
+    assert ledger_events.pull_request(raw).gate_passed is passed
+    raw["statusCheckRollup"] = [rollup[0], {"name": GATE, "conclusion": gate}, {"name": GATE, "conclusion": "FAILURE"}]
+    assert ledger_events.pull_request(raw).gate_passed is False
 
 
 def test_a_failed_check_beside_a_pending_gate_resolves_red_once_runs_finish():
