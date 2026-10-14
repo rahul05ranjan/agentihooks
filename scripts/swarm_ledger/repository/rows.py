@@ -60,6 +60,13 @@ def flatten(value: object) -> dict:
     return rows
 
 
+def _child_paths_match(left, right, old_children, new_children):
+    if type(left) is dict and all(type(key) is str for key in left) and all(type(key) is str for key in right):
+        return list(left) == list(right)[: len(left)]
+    names = [encode(child[1]) for child in old_children]
+    return names == [encode(child[1]) for child in new_children[: len(names)]]
+
+
 def diff(old: object, new: object) -> tuple[dict, dict]:
     """The stored rows of `old` and `new` under every path that differs, descending only into changed values."""
     before, after = {}, {}
@@ -71,12 +78,12 @@ def diff(old: object, new: object) -> tuple[dict, dict]:
         if same_shape:
             old_children = list(children(left, parts, table))
             new_children = list(children(right, parts, table))
-            names = [encode(child[1]) for child in old_children]
-            if names == [encode(child[1]) for child in new_children[: len(names)]]:
+            if _child_paths_match(left, right, old_children, new_children):
+                encoded_parent = encode(parts)
                 for (old_child, child_parts, name, index, bucket), new_child in zip(old_children, new_children):
-                    walk(old_child, new_child[0], child_parts, encode(parts), name, index, bucket)
-                for child, child_parts, name, index, bucket in new_children[len(names) :]:
-                    visit(after, child, child_parts, encode(parts), name, index, bucket)
+                    walk(old_child, new_child[0], child_parts, encoded_parent, name, index, bucket)
+                for child, child_parts, name, index, bucket in new_children[len(old_children) :]:
+                    visit(after, child, child_parts, encoded_parent, name, index, bucket)
                 return
         visit(before, left, parts, parent, key, position, table)
         visit(after, right, parts, parent, key, position, table)

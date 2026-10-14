@@ -5,6 +5,10 @@ def small_corpus():
     return {
         "state": {
             "title": "Replay",
+            "overview": "Recorded operations replay " * 40,
+            "size": "small",
+            "sources": [],
+            "orchestrator": "",
             "phases": [],
             "tasks": [],
             "followups": [],
