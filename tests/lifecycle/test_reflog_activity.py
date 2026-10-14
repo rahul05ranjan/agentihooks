@@ -114,8 +114,9 @@ def test_newest_reflog_event_is_used_even_when_entries_are_not_chronological(rep
 
 
 def test_reflog_activity_is_independent_of_default_encoding(repo, monkeypatch):
-    git(repo.primary, "config", "user.name", "José")
+    monkeypatch.setenv("GIT_COMMITTER_NAME", "José")
     path = repo.worktree("unicode-event")
+    assert "José".encode("utf-8") in (admin_dir(path) / "logs" / "HEAD").read_bytes()
     age(path, 3 * 3600)
     git(path, "reflog", "expire", "--all", "--expire=never", "--expire-unreachable=never")
     original = io.text_encoding
