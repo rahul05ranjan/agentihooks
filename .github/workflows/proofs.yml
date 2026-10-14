@@ -38,10 +38,13 @@ jobs:
     if: inputs.proof == 'operations-receipts'
     runs-on: ${{ (github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.actor) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.triggering_actor) || (github.event_name == 'merge_group' || github.event_name == 'push' && github.ref == 'refs/heads/dev') && github.actor == 'github-merge-queue[bot]' && github.triggering_actor == 'github-merge-queue[bot]') && 'anton-oss-batch' || 'ubuntu-latest' }}
     timeout-minutes: 15
+    env:
+      RECEIPT_STATS_BASE: ${{ inputs.base }}
     steps:
       - uses: actions/checkout@v4
         with:
           path: head
+          fetch-depth: 0
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.base }}
@@ -65,6 +68,17 @@ jobs:
         if: always()
         working-directory: head
         run: python -m pytest tests/swarm_ledger/receipt_probe.py -n 0 -s --tb=short
+      - name: Observe instrumented base receipts
+        if: always()
+        working-directory: base
+        run: |
+          cp ../head/tests/swarm_ledger/receipt_stats_probe.py tests/swarm_ledger/receipt_stats_probe.py
+          cp -a ../head/scripts/ci_mutation/. scripts/ci_mutation/
+          python -m tests.swarm_ledger.receipt_stats_probe
+      - name: Observe instrumented head receipts
+        if: always()
+        working-directory: head
+        run: python -m tests.swarm_ledger.receipt_stats_probe
 
   operations-cpu:
     if: inputs.proof == 'operations-cpu'

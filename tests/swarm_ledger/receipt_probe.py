@@ -1,4 +1,6 @@
+import faulthandler
 import json
+import sys
 import time
 
 from tests.swarm_ledger import test_api_v1 as cases
@@ -14,6 +16,10 @@ def test_record_the_original_receipt_case_requests(live, monkeypatch):
         started = time.monotonic()
         try:
             return original(*args, **kwargs)
+        except TimeoutError:
+            print("[receipt-stats] Request timed out; active threads:", file=sys.stderr)
+            faulthandler.dump_traceback(file=sys.stderr)
+            raise
         finally:
             calls.append({"method": args[1], "path": args[2], "wall_seconds": time.monotonic() - started})
 
