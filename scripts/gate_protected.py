@@ -42,6 +42,7 @@ def reuse_jobs(policy: object = None) -> list[dict]:
             [install] = [step for step in job["steps"] if step.get("name") == "Install metadata dependencies"]
             install["env"] = {"PYTHONNOUSERSITE": "1"}
         jobs.append(job)
+        jobs.append({**job, "if": "github.event_name != 'merge_group' && github.event_name != 'pull_request'"})
     return jobs
 
 
@@ -62,7 +63,10 @@ def _aggregator_problems(base: tuple[str, str, dict], head: tuple[str, str, dict
             field == "steps"
             and base_id == "gate-required"
             and head_job.get("steps")
-            in [ci_reuse.gate_steps(queue, selected) for queue in (False, True) for selected in (False, True)]
+            in (
+                [ci_reuse.gate_steps(queue, selected) for queue in (False, True) for selected in (False, True)]
+                + [ci_reuse.gate_steps(queue_tier=True)]
+            )
         )
         and not (field == "runs-on" and head_job.get(field) in runners(policy))
     ]
