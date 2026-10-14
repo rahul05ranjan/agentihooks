@@ -6,7 +6,6 @@ by id ({"ids"}).
 """
 
 
-
 def same(a, b, *, shared=False):
     """JSON equality: unlike ==, true is not 1 and 1.0 is not 1."""
     if shared and a is b:
