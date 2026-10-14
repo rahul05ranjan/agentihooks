@@ -114,7 +114,7 @@ def _hosted(runner: object) -> bool:
     )
 
 
-def selector(policy: dict, pool: str, *, trusted_reruns: bool = False) -> str:
+def selector(policy: dict, pool: str, *, trusted_reruns: bool) -> str:
     members = json.dumps(policy["actors"], separators=(",", ":"))
     queue = policy["queue_actor"]
     condition = (
