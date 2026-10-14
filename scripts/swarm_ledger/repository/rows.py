@@ -72,6 +72,7 @@ def _dict_paths_match(left, right):
         and list(left) == list(right)[: len(left)]
     )
 
+
 def _child_paths_match(left, right, old_children, new_children):
     if type(left) is dict and _dict_paths_match(left, right):
         return True
@@ -83,23 +84,24 @@ def _child_paths_match(left, right, old_children, new_children):
     return names == [encode(child[1]) for child in new_children[: len(names)]]
 
 
+def _walk_dictionary(left, right, parts, table, walk, after):
+    encoded_parent = encode(parts)
+    for index, (name, child) in enumerate(right.items()):
+        if index < len(left) and left[name] is child and type(child) is not float:
+            continue
+        bucket = THREADS if name in ("comments", "answers") else table
+        if not parts and name in COLLECTIONS:
+            bucket = RESOURCES
+        child_parts = [*parts, name]
+        if index < len(left):
+            walk(left[name], child, child_parts, encoded_parent, name, index, bucket)
+        else:
+            visit(after, child, child_parts, encoded_parent, name, index, bucket)
+
+
 def diff(old: object, new: object) -> tuple[dict, dict]:
     """The stored rows of `old` and `new` under every path that differs, descending only into changed values."""
     before, after = {}, {}
-
-    def dictionary(left, right, parts, table):
-        encoded_parent = encode(parts)
-        for index, (name, child) in enumerate(right.items()):
-            if index < len(left) and left[name] is child and type(child) is not float:
-                continue
-            bucket = THREADS if name in ("comments", "answers") else table
-            if not parts and name in COLLECTIONS:
-                bucket = RESOURCES
-            child_parts = [*parts, name]
-            if index < len(left):
-                walk(left[name], child, child_parts, encoded_parent, name, index, bucket)
-            else:
-                visit(after, child, child_parts, encoded_parent, name, index, bucket)
 
     def walk(left, right, parts, parent, key, position, table):
         if type(left) is type(right) and left == right:
@@ -107,7 +109,7 @@ def diff(old: object, new: object) -> tuple[dict, dict]:
         same_shape = type(left) is type(right) and isinstance(left, (dict, list))
         if same_shape:
             if type(left) is dict and _dict_paths_match(left, right):
-                dictionary(left, right, parts, table)
+                _walk_dictionary(left, right, parts, table, walk, after)
                 return
             old_children = list(children(left, parts, table))
             new_children = list(children(right, parts, table))
