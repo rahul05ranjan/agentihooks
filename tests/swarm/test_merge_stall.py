@@ -182,7 +182,7 @@ def test_failed_check_counts_runs_once_and_reads_all_jobs(monkeypatch):
         commands.append(command)
         if "/actions/runs?" in command[2]:
             data = {"workflow_runs": [{"id": 1, "conclusion": "failure"}, {"id": 2, "conclusion": "success"}]}
-        elif "page=1" in command[2]:
+        elif command[2].endswith("&page=1"):
             data = {"jobs": [{"name": "Coverage", "conclusion": "failure"}] * 100}
         else:
             data = {"jobs": [{"name": "Mutation", "conclusion": "timed_out"}]}
