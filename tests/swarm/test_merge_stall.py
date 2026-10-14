@@ -82,3 +82,153 @@ def test_health_pass_reports_stalled_merge_queue_and_notifies_master(rig):
     sent = ledger_events.findings_pass(inbox, store, "proof", found)
     assert len(sent) == 1
     assert "Queue length: 3" in inbox.inbox("master@proof")[0].text
+
+
+@pytest.mark.parametrize("length,age", [(0, HOUR), (3, HOUR - 1), (0, 2 * HOUR), (3, 0)])
+def test_empty_or_recently_merging_queue_has_no_finding(rig, length, age):
+    from scripts.inbox.store import InboxStore
+    from scripts.swarm import ledger_events, status
+
+    store, config, state = rig
+    state.update(queue=length, merged=AT - age)
+    assert status.findings(store, "proof", config, [], []) == []
+    inbox = InboxStore(store.redis)
+    assert ledger_events.findings_pass(inbox, store, "proof", []) == []
+    assert inbox.inbox("master@proof") == []
+
+
+def test_stall_repeats_hourly_even_after_a_verdict_and_resets_after_recovery(rig):
+    from scripts.inbox.store import InboxStore
+    from scripts.swarm import ledger_events, status
+
+    store, config, state = rig
+    inbox = InboxStore(store.redis)
+
+    def pass_health():
+        found = status.findings(store, "proof", config, [], [])
+        return found, ledger_events.findings_pass(inbox, store, "proof", found)
+
+    found, sent = pass_health()
+    assert len(sent) == 1
+    status.verdict_store(store, "proof").judge(found[0]["id"], "established", "master", "Observed", AT)
+    assert pass_health()[1] == []
+    state["at"] += HOUR - 300_000
+    assert pass_health()[1] == []
+    state["at"] += 300_000
+    assert len(pass_health()[1]) == 1
+    state["at"] += 300_000
+    state["queue"] = 0
+    assert pass_health() == ([], [])
+    state["at"] += 300_000
+    state["queue"] = 3
+    assert len(pass_health()[1]) == 1
+    assert len(inbox.inbox("master@proof")) == 3
+
+
+def test_observation_is_cached_and_failed_refresh_keeps_evidence_without_notices(rig, monkeypatch):
+    from scripts.inbox.store import InboxStore
+    from scripts.swarm import ledger_events, status
+
+    store, config, state = rig
+    found = status.findings(store, "proof", config, [], [])
+    count = len(state["calls"])
+    state["at"] += 299_999
+    assert status.findings(store, "proof", config, [], []) == found
+    assert len(state["calls"]) == count
+
+    def fail(command, **kwargs):
+        raise OSError("GitHub unavailable")
+
+    monkeypatch.setattr(subprocess, "run", fail)
+    state["at"] += 1
+    assert status.findings(store, "proof", config, [], []) == found
+    assert ledger_events.findings_pass(InboxStore(store.redis), store, "proof", found) == []
+    assert json.loads(store.redis.get(store.key("proof", "merge-stall")))["error"] == "GitHub unavailable"
+
+
+def test_last_merge_is_found_past_old_pulls_updated_recently(monkeypatch):
+    from scripts.swarm.health import merge_stall
+
+    commands = []
+    pages = [
+        {
+            "nodes": [{"mergedAt": iso(AT - 3 * HOUR), "updatedAt": iso(AT)}],
+            "pageInfo": {"hasNextPage": True, "endCursor": "page-two"},
+        },
+        {
+            "nodes": [{"mergedAt": iso(AT - HOUR), "updatedAt": iso(AT - HOUR)}],
+            "pageInfo": {"hasNextPage": True, "endCursor": "unneeded"},
+        },
+    ]
+
+    def run(command, **kwargs):
+        commands.append(command)
+        pulls = pages.pop(0)
+        data = {"data": {"repository": {"mergeQueue": {"entries": {"totalCount": 123}}, "pullRequests": pulls}}}
+        return subprocess.CompletedProcess(command, 0, json.dumps(data), "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    assert merge_stall.queue("/repo", REPO) == (123, AT - HOUR)
+    assert len(commands) == 2
+    assert commands[1][-2:] == ["-f", "cursor=page-two"]
+
+
+def test_failed_check_counts_runs_once_and_reads_all_jobs(monkeypatch):
+    from scripts.swarm.health import merge_stall
+
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        if "/actions/runs?" in command[2]:
+            data = {"workflow_runs": [{"id": 1, "conclusion": "failure"}, {"id": 2, "conclusion": "success"}]}
+        elif "page=1" in command[2]:
+            data = {"jobs": [{"name": "Coverage", "conclusion": "failure"}] * 100}
+        else:
+            data = {"jobs": [{"name": "Mutation", "conclusion": "timed_out"}]}
+        return subprocess.CompletedProcess(command, 0, json.dumps(data), "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    assert merge_stall.failed_checks("/repo", REPO) == "Coverage (1 runs)"
+    assert len(commands) == 3
+    assert commands[2][2] == "repos/owner/repo/actions/runs/1/jobs?per_page=100&page=2"
+
+
+@pytest.mark.parametrize(
+    "response,error",
+    [
+        (subprocess.CompletedProcess([], 1, "", "Permission denied"), "Permission denied"),
+        (subprocess.CompletedProcess([], 1, "", ""), "GitHub API failed"),
+        (subprocess.CompletedProcess([], 0, '{"errors":[{"message":"Not found"}]}', ""), "Not found"),
+    ],
+)
+def test_github_failure_is_visible_without_creating_a_finding(rig, monkeypatch, response, error):
+    from scripts.swarm import status
+
+    store, config, state = rig
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: response)
+    assert status.findings(store, "proof", config, [], []) == []
+    assert json.loads(store.redis.get(store.key("proof", "merge-stall")))["error"] == error
+
+
+def test_new_merge_resets_the_notice_even_if_it_is_already_an_hour_old(rig):
+    from scripts.inbox.store import InboxStore
+    from scripts.swarm import ledger_events, status
+
+    store, config, state = rig
+    inbox = InboxStore(store.redis)
+    found = status.findings(store, "proof", config, [], [])
+    assert len(ledger_events.findings_pass(inbox, store, "proof", found)) == 1
+    state.update(at=AT + 300_000, merged=AT - HOUR + 300_000)
+    found = status.findings(store, "proof", config, [], [])
+    assert len(ledger_events.findings_pass(inbox, store, "proof", found)) == 1
+
+
+def test_no_recent_failed_queue_check_reports_none_observed(monkeypatch):
+    from scripts.swarm.health import merge_stall
+
+    def run(command, **kwargs):
+        return subprocess.CompletedProcess(command, 0, '{"workflow_runs":[]}', "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    assert merge_stall.failed_checks("/repo", REPO) == "none observed"
