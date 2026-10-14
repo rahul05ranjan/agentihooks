@@ -173,6 +173,41 @@ def test_worker_shards_select_each_measured_and_unknown_case_once(tmp_path):
     assert all(selections)
 
 
+@pytest.mark.parametrize("workers", [1, 4, 16, "auto", None])
+@pytest.mark.parametrize("worker", [False, True])
+def test_shard_partition_is_independent_of_worker_capacity(tmp_path, monkeypatch, workers, worker):
+    (tmp_path / "tests").mkdir()
+    durations = {}
+    for number in range(6):
+        path = f"tests/test_{number}.py"
+        mark = 'pytestmark = pytest.mark.xdist_group("redis")\n' if number % 2 else ""
+        (tmp_path / path).write_text("import pytest\n" + mark)
+        durations.update({f"{path}::test_{case}": float((number + 1) * (case + 1)) for case in range(8)})
+    (tmp_path / ".test_durations").write_text(json.dumps(durations))
+    nodes = [*durations, "tests/test_0.py::test_new", "tests/test_1.py::test_new[a@b]"]
+    monkeypatch.setattr(conftest.os, "cpu_count", lambda: 32)
+    selections = []
+    for shard in range(1, 5):
+        counts = (4, workers, 4 if worker else None)
+        partitions = []
+        for count in counts:
+            config = SimpleNamespace(
+                getoption=lambda name, shard=shard: f"{shard}/4",
+                stash=pytest.Stash(),
+                rootpath=tmp_path,
+                option=SimpleNamespace(numprocesses=count),
+                **({"workerinput": {"workercount": count}} if worker and count else {}),
+            )
+            files = conftest._shard_files(config)
+            items = [SimpleNamespace(nodeid=node) for node in nodes if node.split("::", 1)[0] in files]
+            conftest.pytest_collection_modifyitems(config, items)
+            partitions.append({item.nodeid for item in items})
+        assert partitions[0] == partitions[1] == partitions[2]
+        selections.append(partitions[1])
+    assert set.union(*selections) == set(nodes)
+    assert sum(map(len, selections)) == len(nodes)
+
+
 def test_new_case_in_a_sparsely_measured_module_stays_on_a_collecting_shard(tmp_path):
     import zlib
 
