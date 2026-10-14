@@ -40,7 +40,7 @@ def children(item, parts, table):
         seen = {}
         for index, child in enumerate(item):
             identity = ["id", child["id"]] if isinstance(child, dict) and "id" in child else ["index", index]
-            token = encode(identity)
+            token = tuple(identity) if identity[0] == "index" or type(identity[1]) is str else encode(identity)
             occurrence = seen.get(token, 0)
             seen[token] = occurrence + 1
             yield child, [*parts, [*identity, occurrence]], index, index, table
@@ -60,9 +60,18 @@ def flatten(value: object) -> dict:
     return rows
 
 
+def _list_paths(children):
+    paths = [child[1][-1] for child in children]
+    return paths if all(path[0] == "index" or type(path[1]) is str for path in paths) else None
+
+
 def _child_paths_match(left, right, old_children, new_children):
     if type(left) is dict and all(type(key) is str for key in left) and all(type(key) is str for key in right):
         return list(left) == list(right)[: len(left)]
+    if type(left) is list:
+        old_paths, new_paths = _list_paths(old_children), _list_paths(new_children)
+        if old_paths is not None and new_paths is not None:
+            return old_paths == new_paths[: len(old_paths)]
     names = [encode(child[1]) for child in old_children]
     return names == [encode(child[1]) for child in new_children[: len(names)]]
 
