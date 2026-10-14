@@ -13,7 +13,6 @@ def install(tmp_path, monkeypatch, slug, server):
     home.mkdir(parents=True)
     monkeypatch.setattr(config, "AGENTIHOOKS_HOME", str(home))
     redis = fakeredis.FakeRedis(decode_responses=True)
-    monkeypatch.setattr("scripts.swarm.store.redis_client", lambda environ=None: redis)
     monkeypatch.setattr("scripts.inbox.store.now_ms", lambda: 1791939600000)
     store = RedisStore(redis)
     store.create(SwarmConfig(slug, str(tmp_path), 1, 0))
@@ -28,6 +27,7 @@ def install(tmp_path, monkeypatch, slug, server):
     for name, callback in callbacks.items():
         monkeypatch.setattr(server, name, callback)
     inbox = InboxStore(redis)
+    monkeypatch.setattr("scripts.inbox.store.connect", lambda environ=None: inbox)
 
     def outcomes():
         marks = sorted(
