@@ -122,7 +122,8 @@ def test_a_stalled_download_is_killed_at_its_attempt_timeout_and_retried_green(t
 
 
 def test_a_stalled_installed_browser_launch_is_retried_green(tmp_path, monkeypatch):
-    result, calls = _setup(tmp_path, monkeypatch, cached=False, ready=False, launch_stall_once=True, attempt_seconds=5)
+    monkeypatch.setenv("BROWSER_CACHE_TEST_LAUNCH", "stall")
+    result, calls = _setup(tmp_path, monkeypatch, cached=False, ready=False, attempt_seconds=5)
     assert result.returncode == 0, result.stderr
     assert calls == ["mirror", "install", "launch", "install", "launch"]
 
