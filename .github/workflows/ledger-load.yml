@@ -93,6 +93,9 @@ jobs:
       - name: Run the base load gate
         if: inputs.compare
         working-directory: load-base
+        env:
+          REDIS_URL: redis://127.0.0.1:6379/1
+          AGENTIHOOKS_SWARM_REDIS_URL: redis://127.0.0.1:6379/1
         run: |
           set -o pipefail
           "$HOME/venv/bin/python" -m tests.ledger_load.gate \
@@ -101,6 +104,9 @@ jobs:
 
       - name: Run the head load gate on the same runner
         if: ${{ always() && inputs.compare }}
+        env:
+          REDIS_URL: redis://127.0.0.1:6379/2
+          AGENTIHOOKS_SWARM_REDIS_URL: redis://127.0.0.1:6379/2
         run: |
           set -o pipefail
           "$HOME/venv/bin/python" -m tests.ledger_load.gate \
