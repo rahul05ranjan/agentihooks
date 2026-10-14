@@ -56,7 +56,7 @@
   "test.yml/sonar": "standard",
   "test.yml/split": "standard",
   "test.yml/stage-budget": "light",
-  "test.yml/test-count": "light",
+  "test.yml/test-count": "standard",
   "test.yml/unit": "standard",
   "test.yml/unit-selected": "standard",
   "worker-resources.yml/measure": "batch"
