@@ -47,3 +47,19 @@ def test_generation_removal_and_reordering_do_not_keep_obsolete_fragments():
 def test_generation_rejects_nonfinite_values_before_identity_reuse():
     with pytest.raises(ValueError):
         document({"tasks": [{"value": float("nan")}]})
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+def test_native_null_encoding_cannot_reuse_a_finite_fragment(value):
+    previous = document({"tasks": [{"value": None}]})
+    with pytest.raises(ValueError):
+        document({"tasks": [{"value": value}]}, previous)
+
+
+def test_large_integers_keep_canonical_precision_in_the_fallback():
+    first = document({"tasks": [{"value": 2**100}]})
+    same = document({"tasks": [{"value": 2**100}]}, first)
+    changed = document({"tasks": [{"value": 2**100 + 1}]}, same)
+    assert same is first
+    assert changed.text == encode(changed.value)
+    assert changed.value["tasks"][0]["value"] == 2**100 + 1

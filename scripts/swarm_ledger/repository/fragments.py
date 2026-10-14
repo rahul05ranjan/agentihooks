@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+import orjson
+
 from .rows import encode
 
 
@@ -8,11 +10,17 @@ class Fragment:
     value: object
     text: str
     parts: dict | tuple | None = None
+    signature: bytes | str | None = None
 
 
 def leaf(value: object, previous: Fragment | None = None) -> Fragment:
-    text = encode(value)
-    return previous if previous is not None and previous.text == text else Fragment(value, text)
+    try:
+        signature = orjson.dumps(value)
+    except orjson.JSONEncodeError:
+        signature = encode(value)
+    if previous is not None and value == previous.value and signature == previous.signature:
+        return previous
+    return Fragment(value, encode(value), signature=signature)
 
 
 def sequence(value: list, previous: Fragment | None = None) -> Fragment:
