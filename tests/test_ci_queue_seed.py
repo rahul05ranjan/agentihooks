@@ -274,6 +274,11 @@ def base_run(tmp_path):
     (tools / "gh").write_text(
         "#!/usr/bin/env bash\n"
         'printf "%s\\n" "$@" >> "$ARGS"\n'
+        'if [[ "$1" == run && "$2" == download ]]; then\n'
+        '  mkdir -p "$7"; count=$(jq --arg run "$3" \'.[$run] // 0\' <<< "$FAKE_HISTORY")\n'
+        '  jq -n --argjson count "$count" \'{history: [range($count) | {commit: "older"}]}\' > "$7/baseline.json"\n'
+        "  exit 0\n"
+        "fi\n"
         'case "$2" in\n'
         '  */commits/*) printf "tree-of-base" ;;\n'
         '  */runs\\?head_sha=*) [[ -z "$FAIL_RUNS" ]] || exit 1; for r in $FAKE_RUNS; do e=pull_request; s=$FAKE_STATUS;'
