@@ -1647,20 +1647,23 @@ def test_codex_render_keeps_operator_hook_flags_beside_computed_trust(world):
 
 
 def test_codex_render_rerenders_when_the_operator_hooks_change(world):
+    import hashlib
+
     from scripts.profiles import render
     from tests.codex_hook_fixtures import CODEX_HOOK_HASHES, CODEX_HOOKS
 
     home = world["home"]
     hooks = home / ".codex" / "hooks.json"
-    stop = {"hooks": {"Stop": CODEX_HOOKS["hooks"]["Stop"][:1]}}
-    _write(hooks, json.dumps(stop))
     first = render.render_codex("rb-role")
+    assert json.loads((first / render.STAMP).read_text())["hooks"] == ""
     assert render.render_codex("rb-role") is None
 
-    _write(hooks, json.dumps({"hooks": {"Stop": CODEX_HOOKS["hooks"]["Stop"]}}))
+    text = json.dumps({"hooks": {"Stop": CODEX_HOOKS["hooks"]["Stop"]}})
+    _write(hooks, text)
     out = render.render_codex("rb-role")
 
     assert out is not None and out != first
+    assert json.loads((out / render.STAMP).read_text())["hooks"] == hashlib.sha256(text.encode()).hexdigest()
     state = tomllib.loads((out / "config.toml").read_text())["hooks"]["state"]
     assert {k: v["trusted_hash"] for k, v in state.items()} == {
         f"{out / 'hooks.json'}:stop:0:0": CODEX_HOOK_HASHES["stop:0:0"],

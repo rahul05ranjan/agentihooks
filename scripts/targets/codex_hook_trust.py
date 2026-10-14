@@ -1,11 +1,13 @@
-"""Codex hook trust hashes, computed the way Codex's hook discovery computes them.
+"""Codex hook trust hashes, computed the way Codex 0.162.1 hook discovery computes them.
 
 Codex runs a hooks.json entry only when `hooks.state."<hooks path>:<event>:<group>:<handler>".trusted_hash`
-equals the sha256 of the handler's normalized identity, serialized as JSON with sorted keys.
+equals the sha256 of the handler's normalized identity, serialized as JSON with sorted keys. A Codex release
+that changes that identity needs tests/codex_hook_fixtures.py regenerated from its app-server hooks/list.
 """
 
 import hashlib
 import json
+from collections.abc import Iterator
 from pathlib import Path
 
 EVENT_LABELS = {
@@ -53,20 +55,26 @@ def hook_hash(event: str, matcher: str | None, hook: dict) -> str:
     return f"sha256:{hashlib.sha256(text.encode()).hexdigest()}"
 
 
-def trusted_state(hooks: Path, key_path: Path) -> dict[str, dict[str, str]]:
+def _command_hooks(hooks: Path) -> Iterator[tuple[str, int, int, str | None, dict]]:
     try:
         doc = json.loads(hooks.read_text())
     except (OSError, ValueError):
-        return {}
+        return
     events = doc.get("hooks") if isinstance(doc, dict) else None
-    state = {}
     for event, groups in (events if isinstance(events, dict) else {}).items():
         if event not in EVENT_LABELS or not isinstance(groups, list):
             continue
         for group_index, group in enumerate(groups):
-            for handler_index, hook in enumerate(group.get("hooks") or []):
-                if hook.get("type") != "command" or not str(hook.get("command", "")).strip():
-                    continue
-                key = f"{key_path}:{EVENT_LABELS[event]}:{group_index}:{handler_index}"
-                state[key] = {"trusted_hash": hook_hash(event, group.get("matcher"), hook)}
-    return state
+            handlers = group.get("hooks") if isinstance(group, dict) else None
+            for handler_index, hook in enumerate(handlers if isinstance(handlers, list) else []):
+                if isinstance(hook, dict) and hook.get("type") == "command" and str(hook.get("command", "")).strip():
+                    yield event, group_index, handler_index, group.get("matcher"), hook
+
+
+def trusted_state(hooks: Path, key_path: Path) -> dict[str, dict[str, str]]:
+    return {
+        f"{key_path}:{EVENT_LABELS[event]}:{group_index}:{handler_index}": {
+            "trusted_hash": hook_hash(event, matcher, hook)
+        }
+        for event, group_index, handler_index, matcher, hook in _command_hooks(hooks)
+    }

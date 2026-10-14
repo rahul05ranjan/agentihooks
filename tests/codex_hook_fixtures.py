@@ -31,7 +31,10 @@ CODEX_HOOKS = {
         "PreToolUse": [
             {"matcher": "Bash", "hooks": [{"type": "command", "command": "p", "timeout": 30, "statusMessage": "é"}]}
         ],
-        "SessionEnd": [{"hooks": [{"type": "command", "command": "e", "timeout": 99}]}],
+        "SessionEnd": [
+            {"hooks": [{"type": "command", "command": "e", "timeout": 99}]},
+            {"hooks": [{"type": "command", "command": "f", "timeout": 0, "statusMessage": ""}]},
+        ],
         "SessionStart": [
             {
                 "hooks": [
@@ -48,6 +51,7 @@ CODEX_HOOK_HASHES = {
     "interrupt:1:0": "sha256:009ac8eea97d0c53bec61fba09e3630ada40d18a180cc2b722854b6ca1237438",
     "pre_tool_use:0:0": "sha256:92efda7cc89cc3510e155836a793b6f8b28789b2aa9e53122961eff3af0a3d24",
     "session_end:0:0": "sha256:1c961b1feb2ddfd034b56b57216af374518582fbf5dc0173dcebc20889d389f5",
+    "session_end:1:0": "sha256:0d13177c538df58fc6fb454550ce53df5b4e5b7c4cc8970ebf400e7409b5d3cf",
     "session_start:0:1": "sha256:eac8c1c5a0f1a81cfe6f46337ba676b39a7c96a24a9c302e775f94f21b571891",
     "stop:0:0": "sha256:f8c97e05f9aeec4e4f01985044a5944fc59c699f79942dba159c3d4b36e49696",
     "stop:1:0": "sha256:1eb006a946829f29749b0a44d6191b1b3dd84207487b5fe9ce01d3997fe89398",

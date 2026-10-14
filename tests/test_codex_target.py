@@ -277,7 +277,11 @@ class TestHooksJson:
         assert (codex_home() / "hooks.json").stat().st_mtime_ns == before
 
     def test_changed_hooks_file_keeps_trust_without_advice(self, adapter, capsys):
+        import tomllib
+
         adapter.write_settings({})
+        config = codex_home() / "config.toml"
+        trusted = tomllib.loads(config.read_text())["hooks"]["state"]
         path = codex_home() / "hooks.json"
         doc = json.loads(path.read_text())
         del doc["hooks"]["SessionStart"]
@@ -289,6 +293,8 @@ class TestHooksJson:
         assert "run /hooks inside codex" not in out
         assert "Trusted" not in out
         assert "SessionStart" in json.loads(path.read_text())["hooks"]
+        assert tomllib.loads(config.read_text())["hooks"]["state"] == trusted
+        assert len(trusted) == len(CODEX_HOOK_EVENTS)
 
     def test_install_trusts_every_entry_including_foreign_groups(self, adapter):
         import tomllib
@@ -305,7 +311,19 @@ class TestHooksJson:
         adapter.write_settings({})
 
         doc = json.loads(hooks.read_text())["hooks"]
-        label = {event: "".join(f"_{c.lower()}" if c.isupper() else c for c in event)[1:] for event in doc}
+        label = {
+            "SessionStart": "session_start",
+            "SessionEnd": "session_end",
+            "UserPromptSubmit": "user_prompt_submit",
+            "PreToolUse": "pre_tool_use",
+            "PostToolUse": "post_tool_use",
+            "Stop": "stop",
+            "SubagentStart": "subagent_start",
+            "SubagentStop": "subagent_stop",
+            "PreCompact": "pre_compact",
+            "PermissionRequest": "permission_request",
+            "Interrupt": "interrupt",
+        }
         entries = {
             f"{hooks}:{label[event]}:{g}:{h}"
             for event, groups in doc.items()

@@ -27,6 +27,9 @@ def test_every_command_entry_gets_the_hash_codex_computes(tmp_path):
         '{"hooks": {"Stop": [{"matcher": "m"}]}}',
         '{"hooks": {"Stop": [{"hooks": [{"type": "mcp_tool", "server": "s", "tool": "t"}]}]}}',
         '{"hooks": {"Stop": [{"hooks": [{"type": "command"}]}]}}',
+        '{"hooks": {"Stop": ["x"]}}',
+        '{"hooks": {"Stop": [{"hooks": "x"}]}}',
+        '{"hooks": {"Stop": [{"hooks": ["x"]}]}}',
     ],
 )
 def test_entries_codex_does_not_run_as_commands_get_no_trust(tmp_path, text):
