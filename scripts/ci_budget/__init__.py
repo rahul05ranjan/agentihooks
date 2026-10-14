@@ -37,6 +37,7 @@ BUDGETS = {
     "flake-budget": 120,
     "stage-budget": 60,
 }
+BUDGETS["queue-base-lookup"] = BUDGETS["queue-baseline"]
 
 
 def seconds(stamp: str) -> float:

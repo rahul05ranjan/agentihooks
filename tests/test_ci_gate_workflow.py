@@ -84,6 +84,7 @@ def test_required_gate_runs_after_parallel_unit_and_lint():
             "mutation-stats",
             "reuse",
             "queue-baseline",
+            "queue-base-lookup",
             "stage-budget",
         }
     )
@@ -262,7 +263,8 @@ def test_lint_and_test_count_grade_a_pull_request_that_merged_dev_from_the_curre
 def test_coverage_ratchet_grades_the_merged_shards_from_the_base_copy():
     jobs = _workflow()["jobs"]
     job = jobs["coverage-ratchet"]
-    assert job["needs"] == ["durations", "unit", "queue-baseline", "reuse"]
+    lookup = "queue-base-lookup" if "queue-base-lookup" in jobs else "queue-baseline"
+    assert job["needs"] == ["durations", "unit", lookup, "reuse"]
     download = next(step for step in job["steps"] if step.get("name") == "Download shard coverage")
     assert download["with"]["pattern"] == "coverage-3.12-*"
     grade = next(step for step in job["steps"] if step.get("name") == "Hold every line the base ran")
