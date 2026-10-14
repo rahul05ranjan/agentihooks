@@ -51,7 +51,7 @@ SELECTED_SKIPS = (
 QUEUE_TIER = """if [[ "${EVENT:-}" == merge_group || "${EVENT:-}" == pull_request ]]; then
   if ! jq -e --arg event "$EVENT" --arg mutation "$MUTATION" '
     (if $event == "merge_group" then
-      ["durations", "split", "unit", "shard-check", "test-count"]
+      ["durations", "split", "shard-check", "test-count"]
     else
       ["durations", "split", "unit", "shard-check", "test-count", "lint", "semgrep", "sonar"]
       + (if $mutation == "true" then ["mutation-plan", "mutation-stats", "mutation"] else [] end)
