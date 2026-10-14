@@ -95,7 +95,7 @@ def test_queue_runs_record_their_baseline_on_the_dev_history_they_grade_on():
         "python -m tests.coverage_baseline --shards 12 --head-shards .coverage-shards"
         ' --out "$RUNNER_TEMP/own-baseline/baseline.json" --previous "$HOME/coverage-baseline/baseline.json"'
     )
-    assert "if" not in find and "if" not in dev
+    assert find["if"] == dev["if"] == "needs.reuse.outputs.reused != 'true'"
     assert upload["with"]["name"] == "coverage-baseline"
     assert upload["with"]["path"] == "${{ runner.temp }}/own-baseline/"
     assert steps.index(download) < steps.index(find) < steps.index(dev) < steps.index(record) < steps.index(upload)
