@@ -592,14 +592,14 @@ def test_lead_master_never_takes_a_warned_closed_or_unknown_account(tmp_path):
 def test_lead_master_capacity_ignores_session_caps_but_not_closed_accounts(tmp_path):
     from scripts.swarm.runtime import HerdrRuntime
 
-    config = SwarmConfig("sw", "/repo", lanes={"master": {"agent": "claude"}})
+    config = SwarmConfig("sw", "/repo", 0, 0, lanes={"master": {"agent": "claude"}})
     runtime = HerdrRuntime(home=tmp_path)
     runtime._quota_accounts = [account("full", sessions=3), account("cx", harness="codex", sessions=3)]
     assert not runtime.has_capacity(config)
     assert runtime.lead_master_has_capacity(config)
     runtime._quota_accounts = [account("closed", cap=0), account("cx", harness="codex", sessions=3)]
     assert not runtime.lead_master_has_capacity(config)
-    assert runtime.lead_master_has_capacity(SwarmConfig("sw", "/repo"))
+    assert runtime.lead_master_has_capacity(SwarmConfig("sw", "/repo", 0, 0))
 
 
 def test_lead_master_slot_waits_only_on_its_own_capacity():
@@ -621,12 +621,12 @@ def test_lead_master_slot_waits_only_on_its_own_capacity():
 def test_lead_master_capacity_keeps_its_pinned_harness(tmp_path):
     from scripts.swarm.runtime import HerdrRuntime
 
-    pinned = SwarmConfig("sw", "/repo", lanes={"master": {"agent": "claude"}})
+    pinned = SwarmConfig("sw", "/repo", 0, 0, lanes={"master": {"agent": "claude"}})
     runtime = HerdrRuntime(home=tmp_path)
     runtime._quota_accounts = [account("closed", cap=0), account("cx", harness="codex")]
     assert runtime.has_capacity(pinned)
     assert not runtime.lead_master_has_capacity(pinned)
-    assert runtime.lead_master_has_capacity(SwarmConfig("sw", "/repo"))
+    assert runtime.lead_master_has_capacity(SwarmConfig("sw", "/repo", 0, 0))
 
 
 def test_lead_master_quota_handoff_takes_an_account_past_its_cap(tmp_path):
