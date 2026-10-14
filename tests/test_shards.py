@@ -335,7 +335,12 @@ def test_shard_option_accounts_for_serial_worker_groups(tmp_path, worker):
 def test_shard_option_collects_only_that_shards_files(pytestconfig):
     files = [path for path in discover_test_files(_ROOT) if path not in FIRST_SHARD_FILES]
     shard = 2
-    expected = set(assign_files(_stored_durations(), files, 4, source_sizes(_ROOT, files))[shard - 1])
+    durations = {node: seconds for node, seconds in _stored_durations().items() if node.split("::", 1)[0] in files}
+    part = conftest.assign_nodes(durations, 4, conftest.grouped_files(_ROOT, files), 4, source_sizes(_ROOT, files))[
+        shard - 1
+    ]
+    known = {node.split("::", 1)[0] for node in durations}
+    expected = {node.split("::", 1)[0] for node in part} | (set(files) - known)
     assert "shard" in vars(pytestconfig.option)
     config = SimpleNamespace(getoption=lambda name: f"{shard}/4", stash=pytest.Stash(), rootpath=_ROOT)
     kept = {path for path in files if not conftest.pytest_ignore_collect(_ROOT / path, config)}
