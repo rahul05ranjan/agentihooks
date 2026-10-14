@@ -5,7 +5,6 @@ patches a list: drop its first items and append new ones ({"drop", "add"}), upse
 by id ({"ids"}).
 """
 
-import json
 
 
 def same(a, b, *, shared=False):
@@ -14,12 +13,6 @@ def same(a, b, *, shared=False):
         return True
     if type(a) is not type(b) or a != b:
         return False
-    if isinstance(a, list) and len(a) >= 16 and not shared:
-        try:
-            if json.dumps(a, sort_keys=True, allow_nan=False) == json.dumps(b, sort_keys=True, allow_nan=False):
-                return True
-        except (TypeError, ValueError):
-            pass
     if isinstance(a, dict):
         return a.keys() == b.keys() and all(
             type(value) is type(b[key])
