@@ -223,7 +223,7 @@ def base_run(tmp_path):
         '  */commits/*) printf "tree-of-base" ;;\n'
         '  */runs\\?head_sha=*) [[ -z "$FAIL_RUNS" ]] || exit 1; for r in $FAKE_RUNS; do e=merge_group; s=$FAKE_STATUS;'
         ' [[ " $FAKE_DISPATCH " == *" $r "* ]] && { e=workflow_dispatch; s=in_progress; };'
-        ' jq -n --argjson id "$r" --arg s "$s" --arg e "$e" \'{id: $id, status: $s, event: $e, head_branch: "gh-readonly-queue/dev/pr-1", head_sha: "b" * 40}\'; done'
+        ' jq -n --argjson id "$r" --arg s "$s" --arg e "$e" \'{id: $id, status: $s, event: $e, head_branch: "gh-readonly-queue/dev/pr-1", head_sha: ("b" * 40)}\'; done'
         " | jq -s '{workflow_runs: .}' | jq -r \"$4\" ;;\n"
         '  */artifacts*) n=$(cat "$POLLS"); echo $((n + 1)) > "$POLLS"; '
         '[[ "$2" == *"/$FAKE_KEPT_BY/"* && $n -ge $FAKE_AFTER ]] && printf 1 || printf 0 ;;\n'
