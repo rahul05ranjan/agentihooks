@@ -41,7 +41,8 @@ def test_dev_extra_declares_test_plugin(plugin):
 
 def test_workflow_runs_whole_suite_in_parallel():
     command = _pytest_command()
-    assert "-n auto" in command
+    assert '-n "$(python -m scripts.ci_cpu_quota)"' in command
+    assert "-n auto" not in command
     assert "tests/" in command
     assert "-m unit" not in command
 
