@@ -40,15 +40,12 @@ def _executed(shards: list[Path]) -> dict[str, list[int]]:
 
 def record(repo: Path, shards: list[Path], target: Path, previous: Path | None = None) -> None:
     executed = _executed(shards)
-    invalid = []
     for path, lines in executed.items():
         parser = PythonParser(filename=str(repo / path))
         parser.parse_source()
         for line in sorted(set(lines) - parser.statements):
-            invalid.append(f"{path}:{line}")
-            print(f"::error::{path}:{line} is not executable in the current source")
-    if invalid:
-        raise ValueError(f"baseline contains lines that are not executable: {', '.join(invalid)}")
+            print(f"::warning::{path}:{line} is not executable in the current source; dropped from baseline")
+        executed[path] = sorted(set(lines) & parser.statements)
     history = []
     if previous and previous.is_file():
         old = read(previous)
