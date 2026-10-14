@@ -91,3 +91,17 @@ def test_scalar_metadata_remains_a_leaf():
     result = document(value)
     assert result.value == value
     assert result.text == encode(value)
+
+
+def test_opaque_document_fields_reuse_unchanged_container_generations():
+    def state(rev):
+        return {
+            "layout": {"widths": [10, 20]},
+            "_meta": {"rev": rev, "api_operations": {"done": {"results": {"item": True}}}},
+        }
+
+    old = document(state(1))
+    new = document(state(2), old)
+    assert new.value["layout"] is old.value["layout"]
+    assert new.value["_meta"]["api_operations"] is old.value["_meta"]["api_operations"]
+    assert new.text == encode(state(2))
