@@ -24,8 +24,6 @@ def _setup(
     recovery=True,
     stall_once=False,
     attempt_seconds=None,
-    launch_stall_once=False,
-    launch_fails=False,
 ):
     executable = tmp_path / "python"
     calls = tmp_path / "calls"
@@ -36,7 +34,7 @@ def _setup(
     if stall_once:
         stall.touch()
     launch_stall = tmp_path / "launch_stall"
-    if launch_stall_once:
+    if os.environ.get("BROWSER_CACHE_TEST_LAUNCH") == "stall":
         launch_stall.touch()
     executable.write_text(
         "#!/usr/bin/env bash\nset -euo pipefail\n"
@@ -62,7 +60,7 @@ def _setup(
     monkeypatch.setenv("STALL", str(stall))
     monkeypatch.setenv("RECOVERY", str(recovery).lower())
     monkeypatch.setenv("LAUNCH_STALL", str(launch_stall))
-    monkeypatch.setenv("LAUNCH_FAILS", str(launch_fails).lower())
+    monkeypatch.setenv("LAUNCH_FAILS", str(os.environ.get("BROWSER_CACHE_TEST_LAUNCH") == "fail").lower())
     monkeypatch.setenv("CACHE_HIT", str(cached).lower())
     monkeypatch.setenv("GITHUB_ACTION_PATH", str(ACTION))
     output = tmp_path / "output"
@@ -130,7 +128,8 @@ def test_a_stalled_installed_browser_launch_is_retried_green(tmp_path, monkeypat
 
 
 def test_failed_installed_browser_launch_is_red_after_two_attempts(tmp_path, monkeypatch):
-    result, calls = _setup(tmp_path, monkeypatch, cached=False, ready=False, launch_fails=True)
+    monkeypatch.setenv("BROWSER_CACHE_TEST_LAUNCH", "fail")
+    result, calls = _setup(tmp_path, monkeypatch, cached=False, ready=False)
     assert result.returncode != 0
     assert calls == ["mirror", "install", "launch", "install", "launch"]
     assert result.stdout.count("::warning title=Retried browser install::") == 1
