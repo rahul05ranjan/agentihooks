@@ -252,6 +252,17 @@ def test_the_required_workflow_uses_the_protected_canonical_aggregation():
     assert workflow["jobs"]["reuse"] in gate_protected.reuse_jobs(policy)
 
 
+@pytest.mark.parametrize("event", ["merge_group", "pull_request", "push", "workflow_dispatch"])
+@pytest.mark.parametrize("lookup", ["success", "failure", "skipped", "cancelled"])
+def test_the_independent_queue_lookup_skips_only_outside_the_queue(event, lookup):
+    from scripts import ci_reuse
+
+    needs = {"queue-base-lookup": {"result": lookup}, "unit": {"result": "success"}}
+    result = _gate(ci_reuse.gate_steps(queue_lookup=True), needs, event=event)
+    expected = lookup == "success" or (lookup == "skipped" and event != "merge_group")
+    assert (result.returncode == 0) is expected, result.stdout + result.stderr
+
+
 @pytest.mark.parametrize("reuse_repo", ["dynamic"], indirect=True)
 def test_a_full_pass_with_dynamic_mutation_shards_reuses(full_source, tmp_path):
     root, base, _, queue, env, _, _ = full_source
