@@ -566,6 +566,46 @@ def _commit(repo, files):
     return _git(repo, "rev-parse", "HEAD")
 
 
+@pytest.fixture
+def queue_grader_repo(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-b", "dev")
+    dev = _commit(
+        repo, {"tests/__init__.py": "", "tests/coverage_ratchet.py": 'import sys\nprint("DEV_GRADER", sys.argv)\n'}
+    )
+    _git(repo, "checkout", "-b", "queue")
+    predecessor = _commit(repo, {"tests/coverage_ratchet.py": 'print("QUEUE_GRADER")\n'})
+    _commit(repo, {"hooks/example.py": "value = 1\n"})
+    _git(repo, "remote", "add", "origin", str(repo))
+    runner = tmp_path / "runner"
+    runner.mkdir()
+    return repo, dev, predecessor, runner
+
+
+def test_queue_base_resolves_to_dev_without_the_predecessor_measurement(queue_grader_repo, tmp_path):
+    repo, dev, predecessor, runner = queue_grader_repo
+    step = _step("queue-baseline", "Resolve the dev merge base")
+    output = tmp_path / "output"
+    output.write_text("")
+    env = dict(os.environ, GRADER=dev, GITHUB_OUTPUT=str(output), RUNNER_TEMP=str(runner))
+    result = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=repo, env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert output.read_text().splitlines() == [f"commit={dev}", f"tree={_git(repo, 'rev-parse', f'{dev}^{{tree}}')}"]
+    assert predecessor not in output.read_text()
+
+
+def test_queue_uses_the_dev_grader_when_its_head_replaces_the_grader(queue_grader_repo):
+    repo, dev, _, runner = queue_grader_repo
+    step = _step("queue-baseline", "Hold every line the base ran")
+    env = dict(os.environ, GRADER=dev, BASE=dev, RUNNER_TEMP=str(runner), GITHUB_WORKSPACE=str(repo))
+    result = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=repo, env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert "DEV_GRADER" in result.stdout
+    assert "QUEUE_GRADER" not in result.stdout
+    assert f"'--base', '{dev}'" in result.stdout
+
+
 RULE = "deploy/helm/agentihooks-swarm/ci/kind-due.sh"
 
 

@@ -346,6 +346,14 @@ def test_the_base_run_waits_for_an_earlier_queue_entry_to_publish(base_run):
         assert output == "id=222\ntree=tree-of-base\n"
 
 
+def test_queue_lookup_stops_without_polling_an_unpublished_predecessor(base_run, tmp_path):
+    result, output, _ = base_run(after=5)
+    assert result.returncode != 0
+    assert "::error::" in result.stdout
+    assert output == ""
+    assert (tmp_path / "polls").read_text().strip() == "2"
+
+
 def test_a_failed_runs_listing_is_red_at_once_instead_of_waiting(base_run):
     result, output, args = base_run(fail_runs="1")
     assert result.returncode != 0
