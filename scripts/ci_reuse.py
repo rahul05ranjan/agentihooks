@@ -80,7 +80,7 @@ def gate_steps(queue_coverage: bool = False, selected: bool = False, queue_tier:
     if selected:
         run = run.replace(*SELECTED_SCOPE).replace(*SELECTED_SKIPS)
     if queue_tier:
-        run = run.replace('echo "$NEEDS"\n', 'echo "$NEEDS"\n' + QUEUE_TIER, 1)
+        run = QUEUE_TIER + run
     return [
         {
             "name": "Require every gate to succeed",
