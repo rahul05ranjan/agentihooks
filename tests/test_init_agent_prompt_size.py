@@ -10,7 +10,7 @@ from scripts.profiles import binding
 
 
 @pytest.mark.parametrize("agent", ["claude", "codex"])
-@pytest.mark.parametrize("prompt", ["x" * 200_000, "é" * 65_536])
+@pytest.mark.parametrize("prompt", ["x" * 200_000, "é" * 65_536], ids=["ascii", "multibyte"])
 def test_large_opening_prompt_launches_without_exceeding_the_argument_limit(tmp_path, monkeypatch, agent, prompt):
     command = [
         sys.executable,
@@ -24,7 +24,7 @@ def test_large_opening_prompt_launches_without_exceeding_the_argument_limit(tmp_
     )
     line = next(line for line in launcher.read_text().splitlines() if shlex.quote(sys.executable) in line)
 
-    result = subprocess.run(["bash", "-c", line], capture_output=True, text=True, check=False)
+    result = subprocess.run(["bash", "-c", line], capture_output=True, text=True, check=False, timeout=10)
 
     assert result.returncode == 0, result.stderr
     arguments = json.loads(result.stdout)
