@@ -4,7 +4,8 @@ import subprocess
 from pathlib import Path
 
 from coverage import CoverageData
-from coverage.parser import PythonParser
+
+from tests.coverage_grade import statements_of
 
 
 def _git(repo: Path, revision: str) -> str:
@@ -41,11 +42,10 @@ def _executed(shards: list[Path]) -> dict[str, list[int]]:
 def record(repo: Path, shards: list[Path], target: Path, previous: Path | None = None) -> None:
     executed = _executed(shards)
     for path, lines in executed.items():
-        parser = PythonParser(filename=str(repo / path))
-        parser.parse_source()
-        for line in sorted(set(lines) - parser.statements):
+        statements = statements_of((repo / path).read_text(), lines)
+        for line in sorted(set(lines) - set(statements)):
             print(f"::warning::{path}:{line} is not executable in the current source; dropped from baseline")
-        executed[path] = sorted(set(lines) & parser.statements)
+        executed[path] = sorted(set(statements.values()))
     history = []
     if previous and previous.is_file():
         old = read(previous)

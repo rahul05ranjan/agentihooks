@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from coverage import CoverageData
+from coverage.exceptions import NotPython
+from coverage.parser import PythonParser
 
 GRADED = ("hooks/", "scripts/")
 HISTORY = 30
@@ -121,10 +123,22 @@ def _lost(
             if old is None or new is None:
                 continue
             mapped = line_map(old, new) if isinstance(moved, str) else _split_map(old, new)
-            gone.update(line for line in ran if line in mapped and mapped[line] not in head.get(target, set()))
+            covered = set(statements_of(new, head.get(target, set())).values())
+            gone.update(
+                line for line in set(statements_of(old, ran).values()) if line in mapped and mapped[line] not in covered
+            )
         if gone:
             lost[path] = sorted(gone)
     return lost
+
+
+def statements_of(source: str, lines: Iterable[int]) -> dict[int, int]:
+    parser = PythonParser(text=source)
+    try:
+        parser.parse_source()
+    except NotPython:
+        return {line: line for line in lines}
+    return {line: parser.first_line(line) for line in lines if parser.first_line(line) in parser.statements}
 
 
 def _statuses(base_source: str, path: str, lines: list[int], run: Measurement, old: str | None) -> dict[int, bool]:
