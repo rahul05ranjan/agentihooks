@@ -1343,13 +1343,15 @@ jobs:
             exit 1
           fi
 
-      # The base revision's copy grades once the base has one, so a pull request cannot loosen its own audit.
+      # The base revision's copy grades, so a pull request cannot loosen its own audit.
       - name: Fail on known vulnerabilities new against the base
         if: ${{ !cancelled() }}
         run: |
-          grader="$RUNNER_TEMP/base"
-          [[ -f "$grader/scripts/ci_dependency_audit.py" ]] || grader="$GITHUB_WORKSPACE"
-          cd "$grader"
+          if [[ ! -f "$RUNNER_TEMP/base/scripts/ci_dependency_audit.py" ]]; then
+            echo "::error::The base carries no scripts/ci_dependency_audit.py, so nothing trusted can grade."
+            exit 1
+          fi
+          cd "$RUNNER_TEMP/base"
           python -m scripts.ci_dependency_audit --base "$RUNNER_TEMP/base" --head "$GITHUB_WORKSPACE"
 
       - name: Select docs build
