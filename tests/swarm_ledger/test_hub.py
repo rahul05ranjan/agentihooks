@@ -89,7 +89,7 @@ def test_immutable_snapshot_baseline_and_unwatched_resources():
     assert hub.channels[SLUG].seq == 0
 
 
-@pytest.mark.parametrize("change", ["metadata", "copy", "append", "reorder", "no_ids"])
+@pytest.mark.parametrize("change", ["metadata", "equivalent", "copy", "append", "reorder", "no_ids"])
 def test_snapshot_comparison_work_is_bounded_by_changed_structure(change, monkeypatch):
     shared = [{"id": str(index), "values": list(range(64))} for index in range(32)]
     if change == "no_ids":
@@ -101,7 +101,7 @@ def test_snapshot_comparison_work_is_bounded_by_changed_structure(change, monkey
         tasks = [*shared, {"id": "added", "values": []}]
     elif change == "reorder":
         tasks = list(reversed(shared))
-    old, new = ledger(1, tasks=shared), ledger(2, tasks=tasks)
+    old, new = ledger(1, tasks=shared), ledger(1 if change == "equivalent" else 2, tasks=tasks)
     hub = Hub()
     hub.open(SLUG, lambda: {"ledger": ledger(0)})
     hub.publish_snapshot(SLUG, "ledger", old)
@@ -114,12 +114,15 @@ def test_snapshot_comparison_work_is_bounded_by_changed_structure(change, monkey
         return original(*args, **kwargs)
 
     monkeypatch.setattr(events_hub.patch, "same", counted)
-    assert hub.publish_snapshot(SLUG, "ledger", new)
-    budget = 20 if change == "metadata" else len(shared) * (3 if change in {"append", "reorder"} else 1) + 20
+    assert hub.publish_snapshot(SLUG, "ledger", new) is (change != "equivalent")
+    budget = (
+        20 if change in {"metadata", "equivalent"} else len(shared) * (3 if change in {"append", "reorder"} else 1) + 20
+    )
     assert calls <= budget
     frames = hub.wait(SLUG, 1, 0)
-    assert len(frames) == 1
-    assert apply(old, frames[0][3]["patch"]) == new
+    assert len(frames) == (0 if change == "equivalent" else 1)
+    if frames:
+        assert apply(old, frames[0][3]["patch"]) == new
 
 
 def test_publishing_an_unchanged_value_or_an_unwatched_ledger_adds_nothing():
