@@ -373,11 +373,8 @@ class HerdrRuntime:
         return [row for row in self._quota_open() if row.harness == harness and free_seats(row)]
 
     def _lead_master_rows(self, harness):
-        warned = self._quota_warned()
-        rows = [row for row in self._quota_accounts if row.harness == harness and row.cap]
-        return sorted(
-            rows, key=lambda row: ((row.harness, row.name) in warned, row.sessions - row.cap, -(row.week_left or 0))
-        )
+        rows = [row for row in self._quota_open() if row.harness == harness and row.cap]
+        return sorted(rows, key=lambda row: (row.sessions - row.cap, -(row.week_left or 0)))
 
     def lead_master_has_capacity(self, config):
         placeable = self.has_capacity(config)

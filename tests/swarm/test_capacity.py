@@ -570,19 +570,23 @@ def test_lead_master_falls_to_the_other_harness_only_when_unpinned(tmp_path):
     assert runtime._quota_choice("claude", "priority", False, "master", lead=True)[0] == "codex"
 
 
-def test_lead_master_prefers_unwarned_accounts_and_never_takes_a_closed_one(tmp_path):
+def test_lead_master_never_takes_a_warned_closed_or_unknown_account(tmp_path):
     from scripts.swarm.runtime import HerdrRuntime
 
     runtime = HerdrRuntime(home=tmp_path)
     runtime._quota_accounts = [
         account("closed", cap=0),
-        account("warned", sessions=0),
-        account("open", sessions=6),
+        account("warned", sessions=0, left=5),
+        account("fuller", sessions=6),
+        account("open", sessions=4, left=60),
+        account("roomy", sessions=4),
         account("unknown", cap=None),
     ]
-    runtime._quota_warned = lambda: {("claude", "warned"): "week"}
-    assert [row.name for row in runtime._lead_master_rows("claude")] == ["open", "warned"]
-    assert runtime._quota_account("claude", None, None, lead=True).name == "open"
+    assert [row.name for row in runtime._lead_master_rows("claude")] == ["roomy", "open", "fuller"]
+    assert runtime._quota_account("claude", None, None, lead=True).name == "roomy"
+    runtime._quota_accounts = [account("warned", sessions=0, left=5), account("closed", cap=0)]
+    with pytest.raises(SpawnError, match="no claude account has placeable quota seats"):
+        runtime._quota_account("claude", None, None, lead=True)
 
 
 def test_lead_master_capacity_ignores_session_caps_but_not_closed_accounts(tmp_path):
