@@ -3,6 +3,7 @@
 Loaded with `-p tests.browser_coverage`; idle unless JS_COVERAGE_DIR names the capture folder.
 """
 
+import functools
 import hashlib
 import json
 import os
@@ -97,6 +98,36 @@ def pytest_runtest_makereport(item, call):
     outcome = yield
     if os.environ.get("JS_COVERAGE_DIR"):
         failed_launch(outcome.get_result())
+
+
+@functools.cache
+def drives_browser(root: Path, test: str) -> bool:
+    from scripts.ci_mutation.browser import needs_browser
+
+    return needs_browser(root, [test])
+
+
+def track_greenlets(config, path: Path) -> None:
+    controller = getattr(config.pluginmanager.getplugin("_cov"), "cov_controller", None)
+    if controller is None or not controller.started:
+        return
+    import greenlet
+
+    # Greenlet tracking runs a Python lookup on every call and return, so only test files that drive Playwright get it.
+    wanted = (
+        greenlet.getcurrent if drives_browser(config.rootpath, path.relative_to(config.rootpath).as_posix()) else None
+    )
+    collector = controller.cov._collector
+    if collector.concur_id_func is not wanted:
+        # A tracer reads its id function when it starts, so restart between tests where no measured frame is live.
+        controller.cov.stop()
+        collector.concur_id_func = wanted
+        controller.cov.start()
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_protocol(item, nextitem):
+    track_greenlets(item.config, item.path)
 
 
 def pytest_configure(config):
