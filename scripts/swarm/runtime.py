@@ -373,8 +373,6 @@ class HerdrRuntime:
         return [row for row in self._quota_open() if row.harness == harness and free_seats(row)]
 
     def _lead_master_rows(self, harness):
-        """The lead master never waits on a session cap: every account of the harness with window room, open ones
-        first, then the most room under its cap."""
         warned = self._quota_warned()
         rows = [row for row in self._quota_accounts if row.harness == harness and row.cap]
         return sorted(
@@ -382,10 +380,9 @@ class HerdrRuntime:
         )
 
     def lead_master_has_capacity(self, config):
-        if self.has_capacity(config):
-            return True
+        placeable = self.has_capacity(config)
         if not hasattr(self, "_quota_accounts"):
-            return False
+            return placeable
         want = affinity.desired(config)
         return any(self._lead_master_rows(h) for h in ((want,) if want else agent_choice.AGENTS))
 
@@ -415,7 +412,7 @@ class HerdrRuntime:
             (seat.harness, "rotation") if seat else (agent_choice.fallback(self._quota_accounts), agent_choice.ALL_FULL)
         )
 
-    def _quota_transfer(self, saved, profile, environ, lane, want, planned=None):
+    def _quota_transfer(self, saved, profile, environ, lane, want, planned=None, lead=False):
         from scripts.swarm import quota_handoff
 
         thresholds = quota_handoff.Thresholds.from_env(environ)
@@ -438,6 +435,9 @@ class HerdrRuntime:
             or quota_handoff.successor(preferred, order, thresholds)
             or quota_handoff.successor(candidates, order, thresholds)
         )
+        if account is None and lead:
+            past = (row for h in order if h in harnesses for row in self._lead_master_rows(h))
+            account = next((row for row in past if (row.harness, row.name) != predecessor), None)
         if account is None:
             raise SpawnError(
                 quota_handoff.refusal(predecessor, harnesses, self._quota_accounts, blocked), "unavailable"
@@ -516,12 +516,13 @@ class HerdrRuntime:
         profile = decision.profile
         requested = "claude" if plugins.claude_only(profile) else _set(chosen.get("agent"))
         want = affinity.desired(config) if lane == MASTER else _set(chosen.get("agent"))
+        lead = lane == MASTER and task["id"] == MASTER
         if want and plugins.claude_only(profile) and want != "claude":
             kind = "master affinity" if lane == MASTER else "lane harness"
             raise SpawnError(f"{kind} {want} cannot mount the claude only profile {profile}", "unsupported")
         quota_transfer = (task.get("handoff_envelope") or {}).get("reason") == "quota"
         saved = (
-            self._quota_transfer(saved, profile, environ, lane, want, self._planned_slot(task["id"]))
+            self._quota_transfer(saved, profile, environ, lane, want, self._planned_slot(task["id"]), lead)
             if saved and quota_transfer
             else saved
         )
@@ -539,7 +540,6 @@ class HerdrRuntime:
         planned = getattr(self, "_quota_tasks", {}).get(task["id"])
         if planned and not (requested or saved or want):
             agent, reason = planned, "fallthrough: quota reservation"
-        lead = lane == MASTER and task["id"] == MASTER
         agent, reason = (
             (agent, reason)
             if route_kind == "interactive"

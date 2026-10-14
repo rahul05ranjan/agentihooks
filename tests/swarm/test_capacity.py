@@ -614,6 +614,32 @@ def test_lead_master_slot_waits_only_on_its_own_capacity():
     assert seat_spawn.no_slot(None, Lead(), "master") == "no session slot for the master, waiting"
 
 
+def test_lead_master_capacity_keeps_its_pinned_harness(tmp_path):
+    from scripts.swarm.runtime import HerdrRuntime
+
+    pinned = SwarmConfig("sw", "/repo", lanes={"master": {"agent": "claude"}})
+    runtime = HerdrRuntime(home=tmp_path)
+    runtime._quota_accounts = [account("closed", cap=0), account("cx", harness="codex")]
+    assert runtime.has_capacity(pinned)
+    assert not runtime.lead_master_has_capacity(pinned)
+    assert runtime.lead_master_has_capacity(SwarmConfig("sw", "/repo"))
+
+
+def test_lead_master_quota_handoff_takes_an_account_past_its_cap(tmp_path):
+    from scripts.swarm.runtime import HerdrRuntime
+
+    runtime = HerdrRuntime(home=tmp_path)
+    runtime._quota_accounts = [account("old", sessions=1), account("full", sessions=3), account("closed", cap=0)]
+    saved = {"harness": "claude", "account": "old", "effort": "high"}
+    with pytest.raises(SpawnError, match="can take the quota handoff"):
+        runtime._quota_transfer(saved, "master", {}, "master", "claude")
+    moved = runtime._quota_transfer(saved, "master", {}, "master", "claude", lead=True)
+    assert (moved["harness"], moved["account"]) == ("claude", "full")
+    runtime._quota_accounts = [account("old", sessions=1), account("closed", cap=0)]
+    with pytest.raises(SpawnError, match="can take the quota handoff"):
+        runtime._quota_transfer(saved, "master", {}, "master", "claude", lead=True)
+
+
 def test_failed_fresh_probe_does_not_leave_a_stale_healthy_account_placeable(monkeypatch):
     healthy = balancer.ProbeResult(
         "a", "allowed", "NORMAL", 90, balancer.QuotaWindow(used=10), balancer.QuotaWindow(used=10)

@@ -19,7 +19,6 @@ def no_slot(config, runtime, what: str) -> str:
 
 
 def no_lead_master_slot(config, runtime) -> str:
-    """The lead master waits only when no account of its harness has window room, never on a session cap."""
     placeable = getattr(runtime, "lead_master_has_capacity", None) or runtime.has_capacity
     return "" if placeable(config) else "no session slot for the master, waiting"
 
