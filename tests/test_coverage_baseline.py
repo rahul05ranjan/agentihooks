@@ -57,6 +57,33 @@ def test_record_retains_the_previous_measurement_and_its_history(measured):
     assert [item["commit"] for item in value["history"]] == ["base"]
 
 
+def test_queue_recorder_keeps_the_previous_dev_history(measured, monkeypatch):
+    import os
+    import shlex
+
+    import yaml
+
+    root, state, shards = measured
+    workflow = yaml.safe_load((Path(__file__).parents[1] / ".github/workflows/test.yml").read_text())
+    command = next(step["run"] for step in workflow["jobs"]["queue-baseline"]["steps"] if step.get("id") == "record")
+    previous = root / "dev-baseline/baseline.json"
+    cache.record(root, shards, previous)
+    state.update(commit="dev", tree="dev-tree")
+    cache.record(root, shards, previous, previous)
+    state.update(commit="queue", tree="queue-tree")
+    for number in range(1, 13):
+        folder = root / f".coverage-shards/coverage-3.12-{number}"
+        folder.mkdir(parents=True)
+        (folder / ".coverage").write_bytes(shards[0].read_bytes())
+    monkeypatch.setenv("RUNNER_TEMP", str(root))
+    monkeypatch.chdir(root)
+    assert cache.main(shlex.split(os.path.expandvars(command))[3:]) == 0
+    value = cache.read(root / "own-baseline/baseline.json")
+    assert value["commit"] == "queue"
+    assert [item["commit"] for item in value["history"]] == ["dev", "base"]
+    assert [item["executed"]["hooks/example.py"] for item in value["history"]] == [[1, 2], [1, 2]]
+
+
 def test_an_incomplete_suite_cannot_publish_a_baseline(measured):
     root, _, shards = measured
     target = root / "baseline.json"
