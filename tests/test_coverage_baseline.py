@@ -136,6 +136,21 @@ def test_the_recorder_reads_exactly_the_shards_the_run_split(measured, folders, 
     assert target.exists() == (code == 0)
 
 
+def test_an_unparsable_source_fails_publication_with_an_error(measured, capsys):
+    root, _, _ = measured
+    (root / "hooks/example.py").write_text("def (\n")
+    folder = root / "downloaded" / "coverage-3.12-1"
+    folder.mkdir(parents=True)
+    data = CoverageData(basename=str(folder / ".coverage"))
+    data.add_lines({"hooks/example.py": {1}})
+    data.write()
+    target = root / "baseline.json"
+    argv = ["--head", str(root), "--shards", "1", "--head-shards", str(root / "downloaded"), "--out", str(target)]
+    assert cache.main(argv) == 1
+    assert "::error::Cannot record the coverage baseline" in capsys.readouterr().out
+    assert not target.exists()
+
+
 def test_history_is_bounded_to_thirty_measurements(measured):
     root, state, shards = measured
     target = root / "baseline.json"
