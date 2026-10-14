@@ -85,7 +85,25 @@ def lookup(tmp_path):
             "jobs": jobs,
             "artifacts": ["coverage-baseline", "durations-merged"],
         }
-        if fault in {"reuse", "reuse-failed", "reuse-decision-failed"}:
+        changes = {
+            "unit": (jobs[0], "conclusion", "failure"),
+            "measure": (jobs[-2]["steps"][0], "conclusion", "failure"),
+            "publish": (jobs[-2]["steps"][1], "conclusion", "failure"),
+            "publisher-job": (jobs[-2], "conclusion", "failure"),
+            "outside-dev": (source, "ancestry", "diverged"),
+            "event": (source["run"], "event", "pull_request"),
+            "branch": (source["run"], "head_branch", "feature"),
+            "head": (source["run"], "head_sha", "other"),
+            "artifact": (source, "artifacts", []),
+        }
+        if fault in changes:
+            target, key, value = changes[fault]
+            target[key] = value
+        elif fault == "missing-unit":
+            jobs.pop(0)
+        elif fault == "missing-publisher":
+            jobs.pop(-2)
+        elif fault in {"reuse", "reuse-failed", "reuse-decision-failed"}:
             jobs[:] = [
                 jobs[-2],
                 jobs[-1],
@@ -101,28 +119,6 @@ def lookup(tmp_path):
                     ],
                 },
             ]
-        elif fault == "publisher-job":
-            jobs[-2]["conclusion"] = "failure"
-        elif fault == "unit":
-            jobs[0]["conclusion"] = "failure"
-        elif fault == "missing-unit":
-            jobs.pop(0)
-        elif fault == "measure":
-            jobs[-2]["steps"][0]["conclusion"] = "failure"
-        elif fault == "publish":
-            jobs[-2]["steps"][1]["conclusion"] = "failure"
-        elif fault == "missing-publisher":
-            jobs.pop(-2)
-        elif fault == "outside-dev":
-            source["ancestry"] = "diverged"
-        elif fault == "event":
-            source["run"]["event"] = "pull_request"
-        elif fault == "branch":
-            source["run"]["head_branch"] = "feature"
-        elif fault == "head":
-            source["run"]["head_sha"] = "other"
-        elif fault == "artifact":
-            source["artifacts"] = []
         output = tmp_path / "output"
         output.write_text("")
         requests = tmp_path / "requests"
