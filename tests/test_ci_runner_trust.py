@@ -246,6 +246,12 @@ def test_safe_pool_selector_passes_without_job_admission_skip(pool):
 
 
 @pytest.mark.parametrize("pool", ["anton-oss", "anton-oss-light", "anton-oss-batch"])
+def test_selector_preserves_the_existing_contract_by_default(pool):
+    policy = {"actors": ACTORS, "queue_actor": "github-merge-queue[bot]"}
+    assert ci_runner_trust.selector(policy, pool) == selector(pool)
+
+
+@pytest.mark.parametrize("pool", ["anton-oss", "anton-oss-light", "anton-oss-batch"])
 def test_safe_queue_rerun_selector_passes_without_job_admission_skip(pool):
     runner = selector(pool).replace(
         "github.triggering_actor == 'github-merge-queue[bot]'",
