@@ -5564,7 +5564,7 @@ def cmd_balance(
 
     session_env = dict(os.environ)
     _load_claude_runtime_env()
-    credentials = discover_credentials(router_environ(os.environ))
+    credentials = discover_credentials(router_environ(dict(os.environ)))
     live = sessions_by_account()
     if current:
         known = discover_credentials(session_env) + credentials

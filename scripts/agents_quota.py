@@ -317,7 +317,7 @@ def _claude(refresh: bool, timeout: float) -> list[QuotaRow]:
     from scripts.routing.claude_api import ClaudeApiSource
 
     _load_claude_runtime_env()
-    credentials = discover_credentials(router_environ(os.environ))
+    credentials = discover_credentials(router_environ(dict(os.environ)))
     sessions = sessions_by_account()
     if credentials:
         results, source = collect_results(

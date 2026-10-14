@@ -285,11 +285,10 @@ def _router_accounts(monkeypatch, count: int) -> list[str]:
         monkeypatch.delenv(name)
     monkeypatch.setenv(names[0], "token-1")
     monkeypatch.setattr(install, "_load_claude_runtime_env", lambda: None)
-    monkeypatch.setattr(operator_env, "block_tokens", lambda: {})
     monkeypatch.setattr(
         operator_env,
         "fill",
-        lambda environ: [monkeypatch.setenv(name, f"token-{n}") for n, name in enumerate(names, 1)],
+        lambda environ: environ.update({name: f"token-{n}" for n, name in enumerate(names, 1)}),
     )
     return [name.removeprefix("AH_CC_TOKEN_") for name in names]
 
@@ -310,6 +309,7 @@ def test_quota_lists_every_account_the_router_knows_from_a_one_token_session(mon
     monkeypatch.setattr(agents_quota, "api_rows", lambda source, harness, now: [])
     monkeypatch.setattr(agents_quota, "_masters", lambda harness="": {})
     assert [row.account for row in agents_quota._claude(False, 1.0)] == accounts
+    assert "AH_CC_TOKEN_acct7" not in os.environ
 
 
 def test_no_agent_rows_exit_one(monkeypatch, capsys):
