@@ -21,7 +21,7 @@ def test_browser_callbacks_record_only_executable_artifact_sanity_lines(tmp_path
         from scripts.swarm_ledger import artifact_sanity as sanity
 
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch()
+            browser = playwright.chromium.launch(channel="chromium")
             try:
                 files = sorted((root / 'tests/fixtures/artifacts').iterdir())
                 assert sanity.run(browser, files) == {path.name: [] for path in files}
