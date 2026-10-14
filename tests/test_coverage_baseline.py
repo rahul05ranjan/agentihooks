@@ -24,20 +24,24 @@ def measured(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("invalid", [0, 4, 5, 6, 99])
 def test_impossible_lines_cannot_replace_a_baseline(measured, invalid, capsys):
-    root, _, shards = measured
+    root, state, shards = measured
     source = root / "hooks/example.py"
     source.parent.mkdir(exist_ok=True)
     source.write_text('value = 1\nscript = """\nconst example = 1;\nconst other = 2;\n"""\n# comment\nvalue += 1\n')
     data = CoverageData(basename=str(shards[0]))
     data.erase()
-    data.add_lines({"hooks/example.py": {1, 2, 7, invalid}})
+    data.add_lines({"hooks/example.py": {1, 2, 7}})
     data.write()
     target = root / "baseline.json"
-    target.write_text("existing baseline")
-    with pytest.raises(ValueError, match="not executable"):
-        cache.record(root, shards, target)
+    cache.record(root, shards, target)
+    state.update(commit="next", tree="next-tree")
+    data.add_lines({"hooks/example.py": {invalid}})
+    data.write()
+    cache.record(root, shards, target, target)
     assert f"hooks/example.py:{invalid}" in capsys.readouterr().out
-    assert target.read_text() == "existing baseline"
+    value = cache.read(target)
+    assert value["executed"] == {"hooks/example.py": [1, 2, 7]}
+    assert value["history"][0]["executed"] == {"hooks/example.py": [1, 2, 7]}
 
 
 def test_publication_reports_every_impossible_line(measured, capsys):
@@ -49,12 +53,12 @@ def test_publication_reports_every_impossible_line(measured, capsys):
     data.erase()
     data.add_lines({"hooks/example.py": {1, 2, 99, 100}})
     data.write()
-    with pytest.raises(ValueError, match="not executable"):
-        cache.record(root, shards, root / "baseline.json")
+    target = root / "baseline.json"
+    cache.record(root, shards, target)
     output = capsys.readouterr().out
     assert "hooks/example.py:99" in output
     assert "hooks/example.py:100" in output
-    assert not (root / "baseline.json").exists()
+    assert cache.read(target)["executed"] == {"hooks/example.py": [1, 2]}
 
 
 def test_record_computes_the_baseline_from_coverage(measured):
