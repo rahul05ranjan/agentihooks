@@ -276,7 +276,7 @@ class TestHooksJson:
         assert "hooks.json unchanged; existing Codex hook trust holds" in out
         assert (codex_home() / "hooks.json").stat().st_mtime_ns == before
 
-    def test_changed_hooks_file_prints_trust_advice_once(self, adapter, capsys):
+    def test_changed_hooks_file_keeps_trust_without_advice(self, adapter, capsys):
         adapter.write_settings({})
         path = codex_home() / "hooks.json"
         doc = json.loads(path.read_text())
@@ -285,7 +285,9 @@ class TestHooksJson:
         capsys.readouterr()
         adapter.write_settings({})
         adapter.post_install_reconcile([], "")
-        assert capsys.readouterr().out.count("run /hooks") == 1
+        out = capsys.readouterr().out
+        assert "run /hooks inside codex" not in out
+        assert "Trusted" not in out
         assert "SessionStart" in json.loads(path.read_text())["hooks"]
 
     def test_install_trusts_every_entry_including_foreign_groups(self, adapter):
