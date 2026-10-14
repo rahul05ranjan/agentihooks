@@ -31,13 +31,20 @@ def rig(monkeypatch):
 
     def run(command, **kwargs):
         state["calls"].append((command, kwargs))
+        assert kwargs["cwd"] == "/repo"
+        assert command[:3] == ["gh", "repo", "view"] or command[:2] == ["gh", "api"]
+        if command[1] == "api" and command[2] != "graphql":
+            assert command[2].startswith("repos/owner/repo/")
         if command[1:3] == ["repo", "view"]:
+            assert command == ["gh", "repo", "view", "--json", "nameWithOwner"]
             data = {"nameWithOwner": REPO}
         elif command[2] == "graphql":
             data = {
                 "data": {
                     "repository": {
-                        "mergeQueue": {"entries": {"totalCount": state["queue"]}},
+                        "mergeQueue": {"entries": {"totalCount": state["queue"]}}
+                        if state["queue"] is not None
+                        else None,
                         "pullRequests": {
                             "nodes": [{"mergedAt": iso(state["merged"]), "updatedAt": iso(state["merged"])}],
                             "pageInfo": {"hasNextPage": False, "endCursor": None},
@@ -48,8 +55,10 @@ def rig(monkeypatch):
         elif "/actions/runs?" in command[2]:
             data = {"workflow_runs": [{"id": 11, "conclusion": "failure"}, {"id": 12, "conclusion": "failure"}]}
         elif "/actions/runs/11/jobs?" in command[2]:
+            assert command[2].endswith("&page=1")
             data = {"jobs": [{"name": "Coverage", "conclusion": "failure"}, {"name": "Tests", "conclusion": "success"}]}
         elif "/actions/runs/12/jobs?" in command[2]:
+            assert command[2].endswith("&page=1")
             data = {
                 "jobs": [{"name": "Coverage", "conclusion": "failure"}, {"name": "Mutation", "conclusion": "failure"}]
             }
@@ -81,7 +90,20 @@ def test_health_pass_reports_stalled_merge_queue_and_notifies_master(rig):
     inbox = InboxStore(store.redis)
     sent = ledger_events.findings_pass(inbox, store, "proof", found)
     assert len(sent) == 1
-    assert "Queue length: 3" in inbox.inbox("master@proof")[0].text
+    item = inbox.inbox("master@proof")[0]
+    assert item.sender == "swarm"
+    assert item.address == "master@proof"
+    assert item.ref == f"merge-stall:proof:{AT - HOUR}:{AT}"
+    assert item.text == (
+        "Merge stall on owner/repo: Dev has had no merge for 60 minutes with 3 queued entries. "
+        "Queue length: 3; Time since last dev merge: 60 minutes; "
+        "Most common failed check in the last 10 queue runs: Coverage (2 runs)"
+    )
+    assert found[0]["summary"] == "Dev has had no merge for 60 minutes with 3 queued entries"
+    assert found[0]["threshold"] == "sixty minutes without a dev merge while the queue holds entries; observation only"
+    from scripts.swarm.health import merge_stall
+
+    assert merge_stall.findings(store, "proof", config.repo, AT)[0].measure == 60
 
 
 @pytest.mark.parametrize("length,age", [(0, HOUR), (3, HOUR - 1), (0, 2 * HOUR), (3, 0)])
@@ -170,7 +192,18 @@ def test_last_merge_is_found_past_old_pulls_updated_recently(monkeypatch):
     monkeypatch.setattr(subprocess, "run", run)
     assert merge_stall.queue("/repo", REPO) == (123, AT - HOUR)
     assert len(commands) == 2
-    assert commands[1][-2:] == ["-f", "cursor=page-two"]
+    assert commands[0] == [
+        "gh",
+        "api",
+        "graphql",
+        "-f",
+        f"query={merge_stall.QUERY}",
+        "-f",
+        "owner=owner",
+        "-f",
+        "name=repo",
+    ]
+    assert commands[1] == [*commands[0], "-f", "cursor=page-two"]
 
 
 def test_failed_check_counts_runs_once_and_reads_all_jobs(monkeypatch):
@@ -180,6 +213,8 @@ def test_failed_check_counts_runs_once_and_reads_all_jobs(monkeypatch):
 
     def run(command, **kwargs):
         commands.append(command)
+        assert command[:2] == ["gh", "api"]
+        assert len(commands) <= 3
         if "/actions/runs?" in command[2]:
             data = {"workflow_runs": [{"id": 1, "conclusion": "failure"}, {"id": 2, "conclusion": "success"}]}
         elif command[2].endswith("&page=1"):
@@ -269,3 +304,81 @@ def test_every_github_request_renews_the_tick_before_waiting(monkeypatch):
             {"cwd": "/repo", "capture_output": True, "text": True, "timeout": 20},
         ),
     ]
+
+
+@pytest.mark.parametrize("length", [0, None])
+def test_an_empty_or_absent_dev_queue_returns_no_entries(rig, length):
+    from scripts.swarm.health import merge_stall
+
+    store, config, state = rig
+    state["queue"] = length
+    assert merge_stall.queue(config.repo, REPO) == (0, 0)
+
+
+@pytest.mark.parametrize("length,age", [(0, HOUR), (None, HOUR), (3, HOUR - 1), (3, 0)])
+def test_observation_of_a_queue_without_a_stall_skips_workflow_requests(rig, length, age):
+    from scripts.swarm.health import merge_stall
+
+    store, config, state = rig
+    state.update(queue=length, merged=AT - age)
+    expected_length = 0 if length is None else length
+    expected_merged = AT - age if length else 0
+    assert merge_stall.observe(config.repo, AT) == {
+        "repo": REPO,
+        "queue": expected_length,
+        "merged": expected_merged,
+        "failed": "none observed",
+        "at": AT,
+    }
+    assert len(state["calls"]) == 2
+
+
+def test_most_common_failed_check_wins_over_alphabetical_order(monkeypatch):
+    from scripts.swarm.health import merge_stall
+
+    def run(command, **kwargs):
+        assert command[:2] == ["gh", "api"]
+        if "/actions/runs?" in command[2]:
+            data = {
+                "workflow_runs": [
+                    {"id": 1, "conclusion": "success"},
+                    {"id": 2, "conclusion": "skipped"},
+                    {"id": 3, "conclusion": "failure"},
+                    {"id": 4, "conclusion": "failure"},
+                ]
+            }
+        elif "/runs/3/" in command[2]:
+            data = {"jobs": [{"name": "Aardvark", "conclusion": "failure"}, {"name": "Zebra", "conclusion": "failure"}]}
+        elif "/runs/4/" in command[2]:
+            data = {"jobs": [{"name": "Zebra", "conclusion": "failure"}]}
+        else:
+            raise AssertionError(command)
+        return subprocess.CompletedProcess(command, 0, json.dumps(data), "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    assert merge_stall.failed_checks("/repo", REPO) == "Zebra (2 runs)"
+
+
+def test_multiple_github_errors_remain_readable(monkeypatch):
+    from scripts.swarm.health import merge_stall
+    from scripts.swarm.store import SwarmError
+
+    def run(command, **kwargs):
+        return subprocess.CompletedProcess(command, 0, '{"errors":[{"message":"First"},{"message":"Second"}]}', "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    with pytest.raises(SwarmError) as error:
+        merge_stall.request("/repo", ["repo", "view"])
+    assert str(error.value) == "First; Second"
+
+
+def test_a_merge_stall_does_not_suppress_later_health_notices(rig):
+    from scripts.inbox.store import InboxStore
+    from scripts.swarm import ledger_events, status
+
+    store, config, state = rig
+    found = status.findings(store, "proof", config, [], [])
+    found.append({"id": "ceremony/worker", "kind": "ceremony", "subject": "worker", "summary": "Too many writes"})
+    inbox = InboxStore(store.redis)
+    assert len(ledger_events.findings_pass(inbox, store, "proof", found)) == 2
+    assert len(inbox.inbox("master@proof")) == 2
