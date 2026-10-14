@@ -19,7 +19,11 @@ def same(a, b):
         except (TypeError, ValueError):
             pass
     if isinstance(a, dict):
-        return a.keys() == b.keys() and all(same(value, b[key]) for key, value in a.items())
+        return a.keys() == b.keys() and all(
+            type(value) is type(b[key])
+            and (same(value, b[key]) if isinstance(value, (dict, list)) else value == b[key])
+            for key, value in a.items()
+        )
     if isinstance(a, list):
         return len(a) == len(b) and all(map(same, a, b))
     return a == b
