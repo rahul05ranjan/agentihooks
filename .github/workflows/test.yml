@@ -1252,11 +1252,18 @@ jobs:
           path: ~/coverage-baseline
           key: coverage-baseline-${{ steps.base.outputs.tree }}
 
+      - name: Check retained baseline history
+        id: cached-history
+        if: steps.cached.outputs.cache-hit == 'true'
+        run: |
+          retained=$(jq -r '.history | length > 0' "$HOME/coverage-baseline/baseline.json")
+          echo "retained=$retained" >> "$GITHUB_OUTPUT"
+
       # The cache evicts a baseline seven days after its last read, and a dev commit the queue merged may get no push run,
       # so a miss falls back to the artifact any passed run of the base kept.
       - name: Mint the tcc main ci App token
         id: app-token
-        if: steps.cached.outcome == 'success' && steps.cached.outputs.cache-hit != 'true'
+        if: steps.cached.outcome == 'success' && (steps.cached.outputs.cache-hit != 'true' || steps.cached-history.outputs.retained != 'true')
         uses: actions/create-github-app-token@v3.2.0
         with:
           client-id: ${{ secrets.TCC_CI_CLIENT_ID }}
@@ -1271,21 +1278,38 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           BASE: ${{ steps.base.outputs.commit }}
+          CACHED: ${{ steps.cached.outputs.cache-hit }}
         run: |
+          fallback=""
           runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/test.yml/runs?head_sha=$BASE&status=success&per_page=20" --jq '.workflow_runs[].id')
           for run in $runs; do
             kept=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts?name=coverage-baseline" --jq '[.artifacts[] | select(.expired | not)] | length')
             if [[ "$kept" -gt 0 ]]; then
-              echo "Restoring the coverage baseline of base $BASE from passed run $run"
-              echo "id=$run" >> "$GITHUB_OUTPUT"
-              exit 0
+              candidate="$RUNNER_TEMP/base-candidates/$run"
+              gh run download "$run" -n coverage-baseline -D "$candidate" -R "$GITHUB_REPOSITORY"
+              snapshots=$(jq '.history | length' "$candidate/baseline.json")
+              if [[ "$snapshots" -gt 0 ]]; then
+                echo "Restoring the coverage history of base $BASE from passed run $run"
+                echo "id=$run" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              fallback="${fallback:-$run}"
             fi
           done
+          if [[ "${CACHED:-false}" == true ]]; then
+            echo "Keeping the cached exact base baseline; no artifact retained history."
+            exit 0
+          fi
+          if [[ -n "$fallback" ]]; then
+            echo "Restoring the exact base baseline from passed run $fallback without history."
+            echo "id=$fallback" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           echo "::error::No passed Tests run on base $BASE kept a live coverage-baseline artifact."
           exit 1
 
       - name: Download the base baseline its run published
-        if: steps.base-run.outcome == 'success'
+        if: steps.base-run.outcome == 'success' && steps.base-run.outputs.id != ''
         uses: actions/download-artifact@v4
         with:
           name: coverage-baseline
