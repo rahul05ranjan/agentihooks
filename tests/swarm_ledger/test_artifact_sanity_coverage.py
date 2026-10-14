@@ -4,8 +4,11 @@ import sys
 import textwrap
 from pathlib import Path
 
+import pytest
 
-def test_browser_callbacks_record_only_executable_artifact_sanity_lines(tmp_path):
+
+@pytest.mark.skipif(sys.version_info[:2] != (3, 12), reason="Browser coverage runs on Python 3.12")
+def test_browser_callbacks_record_only_executable_artifact_sanity_lines():
     root = Path(__file__).parents[2]
     script = textwrap.dedent("""
         import dis
