@@ -43,6 +43,15 @@ def test_nonfinite_nested_values_keep_their_comparison_behavior():
     assert patch.diff(value, value) is not None
 
 
+def test_default_list_comparison_keeps_nonfinite_values_changed():
+    value = [math.nan]
+    assert patch.overlap(value, value) == 1
+    change = patch.list_diff(value, value)
+    assert change["drop"] == 1
+    assert change["add"] == value
+    assert change["u"] == []
+
+
 def test_non_json_values_keep_the_legacy_comparison():
     old, new = [{1, 2}] * 16, [{2, 1}] * 16
     assert patch.diff(old, new) is None

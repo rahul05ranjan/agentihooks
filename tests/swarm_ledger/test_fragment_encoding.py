@@ -75,3 +75,19 @@ def test_large_integers_keep_canonical_precision_in_the_fallback():
     assert same is first
     assert changed.text == encode(changed.value)
     assert changed.value["tasks"][0]["value"] == 2**100 + 1
+
+
+def test_fallback_signature_preserves_changed_number_types():
+    old = document({"tasks": [{"large": 2**100, "value": True}]})
+    new = document({"tasks": [{"large": 2**100, "value": 1}]}, old)
+    assert type(new.value["tasks"][0]["value"]) is int
+    assert new.value["tasks"][0] is not old.value["tasks"][0]
+    assert new.text == encode(new.value)
+    assert type(old.value["tasks"][0]["value"]) is bool
+
+
+def test_scalar_metadata_remains_a_leaf():
+    value = {"_meta": "scalar"}
+    result = document(value)
+    assert result.value == value
+    assert result.text == encode(value)
