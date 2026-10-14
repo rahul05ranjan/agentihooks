@@ -224,7 +224,7 @@ def _paged(commit, field, page, run):
     for _ in range(MAX_PAGES):
         if not info.get("hasNextPage"):
             return nodes
-        if not commit or not info.get("endCursor"):
+        if not commit:
             return None
         query, path = PAGES[field]
         page = _graphql(query, run, id=commit, after=info["endCursor"]).get("node")
