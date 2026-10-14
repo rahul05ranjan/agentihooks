@@ -89,6 +89,39 @@ def test_immutable_snapshot_baseline_and_unwatched_resources():
     assert hub.channels[SLUG].seq == 0
 
 
+@pytest.mark.parametrize("change", ["metadata", "copy", "append", "reorder", "no_ids"])
+def test_snapshot_comparison_work_is_bounded_by_changed_structure(change, monkeypatch):
+    shared = [{"id": str(index), "values": list(range(64))} for index in range(32)]
+    if change == "no_ids":
+        shared = [list(range(64)) for _ in range(32)]
+    tasks = shared
+    if change == "copy":
+        tasks = list(shared)
+    elif change in {"append", "no_ids"}:
+        tasks = [*shared, {"id": "added", "values": []}]
+    elif change == "reorder":
+        tasks = list(reversed(shared))
+    old, new = ledger(1, tasks=shared), ledger(2, tasks=tasks)
+    hub = Hub()
+    hub.open(SLUG, lambda: {"ledger": ledger(0)})
+    hub.publish_snapshot(SLUG, "ledger", old)
+    calls = 0
+    original = events_hub.patch.same
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(events_hub.patch, "same", counted)
+    assert hub.publish_snapshot(SLUG, "ledger", new)
+    budget = 20 if change == "metadata" else len(shared) * (3 if change in {"append", "reorder"} else 1) + 20
+    assert calls <= budget
+    frames = hub.wait(SLUG, 1, 0)
+    assert len(frames) == 1
+    assert apply(old, frames[0][3]["patch"]) == new
+
+
 def test_publishing_an_unchanged_value_or_an_unwatched_ledger_adds_nothing():
     hub = Hub()
     assert not hub.publish(SLUG, "ledger", ledger(1))
