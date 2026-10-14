@@ -86,20 +86,3 @@ def test_module_prints_a_worker_count_within_this_container():
     if quota is not None:
         assert workers <= max(1, int(quota))
     assert f"pytest workers {workers}" in result.stderr
-
-
-def test_unit_shard_command_evaluates_to_a_count_within_this_container():
-    (line,) = [
-        line.strip()
-        for line in (_ROOT / ".github/workflows/test.yml").read_text().splitlines()
-        if line.strip().startswith("run: workers=$(python -m scripts.ci_cpu_quota) && ")
-    ]
-    prefix = line.removeprefix("run: ").split(" && ")[0]
-    result = subprocess.run(
-        ["bash", "-e", "-c", f'{prefix} && echo "$workers"'], cwd=_ROOT, capture_output=True, text=True, check=True
-    )
-    workers = int(result.stdout)
-    assert 1 <= workers <= len(os.sched_getaffinity(0))
-    quota = quota_cpus()
-    if quota is not None:
-        assert workers <= max(1, int(quota))

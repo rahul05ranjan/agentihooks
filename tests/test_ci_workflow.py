@@ -48,6 +48,17 @@ def test_workflow_runs_whole_suite_in_parallel():
     assert "-m unit" not in command
 
 
+def test_workflow_worker_count_stays_within_this_container():
+    prefix = _pytest_command().strip().removeprefix("run: ").split(" && ")[0]
+    result = subprocess.run(
+        ["bash", "-e", "-c", f'{prefix} && echo "$workers"'], cwd=_ROOT, capture_output=True, text=True, check=True
+    )
+    workers = int(result.stdout)
+    quota = re.search(r"cpu quota (\S+),", result.stderr).group(1)
+    assert 1 <= workers <= len(os.sched_getaffinity(0))
+    assert quota == "None" or workers <= max(1, int(float(quota)))
+
+
 def test_workflow_keeps_xdist_groups_on_one_worker():
     assert "--dist loadgroup" in _pytest_command()
 
