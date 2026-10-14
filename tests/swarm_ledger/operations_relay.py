@@ -35,7 +35,7 @@ def install(tmp_path, monkeypatch, slug, server):
         )
         return {
             "items": [asdict(item) for item in inbox.inbox(master.seat)],
-            "receipts": {mark: redis.get(mark) for mark in marks},
+            "receipts": {mark.removeprefix(inbox.key()): redis.get(mark) for mark in marks},
             "unrelayed": server.unrelayed(),
             "control": [call.args for call in control.call_args_list],
         }
