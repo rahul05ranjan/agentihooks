@@ -936,22 +936,40 @@ def test_the_probe_refuses_a_next_page_without_a_cursor():
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize("more", [False, True])
+def test_the_probe_reads_up_to_its_page_cap_and_refuses_beyond(more):
+    from scripts.swarm.ledger_events import MAX_PAGES
+
+    def page(n, last):
+        info = {"hasNextPage": not last or more, "endCursor": f"c{n}"}
+        nodes = [{"name": f"job {n}", "conclusion": "SUCCESS", "databaseId": n}]
+        return {"data": {"node": {"statusCheckRollup": {"contexts": {"nodes": nodes, "pageInfo": info}}}}}
+
+    first = {"nodes": [], "pageInfo": {"hasNextPage": True, "endCursor": "c0"}}
+    pages = [page(n, n == MAX_PAGES) for n in range(1, MAX_PAGES + 1)]
+    run, calls = paged(big_head(first, NO_SUITES), *pages)
+    pull = github_view(URL, run)
+    assert len(calls) == MAX_PAGES + 1
+    assert (pull is None) is more
+    assert more or pull.resolved is True
+
+
 TESTS_SUITE = {"workflowRun": {"workflow": {"name": "Tests"}}}
 DOCS_SUITE = {"workflowRun": {"workflow": {"name": "Docs"}}}
 
 
-@pytest.mark.parametrize("order", [1, -1])
+@pytest.mark.parametrize("reverse", [False, True])
 @pytest.mark.parametrize(
     "older, newer, red",
     [("FAILURE", "SUCCESS", False), ("SUCCESS", "FAILURE", True), ("TIMED_OUT", "SUCCESS", False)],
 )
-def test_the_probe_judges_only_the_newest_run_of_each_check(order, older, newer, red):
+def test_the_probe_judges_only_the_newest_run_of_each_check(reverse, older, newer, red):
     rollup = [
         {"name": "unit", "conclusion": older, "databaseId": 11, "checkSuite": TESTS_SUITE},
         {"name": "unit", "conclusion": newer, "databaseId": 12, "checkSuite": TESTS_SUITE},
         {"name": "unit", "conclusion": "SUCCESS", "databaseId": 10, "checkSuite": DOCS_SUITE},
-    ][::order]
-    pull = probe(rollup, [APP_SUITE])
+    ]
+    pull = probe(rollup[::-1] if reverse else rollup, [APP_SUITE])
     assert pull.resolved is True
     assert pull.red is red
     assert pull.failed == (("unit",) if red else ())
@@ -965,18 +983,25 @@ def test_the_probe_keeps_the_same_check_name_of_another_workflow():
     assert probe(rollup, [APP_SUITE]).failed == ("unit",)
 
 
-def test_a_superseded_failure_never_ends_a_checks_wait(tick):
+@pytest.mark.parametrize(
+    "older, newer, told",
+    [
+        ("FAILURE", None, []),
+        ("FAILURE", "SUCCESS", [f"ended the wait of {ME}: checks on {URL}, now green"]),
+        ("SUCCESS", "FAILURE", [f"ended the wait of {ME}: checks on {URL}, now red"]),
+    ],
+)
+def test_a_superseded_failure_never_ends_a_checks_wait(tick, older, newer, told):
     rollup = [
-        {"name": "unit", "conclusion": "FAILURE", "databaseId": 1, "checkSuite": TESTS_SUITE},
+        {"name": "unit", "conclusion": older, "databaseId": 1, "checkSuite": TESTS_SUITE},
         {"name": "lint", "conclusion": "SUCCESS", "databaseId": 2, "checkSuite": TESTS_SUITE},
-        {"name": "unit", "conclusion": None, "databaseId": 3, "checkSuite": TESTS_SUITE},
+        {"name": "unit", "conclusion": newer, "databaseId": 3, "checkSuite": TESTS_SUITE},
     ]
     tick.hold("checks", URL)
     tick.pulls[URL] = probe(rollup, [APP_SUITE])
     assert tick.end() == []
-    assert tick.end() == []
-    assert tick.told() == []
-    assert idle.wait(tick.store.redis, "sw", ME)["on"]["head"] == "second"
+    assert tick.end() == told
+    assert (idle.wait(tick.store.redis, "sw", ME) is None) is bool(told)
 
 
 def test_a_checks_wait_stays_held_while_the_new_heads_run_is_queued(tick):

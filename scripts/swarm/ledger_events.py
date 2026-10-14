@@ -42,30 +42,26 @@ PENDING = {None, "", "PENDING", "EXPECTED"}
 GATE = "Gate — Required"
 RED_NOTICE = re.compile(r"^Your pull request (\S+) for .* has red checks and no push for twenty minutes\.")
 GATE_JOB = re.compile(rf"^[ \t]+name:[ \t]*(['\"]?){re.escape(GATE)}\1[ \t]*$", re.MULTILINE)
+CONTEXT_NODES = (
+    "nodes{...on CheckRun{databaseId name conclusion completedAt checkSuite{workflowRun{workflow{name}}}} "
+    "...on StatusContext{context state createdAt}} pageInfo{hasNextPage endCursor}"
+)
+SUITE_NODES = "nodes{status workflowRun{databaseId createdAt}} pageInfo{hasNextPage endCursor}"
 PULL_QUERY = (
     "query($url:URI!){resource(url:$url){...on PullRequest{state mergedAt headRefOid mergeQueueEntry{id} "
     "mergeable isDraft "
     "commits(last:1){nodes{commit{id committedDate "
     'file(path:".github/workflows"){object{...on Tree{entries{object{...on Blob{text}}}}}} '
-    "statusCheckRollup{contexts(first:100){"
-    "nodes{...on CheckRun{databaseId name conclusion completedAt checkSuite{workflowRun{workflow{name}}}} "
-    "...on StatusContext{context state createdAt}} "
-    "pageInfo{hasNextPage endCursor}}} checkSuites(first:100){nodes{status workflowRun{databaseId createdAt}} "
-    "pageInfo{hasNextPage endCursor}}}}}}}}"
+    "statusCheckRollup{contexts(first:100){" + CONTEXT_NODES + "}} "
+    "checkSuites(first:100){" + SUITE_NODES + "}}}}}}}"
 )
-PAGE_QUERY = "query($id:ID!,$after:String!){node(id:$id){...on Commit{%s}}}"
+PAGE = "query($id:ID!,$after:String!){node(id:$id){...on Commit{"
 PAGES = {
     "contexts": (
-        "statusCheckRollup{contexts(first:100,after:$after){"
-        "nodes{...on CheckRun{databaseId name conclusion completedAt checkSuite{workflowRun{workflow{name}}}} "
-        "...on StatusContext{context state createdAt}} pageInfo{hasNextPage endCursor}}}",
+        PAGE + "statusCheckRollup{contexts(first:100,after:$after){" + CONTEXT_NODES + "}}}}}",
         ("statusCheckRollup", "contexts"),
     ),
-    "checkSuites": (
-        "checkSuites(first:100,after:$after){nodes{status workflowRun{databaseId createdAt}} "
-        "pageInfo{hasNextPage endCursor}}",
-        ("checkSuites",),
-    ),
+    "checkSuites": (PAGE + "checkSuites(first:100,after:$after){" + SUITE_NODES + "}}}}", ("checkSuites",)),
 }
 MAX_PAGES = 20
 
@@ -138,7 +134,7 @@ def _newest(checks):
         mark = (check.get("databaseId") or 0, check.get("createdAt") or "", order)
         if key not in latest or mark > latest[key][0]:
             latest[key] = (mark, check)
-    return [check for _, check in latest.values()]
+    return [check for _, check in sorted(latest.values(), key=lambda pair: pair[0][2])]
 
 
 def red_window(pushed_at, red_at, now_ms):
@@ -226,11 +222,11 @@ def _paged(commit, field, page, run):
         if not commit or not info.get("endCursor"):
             return None
         query, path = PAGES[field]
-        page = _graphql(PAGE_QUERY % query, run, id=commit, after=info["endCursor"]).get("node")
+        page = _graphql(query, run, id=commit, after=info["endCursor"]).get("node")
         for key in path:
             page = page[key]
         nodes, info = nodes + list(page["nodes"]), page["pageInfo"]
-    return None
+    return None if info.get("hasNextPage") else nodes
 
 
 def views(
