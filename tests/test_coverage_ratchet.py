@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from coverage import CoverageData
+from coverage.exceptions import NotPython
 
 from tests import coverage_history
 from tests import coverage_ratchet as ratchet
@@ -63,6 +64,31 @@ def test_a_statement_the_head_runs_only_through_its_continuation_lines_is_kept()
     base = _measure("b1", {"hooks/a.py": {1}}, {"hooks/a.py": source})
     result = ratchet.grade({"hooks/a.py": {2, 3}}, lambda path: source, iter([base]))
     assert result.lost == {}
+
+
+def test_a_statement_whose_first_line_changed_is_lost_when_the_head_stops_running_it():
+    old = "v = max(\n    1,\n    2,\n)\n"
+    new = "v = min(\n    1,\n    2,\n)\n"
+    base = _measure("b1", {"hooks/a.py": {2, 3}}, {"hooks/a.py": old})
+    result = ratchet.grade({"hooks/a.py": set()}, lambda path: new, iter([base]))
+    assert result.lost == {"hooks/a.py": [1]}
+
+
+def test_history_that_ran_a_statement_only_through_continuation_lines_keeps_it_lost():
+    source = "v = max(\n    1,\n    2,\n)\n"
+    runs = [
+        _measure(commit, {"hooks/a.py": lines}, {"hooks/a.py": source})
+        for commit, lines in [("b1", {1, 2, 3}), ("b2", {2, 3}), ("b3", {2, 3})]
+    ]
+    result = ratchet.grade({"hooks/a.py": set()}, lambda path: source, iter(runs))
+    assert result.lost == {"hooks/a.py": [1]}
+    assert result.unconfirmed == {}
+
+
+def test_an_unparsable_source_cannot_be_graded():
+    base = _measure("b1", {"hooks/a.py": {1}}, {"hooks/a.py": "def (\n"})
+    with pytest.raises(NotPython):
+        ratchet.grade({"hooks/a.py": set()}, lambda path: "def (\n", iter([base]))
 
 
 def test_an_added_line_no_test_runs_is_not_a_lost_line():

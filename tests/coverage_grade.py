@@ -118,14 +118,19 @@ def _lost(
         targets = (moved,) if isinstance(moved, str) else moved
         gone = set()
         old = base.source(path)
-        statements = set(statements_of(old, ran).values()) if old is not None else set()
+        statement_of = statements_of(old, ran) if old is not None else {}
         for target in targets:
             new = head_source(target)
             if old is None or new is None:
                 continue
             mapped = line_map(old, new) if isinstance(moved, str) else _split_map(old, new)
+            head_statement_of = statements_of(new, [mapped[line] for line in statement_of if line in mapped])
             covered = set(statements_of(new, head.get(target, set())).values())
-            gone.update(line for line in statements if line in mapped and mapped[line] not in covered)
+            gone.update(
+                statement
+                for line, statement in statement_of.items()
+                if line in mapped and head_statement_of.get(mapped[line]) not in covered
+            )
         if gone:
             lost[path] = sorted(gone)
     return lost
@@ -141,7 +146,8 @@ def _statuses(base_source: str, path: str, lines: list[int], run: Measurement, o
     if old is None or path not in run.executed:
         return {}
     mapped = line_map(base_source, old)
-    return {line: mapped[line] in run.executed[path] for line in lines if line in mapped}
+    ran = set(statements_of(old, run.executed[path]).values())
+    return {line: mapped[line] in ran for line in lines if line in mapped}
 
 
 def _flaky(history: list[bool]) -> bool:

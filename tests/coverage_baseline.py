@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 from coverage import CoverageData
+from coverage.exceptions import NotPython
 
 from tests.coverage_grade import statements_of
 
@@ -76,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
         if downloaded != sorted(shard.parent.name for shard in shards):
             raise ValueError(f"downloaded shard coverage {downloaded} is not the {args.shards} shards the run split")
         record(args.head, shards, args.out, args.previous)
-    except (subprocess.CalledProcessError, KeyError, ValueError, OSError) as exc:
+    except (subprocess.CalledProcessError, KeyError, ValueError, OSError, NotPython) as exc:
         print(f"::error::Cannot record the coverage baseline: {exc}")
         return 1
     return 0
