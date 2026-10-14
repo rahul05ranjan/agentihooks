@@ -133,11 +133,11 @@ def test_a_publish_builds_its_patch_while_holding_the_channel_lock(monkeypatch):
         if got:
             hub.changed.release()
 
-    def diff(old, new):
+    def diff(old, new, **options):
         other = threading.Thread(target=try_lock)
         other.start()
         other.join()
-        return real_diff(old, new)
+        return real_diff(old, new, **options)
 
     monkeypatch.setattr(events_hub.patch, "diff", diff)
     hub.publish(SLUG, "ledger", ledger(2))
