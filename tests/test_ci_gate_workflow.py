@@ -336,6 +336,8 @@ def test_durations_restores_the_parent_baseline_when_the_dispatched_base_is_the_
     (bin_dir / "gh").write_text(
         "#!/usr/bin/env bash\n"
         'case "$2" in\n'
+        "  */compare/*) echo ahead ;;\n"
+        '  */jobs*) jq -nc \'[range(1;13) | {name: ("unit (3.12, " + tostring + ")"), conclusion: "success"}] + [range(1;7) | {name: ("unit (3.11, " + tostring + ")"), conclusion: "success"}] + [{name: "coverage-baseline", conclusion: "success", steps: [{name: "Compute the coverage baseline", conclusion: "success"}, {name: "Publish the passed dev coverage baseline", conclusion: "success"}]}]\' | jq -c \'.[]\' ;;\n'
         "  */commits/head) [[ $4 == .sha ]] && echo head || echo parent ;;\n"
         "  */commits/*) echo other ;;\n"
         '  */runs\\?*) s="${2##*head_sha=}"; s="${s%%&*}"; echo "run-$s $s" ;;\n'
