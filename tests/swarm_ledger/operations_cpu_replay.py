@@ -59,9 +59,10 @@ def replay(tmp_path, monkeypatch, profiled=False):
     repository.import_document(SLUG, recorded["state"])
     monkeypatch.setattr(server, "repository", Publishing(repository, server.publish_ledger))
     sequence, _ = server.HUB.open(SLUG, lambda: {"ledger": server.ledger_view(repository.get_document(SLUG))})
-    phases = {}
+    phases = {"request_read": 0.0}
     for instance, method, name in (
         (server.repository, "get_document", "request_read"),
+        (server.repository, "current", "current_snapshot"),
         (server.repository, "apply_ops", "write_and_publish"),
         (repository, "_write", "storage_write"),
         (server.HUB, "publish", "stream_publish"),

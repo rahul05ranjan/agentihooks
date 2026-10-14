@@ -361,7 +361,7 @@ class SQLiteLedgerRepository:
         return None if row is None else row[0]
 
     def apply_ops(
-        self, slug: str, changes: list | None = None, ops: list | None = None, gate=None
+        self, slug: str, changes: list | None = None, ops: list | None = None, gate=None, *, copy_state: bool = True
     ) -> tuple[dict, list]:
         from . import mutation
 
@@ -374,7 +374,7 @@ class SQLiteLedgerRepository:
                 rejected, ctx = mutation.apply(slug, state, self.domain, changes, ops, gate)
                 written = self._write(connection, slug, entry, state, ctx.events if ctx.changed else [])
             self._remember(slug, written)
-        return json.loads(written.text), rejected
+        return (json.loads(written.text) if copy_state else written.state), rejected
 
     def _write(self, connection, slug: str, entry: Entry, state: dict, events: list) -> Entry:
         before, after = diff(*(without_events(document) for document in (entry.state, state)))

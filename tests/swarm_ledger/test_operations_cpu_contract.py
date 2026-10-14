@@ -45,6 +45,7 @@ def test_small_replay_keeps_acceptance_refusal_and_reports_real_phases(tmp_path,
     assert measured["outputs"][0]["relays"]["relay_to_inbox"]
     assert set(measured["phase_cpu_seconds_per_request"]) == {
         "request_read",
+        "current_snapshot",
         "storage_write",
         "stream_publish",
         "write_and_publish",

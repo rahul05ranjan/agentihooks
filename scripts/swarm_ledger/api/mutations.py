@@ -70,7 +70,7 @@ class GuardedOperations:
 
 
 def apply(server: ModuleType, slug: str, principal: str, payload: dict) -> dict:
-    doc = server.repository.get_document(slug)
+    doc = server.repository.current(slug).state
     operations = schemas.check_operations(payload, server.core, tuple(t["id"] for t in doc.get("tasks", [])))
     refusals = [reason for op in operations if (reason := server.authority.refusal(principal, op))]
     if principal and payload.get("changes"):
@@ -90,7 +90,7 @@ def apply(server: ModuleType, slug: str, principal: str, payload: dict) -> dict:
         screen,
         GuardedOperations(payload, fence, server.core, lambda epoch: server.authority.fence(slug, epoch)),
     )
-    state, rejected = server.repository.apply_ops(slug, ops=operations, gate=gate)
+    state, rejected = server.repository.apply_ops(slug, ops=operations, gate=gate, copy_state=False)
     fence.publish(rejected)
     server.relay_to_inbox(slug, state)
     server.doctor_phrase(slug, state)
