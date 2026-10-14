@@ -105,6 +105,12 @@ class FencedRuntime:
             return False
         return self.deployment != LOCAL or self.runtime.has_capacity(config)
 
+    def lead_master_has_capacity(self, config) -> bool:
+        lease.renew(self.store, self.slug, self.held)
+        if self._mode_refusal():
+            return False
+        return self.deployment != LOCAL or self.runtime.lead_master_has_capacity(config)
+
     def spawn(self, config, lane, name, task):
         lease.renew(self.store, self.slug, self.held)
         if refused := self.placement_refusal(lane, task):

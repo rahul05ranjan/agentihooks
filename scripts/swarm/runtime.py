@@ -372,7 +372,24 @@ class HerdrRuntime:
 
         return [row for row in self._quota_open() if row.harness == harness and free_seats(row)]
 
-    def _quota_choice(self, agent, reason, fixed, lane):
+    def _lead_master_rows(self, harness):
+        """The lead master never waits on a session cap: every account of the harness with window room, open ones
+        first, then the most room under its cap."""
+        warned = self._quota_warned()
+        rows = [row for row in self._quota_accounts if row.harness == harness and row.cap]
+        return sorted(
+            rows, key=lambda row: ((row.harness, row.name) in warned, row.sessions - row.cap, -(row.week_left or 0))
+        )
+
+    def lead_master_has_capacity(self, config):
+        if self.has_capacity(config):
+            return True
+        if not hasattr(self, "_quota_accounts"):
+            return False
+        want = affinity.desired(config)
+        return any(self._lead_master_rows(h) for h in ((want,) if want else agent_choice.AGENTS))
+
+    def _quota_choice(self, agent, reason, fixed, lane, lead=False):
         if not hasattr(self, "_quota_accounts"):
             return agent, reason
         allocation = getattr(self, "_quota_allocations", {}).get(lane)
@@ -381,6 +398,10 @@ class HerdrRuntime:
             return agent, reason
         if not fixed and eligible:
             return eligible[0], f"fallthrough: {agent} has no placeable quota seats"
+        harnesses = (agent,) if fixed else agent_choice.preferring(agent)
+        past = next((h for h in harnesses if self._lead_master_rows(h)), None) if lead else None
+        if past:
+            return past, f"lead master past the session cap: {agent} has no placeable quota seats"
         raise SpawnError(self._quota_refusal(agent, None if fixed else agent_choice.AGENTS), "unavailable")
 
     def _rotation(self, requested, environ, prefer=()):
@@ -463,7 +484,7 @@ class HerdrRuntime:
         harness = getattr(self, "_quota_tasks", {}).get(task_id)
         return (harness, getattr(self, "_quota_task_accounts", {}).get(task_id)) if harness else None
 
-    def _quota_account(self, agent, preferred, excluded):
+    def _quota_account(self, agent, preferred, excluded, lead=False):
         from scripts.swarm.capacity import offered, pick
 
         eligible = [row for row in self._quota_eligible(agent) if row.name != excluded]
@@ -472,7 +493,10 @@ class HerdrRuntime:
             rows = [row for row in self._quota_accounts if row.harness == agent]
             seat = pick(offered(rows, {(row.harness, row.name) for row in rows if row not in eligible}))
             if seat is None:
-                raise SpawnError(self._quota_refusal(agent), "unavailable")
+                past = [row for row in self._lead_master_rows(agent) if row.name != excluded] if lead else []
+                if not past:
+                    raise SpawnError(self._quota_refusal(agent), "unavailable")
+                return next((row for row in past if row.name == preferred), past[0])
             row = next(row for row in eligible if row.name == seat.account)
         return row
 
@@ -515,10 +539,11 @@ class HerdrRuntime:
         planned = getattr(self, "_quota_tasks", {}).get(task["id"])
         if planned and not (requested or saved or want):
             agent, reason = planned, "fallthrough: quota reservation"
+        lead = lane == MASTER and task["id"] == MASTER
         agent, reason = (
             (agent, reason)
             if route_kind == "interactive"
-            else self._quota_choice(agent, reason, bool(requested or quota_transfer or want), lane)
+            else self._quota_choice(agent, reason, bool(requested or quota_transfer or want), lane, lead)
         )
         if saved and agent != saved["harness"]:
             saved = {key: value for key, value in saved.items() if key not in ("model", "account")}
@@ -568,7 +593,9 @@ class HerdrRuntime:
         )
         account = None
         if hasattr(self, "_quota_accounts") and route_kind != "interactive":
-            account = self._quota_account(agent, saved.get("account") or self.planned_account(task["id"], agent), None)
+            account = self._quota_account(
+                agent, saved.get("account") or self.planned_account(task["id"], agent), None, lead
+            )
             route = ["--route", account.name]
         placed = timing.call(
             self._launch,
