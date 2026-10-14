@@ -266,6 +266,8 @@ def test_a_dev_run_without_a_baseline_still_restores_its_durations(lookup):
 
 @pytest.fixture
 def base_run(tmp_path):
+    import json
+
     find = _step(_jobs()["queue-baseline"]["steps"], "Find the run that measured the base tree")
     tools = tmp_path / "bin"
     tools.mkdir()
@@ -279,7 +281,8 @@ def base_run(tmp_path):
         ' jq -n --argjson id "$r" --arg s "$s" --arg e "$e" \'{id: $id, status: $s, event: $e}\'; done'
         " | jq -s '{workflow_runs: .}' | jq -r \"$4\" ;;\n"
         '  */artifacts*) n=$(cat "$POLLS"); echo $((n + 1)) > "$POLLS"; '
-        '[[ "$2" == *"/$FAKE_KEPT_BY/"* && $n -ge $FAKE_AFTER ]] && printf 1 || printf 0 ;;\n'
+        'id="${2%/artifacts*}"; id="${id##*/}"; '
+        '[[ " $FAKE_KEPT_BY " == *" $id "* && $n -ge $FAKE_AFTER ]] && printf 1 || printf 0 ;;\n'
         "esac\n"
     )
     (tools / "gh").chmod(0o755)
@@ -287,6 +290,7 @@ def base_run(tmp_path):
     (tools / "sleep").chmod(0o755)
 
     def run(runs="111 222", kept_by="222", after=0, wait="600", fail_runs="", status="in_progress", dispatch=""):
+        history = kept_by if isinstance(kept_by, dict) else {kept_by: 0}
         output = tmp_path / "output"
         output.write_text("")
         polls = tmp_path / "polls"
@@ -297,7 +301,9 @@ def base_run(tmp_path):
             ARGS=str(tmp_path / "args"),
             POLLS=str(polls),
             FAKE_RUNS=runs,
-            FAKE_KEPT_BY=kept_by,
+            FAKE_KEPT_BY=" ".join(history),
+            FAKE_HISTORY=json.dumps(history),
+            RUNNER_TEMP=str(tmp_path),
             FAKE_AFTER=str(after),
             FAIL_RUNS=fail_runs,
             FAKE_STATUS=status,
