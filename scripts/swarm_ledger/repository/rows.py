@@ -74,8 +74,6 @@ def _dict_paths_match(left, right):
 
 
 def _child_paths_match(left, right, old_children, new_children):
-    if type(left) is dict and _dict_paths_match(left, right):
-        return True
     if type(left) is list:
         old_paths, new_paths = _list_paths(old_children), _list_paths(new_children)
         if old_paths is not None and new_paths is not None:
