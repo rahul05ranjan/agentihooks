@@ -51,6 +51,13 @@ def test_a_line_the_base_ran_and_the_head_no_longer_runs_is_lost():
     assert result.lost == {"hooks/a.py": [3]}
 
 
+def test_a_base_line_that_is_no_statement_of_the_base_source_is_never_lost():
+    source = 'SCRIPT = """\nconst a = 1;\n"""\n\n\ndef f(x):\n    return x\n'
+    base = _measure("b1", {"hooks/a.py": {1, 2, 6, 7}}, {"hooks/a.py": source})
+    result = ratchet.grade({"hooks/a.py": {1, 6}}, lambda path: source, iter([base]))
+    assert result.lost == {"hooks/a.py": [7]}
+
+
 def test_an_added_line_no_test_runs_is_not_a_lost_line():
     head_source = SOURCE + "\n\ndef g():\n    return 3\n"
     base = _measure("b1", {"hooks/a.py": {1, 2, 3}}, {"hooks/a.py": SOURCE})
