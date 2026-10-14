@@ -1,4 +1,4 @@
-import locale
+import io
 import os
 from pathlib import Path
 
@@ -113,15 +113,18 @@ def test_newest_reflog_event_is_used_even_when_entries_are_not_chronological(rep
     assert (finding.action, finding.reason) == ("keep", "clean, recent")
 
 
-def test_reflog_activity_is_independent_of_locale_encoding(repo):
+def test_reflog_activity_is_independent_of_default_encoding(repo, monkeypatch):
     git(repo.primary, "config", "user.name", "José")
     path = repo.worktree("unicode-event")
     age(path, 3 * 3600)
     git(path, "reflog", "expire", "--all", "--expire=never", "--expire-unreachable=never")
-    original = locale.setlocale(locale.LC_CTYPE)
-    try:
-        locale.setlocale(locale.LC_CTYPE, "C")
-        finding = classify(path, repo.root(), snap())
-        assert (finding.action, finding.reason) == ("remove", "clean and on a remote")
-    finally:
-        locale.setlocale(locale.LC_CTYPE, original)
+    original = io.text_encoding
+
+    def encoding(value, *args):
+        return "ascii" if value is None else original(value, *args)
+
+    monkeypatch.setattr(io, "text_encoding", encoding)
+    with pytest.raises(UnicodeDecodeError):
+        (admin_dir(path) / "logs" / "HEAD").read_text()
+    finding = classify(path, repo.root(), snap())
+    assert (finding.action, finding.reason) == ("remove", "clean and on a remote")
