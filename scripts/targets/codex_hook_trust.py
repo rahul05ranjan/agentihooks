@@ -41,7 +41,7 @@ def hook_hash(event: str, matcher: str | None, hook: dict) -> str:
         "type": "command",
         "command": hook["command"],
         "timeout": _timeout(event, hook.get("timeout")),
-        "async": bool(hook.get("async", False)),
+        "async": bool(hook.get("async")),
     }
     if hook.get("statusMessage") is not None:
         handler["statusMessage"] = hook["statusMessage"]
