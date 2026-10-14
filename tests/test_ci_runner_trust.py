@@ -245,6 +245,23 @@ def test_safe_pool_selector_passes_without_job_admission_skip(pool):
     )
 
 
+@pytest.mark.parametrize("pool", ["anton-oss", "anton-oss-light", "anton-oss-batch"])
+def test_safe_queue_rerun_selector_passes_without_job_admission_skip(pool):
+    runner = selector(pool).replace(
+        "github.triggering_actor == 'github-merge-queue[bot]'",
+        "(github.triggering_actor == 'github-merge-queue[bot]' || "
+        'contains(fromJSON(\'["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]\'), github.triggering_actor))',
+    )
+    candidate = {
+        "on": {"pull_request": {}, "push": {}, "merge_group": {}},
+        "jobs": {"test": {"runs-on": runner}},
+    }
+    assert (
+        ci_runner_trust.check({"test.yml": candidate}, {"actors": ACTORS, "queue_actor": "github-merge-queue[bot]"})
+        == []
+    )
+
+
 @pytest.mark.parametrize("replace", ["actor", "trigger", "target", "fork", "queue-ref", "outsider", "fallback", "pool"])
 def test_selector_cannot_loosen_actor_or_event_policy(replace):
     runner = selector()
