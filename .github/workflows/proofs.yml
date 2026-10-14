@@ -8,7 +8,7 @@ on:
         type: choice
         required: true
         default: tests
-        options: [tests, mutation, semgrep, worker-image, swarm-image, brain-smoke, helm-kind, github-access, row-memory]
+        options: [tests, mutation, semgrep, worker-image, swarm-image, brain-smoke, helm-kind, github-access, row-memory, operations-cpu]
       base:
         description: Base revision for mutation or Semgrep scope
         required: true
@@ -34,6 +34,79 @@ permissions:
   actions: read
 
 jobs:
+  operations-cpu:
+    if: inputs.proof == 'operations-cpu'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        revision: [base, head]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: proof
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.revision == 'base' && inputs.base || github.sha }}
+          path: replay
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          version: '0.12.23'
+          enable-cache: false
+      - name: Install the revision under measurement
+        working-directory: replay
+        run: uv pip install --system --excludes .github/test-excludes.txt -e '.[dev,all]'
+      - name: Replay identical recorded operation payloads
+        working-directory: replay
+        env:
+          OPERATIONS_CPU_REPORT: ${{ github.workspace }}/operations-${{ matrix.revision }}.json
+          OPERATIONS_CPU_BASELINE: ${{ matrix.revision == 'base' && 'true' || '' }}
+          PYTHONUNBUFFERED: '1'
+        run: |
+          cp ../proof/tests/swarm_ledger/test_operations_cpu.py tests/swarm_ledger/test_operations_cpu.py
+          cp ../proof/tests/swarm_ledger/operations_corpus.json.gz tests/swarm_ledger/operations_corpus.json.gz
+          python -m pytest tests/swarm_ledger/test_operations_cpu.py -n 0 --tb=short
+      - name: Retain the CPU profile and every outcome
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operations-${{ matrix.revision }}
+          path: operations-${{ matrix.revision }}.json
+          if-no-files-found: error
+
+  operations-compare:
+    if: always() && inputs.proof == 'operations-cpu'
+    needs: operations-cpu
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: operations-*
+          merge-multiple: true
+      - name: Compare acceptance, revision and persistence on the same corpus
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          base = json.loads(Path('operations-base.json').read_text())
+          head = json.loads(Path('operations-head.json').read_text())
+          assert base['source'] == head['source']
+          assert base['outputs'] == head['outputs'], 'Operation or persisted-state outcomes changed'
+          print(json.dumps({
+              'requests': head['requests'],
+              'base_cpu_seconds_per_request': base['mean_cpu_seconds'],
+              'head_cpu_seconds_per_request': head['mean_cpu_seconds'],
+              'ratio': head['mean_cpu_seconds'] / base['mean_cpu_seconds'],
+              'operation_mix': head['source']['operation_mix'],
+          }, indent=2))
+          assert head['mean_cpu_seconds'] <= 0.268092752
+          assert head['mean_cpu_seconds'] <= base['mean_cpu_seconds'] / 2
+          PY
+
   row-memory:
     if: inputs.proof == 'row-memory'
     uses: ./.github/workflows/ledger-row-memory.yml

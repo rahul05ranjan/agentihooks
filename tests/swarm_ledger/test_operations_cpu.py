@@ -3,6 +3,7 @@ import gzip
 import hashlib
 import io
 import json
+import os
 import pstats
 import time
 from pathlib import Path
@@ -85,4 +86,7 @@ def test_operations_write_cpu_is_at_most_half_the_production_baseline(tmp_path, 
     assert measured["outputs"] == profiled["outputs"]
     report = dict(measured)
     report["profile"] = profiled["profile"]
-    assert measured["mean_cpu_seconds"] <= 0.268092752, json.dumps(report, indent=2)
+    if destination := os.environ.get("OPERATIONS_CPU_REPORT"):
+        Path(destination).write_text(json.dumps(report, indent=2) + "\n")
+    if not os.environ.get("OPERATIONS_CPU_BASELINE"):
+        assert measured["mean_cpu_seconds"] <= 0.268092752, json.dumps(report, indent=2)
