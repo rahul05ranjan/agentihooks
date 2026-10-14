@@ -65,7 +65,8 @@ def replay(tmp_path, monkeypatch, profiled=False):
             {"reply": reply, "state": hashlib.sha256(json.dumps(persisted, sort_keys=True).encode()).hexdigest()}
         )
     stream = io.StringIO()
-    pstats.Stats(profiler, stream=stream).sort_stats("cumulative").print_stats(25)
+    if profiled:
+        pstats.Stats(profiler, stream=stream).sort_stats("cumulative").print_stats(25)
     return {
         "source": recorded["source"],
         "requests": len(seconds),
@@ -82,6 +83,6 @@ def test_operations_write_cpu_is_at_most_half_the_production_baseline(tmp_path, 
     with monkeypatch.context() as isolated:
         profiled = replay(tmp_path / "profiled", isolated, profiled=True)
     assert measured["outputs"] == profiled["outputs"]
-    report = {key: value for key, value in measured.items() if key != "outputs"}
+    report = dict(measured)
     report["profile"] = profiled["profile"]
     assert measured["mean_cpu_seconds"] <= 0.268092752, json.dumps(report, indent=2)
