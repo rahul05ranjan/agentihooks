@@ -1,6 +1,0 @@
-{
-  "scripts/swarm_ledger/events/patch.py:scripts.swarm_ledger.events.patch.x_same__mutmut_12:69186f67240f79d7d541055a68af4c5bfdd2a2be027066961d4f229c32238cc4": {
-    "reader": "Standards",
-    "reason": "The length-16 threshold only selects a JSON equality shortcut; the recursive fallback preserves the result."
-  }
-}

@@ -1,6 +1,0 @@
-{
-  "scripts/swarm_ledger/events/patch.py:scripts.swarm_ledger.events.patch.x_same__mutmut_26:563b7c4d59b5e5250c5de23e399818e0ba9e7b418ac565873abc7e6d52a4380d": {
-    "reader": "Standards",
-    "reason": "json.dumps allow_nan=None and False both reject NaN because both are false values."
-  }
-}
