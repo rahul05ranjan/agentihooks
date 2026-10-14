@@ -24,11 +24,7 @@ def _v1_limit(path: Path) -> float | None:
 
 def _chain(root: Path, relative: str) -> list[Path]:
     path = root / PurePosixPath(relative).relative_to("/")
-    chain = [path]
-    while root in path.parents:
-        path = path.parent
-        chain.append(path)
-    return chain
+    return [path, *path.parents[: len(path.relative_to(root).parts)]]
 
 
 def quota_cpus(root: Path = CGROUP, proc_cgroup: Path = Path("/proc/self/cgroup")) -> float | None:
