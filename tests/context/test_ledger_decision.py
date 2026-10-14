@@ -77,13 +77,14 @@ def test_an_unbound_copilot_session_leaving_plan_mode_gets_nothing(monkeypatch):
     assert decision.directive(payload) == ""
 
 
-def test_an_unbound_session_with_a_four_item_task_list_gets_nothing(capsys, monkeypatch):
-    assert MARK not in run(todos(4), capsys, "claude", monkeypatch)
-    assert MARK not in run(todos(12), capsys, "claude", monkeypatch)
+@pytest.mark.parametrize("count", [4, 5, 12])
+def test_an_unbound_session_with_a_four_item_task_list_gets_nothing(count, capsys, monkeypatch):
+    assert MARK not in run(todos(count), capsys, "claude", monkeypatch)
 
 
-def test_an_unbound_session_adding_four_tasks_gets_nothing(capsys, monkeypatch):
-    for i in range(4):
+@pytest.mark.parametrize("count", [4, 8])
+def test_an_unbound_session_adding_four_tasks_gets_nothing(count, capsys, monkeypatch):
+    for i in range(count):
         payload = {
             "session_id": "s1",
             "hook_event_name": "PostToolUse",
@@ -95,18 +96,22 @@ def test_an_unbound_session_adding_four_tasks_gets_nothing(capsys, monkeypatch):
         assert MARK not in run(payload, capsys, "claude", monkeypatch)
 
 
-@pytest.mark.parametrize(
-    "text",
-    [
-        "troubleshoot why the ledger page is blank",
-        "Debug the failing shard",
-        "investigate the slow Redis test",
-        "refactor the inbox module",
-        "we have a bug, start debugging it",
-    ],
-)
-def test_an_unbound_session_asked_to_troubleshoot_gets_nothing(text, capsys, monkeypatch):
-    assert MARK not in run(prompt(text), capsys, "claude", monkeypatch)
+TROUBLESHOOT_PROMPTS = [
+    "troubleshoot why the ledger page is blank",
+    "Debug the failing shard",
+    "investigate the slow Redis test",
+    "refactor the inbox module",
+    "we have a bug, start debugging it",
+    "Troubleshooting the deploy rollout",
+    "an investigation into the memory leak",
+    "please help me debug this",
+]
+
+
+@pytest.mark.parametrize("target", ["claude", "codex"])
+@pytest.mark.parametrize("text", TROUBLESHOOT_PROMPTS)
+def test_an_unbound_session_asked_to_troubleshoot_gets_nothing(text, target, capsys, monkeypatch):
+    assert MARK not in run(prompt(text), capsys, target, monkeypatch)
 
 
 def test_an_unbound_trivial_prompt_gets_nothing(capsys, monkeypatch):
@@ -146,14 +151,16 @@ def test_a_session_bound_to_a_ledger_appends_its_plan_there(isolated, capsys, mo
     assert "without asking" in out
 
 
-def test_a_bound_session_with_a_four_item_task_list_still_gets_nothing(isolated, capsys, monkeypatch):
+@pytest.mark.parametrize("count", [4, 12])
+def test_a_bound_session_with_a_four_item_task_list_still_gets_nothing(count, isolated, capsys, monkeypatch):
     bind(isolated, "s1")
-    assert MARK not in run(todos(4), capsys, "claude", monkeypatch)
+    assert MARK not in run(todos(count), capsys, "claude", monkeypatch)
 
 
-def test_a_bound_session_asked_to_troubleshoot_still_gets_nothing(isolated, capsys, monkeypatch):
+@pytest.mark.parametrize("text", TROUBLESHOOT_PROMPTS)
+def test_a_bound_session_asked_to_troubleshoot_still_gets_nothing(text, isolated, capsys, monkeypatch):
     bind(isolated, "s1")
-    assert MARK not in run(prompt("troubleshoot the page"), capsys, "claude", monkeypatch)
+    assert MARK not in run(prompt(text), capsys, "claude", monkeypatch)
 
 
 def test_the_bound_directive_fires_once_per_session(isolated, capsys, monkeypatch):
