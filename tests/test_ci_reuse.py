@@ -263,6 +263,14 @@ def test_the_independent_queue_lookup_skips_only_outside_the_queue(event, lookup
     assert (result.returncode == 0) is expected, result.stdout + result.stderr
 
 
+def test_the_canonical_gate_keeps_independent_lookup_skips_opt_in():
+    from scripts import ci_reuse
+
+    needs = {"queue-base-lookup": {"result": "skipped"}, "unit": {"result": "success"}}
+    result = _gate(ci_reuse.gate_steps(), needs, event="pull_request")
+    assert result.returncode != 0, result.stdout + result.stderr
+
+
 @pytest.mark.parametrize("reuse_repo", ["dynamic"], indirect=True)
 def test_a_full_pass_with_dynamic_mutation_shards_reuses(full_source, tmp_path):
     root, base, _, queue, env, _, _ = full_source
