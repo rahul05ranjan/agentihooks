@@ -64,19 +64,21 @@ def test_main_pull_requests_skip_mutation_but_still_require_the_other_checks():
 
 
 def test_the_protected_grader_accepts_only_the_exact_tiered_aggregation_and_reuse_condition():
-    base = yaml.safe_load((ROOT / ".github/workflows/test.yml").read_text())
+    base = {path.name: yaml.safe_load(path.read_text()) for path in (ROOT / ".github/workflows").glob("*.yml")}
     head = copy.deepcopy(base)
-    head["jobs"]["gate-required"]["steps"] = ci_reuse.gate_steps(queue_tier=True)
-    head["jobs"]["reuse"]["if"] = "github.event_name != 'merge_group' && github.event_name != 'pull_request'"
+    head["test.yml"]["jobs"]["gate-required"]["steps"] = ci_reuse.gate_steps(queue_tier=True)
+    head["test.yml"]["jobs"]["reuse"]["if"] = (
+        "github.event_name != 'merge_group' && github.event_name != 'pull_request'"
+    )
     config = json.loads((ROOT / ".github/gate-wiring.json").read_text())
     policy = json.loads((ROOT / ".github/workflows/trusted-actors.json").read_text())
 
     def grade():
-        return gate_protected.grade({"test.yml": base}, config, {"test.yml": head}, config, date(2026, 10, 14), policy)
+        return gate_protected.grade(base, config, head, config, date(2026, 10, 14), policy)
 
     assert grade() == []
-    head["jobs"]["gate-required"]["steps"][0]["run"] += "exit 0\n"
+    head["test.yml"]["jobs"]["gate-required"]["steps"][0]["run"] += "exit 0\n"
     assert any("changes its steps" in problem for problem in grade())
-    head["jobs"]["gate-required"]["steps"] = ci_reuse.gate_steps(queue_tier=True)
-    head["jobs"]["reuse"]["if"] = "false"
+    head["test.yml"]["jobs"]["gate-required"]["steps"] = ci_reuse.gate_steps(queue_tier=True)
+    head["test.yml"]["jobs"]["reuse"]["if"] = "false"
     assert any("changes the protected reuse job" in problem for problem in grade())
