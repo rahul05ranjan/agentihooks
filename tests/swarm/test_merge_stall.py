@@ -232,3 +232,18 @@ def test_no_recent_failed_queue_check_reports_none_observed(monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", run)
     assert merge_stall.failed_checks("/repo", REPO) == "none observed"
+
+
+@pytest.mark.parametrize("conclusion", ["cancelled", None])
+def test_failed_jobs_in_cancelled_or_running_queue_runs_are_counted(monkeypatch, conclusion):
+    from scripts.swarm.health import merge_stall
+
+    def run(command, **kwargs):
+        if "/actions/runs?" in command[2]:
+            data = {"workflow_runs": [{"id": 1, "conclusion": conclusion}]}
+        else:
+            data = {"jobs": [{"name": "Tests", "conclusion": "failure"}]}
+        return subprocess.CompletedProcess(command, 0, json.dumps(data), "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    assert merge_stall.failed_checks("/repo", REPO) == "Tests (1 runs)"

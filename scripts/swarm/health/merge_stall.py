@@ -59,7 +59,7 @@ def failed_checks(repo: str, name: str) -> str:
     runs = request(repo, ["api", f"repos/{name}/actions/runs?event=merge_group&per_page={RUNS}"])["workflow_runs"]
     counts = Counter()
     for run in runs:
-        if run["conclusion"] not in FAILED:
+        if run["conclusion"] in ("success", "skipped"):
             continue
         page, failed = 1, set()
         while True:
