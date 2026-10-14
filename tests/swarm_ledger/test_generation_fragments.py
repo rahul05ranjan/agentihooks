@@ -3,7 +3,8 @@ import json
 import pytest
 
 from scripts.swarm_ledger import ledger_server as server
-from scripts.swarm_ledger.events import Hub, patch
+from scripts.swarm_ledger.events import patch
+from scripts.swarm_ledger.events.hub import Hub
 from scripts.swarm_ledger.repository.rows import encode
 from scripts.swarm_ledger.repository.sqlite import SQLiteLedgerRepository
 from tests.swarm_ledger.test_operation_snapshot import SLUG, message, repository
@@ -21,6 +22,9 @@ def test_unchanged_collections_share_read_only_generations(tmp_path, monkeypatch
     assert new["_meta"] is not old.state["_meta"]
     assert old.state["chat"] == []
     assert stored.current(SLUG).text == encode(new)
+    later, _ = stored.apply_ops(SLUG, ops=[message("later")], copy_state=False)
+    assert later["tasks"] is new["tasks"]
+    assert stored.current(SLUG).text == encode(later)
     detached = stored.get_document(SLUG)
     detached["tasks"][0]["title"] = "Caller edit"
     assert old.state["tasks"][0]["title"] == "é𝄞"

@@ -44,6 +44,18 @@ def test_generation_removal_and_reordering_do_not_keep_obsolete_fragments():
     assert first.value["_meta"]["stamps"] == {"a": 1}
 
 
+def test_metadata_generations_share_unchanged_events_and_stamps():
+    first = document({"_meta": {"rev": 1, "events": [{"rev": 1}], "stamps": {"a": {"rev": 1}, "b": {"rev": 1}}}})
+    state = {"_meta": {"rev": 2, "events": [{"rev": 1}, {"rev": 2}], "stamps": {"a": {"rev": 1}, "b": {"rev": 2}}}}
+    second = document(state, first)
+    assert second.value["_meta"]["events"][0] is first.value["_meta"]["events"][0]
+    assert second.value["_meta"]["stamps"]["a"] is first.value["_meta"]["stamps"]["a"]
+    assert second.value["_meta"]["stamps"]["b"] is not first.value["_meta"]["stamps"]["b"]
+    assert first.value["_meta"]["events"] == [{"rev": 1}]
+    assert first.value["_meta"]["stamps"]["b"] == {"rev": 1}
+    assert second.text == encode(state)
+
+
 def test_generation_rejects_nonfinite_values_before_identity_reuse():
     with pytest.raises(ValueError):
         document({"tasks": [{"value": float("nan")}]})

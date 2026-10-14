@@ -41,6 +41,20 @@ def test_borrowed_result_keeps_its_own_committed_generation(tmp_path, monkeypatc
     assert stored.current(SLUG).state["_meta"]["rev"] == revision + 1
 
 
+def test_publishing_preserves_borrowed_and_detached_result_ownership(tmp_path, monkeypatch):
+    stored = repository(tmp_path, monkeypatch)
+    publishing = Publishing(stored)
+    borrowed, rejected = publishing.apply_ops(SLUG, ops=[message("borrowed")], copy_state=False)
+    assert rejected == []
+    assert borrowed is stored.current(SLUG).state
+    detached, rejected = publishing.apply_ops(SLUG, ops=[message("detached")])
+    assert rejected == []
+    assert detached is not stored.current(SLUG).state
+    detached["chat"][0]["text"] = "Caller edit"
+    assert borrowed["chat"][0]["text"] == "Recorded message"
+    assert stored.get_document(SLUG)["chat"][0]["text"] == "Recorded message"
+
+
 def test_publication_of_a_newer_write_keeps_the_original_response(tmp_path, monkeypatch):
     stored = repository(tmp_path, monkeypatch)
     advanced = []

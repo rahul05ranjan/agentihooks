@@ -150,6 +150,38 @@ def test_diff_keeps_the_real_parent_key_position_and_table_when_falling_back():
     assert row[3] == 0
 
 
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ({1: "old"}, {True: "new"}),
+        ({True: "old"}, {1: "new"}),
+        ([{"id": True, "value": "old"}], [{"id": 1, "value": "new"}]),
+        ([{"id": 1.0, "value": "old"}], [{"id": 1, "value": "new"}]),
+        ([{"id": "x", "value": "old"}], [{"id": {"nested": 1}, "value": "new"}]),
+        ([{"id": None, "value": "old"}], [{"id": "x", "value": "new"}]),
+        (
+            {"question": {"answers": [{"id": "a", "text": "old"}], "tail": 1}},
+            {"question": {"answers": [{"id": "a", "text": "new"}, {"id": "b", "text": "added"}], "tail": 1}},
+        ),
+        (
+            {"tasks": [{"id": "x", "comments": [{"id": "c", "text": "old"}]}]},
+            {"tasks": [{"id": "x", "comments": [{"id": "c", "text": "new"}], "added": None}]},
+        ),
+        (
+            [{"id": "same", "text": "one"}, {"id": "same", "text": "two"}],
+            [{"id": "same", "text": "three"}, {"id": "same", "text": "four"}],
+        ),
+    ],
+)
+def test_applying_row_deltas_matches_the_complete_stored_tree(old, new):
+    before, after = diff(old, new)
+    stored = flatten(old)
+    for path in before:
+        stored.pop(path, None)
+    stored.update(after)
+    assert stored == flatten(new)
+
+
 def test_diff_treats_a_root_type_change_as_position_zero():
     before, after = diff({"a": 1}, [1])
     assert before[encode([])][3] == 0
