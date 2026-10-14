@@ -41,10 +41,19 @@ def test_dev_extra_declares_test_plugin(plugin):
 
 def test_workflow_runs_whole_suite_in_parallel():
     command = _pytest_command()
-    assert '-n "$(python -m scripts.ci_cpu_quota)"' in command
+    assert command.strip().startswith("run: workers=$(python -m scripts.ci_cpu_quota) && python -c ")
+    assert '-n "$workers"' in command
     assert "-n auto" not in command
     assert "tests/" in command
     assert "-m unit" not in command
+
+
+def test_workflow_worker_count_evaluates_to_a_count_within_this_container():
+    prefix = _pytest_command().strip().removeprefix("run: ").split(" && ")[0]
+    result = subprocess.run(
+        ["bash", "-e", "-c", f'{prefix} && echo "$workers"'], cwd=_ROOT, capture_output=True, text=True, check=True
+    )
+    assert 1 <= int(result.stdout) <= len(os.sched_getaffinity(0))
 
 
 def test_workflow_keeps_xdist_groups_on_one_worker():

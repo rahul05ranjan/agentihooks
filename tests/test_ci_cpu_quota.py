@@ -59,6 +59,11 @@ def test_v1_unlimited_has_no_quota(tmp_path):
     assert quota_cpus(root, proc) is None
 
 
+def test_malformed_cpu_max_has_no_quota(tmp_path):
+    root, proc = _tree(tmp_path, "0::/\n", {"cpu.max": "garbage\n"})
+    assert quota_cpus(root, proc) is None
+
+
 def test_unreadable_cgroup_has_no_quota(tmp_path):
     assert quota_cpus(tmp_path / "missing", tmp_path / "missing-proc") is None
 
