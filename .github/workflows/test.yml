@@ -217,6 +217,7 @@ jobs:
       queued: ${{ steps.republished.outputs.queued }}
       base: ${{ steps.base-run.outputs.sha }}
       source: ${{ steps.unit-source.outputs.source }}
+      dev: ${{ steps.dev-run.outputs.id }}
     steps:
       - uses: actions/checkout@v4
         if: github.event_name == 'push'
@@ -1569,7 +1570,7 @@ jobs:
 
   # A later queue entry's base is the earlier entry's merge commit, so the run that measured it may still be finishing.
   queue-baseline:
-    needs: [unit, reuse]
+    needs: [unit, reuse, durations]
     # The record step refuses a missing 3.12 shard, so a run red only on another shard still publishes what later entries wait on.
     if: ${{ !cancelled() && github.event_name == 'merge_group' }}
     runs-on: ${{ (github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.actor) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.triggering_actor) || (github.event_name == 'merge_group' || github.event_name == 'push' && github.ref == 'refs/heads/dev') && github.actor == 'github-merge-queue[bot]' && github.triggering_actor == 'github-merge-queue[bot]') && 'anton-oss-light' || 'ubuntu-latest' }}
@@ -1592,7 +1593,6 @@ jobs:
         run: python -m pip install "coverage>=7.4"
 
       - name: Mint the token that reads the reused run
-        if: needs.reuse.outputs.reused == 'true'
         id: reuse-token
         uses: actions/create-github-app-token@v3.2.0
         with:
@@ -1619,10 +1619,38 @@ jobs:
           repository: ${{ github.repository }}
           github-token: ${{ steps.reuse-token.outputs.token }}
 
-      # Later queue entries wait on this upload, so it runs before Sonar and the gate rather than after them.
+      - name: Find the previous dev coverage baseline
+        id: history-run
+        env:
+          GH_TOKEN: ${{ steps.reuse-token.outputs.token }}
+          DEV_RUN: ${{ needs.durations.outputs.dev }}
+        run: |
+          runs="$DEV_RUN"
+          if [[ -z "$runs" ]]; then
+            runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/test.yml/runs?branch=dev&event=push&status=success&per_page=20" --jq '.workflow_runs[].id')
+          fi
+          for run in $runs; do
+            kept=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run/artifacts?name=coverage-baseline" --jq '[.artifacts[] | select(.expired | not)] | length')
+            if [[ "$kept" -gt 0 ]]; then
+              echo "id=$run" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "::error::No completed dev push kept a coverage baseline for queue history."
+          exit 1
+
+      - name: Download the previous dev coverage baseline
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-baseline
+          path: ${{ runner.temp }}/dev-baseline
+          run-id: ${{ steps.history-run.outputs.id }}
+          repository: ${{ github.repository }}
+          github-token: ${{ steps.reuse-token.outputs.token }}
+
       - name: Record this run's coverage baseline
         id: record
-        run: python -m tests.coverage_baseline --shards 12 --head-shards .coverage-shards --out "$RUNNER_TEMP/own-baseline/baseline.json"
+        run: python -m tests.coverage_baseline --shards 12 --head-shards .coverage-shards --out "$RUNNER_TEMP/own-baseline/baseline.json" --previous "$RUNNER_TEMP/dev-baseline/baseline.json"
 
       - name: Publish this run's coverage baseline
         uses: actions/upload-artifact@v4
