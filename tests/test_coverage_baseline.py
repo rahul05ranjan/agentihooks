@@ -22,8 +22,8 @@ def measured(tmp_path, monkeypatch):
     return tmp_path, state, [tmp_path / ".coverage"]
 
 
-@pytest.mark.parametrize("invalid", [0, 6, 99])
-def test_impossible_lines_cannot_replace_a_baseline(measured, invalid, capsys):
+@pytest.mark.parametrize(("invalid", "dropped"), [(0, True), (4, False), (5, False), (6, True), (99, True)])
+def test_impossible_lines_cannot_replace_a_baseline(measured, invalid, dropped, capsys):
     root, state, shards = measured
     source = root / "hooks/example.py"
     source.parent.mkdir(exist_ok=True)
@@ -38,7 +38,7 @@ def test_impossible_lines_cannot_replace_a_baseline(measured, invalid, capsys):
     data.add_lines({"hooks/example.py": {invalid}})
     data.write()
     cache.record(root, shards, target, target)
-    assert f"hooks/example.py:{invalid}" in capsys.readouterr().out
+    assert (f"hooks/example.py:{invalid}" in capsys.readouterr().out) is dropped
     value = cache.read(target)
     assert value["executed"] == {"hooks/example.py": [1, 2, 7]}
     assert value["history"][0]["executed"] == {"hooks/example.py": [1, 2, 7]}

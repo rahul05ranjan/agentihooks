@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from coverage import CoverageData
-from coverage.exceptions import NotPython
 from coverage.parser import PythonParser
 
 GRADED = ("hooks/", "scripts/")
@@ -118,15 +117,15 @@ def _lost(
         moved = renamed.get(path, path)
         targets = (moved,) if isinstance(moved, str) else moved
         gone = set()
+        old = base.source(path)
+        statements = set(statements_of(old, ran).values()) if old is not None else set()
         for target in targets:
-            old, new = base.source(path), head_source(target)
+            new = head_source(target)
             if old is None or new is None:
                 continue
             mapped = line_map(old, new) if isinstance(moved, str) else _split_map(old, new)
             covered = set(statements_of(new, head.get(target, set())).values())
-            gone.update(
-                line for line in set(statements_of(old, ran).values()) if line in mapped and mapped[line] not in covered
-            )
+            gone.update(line for line in statements if line in mapped and mapped[line] not in covered)
         if gone:
             lost[path] = sorted(gone)
     return lost
@@ -134,10 +133,7 @@ def _lost(
 
 def statements_of(source: str, lines: Iterable[int]) -> dict[int, int]:
     parser = PythonParser(text=source)
-    try:
-        parser.parse_source()
-    except NotPython:
-        return {line: line for line in lines}
+    parser.parse_source()
     return {line: parser.first_line(line) for line in lines if parser.first_line(line) in parser.statements}
 
 
