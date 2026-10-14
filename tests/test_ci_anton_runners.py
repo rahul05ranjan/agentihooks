@@ -243,12 +243,13 @@ def test_the_expression_reader_tells_trusted_from_untrusted_runs():
 
 def test_every_standard_job_the_tests_run_calls_sends_merge_group_runs_to_the_queue_pool():
     called = {spec["uses"].rsplit("/", 1)[1] for spec in workflows()["test.yml"]["jobs"].values() if "uses" in spec}
-    standard = {key for key, spec in runner_jobs().items() if key[0] in called and "'anton-oss'" in spec["runs-on"]}
+    jobs = runner_jobs()
+    standard = {key for key, spec in jobs.items() if key[0] in called and "'anton-oss'" in spec["runs-on"]}
     assert standard
     assert {key: MOVED[key] for key in standard} == dict.fromkeys(standard, QUEUED)
     merge_group = event("merge_group", actor="github-merge-queue[bot]")
     for key in standard:
-        runs_on = runner_jobs()[key]["runs-on"]
+        runs_on = jobs[key]["runs-on"]
         assert resolve(runs_on, **merge_group) == QUEUE, key
         assert resolve(runs_on, **event("pull_request")) == STANDARD, key
         assert resolve(runs_on, **event("push", actor="github-merge-queue[bot]", ref="refs/heads/dev")) == STANDARD, key
