@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 from coverage import CoverageData
+from coverage.parser import PythonParser
 
 
 def _git(repo: Path, revision: str) -> str:
@@ -38,6 +39,16 @@ def _executed(shards: list[Path]) -> dict[str, list[int]]:
 
 
 def record(repo: Path, shards: list[Path], target: Path, previous: Path | None = None) -> None:
+    executed = _executed(shards)
+    invalid = []
+    for path, lines in executed.items():
+        parser = PythonParser(filename=str(repo / path))
+        parser.parse_source()
+        for line in sorted(set(lines) - parser.statements):
+            invalid.append(f"{path}:{line}")
+            print(f"::error::{path}:{line} is not executable in the current source")
+    if invalid:
+        raise ValueError(f"baseline contains lines that are not executable: {', '.join(invalid)}")
     history = []
     if previous and previous.is_file():
         old = read(previous)
@@ -46,7 +57,7 @@ def record(repo: Path, shards: list[Path], target: Path, previous: Path | None =
         "commit": _git(repo, "HEAD"),
         "tree": _git(repo, "HEAD^{tree}"),
         "shards": len(shards),
-        "executed": _executed(shards),
+        "executed": executed,
         "history": history,
     }
     target.parent.mkdir(parents=True, exist_ok=True)

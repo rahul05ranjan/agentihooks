@@ -13,6 +13,9 @@ def measured(tmp_path, monkeypatch):
     monkeypatch.setattr(
         cache, "_git", lambda repo, revision: state["tree"] if revision.endswith("^{tree}") else state["commit"]
     )
+    source = tmp_path / "hooks/example.py"
+    source.parent.mkdir(exist_ok=True)
+    source.write_text("value = 1\nvalue += 1\n")
     data = CoverageData(basename=str(tmp_path / ".coverage"))
     data.add_lines({"hooks/example.py": {1, 2}})
     data.write()
@@ -23,7 +26,7 @@ def measured(tmp_path, monkeypatch):
 def test_impossible_lines_cannot_replace_a_baseline(measured, invalid, capsys):
     root, _, shards = measured
     source = root / "hooks/example.py"
-    source.parent.mkdir()
+    source.parent.mkdir(exist_ok=True)
     source.write_text('value = 1\nscript = """\nconst example = 1;\nconst other = 2;\n"""\n# comment\nvalue += 1\n')
     data = CoverageData(basename=str(shards[0]))
     data.erase()
@@ -40,7 +43,7 @@ def test_impossible_lines_cannot_replace_a_baseline(measured, invalid, capsys):
 def test_publication_reports_every_impossible_line(measured, capsys):
     root, _, shards = measured
     source = root / "hooks/example.py"
-    source.parent.mkdir()
+    source.parent.mkdir(exist_ok=True)
     source.write_text("value = 1\nvalue += 1\n")
     data = CoverageData(basename=str(shards[0]))
     data.erase()
