@@ -1,5 +1,4 @@
 import json
-import shlex
 import subprocess
 import sys
 
@@ -17,12 +16,13 @@ def test_large_opening_prompt_launches_without_exceeding_the_argument_limit(tmp_
         "-c",
         "import json,sys; print(json.dumps(sys.argv[1:]))",
     ]
-    monkeypatch.setattr(init_agent, "_agent_command", lambda *args: (command, ""))
+    before = ": capture-opening\n"
+    monkeypatch.setattr(init_agent, "_agent_command", lambda *args: (command, before))
     monkeypatch.setattr("scripts.profile_telemetry.installed_langfuse_env", lambda *args: {})
     launcher, opening = init_agent._write_launcher(
         tmp_path, "master", prompt, [], {}, init_agent.AgentSpec(agent=agent)
     )
-    line = next(line for line in launcher.read_text().splitlines() if shlex.quote(sys.executable) in line)
+    line = launcher.read_text().split(before, 1)[1].split("\nrm -f ", 1)[0]
 
     result = subprocess.run(["bash", "-c", line], capture_output=True, text=True, check=False, timeout=10)
 
