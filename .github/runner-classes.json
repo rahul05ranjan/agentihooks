@@ -24,6 +24,7 @@
   "pages.yml/build": "hosted",
   "pages.yml/deploy": "hosted",
   "proofs.yml/tests": "standard",
+  "promote.yml/promote": "hosted",
   "publish-pypi.yml/publish": "hosted",
   "publish-pypi.yml/verify": "hosted",
   "release.yml/release": "hosted",

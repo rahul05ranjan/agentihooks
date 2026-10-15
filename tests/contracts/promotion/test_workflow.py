@@ -1,6 +1,10 @@
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 import yaml
+
+from tests.contracts.ci_tiers.test_workflow import enabled
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -15,3 +19,31 @@ def test_promotion_requires_all_push_checks_and_never_runs_for_a_red_grade():
     assert "needs.gate-required.result == 'success'" in promote["if"]
     assert "!contains(needs.*.result, 'failure')" in promote["if"]
     assert "!contains(needs.*.result, 'cancelled')" in promote["if"]
+
+
+@pytest.mark.parametrize("result", ["failure", "cancelled"])
+@pytest.mark.parametrize("job", ["gate-required", "refresh-durations", "coverage-baseline", "flake-budget"])
+def test_a_red_or_cancelled_promotion_dependency_prevents_all_promotion_writes(job, result):
+    promote = yaml.safe_load((ROOT / ".github/workflows/test.yml").read_text())["jobs"]["promote"]
+    needs = {name: SimpleNamespace(result="success") for name in promote["needs"]}
+    assert enabled(promote["if"], "push", needs)
+    needs[job].result = result
+    assert not enabled(promote["if"], "push", needs)
+
+
+def test_promotion_reuses_the_release_environment_and_never_dispatches_or_publishes_to_pypi():
+    workflow = yaml.safe_load((ROOT / ".github/workflows/promote.yml").read_text())
+    assert "workflow_call" in workflow.get("on", workflow.get(True))
+    job = workflow["jobs"]["promote"]
+    assert job["environment"] == "release"
+    assert job["timeout-minutes"] == 10
+    assert job["concurrency"] == {"group": "promotion-release", "cancel-in-progress": False}
+    commands = "\n".join(step.get("run", "") for step in job["steps"])
+    assert "--generate-notes" in commands
+    assert "--verify-tag" in commands
+    assert "workflow run" not in commands
+    assert "publish-pypi" not in commands
+    mint = next(step for step in job["steps"] if step.get("id") == "app-token")
+    assert mint["with"]["permission-metadata"] == "read"
+    assert mint["with"]["permission-contents"] == "write"
+    assert mint["with"]["permission-pull-requests"] == "write"
