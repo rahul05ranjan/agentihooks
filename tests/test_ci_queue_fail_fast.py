@@ -17,7 +17,8 @@ pytestmark = pytest.mark.unit
 _QUEUE = "github.event_name == 'merge_group'"
 _GATE_NEED = (
     "${{ !cancelled() && (github.event_name != 'workflow_dispatch' || needs.admission.result == 'success')"
-    " && (github.event_name != 'merge_group' || needs.reuse.outputs.reused != 'true') }}"
+    " && (github.event_name != 'merge_group' || needs.reuse.outputs.reused != 'true')"
+    " && github.event_name != 'pull_request' }}"
 )
 _APP_TOKEN = "${{ steps.app-token.outputs.token }}"
 

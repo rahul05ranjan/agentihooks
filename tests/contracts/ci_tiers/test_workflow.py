@@ -8,8 +8,9 @@ import yaml
 pytestmark = pytest.mark.unit
 
 ROOT = Path(__file__).parents[3]
-QUEUE = {"durations", "split", "unit", "shard-check", "test-count", "gate-required"}
-PULL_REQUEST = QUEUE | {"select", "lint", "semgrep", "sonar", "mutation-plan", "mutation-stats", "mutation"}
+UNIT = {"durations", "split", "unit", "shard-check", "test-count", "gate-required"}
+QUEUE = UNIT | {"queue-fail-fast"}
+PULL_REQUEST = UNIT | {"select", "lint", "semgrep", "sonar", "mutation-plan", "mutation-stats", "mutation"}
 SELECTED = PULL_REQUEST - {"split", "unit", "shard-check"} | {"unit-selected"}
 
 
