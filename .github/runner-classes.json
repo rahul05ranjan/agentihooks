@@ -23,6 +23,7 @@
   "mutation-replay.yml/verify": "light",
   "pages.yml/build": "hosted",
   "pages.yml/deploy": "hosted",
+  "promote.yml/promote": "hosted",
   "proofs.yml/tests": "standard",
   "publish-pypi.yml/publish": "hosted",
   "publish-pypi.yml/verify": "hosted",
