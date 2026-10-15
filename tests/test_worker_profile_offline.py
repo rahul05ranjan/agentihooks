@@ -37,9 +37,14 @@ def test_offline_codex_profile_runs_rendered_hook_without_a_live_registry(tmp_pa
     )
     home = configured_home(tmp_path, f"{shlex.quote(sys.executable)} {shlex.quote(str(hook))}")
 
-    profile_probe.codex_session_start(home)
+    result = profile_probe.codex_session_start(home)
 
     assert profile_probe.sessions(home) == {"worker-profile-codex": str(work)}
+    assert result["registered_at"] == (home / ".agentihooks/active-sessions.json").stat().st_mtime
+    assert result["elapsed_seconds"] > 0
+    assert result["registration_to_exit_seconds"] >= 0
+    assert profile_probe.harness("codex", tmp_path, tmp=home) == {"exit": 0, "output": ""}
+    assert int((home / "codex-run.started").read_text()) > 0
 
 
 def test_offline_codex_profile_rejects_a_failing_rendered_hook(tmp_path):
@@ -49,6 +54,7 @@ def test_offline_codex_profile_rejects_a_failing_rendered_hook(tmp_path):
         profile_probe.codex_session_start(home)
 
     assert failed.value.returncode == 7
+    assert (home / "codex-run.exit").read_text() == "7"
     assert not (home / ".agentihooks/active-sessions.json").exists()
 
 
