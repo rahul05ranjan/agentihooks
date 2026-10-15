@@ -177,7 +177,7 @@ def test_the_dry_run_names_what_stops_and_what_keeps_running(rig):
     plan = stand_down.plan(rig.bindings, SLUG, OLD, others)
     assert plan.stops == (
         "conversation thread-old of ci@abc-0815 (execution exe-old generation 1): "
-        "its turn turn-1 is interrupted and it takes no new turns",
+        "its active turn (last recorded: turn-1) is interrupted and it takes no new turns",
     )
     assert plan.keeps == (
         f"app-server pid {SERVER_PID + 1}: not signalled",
@@ -194,7 +194,7 @@ def test_a_conversation_without_a_managed_endpoint_is_refused_with_the_process_a
         stand_down.plan(rig.bindings, SLUG, "ci@abc-0700", others)
     assert refused.value.reason == (
         "ci@abc-0700 has no managed Codex conversation in swarm fixture, "
-        "so no single conversation can be stopped without signals"
+        "so its conversations cannot be stopped one at a time"
     )
     assert refused.value.alternative == (
         "process 2448581 hosts only conversations uuid-1, uuid-2; "
@@ -254,7 +254,7 @@ def test_the_command_prints_a_refusal_with_its_safe_alternative(rig, monkeypatch
     assert main(["ci@abc-0999", "--stand-down", "--swarm", SLUG]) == 2
     assert capsys.readouterr().err.splitlines() == [
         "terminate-agent: refused: ci@abc-0999 has no managed Codex conversation in swarm fixture, "
-        "so no single conversation can be stopped without signals",
+        "so its conversations cannot be stopped one at a time",
         "terminate-agent: safe alternative: agentihooks terminate-agent --list --type codex shows the live conversations",
     ]
 
@@ -275,6 +275,15 @@ def test_a_failed_stand_down_exits_one_with_its_reason(rig, monkeypatch, capsys)
 
     monkeypatch.setattr(stand_down, "execute", fail)
     assert main([OLD, "--stand-down", "--swarm", SLUG]) == 1
-    assert capsys.readouterr().err.strip() == (
-        "terminate-agent: cannot open the app-server socket: ConnectionRefusedError"
-    )
+    assert capsys.readouterr().err.splitlines() == [
+        "terminate-agent: cannot open the app-server socket: ConnectionRefusedError",
+        "terminate-agent: ci@abc-0815 stays fenced from new inbox turns; "
+        "run the same stand down again to interrupt its turn",
+    ]
+
+
+def test_the_fence_keeps_what_the_pump_wrote_after_the_plan(rig):
+    chosen = stand_down.plan(rig.bindings, SLUG, OLD, [])
+    rig.bindings.put(SLUG, TransportRecord(**{**asdict(rig.record("exe-old")), "last_reconcile_at": 4242}))
+    rig.execute(chosen)
+    assert (rig.record("exe-old").state, rig.record("exe-old").last_reconcile_at) == (STOOD_DOWN, 4242)

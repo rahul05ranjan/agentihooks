@@ -1,8 +1,10 @@
 """Stand down one managed Codex conversation: fence its execution, then interrupt its active turn, with no signal."""
 
+import json
+import sys
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from typing import TYPE_CHECKING
 
 from scripts.codex_session import protocol
@@ -26,6 +28,7 @@ WAIT_S = 10.0
 CONNECT_S = 5.0
 IN_PROGRESS = "inProgress"
 LISTING = "agentihooks terminate-agent --list --type codex shows the live conversations"
+RETRY = "run the same stand down again to interrupt its turn"
 
 
 class Refused(ValueError):
@@ -50,7 +53,7 @@ def _conversation(record: TransportRecord) -> str:
 def _unmanaged(slug: str, selector: str, sessions: "list[Session]") -> Refused:
     reason = (
         f"{selector} has no managed Codex conversation in swarm {slug}, "
-        "so no single conversation can be stopped without signals"
+        "so its conversations cannot be stopped one at a time"
     )
     pids = {s.process.pid for s in sessions if selector in {s.name, s.session_id, str(s.process.pid)}}
     if len(pids) != 1:
@@ -90,7 +93,8 @@ def plan(bindings: BindingStore, slug: str, selector: str, sessions: "list[Sessi
     )
     stops = (
         f"{_conversation(record)} (execution {record.execution_id} generation {record.execution_generation}): "
-        f"its turn {record.active_turn_id or 'none'} is interrupted and it takes no new turns",
+        f"its active turn (last recorded: {record.active_turn_id or 'none'}) is interrupted "
+        "and it takes no new turns",
     )
     return Plan(slug, record, stops, keeps)
 
@@ -111,17 +115,31 @@ def _settle(
     return True
 
 
+def _fence(bindings: BindingStore, slug: str, record: TransportRecord) -> None:
+    from scripts.inbox.receipts import transact
+
+    key = bindings.store.key(slug, RECORDS)
+
+    def fence(pipe):
+        pipe.watch(key)
+        current = bindings.get(slug, record.execution_id)
+        pipe.multi()
+        pipe.hset(key, record.execution_id, json.dumps(asdict(replace(current, state=STOOD_DOWN))))
+
+    transact(bindings.redis, fence)
+
+
 def execute(
     bindings: BindingStore,
-    plan: Plan,
+    chosen: Plan,
     connect: Callable = protocol.connect,
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
     wait_s: float = WAIT_S,
 ) -> dict:
-    record = plan.record
-    bindings.put(plan.slug, replace(record, state=STOOD_DOWN))
-    publishing = bindings.store.key(plan.slug, PUBLISHING)
+    record = chosen.record
+    _fence(bindings, chosen.slug, record)
+    publishing = bindings.store.key(chosen.slug, PUBLISHING)
     if not _settle(lambda: bindings.redis.hget(publishing, record.seat) != record.execution_id, clock, sleep, wait_s):
         raise RuntimeError(f"an inbox publication for {record.agent_name} is still in flight")
     connection, _ = connect(record.endpoint_ref.removeprefix(UNIX), CONNECT_S)
@@ -137,8 +155,6 @@ def execute(
 
 
 def run(selector: str, swarm: str, dry_run: bool, sessions: "list[Session]") -> int:
-    import sys
-
     from scripts.swarm import store as swarm_store
 
     store = swarm_store.connect()
@@ -164,6 +180,9 @@ def run(selector: str, swarm: str, dry_run: bool, sessions: "list[Session]") -> 
         result = execute(bindings, chosen)
     except (OSError, TimeoutError, RuntimeError, protocol.ProtocolError) as exc:
         print(f"terminate-agent: {exc}", file=sys.stderr)
+        print(
+            f"terminate-agent: {chosen.record.agent_name} stays fenced from new inbox turns; {RETRY}", file=sys.stderr
+        )
         return 1
     print("result=stood-down " + " ".join(f"{key}={value}" for key, value in result.items()))
     return 0
