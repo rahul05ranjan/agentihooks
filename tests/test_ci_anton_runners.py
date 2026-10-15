@@ -73,12 +73,14 @@ MOVED = {
     ("test.yml", "queue-baseline"): LIGHT,
     ("test.yml", "refresh-durations"): STANDARD,
     ("test.yml", "reuse"): LIGHT,
+    ("test.yml", "select"): LIGHT,
     ("test.yml", "shard-check"): LIGHT,
     ("test.yml", "sonar"): STANDARD,
     ("test.yml", "split"): STANDARD,
     ("test.yml", "stage-budget"): LIGHT,
     ("test.yml", "test-count"): STANDARD,
     ("test.yml", "unit"): STANDARD,
+    ("test.yml", "unit-selected"): STANDARD,
     ("worker-resources.yml", "measure"): BATCH,
 }
 
