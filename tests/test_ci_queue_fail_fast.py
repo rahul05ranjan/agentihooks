@@ -244,7 +244,3 @@ def test_the_stage_report_leaves_out_the_watcher():
         return {"name": name, "created_at": "2026-10-13T08:00:00Z", "completed_at": "2026-10-13T08:40:00Z"}
 
     assert ci_budget.stages([job("queue-fail-fast"), job("lint")]) == {"lint": 2400.0}
-
-
-def test_plant_fails_only_in_the_merge_queue():
-    assert os.environ.get("GITHUB_EVENT_NAME") != "merge_group"
