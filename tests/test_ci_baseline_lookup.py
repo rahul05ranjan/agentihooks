@@ -31,7 +31,8 @@ def lookup(tmp_path):
         "endpoint = args[1]\n"
         "path = urlsplit(endpoint).path\n"
         "query = parse_qs(urlsplit(endpoint).query)\n"
-        "if '/compare/' in path: body = {'status': data['ancestry']}\n"
+        "if '/compare/' in path:\n"
+        "    body = {'status': data['queue_ancestry'] if path.endswith('...head') else data['ancestry']}\n"
         "elif '/commits/' in path: body = {'sha': 'base', 'commit': {'tree': {'sha': 'tree'}}, 'parents': [{'sha': 'base'}]}\n"
         "elif path.endswith('/jobs'): body = {'jobs': data['jobs']}\n"
         "elif path.endswith('/artifacts'): body = {'artifacts': [{'name': name, 'expired': False} for name in data['artifacts']]}\n"
@@ -51,7 +52,7 @@ def lookup(tmp_path):
     )
     gh.chmod(0o755)
 
-    def run(selector, event="push", fault=None):
+    def run(selector, event="push", fault=None, queue_ancestry="diverged"):
         publisher, measure, publish = (
             ("coverage-baseline", "Compute the coverage baseline", "Publish the passed dev coverage baseline")
             if event == "push"
@@ -82,6 +83,7 @@ def lookup(tmp_path):
                 "conclusion": "failure",
             },
             "ancestry": "ahead",
+            "queue_ancestry": queue_ancestry,
             "jobs": jobs,
             "artifacts": ["coverage-baseline", "durations-merged"],
         }
@@ -196,5 +198,22 @@ def test_lookup_rejects_unverified_queue_reuse(lookup, selector, fault):
 )
 def test_lookup_rejects_sources_without_valid_dev_measurements(lookup, selector, fault):
     result, output, _ = lookup(selector, fault=fault)
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert output == ""
+
+
+@pytest.mark.parametrize("ancestry", ["ahead", "identical"])
+def test_queue_lookup_accepts_measured_predecessor_before_it_merges(lookup, ancestry):
+    selector = ("queue-baseline", "Find the run that measured the base tree")
+    result, output, requests = lookup(selector, event="merge_group", fault="outside-dev", queue_ancestry=ancestry)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "id=222\n" in output
+    assert "compare/base...head" in requests
+
+
+@pytest.mark.parametrize("ancestry", ["behind", "diverged"])
+def test_queue_lookup_rejects_base_outside_dev_and_queue_history(lookup, ancestry):
+    selector = ("queue-baseline", "Find the run that measured the base tree")
+    result, output, _ = lookup(selector, event="merge_group", fault="outside-dev", queue_ancestry=ancestry)
     assert result.returncode != 0, result.stdout + result.stderr
     assert output == ""
