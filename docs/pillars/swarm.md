@@ -222,6 +222,8 @@ Agent commands take the agent name from `--as` or `AGENTIHOOKS_AGENT_NAME`:
 | `agentihooks swarm <id> issue URL` | Record the task's GitHub issue, where the repo has issues; without them the ledger task is the spec. |
 | `agentihooks swarm <id> pr URL` | Record the task's pull request, its head branch and that branch's repository (`branch_repo`); the task moves to `pr`. |
 | `agentihooks swarm <id> merge queue\|dequeue\|state URL` | Queue a pull request into `dev` on the merge queue at its current head, take it out of the queue, or report its state, head and queue entry as JSON. It goes through `gh api graphql`, so any `gh` with `gh api` works; queue and dequeue run only for a swarm worker, never the master, and refuse a pull request into any other base. |
+| `agentihooks swarm <id> prepare` | Resolve the claimed task worktree or create it with the worktree command. A recorded continuation branch supplies the starting revision. Returns the path and branch; repeat calls reuse the worktree. |
+| `agentihooks swarm <id> publish --message TEXT -- FILE...` | Resolve the claimed task worktree even from the primary checkout, stage only explicit repository relative file names, commit, run `python -m scripts.ci_prepush` against that committed HEAD, then push and record the branch. Unrelated tracked changes are refused before staging; unrelated untracked files are preserved. A failed stage stops publication and names the next command. Repeat the command after fixing a failure; an already committed head is graded again without an empty commit. Protected branches and tasks owned by another agent are refused. Tests run only in CI. |
 | `agentihooks swarm <id> branch` | Record the current worktree branch on the task once it is on origin, with its repository (`branch_repo`, the origin remote without credentials), so dependent tasks can start from it. |
 | `agentihooks swarm <id> review` | Start a review round on the task. The third round answers that review is closed: any finding still open gets one ruling from the other reader, then the merge proceeds. A fourth is refused with that text. |
 | `agentihooks swarm <id> done [--pr URL] [proof flags]` | Close the task with the proof its kind needs; the swarm then closes the session. |
@@ -296,7 +298,8 @@ An outage holds the affected idle and delivery decisions until recovery (see
 [Outage holds and recovery](#outage-holds-and-recovery)). Each tick, per swarm:
 
 1. Retire agents that finished, and pass on the messages they left (see [Safe retire](#safe-retire)).
-2. Free the tasks of agents whose pane is gone, or that stayed idle for 10 ticks. An idle agent is nudged at 3.
+2. Free the tasks of agents whose pane is gone, or that stayed idle for 20 ticks. A stale agent is nudged through its inbox
+   (see Stale nudge).
 3. Reopen claimed tasks that have no agent.
 4. Spawn the master if none is online, or retire it once a stopping swarm has no worker left. After the down window, force a launch and promote an engineer when it fails (see [Master outage and promotion](#master-outage-and-promotion)).
 5. While `running`, spawn agents up to the caps, one per claimable task, as long as a Claude account has room
@@ -368,9 +371,20 @@ writes, a master `relay` carrying his verified words among them: an agent's comm
 never judged, even one that asks him for the decision. Every automatic clear is a `priority cleared` event by `swarm` with a
 `reason` in the ledger history.
 
+### Stale nudge
+
+An agent holding a task is stale when its session heartbeat is over ten minutes old and no named wait holds, or
+when its pane shows a provider error while its heartbeat is not working. The tick sends it one inbox item per ten
+minutes of silence, with an id built from the agent, its last activity and the window, so repeated ticks send it
+once; nothing is typed into its pane. The inbox channel delivers it to Claude and the Codex push pump to Codex. A
+nudge the pump delivers within two minutes of its sending interrupts a turn still running and starts a new app server
+turn; a later one is delivered like any message. An agent on a long command declares a wait first.
+The master, an agent the operator is typing to, a swarm with an open outage and an agent in provider recovery get
+no nudge.
+
 ### Safe retire
 
-The tick retires an agent for idleness only after 10 idle ticks, and a tick counts as idle only when all three
+The tick retires an agent for idleness only after 20 idle ticks, and a tick counts as idle only when all three
 say idle:
 
 - its herdr pane, read by its pane id, never by its name, reads idle;

@@ -13,6 +13,7 @@ from scripts.codex_session.binding import CONNECTED, DEGRADED, BindingStore, Tra
 from scripts.inbox.dispatch import Dispatcher, digest
 from scripts.inbox.receipts import MISMATCH, RELEASED, Delivery, DispatchError
 from scripts.inbox.store import NOTIFY, InboxStore, Item, now_ms
+from scripts.swarm import stale_nudge
 from scripts.swarm.delivery import envelope as delivery_envelope
 
 if TYPE_CHECKING:
@@ -265,6 +266,7 @@ class Pump:
         self.receipts.recover(binding.recipient, binding.owner)
         self.subscription = self.store.redis.pubsub()
         self.subscription.subscribe(NOTIFY)
+        protocol.resume_thread(binding.connection, binding.thread_id)
         self._refresh()
         if self.state.active_turn:
             self.state.requests[UNOBSERVED] = UNOBSERVED
@@ -281,8 +283,23 @@ class Pump:
         if woken:
             self.queue += self.dispatcher.reserve(self.binding.recipient, self.binding.owner)
         self._surface()
+        if self.queue and set(self.state.requests.values()) <= {UNOBSERVED} and self.timing.clock() >= self.hold_until:
+            self._submit_nudge()
         while self.queue and not self.state.requests and self.timing.clock() >= self.hold_until:
             self._submit(self.queue.pop(0))
+
+    def _submit_nudge(self) -> None:
+        """A stale nudge goes first; past a turn begun before this pump connected only a fresh one, which ends it."""
+        now = self.timing.now_ms()
+        nudge = next((d for d in self.queue if d.ref.startswith(stale_nudge.REF) and self._jumps(d, now)), None)
+        if nudge is None:
+            return
+        self.queue.remove(nudge)
+        self._submit(nudge)
+
+    def _jumps(self, delivery: Delivery, now: int) -> bool:
+        item = self.store.get(delivery.item)
+        return stale_nudge.interrupts(item, now) if self.state.requests else stale_nudge.is_nudge(item)
 
     def _hinted(self) -> bool:
         if self.subscription.get_message(timeout=0) is None:
@@ -324,7 +341,7 @@ class Pump:
             self.receipts.reject(delivery.id, owner, str(gone))
             return
         try:
-            self._arbitrate(envelope(item, delivery))
+            self._arbitrate(envelope(item, delivery), stale_nudge.interrupts(item, self.timing.now_ms()))
         except protocol.Refused as refused:
             self._requeue(delivery, str(refused))
             self._hold()
@@ -345,19 +362,23 @@ class Pump:
             self.receipts.reject(queued.id, owner, RELEASED)
         self.queue.clear()
 
-    def _arbitrate(self, text: str) -> None:
+    def _arbitrate(self, text: str, fresh: bool) -> None:
         try:
-            self._send(text)
+            self._send(text, fresh)
         except protocol.Refused as refused:
             try:
                 self._refresh()
             except (protocol.ProtocolError, TimeoutError) as lost:
                 raise protocol.Refused(str(refused)) from lost
-            self._send(text)
+            self._send(text, fresh)
 
-    def _send(self, text: str) -> None:
+    def _send(self, text: str, fresh: bool) -> None:
         def send():
             connection, thread = self.binding.connection, self.binding.thread_id
+            if self.state.active_turn and fresh:
+                protocol.interrupt_turn(connection, thread, self.state.active_turn)
+                self.state.active_turn = ""
+                self.state.requests.clear()
             if self.state.active_turn:
                 self.state.follow(protocol.steer_turn(connection, thread, self.state.active_turn, text))
             else:
@@ -369,3 +390,30 @@ class Pump:
         self.hold_until = self.timing.clock() + self.backoff
         self.next_reconcile = min(self.next_reconcile, self.hold_until)
         self.backoff = min(self.backoff * 2, self.timing.backoff_max_s)
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    import signal
+    from threading import Event
+
+    from scripts.codex_session.supervisor import UNIX
+    from scripts.inbox.store import connect as inbox_connect
+    from scripts.swarm.store import connect as swarm_connect
+
+    parser = argparse.ArgumentParser(prog="python -m scripts.inbox.codex")
+    parser.add_argument("swarm")
+    parser.add_argument("execution")
+    args = parser.parse_args(argv)
+    transport = Transport(BindingStore(swarm_connect()), args.swarm, args.execution)
+    record = transport.require()
+    connection, _ = protocol.connect(record.endpoint_ref.removeprefix(UNIX), 5.0)
+    binding = Binding(connection, record.thread_id, record.agent_name, record.execution_id, transport)
+    stopped = Event()
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(signum, lambda number, frame: stopped.set())
+    return 0 if Pump(inbox_connect(), binding).run(stopped.is_set) == STOPPED else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

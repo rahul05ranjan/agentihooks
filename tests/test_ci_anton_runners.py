@@ -13,15 +13,19 @@ TRUSTED = (
     ' && contains(fromJSON(\'["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]\'), github.actor)'
     ' && contains(fromJSON(\'["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]\'), github.triggering_actor)'
     " || (github.event_name == 'merge_group' || github.event_name == 'push' && github.ref == 'refs/heads/dev')"
-    " && github.actor == 'github-merge-queue[bot]' && github.triggering_actor == 'github-merge-queue[bot]')"
+    " && github.actor == 'github-merge-queue[bot]' && (github.triggering_actor == 'github-merge-queue[bot]'"
+    ' || contains(fromJSON(\'["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]\'), github.triggering_actor)))'
 )
 
 
+LIGHT, STANDARD, BATCH, QUEUE = "anton-oss-light", "anton-oss", "anton-oss-batch", "anton-oss-queue"
+QUEUED = "(github.event_name == 'merge_group' && 'anton-oss-queue' || 'anton-oss')"
+
+
 def pool(label):
-    return "${{ " + TRUSTED + " && '" + label + "' || 'ubuntu-latest' }}"
+    route = label if label == QUEUED else f"'{label}'"
+    return "${{ " + TRUSTED + " && " + route + " || 'ubuntu-latest' }}"
 
-
-LIGHT, STANDARD, BATCH = "anton-oss-light", "anton-oss", "anton-oss-batch"
 
 MOVED = {
     ("access-audit.yml", "audit"): LIGHT,
@@ -51,6 +55,7 @@ MOVED = {
     ("swarm-node-image.yml", "image"): STANDARD,
     ("swarm-node-smoke.yml", "worker-health"): STANDARD,
     ("swarm-node-smoke.yml", "worker-image"): STANDARD,
+    ("swarm-node-smoke.yml", "worker-image-compare"): LIGHT,
     ("swarm-smoke.yml", "compose-hive"): STANDARD,
     ("swarm-smoke.yml", "hive-join"): STANDARD,
     ("swarm-smoke.yml", "hive-launch"): STANDARD,
@@ -63,27 +68,31 @@ MOVED = {
     ("test.yml", "coverage-ratchet"): LIGHT,
     ("test.yml", "durations"): LIGHT,
     ("test.yml", "flake-budget"): LIGHT,
+    ("test.yml", "gate-required"): LIGHT,
     ("test.yml", "kind-due"): LIGHT,
-    ("test.yml", "lint"): STANDARD,
+    ("test.yml", "lint"): QUEUED,
     ("test.yml", "mutation"): BATCH,
     ("test.yml", "mutation-plan"): LIGHT,
     ("test.yml", "mutation-stats"): BATCH,
     ("test.yml", "queue-baseline"): LIGHT,
-    ("test.yml", "refresh-durations"): STANDARD,
+    ("test.yml", "refresh-durations"): QUEUED,
+    ("test.yml", "reuse"): LIGHT,
+    ("test.yml", "select"): LIGHT,
     ("test.yml", "shard-check"): LIGHT,
-    ("test.yml", "sonar"): STANDARD,
-    ("test.yml", "split"): STANDARD,
+    ("test.yml", "sonar"): QUEUED,
+    ("test.yml", "split"): QUEUED,
     ("test.yml", "stage-budget"): LIGHT,
-    ("test.yml", "test-count"): STANDARD,
-    ("test.yml", "unit"): STANDARD,
+    ("test.yml", "test-count"): QUEUED,
+    ("test.yml", "unit"): QUEUED,
+    ("test.yml", "unit-selected"): STANDARD,
     ("worker-resources.yml", "measure"): BATCH,
 }
 
 # These exchange a GitHub OIDC token, which the Anton runners have timed out fetching.
 OIDC = {("pages.yml", "deploy"), ("publish-pypi.yml", "publish")}
 
-# The protected grader refuses a head that changes these, so they move only through the gate change protocol.
-PROTECTED = {("test.yml", "gate-required"), ("test.yml", "reuse"), ("runner-trust.yml", "actors")}
+# The runner trust loader contract fixes this job's runner.
+PROTECTED = {("runner-trust.yml", "actors")}
 
 # Runner trust never admits a pull_request_target run to a private runner.
 TARGET = {("gate-protected.yml", "grade")}
@@ -179,6 +188,8 @@ UNTRUSTED_EVENTS = [
     event("pull_request_target", head="stranger/agentihooks"),
     event("pull_request_target", head=None),
     event("push", actor="github-merge-queue[bot]"),
+    event("push", actor="github-merge-queue[bot]", triggering="nestorcolt"),
+    event("workflow_dispatch", actor="github-merge-queue[bot]", triggering="nestorcolt", ref="refs/heads/dev"),
     event("workflow_dispatch", actor="nestorcolt", triggering="stranger"),
 ]
 
@@ -199,9 +210,28 @@ def test_no_job_resolves_a_hosted_runner_for_a_trusted_actor():
         for (name, job), spec in runner_jobs().items()
         if (name, job) not in HOSTED
         for github in TRUSTED_EVENTS
-        if resolve(str(spec.get("runs-on", "")), **github) not in {LIGHT, STANDARD, BATCH}
+        if resolve(str(spec.get("runs-on", "")), **github) not in {LIGHT, STANDARD, BATCH, QUEUE}
     )
     assert hosted == []
+
+
+@pytest.mark.parametrize("triggering", ["nestorcolt", "agenticore-app[bot]", "tcc-main-ci[bot]"])
+@pytest.mark.parametrize("name", ["push", "merge_group"])
+def test_trusted_reruns_of_queue_runs_keep_the_classified_anton_pool(name, triggering):
+    github = event(name, actor="github-merge-queue[bot]", triggering=triggering, ref="refs/heads/dev")
+    hosted = sorted(
+        f"{workflow}:{job}"
+        for (workflow, job), spec in runner_jobs().items()
+        if (workflow, job) not in HOSTED
+        if resolve(str(spec.get("runs-on", "")), **github) != resolve(pool(MOVED[(workflow, job)]), **github)
+    )
+    assert hosted == []
+
+
+@pytest.mark.parametrize("name", ["push", "merge_group"])
+def test_untrusted_reruns_of_queue_runs_stay_hosted(name):
+    github = event(name, actor="github-merge-queue[bot]", triggering="stranger", ref="refs/heads/dev")
+    assert all(resolve(str(spec["runs-on"]), **github) == "ubuntu-latest" for spec in runner_jobs().values())
 
 
 def test_untrusted_and_fork_runs_fall_back_to_hosted_runners():
@@ -228,7 +258,7 @@ def test_every_hosted_job_stays_on_a_hosted_runner():
 def test_jobs_with_service_or_job_containers_run_on_the_docker_pool():
     for (name, job), spec in runner_jobs().items():
         if "services" in spec or "container" in spec:
-            assert MOVED.get((name, job)) == STANDARD, f"{name}:{job}"
+            assert MOVED.get((name, job)) in {STANDARD, QUEUED}, f"{name}:{job}"
 
 
 def test_the_expression_reader_tells_trusted_from_untrusted_runs():
@@ -236,3 +266,6 @@ def test_the_expression_reader_tells_trusted_from_untrusted_runs():
     assert resolve(pool(LIGHT), **event("pull_request", head="stranger/agentihooks")) == "ubuntu-latest"
     assert resolve(pool(LIGHT), **event("pull_request_target")) == "ubuntu-latest"
     assert resolve("ubuntu-latest", **event("push")) == "ubuntu-latest"
+    assert resolve(pool(QUEUED), **event("merge_group", actor="github-merge-queue[bot]")) == QUEUE
+    assert resolve(pool(QUEUED), **event("pull_request")) == STANDARD
+    assert resolve(pool(QUEUED), **event("pull_request_target")) == "ubuntu-latest"
