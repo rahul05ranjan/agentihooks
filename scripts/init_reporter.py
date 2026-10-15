@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import re
 import sys
+from argparse import Namespace
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from copy import deepcopy
 from io import TextIOBase
 from pathlib import Path
+from types import ModuleType
+from typing import TextIO
 
 from scripts.targets import DEFAULT_TARGETS, TargetAdapter
 
@@ -14,33 +18,48 @@ _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
 class InstallOutput(TextIOBase):
-    def __init__(self, stream, *, errors: bool = False) -> None:
+    def __init__(self, stream: TextIO) -> None:
         self.stream = stream
-        self.errors = errors
         self.pending = ""
+        self.diagnostic = ""
 
     def write(self, text: str) -> int:
         self.pending += text
         while "\n" in self.pending:
             line, self.pending = self.pending.split("\n", 1)
-            if self.errors or _DIAGNOSTIC.search(_ANSI.sub("", line)):
-                self.stream.write(line + "\n")
+            if self.diagnostic and line.startswith("       "):
+                self.diagnostic += " " + line.strip()
+            else:
+                self._emit_diagnostic()
+                if _DIAGNOSTIC.search(_ANSI.sub("", line)):
+                    self.diagnostic = line
         return len(text)
 
+    def _emit_diagnostic(self) -> None:
+        if self.diagnostic:
+            self.stream.write(self.diagnostic + "\n")
+            self.diagnostic = ""
+
     def flush(self) -> None:
-        if self.pending:
+        self._emit_diagnostic()
+        if self.pending and (sys.stdin.isatty() or _DIAGNOSTIC.search(_ANSI.sub("", self.pending))):
             self.stream.write(self.pending)
-            self.pending = ""
+        self.pending = ""
         self.stream.flush()
 
 
 @contextmanager
-def capture_details(verbose: bool):
+def capture_details(verbose: bool) -> Iterator[None]:
     if verbose:
         yield
     else:
-        with redirect_stdout(InstallOutput(sys.stdout)), redirect_stderr(InstallOutput(sys.stderr, errors=True)):
-            yield
+        output, errors = InstallOutput(sys.stdout), InstallOutput(sys.stderr)
+        with redirect_stdout(output), redirect_stderr(errors):
+            try:
+                yield
+            finally:
+                output.flush()
+                errors.flush()
 
 
 def installed_counts(servers: dict, skills_home: Path, plugins: dict) -> dict[str, int]:
@@ -51,7 +70,9 @@ def installed_counts(servers: dict, skills_home: Path, plugins: dict) -> dict[st
     }
 
 
-def report_target(install_target, adapter: TargetAdapter, record, *, verbose: bool = False) -> None:
+def report_target(
+    install_target: Callable[[], None], adapter: TargetAdapter, record: Callable[[], dict], *, verbose: bool = False
+) -> None:
     with capture_details(verbose):
         install_target()
         installed = record()
@@ -64,7 +85,7 @@ def report_target(install_target, adapter: TargetAdapter, record, *, verbose: bo
     )
 
 
-def run_init(args, installer) -> None:
+def run_init(args: Namespace, installer: ModuleType) -> None:
     from scripts.herdr_setup import init_step
 
     args.profile = args.init_profile
