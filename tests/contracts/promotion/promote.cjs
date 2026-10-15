@@ -15,11 +15,14 @@ function fixture(options = {}) {
   const pull = { number: 7, head: { sha: options.pullHead || 'graded', repo: { full_name: 'owner/repo' } },
     base: { ref: 'main' }, html_url: 'https://github.com/owner/repo/pull/7' };
   let reads = 0;
+  let readiness = 0;
   const github = { rest: {
     git: { getRef: async () => ({ data: { object: { sha: ++reads === 1 ? options.dev || 'graded' : options.moved || 'graded' } } }) },
     repos: { getCommit: async ({ ref }) => ({ data: ref === 'graded' ? commit('graded', 'tree') :
       ref === 'main' ? commit('main', options.already ? 'tree' : 'old') : commit('rebased', options.wrongTree ? 'wrong' : 'tree') }) },
     pulls: {
+      get: async () => ({ data: { ...pull, mergeable: options.conflict ? false : true,
+        mergeable_state: options.pending || options.waitOnce && readiness++ === 0 ? 'blocked' : 'clean' } }),
       list: async () => ({ data: options.existing ? [pull] : [] }),
       create: async args => { writes.push(['create', args]); return { data: pull }; },
       merge: async args => {
@@ -31,7 +34,7 @@ function fixture(options = {}) {
   } };
   const summary = { addHeading() { return this; }, addTable() { return this; }, async write() {} };
   const core = { setOutput: (key, value) => { outputs[key] = value; }, summary };
-  return { github, context, core, writes, outputs };
+  return { github, context, core, writes, outputs, sleep: async () => {} };
 }
 
 test('promotes exactly the graded head with rebase and records both revisions', async () => {
@@ -69,6 +72,21 @@ test('reuses an existing promotion pull request', async () => {
   await promote(f);
   assert.deepEqual(f.writes.map(([kind]) => kind), ['merge']);
 });
+
+test('waits for GitHub to compute a clean merge', async () => {
+  const f = fixture({ waitOnce: true });
+  await promote(f);
+  assert.equal(f.outputs.main, 'rebased');
+});
+
+for (const options of [{ conflict: true }, { pending: true }]) {
+  test(`never merges a blocked pull request ${JSON.stringify(options)}`, async () => {
+    const f = fixture({ existing: true, ...options });
+    await assert.rejects(promote(f));
+    assert.deepEqual(f.writes, []);
+    assert.equal(f.outputs.main, undefined);
+  });
+}
 
 test('does not merge when dev moves after the first read', async () => {
   const f = fixture({ existing: true, moved: 'newer' });

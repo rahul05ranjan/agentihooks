@@ -1,4 +1,4 @@
-module.exports = async ({ github, context, core }) => {
+module.exports = async ({ github, context, core, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) }) => {
   const { owner, repo } = context.repo;
   const repository = `${owner}/${repo}`;
   if (context.eventName !== 'push' || context.ref !== 'refs/heads/dev' ||
@@ -17,6 +17,19 @@ module.exports = async ({ github, context, core }) => {
     if (pull.head.sha !== context.sha || pull.head.repo.full_name !== repository || pull.base.ref !== 'main') {
       throw new Error('Promotion pull request does not match the graded dev head');
     }
+    let ready = false;
+    for (let attempt = 0; attempt < 48; attempt++) {
+      if (await current() !== context.sha) return;
+      const latest = (await github.rest.pulls.get({ ...api, pull_number: pull.number })).data;
+      if (latest.head.sha !== context.sha) throw new Error('Promotion pull request moved away from the graded head');
+      if (latest.mergeable === false) throw new Error('Promotion pull request has merge conflicts');
+      if (latest.mergeable === true && latest.mergeable_state === 'clean') {
+        ready = true;
+        break;
+      }
+      await sleep(5000);
+    }
+    if (!ready) throw new Error('Promotion checks did not become mergeable within four minutes');
     if (await current() !== context.sha) return;
     const merged = (await github.rest.pulls.merge({ ...api, pull_number: pull.number, sha: context.sha, merge_method: 'rebase' })).data;
     if (!merged.merged) throw new Error('GitHub refused the promotion merge');

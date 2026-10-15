@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 10
     environment: release
     concurrency:
-      group: promotion-release
+      group: release-version
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
