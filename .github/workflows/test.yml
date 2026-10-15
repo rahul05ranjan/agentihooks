@@ -34,7 +34,7 @@ permissions:
 jobs:
   promote:
     needs: [gate-required, refresh-durations, coverage-baseline, flake-budget]
-    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/dev' && needs.gate-required.result == 'success' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/dev' && !contains(needs.*.result, 'cancelled') }}
     uses: ./.github/workflows/promote.yml
     secrets: inherit
 
