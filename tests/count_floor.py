@@ -100,12 +100,7 @@ def _dotted(node: ast.expr) -> str | None:
     return None
 
 
-def referenced_subjects(tree: Path, nodeid: str) -> set[tuple[str, str]]:
-    path, *scopes = nodeid.split("[", 1)[0].split("::")
-    try:
-        module = ast.parse((tree / path).read_bytes())
-    except (OSError, SyntaxError, ValueError):
-        return set()
+def _imports(module: ast.Module) -> tuple[dict[str, set[tuple[str, str]]], dict[str, set[str]]]:
     names: dict[str, set[tuple[str, str]]] = {}
     modules: dict[str, set[str]] = {}
     for statement in ast.walk(module):
@@ -118,23 +113,35 @@ def referenced_subjects(tree: Path, nodeid: str) -> set[tuple[str, str]]:
                 bound = alias.asname or alias.name
                 names.setdefault(bound, set()).add((statement.module, alias.name))
                 modules.setdefault(bound, set()).add(f"{statement.module}.{alias.name}")
+    return names, modules
+
+
+def _test_function(module: ast.Module, scopes: list[str]) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
     body, node = module.body, None
     for scope in scopes:
         node = next((child for child in body if isinstance(child, _DEFINITIONS) and child.name == scope), None)
         if node is None:
-            return set()
+            return None
         body = node.body
-    if isinstance(node, ast.ClassDef) or node is None:
+    return None if isinstance(node, ast.ClassDef) else node
+
+
+def referenced_subjects(tree: Path, nodeid: str) -> set[tuple[str, str]]:
+    path, *scopes = nodeid.split("[", 1)[0].split("::")
+    try:
+        module = ast.parse((tree / path).read_bytes())
+    except (OSError, SyntaxError, ValueError):
         return set()
+    if (node := _test_function(module, scopes)) is None:
+        return set()
+    names, modules = _imports(module)
     subjects = set()
-    for statement in node.body:
-        for child in ast.walk(statement):
-            if isinstance(child, ast.Name):
-                subjects.update(names.get(child.id, ()))
-            elif isinstance(child, ast.Attribute) and (prefix := _dotted(child.value)):
-                root, _, rest = prefix.partition(".")
-                for bound in modules.get(root, ()):
-                    subjects.add((f"{bound}.{rest}" if rest else bound, child.attr))
+    for child in (descendant for statement in node.body for descendant in ast.walk(statement)):
+        if isinstance(child, ast.Name):
+            subjects.update(names.get(child.id, ()))
+        elif isinstance(child, ast.Attribute) and (prefix := _dotted(child.value)):
+            root, _, rest = prefix.partition(".")
+            subjects.update((f"{bound}.{rest}" if rest else bound, child.attr) for bound in modules.get(root, ()))
     return subjects
 
 
