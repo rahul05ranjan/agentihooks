@@ -130,7 +130,7 @@ def test_a_lost_test_whose_subject_moved_to_another_module_is_red(tmp_path):
     assert "tests/test_mod.py::test_subject is in the base and not in the head" in result.stdout
 
 
-def test_a_lost_test_whose_subject_was_deleted_is_graded(tmp_path):
+def test_a_lost_test_whose_subject_was_deleted_is_admitted(tmp_path):
     _, kept = SUBJECTS.split("\n\n\n")
     result = _floor(
         tmp_path,
@@ -138,8 +138,33 @@ def test_a_lost_test_whose_subject_was_deleted_is_graded(tmp_path):
         {"test_mod.py": OTHER_TEST},
         {"base": _package(mod=SUBJECTS), "head": _package(mod=kept)},
     )
-    assert result.returncode in (0, 1), result.stdout + result.stderr
-    assert "tests/test_mod.py::test_subject" in result.stdout
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "tests/test_mod.py::test_subject is admitted: the head deletes subject, which it referenced" in result.stdout
+    assert "head collects 1 tests, base floor 1" in result.stdout
+
+
+def test_a_lost_class_test_whose_imported_subject_was_deleted_is_admitted(tmp_path):
+    base = "from pkg.mod import Subject\n\n\nclass TestSubject:\n    def test_it(self):\n        assert Subject\n"
+    result = _floor(
+        tmp_path,
+        {"test_mod.py": base, "test_c.py": OTHER},
+        {"test_c.py": OTHER},
+        {"base": _package(mod="class Subject:\n    pass\n"), "head": _package(mod="")},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "tests/test_mod.py::TestSubject::test_it is admitted" in result.stdout
+
+
+def test_a_subject_deleted_only_from_the_tests_tree_admits_nothing(tmp_path):
+    helper = "def subject():\n    return 1\n"
+    base = "from floor_helpers import subject\n\n\ndef test_subject():\n    assert subject()\n"
+    result = _floor(
+        tmp_path,
+        {"test_mod.py": base, "floor_helpers.py": helper, "test_c.py": OTHER},
+        {"test_c.py": OTHER},
+    )
+    assert result.returncode == 1
+    assert "tests/test_mod.py::test_subject is in the base and not in the head" in result.stdout
 
 
 def test_a_deleted_subject_admits_only_the_tests_that_referenced_it(tmp_path):
