@@ -69,7 +69,7 @@ def test_init_verbose_controls_all_details(verbose, monkeypatch, capsys):
     monkeypatch.setattr(install, "_load_state", lambda: {})
     monkeypatch.setattr(install, "cmd_init_unified", lambda args: print("linked skill detail"))
     monkeypatch.setattr(herdr_setup, "init_step", lambda *args: print("herdr detail"))
-    options = ["-v"] if verbose else []
+    options = ["--verbose"] if verbose else []
     monkeypatch.setattr(sys, "argv", ["agentihooks", "init", "--profile", "default", *options])
     install.main()
     output = capsys.readouterr().out
