@@ -36,6 +36,7 @@ def test_claude_render_writes_a_row_per_rule_and_doctrine_file(bundle):
     assert [(row["layer"], Path(row["locator"]["path"]).name) for row in packaged] == [
         ("rule", "agentihooks-toolbelt.md"),
         ("rule", "code-intelligence.md"),
+        ("rule", "delivery-tiers.md"),
         ("rule", "read-docs.md"),
         ("rule", "swarm-maker.md"),
         ("rule", "worktrees.md"),

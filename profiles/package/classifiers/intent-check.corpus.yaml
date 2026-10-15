@@ -751,7 +751,7 @@ cases:
   - verdict: pass
   - verdict: pass
   notes:
-    source: https://github.com/the-cloud-clockwork/agentihooks-bundle/pull/162
+    source: agentihooks-bundle pull request 162
     provenance: reconstruction from retained ledger, PR and proof; not digest verified historical input
     labels:
       standards: The task requires installed build and intent shims and a headless deny. Later dated proof notes record 373
@@ -919,7 +919,7 @@ cases:
   - verdict: fail
   - verdict: fail
   notes:
-    source: https://github.com/the-cloud-clockwork/agentihooks-bundle/pull/162
+    source: agentihooks-bundle pull request 162
     provenance: deliberately incomplete control built from original draft description
     labels:
       standards: This deliberately incomplete control explicitly says shim files are absent, thirteen tests fail, operator
@@ -1427,7 +1427,7 @@ cases:
   - verdict: pass
   - verdict: pass
   notes:
-    source: https://github.com/the-cloud-clockwork/agentihooks-bundle/pull/162
+    source: agentihooks-bundle pull request 162
     provenance: fixed retained final PR body paired with delivered proof; not historical digest verified
     labels:
       standards: The retained final description explicitly records the operator condition request, delivered engineer shims
@@ -3713,10 +3713,10 @@ cases:
 
       2026-10-09T21:18:45+02:00 RED: CI Validate run 37978983060 on test-only head 45ffd86a (diffcheck/ci-323133-0263-red):
       Python tests failure, 454 passed 91 skipped 8 errors, all 8 in tests/unit/notifications/test_push_route.py (api.py has
-      no push route, no httpx attribute); Gate Required failure. https://github.com/the-cloud-clockwork/antoncore/actions/runs/37978983060
+      no push route, no httpx attribute); Gate Required failure.
 
       2026-10-09T21:20:02+02:00 GREEN: CI Validate run 37978995978 on PR head 67f8f434: Python tests success, 465 passed 91
-      skipped, tests/unit/notifications/test_push_route.py 11 passed; Gate Required pass. https://github.com/the-cloud-clockwork/antoncore/actions/runs/37978995978
+      skipped, tests/unit/notifications/test_push_route.py 11 passed; Gate Required pass.
 
       '
     reviewer_findings:

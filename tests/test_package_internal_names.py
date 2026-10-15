@@ -6,7 +6,8 @@ import pytest
 
 PACKAGE = Path(__file__).resolve().parents[1] / "profiles" / "package"
 LEAKS = re.compile(
-    r"\b(anton|smith|tcc|homeofanton|litellm|openbao|plane|manifesto|nestor|colt)\b|gateway[ _-]tools|§"
+    r"\b(anton|smith|tcc|homeofanton|litellm|openbao|plane|manifesto|nestor|colt|nestorcolt|agenticore-app)\b"
+    r"|gateway[ _-]tools|§|\bclockwork\b(?!(/|\.github\.io[/ ])agentihooks\b(?!-))"
     r"|\b10\.\d+\.\d+\.\d+|\b192\.168\.\d+\.\d+|\b172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|[\w.+-]+@gmail\.com",
     re.IGNORECASE,
 )
