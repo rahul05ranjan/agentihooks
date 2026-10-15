@@ -41,13 +41,16 @@ def test_reporter_output(verbose, tmp_path, capsys):
 
     def install_target():
         print("linked skill detail")
-        print("  [WARN] missing optional command")
+        print("  [WARN] missing optional command\n       Install the command to enable it.")
+        print("stderr detail", file=sys.stderr)
         print("ERROR: operator action required", file=sys.stderr)
 
     report_target(install_target, adapter, lambda: record, verbose=verbose)
     output = capsys.readouterr()
     assert "[WARN] missing optional command" in output.out
     assert "ERROR: operator action required" in output.err
+    assert "Install the command to enable it." in output.out
+    assert ("stderr detail" in output.err) is verbose
     assert ("linked skill detail" in output.out) is verbose
     summaries = [line for line in output.out.splitlines() if line.startswith("codex ")]
     assert summaries == [
