@@ -1489,8 +1489,10 @@ class TestInitProfileRecall:
     def test_explicit_profile_keeps_a_linked_profile_from_the_previous_chain(self):
         assert self._init_with("anton", "anton,brain") == "anton,brain"
 
-    def test_env_profile_keeps_a_linked_profile_from_the_previous_chain(self):
-        assert self._init_with(None, "anton,brain", env_profile="anton") == "anton,brain"
+    def test_env_profile_cannot_reapply_a_linked_profile_chain(self):
+        with pytest.raises(SystemExit) as exc:
+            self._init_with(None, "anton,brain", env_profile="anton")
+        assert exc.value.code == 1
 
     def test_switching_the_bundle_profile_still_keeps_the_linked_one(self):
         assert self._init_with("smith", "anton,brain") == "smith,brain"
@@ -1641,8 +1643,7 @@ class TestInitProfileRecall:
             called_args = mock_install.call_args[0][0]
             assert called_args.profile == "anton"
 
-    def test_env_var_overrides_state(self):
-        """AGENTIHOOKS_PROFILE env var overrides state.json."""
+    def test_env_profile_cannot_override_the_operator_state(self):
         import argparse
 
         state = self._make_state("default")
@@ -1660,9 +1661,10 @@ class TestInitProfileRecall:
             patch.object(install, "install_global") as mock_install,
             patch.dict("os.environ", {"AGENTIHOOKS_PROFILE": "admin"}, clear=False),
         ):
-            install.cmd_init_unified(args)
-            called_args = mock_install.call_args[0][0]
-            assert called_args.profile == "admin"
+            with pytest.raises(SystemExit) as exc:
+                install.cmd_init_unified(args)
+        assert exc.value.code == 1
+        mock_install.assert_not_called()
 
     def test_prompts_when_no_state(self):
         """When state.json has no profile, falls back to interactive prompt."""
