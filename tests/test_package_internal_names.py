@@ -7,7 +7,9 @@ import pytest
 PACKAGE = Path(__file__).resolve().parents[1] / "profiles" / "package"
 LEAKS = re.compile(
     r"\b(anton|smith|tcc|homeofanton|litellm|openbao|plane|manifesto|nestor|colt|nestorcolt|agenticore-app)\b"
-    r"|gateway[ _-]tools|§|\bclockwork\b(?!(/|\.github\.io[/ ])agentihooks\b(?!-))"
+    r"|gateway[ _-]tools|§|cloudclockwork"
+    r"|\bclockwork\b(?!(?<=github\.com/the-cloud-clockwork)/agentihooks\b(?!-)"
+    r"|(?<=//the-cloud-clockwork)\.github\.io/agentihooks\b(?!-))"
     r"|\b10\.\d+\.\d+\.\d+|\b192\.168\.\d+\.\d+|\b172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|[\w.+-]+@gmail\.com",
     re.IGNORECASE,
 )
@@ -55,6 +57,10 @@ def test_package_names_nothing_internal():
         "runs-on: anton-oss-light",
         "the anton-oss-queue pool",
         "langfuse.homeofanton.com",
+        "TheCloudClockwork",
+        "repos/the-cloud-clockwork/agentihooks",
+        "the-cloud-clockwork.github.io agentihooks",
+        "clockwork/agentihooks",
     ],
 )
 def test_package_scan_turns_red_on_a_planted_name(tmp_path, planted):
@@ -75,9 +81,7 @@ def test_package_scan_turns_red_on_a_planted_name(tmp_path, planted):
         "colts",
         "clockworks",
         "https://github.com/the-cloud-clockwork/agentihooks/pull/913",
-        "repos/the-cloud-clockwork/agentihooks",
         "https://the-cloud-clockwork.github.io/agentihooks/docs/",
-        "the GitHub Pages site the-cloud-clockwork.github.io agentihooks",
     ],
 )
 def test_package_scan_passes_words_that_only_contain_a_name(clean):

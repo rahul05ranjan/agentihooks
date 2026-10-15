@@ -310,7 +310,7 @@ cases:
       what he operates. Build a read docs skill shipped in the agentihooks package, loaded by the master and every role, and
       available in any project. When the operator asks in the ledger chat, a pane or any session what something means or how
       the swarm behaves, such as a gate, a ledger section, a setting or a swarm control, the agent finds the matching page
-      of the agentihooks docs site, published on the GitHub Pages site the-cloud-clockwork.github.io agentihooks from the
+      of the agentihooks docs site, published on the GitHub Pages site the project's agentihooks site from the
       repo docs folder, reads only the section that answers, and replies in plain words naming the page. If the docs lack
       the answer, it says so and proposes a follow up to add it, never invents. Deterministic first: a script maps a question
       to candidate pages through the docs index and headings, and the agent judges only the answer. Seams: the script returns
@@ -367,7 +367,7 @@ cases:
       docs skill shipped in the agentihooks package, loaded by the master and every role, and available in any project. When
       the operator asks in the ledger chat, a pane or any session what something means or how the swarm behaves, such as a
       gate, a ledger section, a setting or a swarm control, the agent finds the matching page of the agentihooks docs site,
-      published on the GitHub Pages site the-cloud-clockwork.github.io agentihooks from the repo docs folder, reads only the
+      published on the GitHub Pages site the project's agentihooks site from the repo docs folder, reads only the
       section that answers, and replies in plain words naming the page. If the docs lack the answer, it says so and proposes
       a follow up to add it, never invents. Deterministic first: a script maps a question to candidate pages through the docs
       index and headings, and the agent judges only the answer. Seams: the script returns the right page for a gate name,
@@ -1052,7 +1052,7 @@ cases:
       what he operates. Build a read docs skill shipped in the agentihooks package, loaded by the master and every role, and
       available in any project. When the operator asks in the ledger chat, a pane or any session what something means or how
       the swarm behaves, such as a gate, a ledger section, a setting or a swarm control, the agent finds the matching page
-      of the agentihooks docs site, published on the GitHub Pages site the-cloud-clockwork.github.io agentihooks from the
+      of the agentihooks docs site, published on the GitHub Pages site the project's agentihooks site from the
       repo docs folder, reads only the section that answers, and replies in plain words naming the page. If the docs lack
       the answer, it says so and proposes a follow up to add it, never invents. Deterministic first: a script maps a question
       to candidate pages through the docs index and headings, and the agent judges only the answer. Seams: the script returns
@@ -1461,7 +1461,7 @@ cases:
       what he operates. Build a read docs skill shipped in the agentihooks package, loaded by the master and every role, and
       available in any project. When the operator asks in the ledger chat, a pane or any session what something means or how
       the swarm behaves, such as a gate, a ledger section, a setting or a swarm control, the agent finds the matching page
-      of the agentihooks docs site, published on the GitHub Pages site the-cloud-clockwork.github.io agentihooks from the
+      of the agentihooks docs site, published on the GitHub Pages site the project's agentihooks site from the
       repo docs folder, reads only the section that answers, and replies in plain words naming the page. If the docs lack
       the answer, it says so and proposes a follow up to add it, never invents. Deterministic first: a script maps a question
       to candidate pages through the docs index and headings, and the agent judges only the answer. Seams: the script returns
@@ -2470,7 +2470,7 @@ cases:
       were synthesized or replayed to inflate real history. Exact retained disputed cases cannot yet be independently labelled
       or measured before and after.
 
-      2026-10-07T16:45:41Z root cause evidence: `gh api --paginate --slurp repos/the-cloud-clockwork/agentihooks/pulls/1320/comments`
+      2026-10-07T16:45:41Z root cause evidence: `gh api --paginate --slurp repos/OWNER/agentihooks/pulls/1320/comments`
       -> "unknown flag: --slurp", exit 1 (gh version 2.4.0+dfsg1). `intent.pr_view(".../pull/1320")` -> None. journalctl agentihooks-swarm:
       last "rig-grade-swarm: task ... intent check" line is t54 pass at 04:13:59; none after. gates/intent/history.jsonl absent.
 

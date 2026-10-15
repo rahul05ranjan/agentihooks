@@ -29,7 +29,7 @@ def test_delivery_tiers_state_the_model(path, statement):
     assert statement in _body(path)
 
 
-def test_delivery_tiers_rule_loads_as_a_package_rule():
+def test_delivery_tiers_rule_carries_package_rule_frontmatter():
     head = RULE.read_text().split("---")[1]
     assert "description: " in head
     assert "priority: " in head
