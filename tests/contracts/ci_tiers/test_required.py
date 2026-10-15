@@ -121,8 +121,12 @@ def test_skipping_reuse_requires_protected_duration_provenance(forged):
     head["test.yml"]["jobs"]["reuse"]["if"] = (
         "github.event_name != 'merge_group' && github.event_name != 'pull_request'"
     )
+    prefix = ci_reuse.duration_provenance_steps()
+    durations = head["test.yml"]["jobs"]["durations"]
+    durations["steps"] = [step for step in durations["steps"] if step not in prefix]
     if forged:
-        head["test.yml"]["jobs"]["durations"]["steps"].insert(0, {"run": "echo required-tree-sha256=forged"})
+        durations["steps"] = prefix + durations["steps"]
+        durations["steps"].insert(0, {"run": "echo required-tree-sha256=forged"})
     config = json.loads((ROOT / ".github/gate-wiring.json").read_text())
     policy = json.loads((ROOT / ".github/workflows/trusted-actors.json").read_text())
     problems = gate_protected.grade(base, config, head, config, date(2026, 10, 14), policy)
