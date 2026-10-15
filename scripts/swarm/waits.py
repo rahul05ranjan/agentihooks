@@ -6,6 +6,7 @@ through its inbox, which the wake ladder delivers. A bare minutes wait, checked 
 
 import json
 import re
+from collections.abc import Callable
 
 from scripts.gates import intent
 from scripts.gates.verdicts import Verdicts
@@ -21,6 +22,16 @@ TASK_ENDS = ("done", "blocked")
 SENDER = "swarm"
 PULL_URL = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+")
 NOTICE_RE = re.compile(r"Your wait on .+ has ended\. Pick task (\S+) back up:")
+
+
+def dependency(held: dict, task: dict, rows: dict, github: Callable) -> bool:
+    kind, target = held.get("kind"), held.get("target")
+    if kind == "task":
+        return target in rows and target != task.get("id") and rows[target].get("state") not in TASK_ENDS
+    if kind == "merge" and target and target != task.get("pr_url"):
+        pull = github(target)
+        return pull is None or pull.state == "OPEN"
+    return False
 
 
 def on(kind, target, task=""):
@@ -99,6 +110,13 @@ def target_problem(kind, target, mine, rows, get):
     return ""
 
 
+def named_tasks(kind, target, mine, read):
+    """By id, the one task a wait of this kind checks, read with read(task id); no read for any other kind."""
+    wanted = {"intent": mine, "task": target}.get(kind)
+    found = read(wanted) if wanted else None
+    return {wanted: found} if found else {}
+
+
 def merge_resolution(held, github, reread, fresh):
     target = held["target"]
     pull = github(target)
@@ -158,6 +176,8 @@ def end_pass(store, slug, rows, inbox, github, now_ms, reread):
             continue
         previous = json.dumps(held)
         outcome = resolution(held["on"], rows, inbox, github, reread, now_ms - held["at"] < FRESH_MS, verdicts)
+        if outcome and agent.task in rows and dependency(held["on"], rows[agent.task], rows, reread):
+            outcome = ""
         if (outcome or json.dumps(held) != previous) and not _save_wait(
             store.redis, slug, agent.name, previous, held, outcome, now_ms
         ):

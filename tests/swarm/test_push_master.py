@@ -4,6 +4,7 @@ import pytest
 
 from scripts.handoff import transfers
 from scripts.inbox import wake
+from scripts.inbox.store import InboxStore
 from scripts.profiles import codex_master
 from scripts.swarm import capabilities, prompt
 from scripts.swarm.capabilities import Capabilities
@@ -67,10 +68,13 @@ def test_each_execution_advertises_capabilities_from_its_harness_and_transport(h
     ],
 )
 def test_the_waker_skips_a_recipient_whose_transport_owns_delivery(harness, transport, typed):
+    import fakeredis
+
+    inbox = InboxStore(fakeredis.FakeRedis(decode_responses=True))
     worker = AgentRecord("sw-eng-1", "eng", "t1", pane_id="p1", harness=harness, transport=transport)
-    assert wake.typed_wake(worker) is typed
-    assert wake.typed_wake(replace(worker, lane=MASTER)) is False
-    assert wake.typed_wake(replace(worker, pane_id="")) is False
+    assert wake.typed_wake(inbox, worker) is typed
+    assert wake.typed_wake(inbox, replace(worker, lane=MASTER)) is False
+    assert wake.typed_wake(inbox, replace(worker, pane_id="")) is False
 
 
 def test_a_push_master_waiting_line_ends_the_turn_and_never_loops_on_wait_inbox():

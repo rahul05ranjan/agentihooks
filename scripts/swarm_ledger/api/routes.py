@@ -61,12 +61,9 @@ def dispatch(handler: object, server: ModuleType) -> dict | str | None:
 
 
 def ledger_read(server: ModuleType, slug: str, path: str, query: dict) -> dict:
-    parts = path.split("/")
-    if parts[0] == "hierarchy":
+    if path.split("/")[0] == "hierarchy":
         return resources.hierarchy_read(server.repository, slug, path, query)
-    if parts[0] in resources.COLLECTIONS and len(parts) in (2, 3):
-        return resources.read(server.repository.read(slug, "/".join(parts[:2])), path, query)
-    return resources.read(server.repository.get_document(slug), path, query)
+    return resources.read(server.repository.current(slug).state, path, query)
 
 
 def agent_token(handler: object, server: ModuleType, slug: str) -> dict:
@@ -123,12 +120,7 @@ def global_resource(handler: object, server: ModuleType, parts: list) -> dict:
     if parts[0] == "proof-ledgers" and handler.command == "POST":
         from . import proofs
 
-        proofs.require_controller(handler, server)
-        if len(parts) == 1:
-            return proofs.create(server, body(handler, server))
-        if len(parts) == 3 and parts[2] == "remove":
-            schemas.validate({"type": "object", "maxProperties": 0}, body(handler, server))
-            return proofs.remove(handler, server, parts[1])
+        return proofs.route(handler, server, parts, body)
     raise APIError(404, "resource_missing", "No such resource")
 
 
