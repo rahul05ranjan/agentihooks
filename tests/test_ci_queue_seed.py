@@ -94,7 +94,7 @@ def test_queue_has_no_coverage_baseline_publisher():
 )
 def test_baseline_dependencies_remain_only_for_protected_aggregation(name):
     needs = _jobs()[name].get("needs", [])
-    assert ("queue-baseline" in needs) is (name in {"gate-required", "stage-budget"})
+    assert ("queue-baseline" in needs) is (name in {"gate-required", "stage-budget", "coverage-ratchet"})
 
 
 @pytest.mark.parametrize(
