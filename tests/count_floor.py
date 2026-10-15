@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
 # Runs inside each tree so the base imports its own sources, never the head's.
@@ -40,35 +41,84 @@ def collect_all(trees: dict[str, Path], tests: str) -> dict[str, list[str] | Non
 _DEFINITIONS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 
 
-def top_level_names(tree: Path, tests: str) -> set[str]:
-    skipped = (tree / tests).resolve()
-    names = set()
+def _definitions(body: list[ast.stmt]) -> Iterator[str]:
+    for node in body:
+        if isinstance(node, _DEFINITIONS):
+            yield node.name
+        elif isinstance(node, (ast.If, ast.Try)):
+            yield from _definitions(node.body + node.orelse + getattr(node, "finalbody", []))
+            for handler in getattr(node, "handlers", []):
+                yield from _definitions(handler.body)
+
+
+def _module_name(relative: Path) -> str:
+    parts = relative.with_suffix("").parts
+    return ".".join(parts[:-1] if parts[-1] == "__init__" else parts)
+
+
+def _sources(tree: Path, skipped: set[Path]) -> Iterator[Path]:
     for root, dirs, files in os.walk(tree):
-        dirs[:] = [
-            name
-            for name in dirs
-            if not name.startswith(".")
-            and name not in {"node_modules", "__pycache__", "site-packages"}
-            and (Path(root) / name).resolve() != skipped
-        ]
-        for name in files:
-            if not name.endswith(".py"):
-                continue
-            try:
-                module = ast.parse((Path(root) / name).read_bytes())
-            except SyntaxError:
-                continue
-            names.update(node.name for node in module.body if isinstance(node, _DEFINITIONS))
-    return names
+        dirs[:] = [name for name in dirs if name != ".git" and (Path(root) / name).resolve() not in skipped]
+        yield from (Path(root) / name for name in files if name.endswith(".py"))
 
 
-def referenced_names(tree: Path, nodeid: str) -> set[str]:
+def top_level_definitions(tree: Path, tests: str) -> set[tuple[str, str]]:
+    definitions = set()
+    for path in _sources(tree, {(tree / tests).resolve()}):
+        try:
+            body = ast.parse(path.read_bytes()).body
+        except (OSError, SyntaxError, ValueError):
+            continue
+        module = _module_name(path.relative_to(tree))
+        definitions.update((module, definition) for definition in _definitions(body))
+    return definitions
+
+
+def bound_names(tree: Path) -> tuple[set[str], list[Path]]:
+    names, unparsed = set(), []
+    for path in _sources(tree, set()):
+        try:
+            module = ast.parse(path.read_bytes())
+        except (OSError, SyntaxError, ValueError):
+            unparsed.append(path)
+            continue
+        for node in ast.walk(module):
+            if isinstance(node, _DEFINITIONS):
+                names.add(node.name)
+            elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                names.add(node.id)
+            elif isinstance(node, ast.alias):
+                names.add(node.asname or node.name.split(".")[0])
+    return names, unparsed
+
+
+def _dotted(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute) and (prefix := _dotted(node.value)):
+        return f"{prefix}.{node.attr}"
+    return None
+
+
+def referenced_subjects(tree: Path, nodeid: str) -> set[tuple[str, str]]:
     path, *scopes = nodeid.split("[", 1)[0].split("::")
     try:
-        body = ast.parse((tree / path).read_bytes()).body
-    except (OSError, SyntaxError):
+        module = ast.parse((tree / path).read_bytes())
+    except (OSError, SyntaxError, ValueError):
         return set()
-    node = None
+    names: dict[str, set[tuple[str, str]]] = {}
+    modules: dict[str, set[str]] = {}
+    for statement in ast.walk(module):
+        if isinstance(statement, ast.Import):
+            for alias in statement.names:
+                bound = alias.asname or alias.name.split(".")[0]
+                modules.setdefault(bound, set()).add(alias.name if alias.asname else bound)
+        elif isinstance(statement, ast.ImportFrom) and statement.module and not statement.level:
+            for alias in statement.names:
+                bound = alias.asname or alias.name
+                names.setdefault(bound, set()).add((statement.module, alias.name))
+                modules.setdefault(bound, set()).add(f"{statement.module}.{alias.name}")
+    body, node = module.body, None
     for scope in scopes:
         node = next((child for child in body if isinstance(child, _DEFINITIONS) and child.name == scope), None)
         if node is None:
@@ -76,15 +126,16 @@ def referenced_names(tree: Path, nodeid: str) -> set[str]:
         body = node.body
     if isinstance(node, ast.ClassDef) or node is None:
         return set()
-    names = set()
-    for child in (descendant for statement in node.body for descendant in ast.walk(statement)):
-        if isinstance(child, ast.Name):
-            names.add(child.id)
-        elif isinstance(child, ast.Attribute):
-            names.add(child.attr)
-        elif isinstance(child, ast.alias):
-            names.add(child.name.rsplit(".", 1)[-1])
-    return names
+    subjects = set()
+    for statement in node.body:
+        for child in ast.walk(statement):
+            if isinstance(child, ast.Name):
+                subjects.update(names.get(child.id, ()))
+            elif isinstance(child, ast.Attribute) and (prefix := _dotted(child.value)):
+                root, _, rest = prefix.partition(".")
+                for bound in modules.get(root, ()):
+                    subjects.add((f"{bound}.{rest}" if rest else bound, child.attr))
+    return subjects
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -103,9 +154,13 @@ def main(argv: list[str] | None = None) -> int:
     lost = sorted(set(base) - set(head))
     admitted = {}
     if len(head) < len(base):
-        deleted = top_level_names(args.base, args.tests) - top_level_names(args.head, args.tests)
+        surviving, unparsed = bound_names(args.head)
+        for path in unparsed:
+            print(f"{path} does not parse in the head, so no lost test is admitted")
+        definitions = set() if unparsed else top_level_definitions(args.base, args.tests)
+        deleted = {definition for definition in definitions if definition[1] not in surviving}
         for nodeid in lost:
-            if subjects := sorted(referenced_names(args.base, nodeid) & deleted):
+            if subjects := sorted(".".join(subject) for subject in referenced_subjects(args.base, nodeid) & deleted):
                 admitted[nodeid] = subjects
                 print(f"{nodeid} is admitted: the head deletes {', '.join(subjects)}, which it referenced")
     floor = len(base) - len(admitted)
