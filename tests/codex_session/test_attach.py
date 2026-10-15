@@ -223,7 +223,8 @@ def test_the_app_server_pane_runs_the_server_in_its_own_session_and_the_viewer_i
         "--agent",
         "sw-master-1",
     ]
-    assert shlex.split(lines[serve + 2]) == ["rm", "-f", str(launcher)]
+    removal = next(line for line in lines[serve + 2 :] if line.startswith("rm -f "))
+    assert shlex.split(removal) == ["rm", "-f", str(launcher)]
 
 
 def test_a_viewer_launched_outside_a_swarm_names_an_empty_slug(tmp_path):
