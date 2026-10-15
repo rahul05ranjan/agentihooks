@@ -6,6 +6,7 @@ chart=deploy/helm/agentihooks-swarm
 release=agentihooks-swarm
 image=local/agentihooks-swarm:dev
 bundle_image=local/agentihooks-bundle:fixture
+terminal_image=local/agentihooks-swarm-terminal-worker:kind
 slug=kind-proof
 cluster="swarm-kind-$(python3 -c 'import uuid; print(uuid.uuid4().hex[:8])')"
 ledger_pod="$release-ledger-0"
@@ -16,6 +17,8 @@ python3 tests/kind_request.py
 
 finish() {
   status=$?
+  wait "$build" || true
+  wait "$cluster_setup" || true
   if [[ -n $ca_dir ]]; then
     rm -rf "$ca_dir"
   fi
@@ -29,6 +32,18 @@ finish() {
   kind delete cluster --name "$cluster" || true
   exit "$status"
 }
+
+(
+  docker build -q -t "$image" . >/dev/null
+  printf 'FROM %s\nCOPY . /\n' "$image" \
+    | docker build -q -t "$bundle_image" -f - tests/fixtures/swarm_v2/worker-bundle >/dev/null
+  docker build -q --build-arg IMAGE="$image" -t "$terminal_image" \
+    -f "$chart/ci/terminal-worker.Dockerfile" . >/dev/null
+) &
+build=$!
+kind create cluster --name "$cluster" --image "$KIND_NODE_IMAGE" --wait 120s &
+cluster_setup=$!
+trap finish EXIT
 
 helm lint --strict "$chart"
 helm lint --strict "$chart" -f "$chart/ci/kind-values.yaml"
@@ -239,10 +254,7 @@ if [[ $refusal != *"controller.api.proof needs controller.workers.apiUrl"* ]]; t
   exit 1
 fi
 printf 'the chart renders the proof setting only when set and refuses an incomplete proof\n'
-docker build -q -t "$image" . >/dev/null &
-build=$!
-trap finish EXIT
-kind create cluster --name "$cluster" --image "$KIND_NODE_IMAGE" --wait 120s
+wait "$cluster_setup"
 kubectl create namespace swarm-pod-proof
 kubectl create serviceaccount swarm-worker --namespace swarm-pod-proof
 printf 'apiVersion: node.k8s.io/v1\nkind: RuntimeClass\nmetadata:\n  name: kata-fc\nhandler: kata-fc\n' | kubectl create -f -
@@ -256,10 +268,7 @@ kubectl create --dry-run=server --validate=strict -f tests/fixtures/swarm_v2/her
 printf 'worker terminal Pod, Secret, Service and NetworkPolicy passed server side strict validation\n'
 wait "$build"
 bash scripts/packaging/swarm-image-clients.sh "$image"
-printf 'FROM %s\nCOPY . /\n' "$image" \
-  | docker build -q -t "$bundle_image" -f - tests/fixtures/swarm_v2/worker-bundle >/dev/null
-kind load docker-image "$image" --name "$cluster"
-kind load docker-image "$bundle_image" --name "$cluster"
+kind load docker-image "$image" "$bundle_image" "$terminal_image" --name "$cluster"
 bash "$chart/ci/terminal-route-proof.sh" "$image"
 helm install "$release" "$chart" -f "$chart/ci/kind-values.yaml" --wait --timeout 5m
 helm test "$release" --logs --timeout 2m
@@ -819,5 +828,5 @@ if [[ $kept != *"refused {}"* ]]; then
   exit 1
 fi
 printf 'the controller start pass reached the herdr client and refused nothing\n'
-bash "$chart/ci/terminal-attach-proof.sh" "$image" "$cluster" "$release" "$slug"
+bash "$chart/ci/terminal-attach-proof.sh" "$terminal_image" "$release" "$slug"
 printf 'Helm chart kind proof passed\n'
