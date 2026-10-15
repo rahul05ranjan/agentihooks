@@ -1102,7 +1102,17 @@ def test_repeated_reconnect_failures_past_the_lease_keep_ownership(rig, monkeypa
     assert owners == [OWNER] * 7
 
 
-def test_a_failed_start_before_ownership_retries_and_owns(rig, monkeypatch):
+def test_a_backoff_pause_renews_before_it_sleeps(rig, monkeypatch):
+    monkeypatch.setattr("time.time", rig.clock)
+    rig.pump.start()
+    rig.clock.now += 45
+    rig.pump._pause(30)
+    assert rig.clock.now == 175.0
+    assert Dispatcher(rig.store).owner(ME) == OWNER
+    assert rig.store.redis.ttl(owner_key(ME)) == 30
+
+
+def test_a_failed_start_before_ownership_retries_without_a_lease_renewal(rig, monkeypatch):
     from redis.exceptions import ConnectionError as RedisConnectionError
 
     original = rig.pump.dispatcher.own
