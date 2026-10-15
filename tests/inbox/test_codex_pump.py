@@ -9,7 +9,7 @@ from scripts.codex_session.binding import CONNECTED, DEGRADED, BindingStore, Tra
 from scripts.inbox import codex
 from scripts.inbox.dispatch import Dispatcher
 from scripts.inbox.receipts import MISMATCH, RELEASED, DispatchError, Receipts
-from scripts.inbox.store import InboxStore
+from scripts.inbox.store import InboxStore, owner_key
 from scripts.swarm.execution import ExecutionRegistry
 from scripts.swarm.store import AgentRecord, RedisStore, SwarmConfig
 
@@ -1064,6 +1064,76 @@ def test_losing_ownership_degrades_at_the_next_reconcile(rig):
     with pytest.raises(DispatchError) as lost:
         rig.pump.step()
     assert str(lost.value) == f"{OWNER} no longer delivers for {ME}"
+
+
+def test_a_renewal_late_past_one_interval_keeps_the_lease(rig, monkeypatch):
+    monkeypatch.setattr("time.time", rig.clock)
+    rig.pump.start()
+    rig.pump.step()
+    rig.clock.now = rig.pump.next_reconcile + rig.pump.timing.reconcile_s / 2
+    rig.pump.step()
+    assert Dispatcher(rig.store).owner(ME) == OWNER
+    assert rig.store.redis.ttl(owner_key(ME)) == 2 * rig.pump.timing.reconcile_s
+
+
+def test_repeated_reconnect_failures_past_the_lease_keep_ownership(rig, monkeypatch):
+    from websockets.exceptions import ConnectionClosedError
+
+    monkeypatch.setattr("time.time", rig.clock)
+    rig.server.broken = ConnectionClosedError(None, None)
+    owners, sleeps = [], []
+
+    def sleep(delay):
+        sleeps.append(delay)
+        rig.clock.now += delay
+
+    def reconnect():
+        owners.append(Dispatcher(rig.store).owner(ME))
+        if len(owners) < 7:
+            raise protocol.ProtocolError("server unavailable")
+        rig.server.broken = None
+        return protocol.Connection(rig.server, 5, clock=rig.clock)
+
+    rig.pump.binding = replace(rig.pump.binding, reconnect=reconnect)
+    rig.pump.timing = replace(rig.pump.timing, sleep=sleep)
+    assert rig.pump.run(lambda: len(owners) >= 7) == codex.STOPPED
+    assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0, 30, 2.0]
+    assert owners == [OWNER] * 7
+
+
+def test_a_failed_start_before_ownership_retries_without_renewing(rig, monkeypatch):
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    original = rig.pump.dispatcher.own
+    own = Mock(side_effect=[RedisConnectionError("redis unavailable"), original])
+
+    def claim(recipient, owner):
+        outcome = own(recipient, owner)
+        return outcome(recipient, owner) if callable(outcome) else outcome
+
+    monkeypatch.setattr(rig.pump.dispatcher, "own", claim)
+    assert rig.run(2) == codex.STOPPED
+    assert own.call_count == 2
+    assert Dispatcher(rig.store).owner(ME) == OWNER
+
+
+def test_a_drain_longer_than_the_lease_keeps_ownership_and_delivers_every_item(rig, monkeypatch):
+    monkeypatch.setattr("time.time", rig.clock)
+    items = [rig.store.send("alice", ME, f"item {n}") for n in range(5)]
+    owners = []
+    original = rig.server.send
+
+    def send(text):
+        if json.loads(text).get("method") in {"turn/start", "turn/steer"}:
+            owners.append(Dispatcher(rig.store).owner(ME))
+            rig.clock.now += 20
+        original(text)
+
+    monkeypatch.setattr(rig.server, "send", send)
+    rig.pump.start()
+    rig.pump.step()
+    assert owners == [OWNER] * 5
+    assert [rig.store.get(item.id).state for item in items] == ["delivered"] * 5
 
 
 def test_start_owns_the_recipient_and_releases_unsent_reservations(rig):
