@@ -402,14 +402,14 @@ def test_the_newest_dev_baseline_grades_only_from_an_ancestor_of_the_head(tmp_pa
     git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t"]
     subprocess.run([*git, "init", "-q"], check=True)
 
-    def commit():
-        subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "c"], check=True)
+    def commit(message):
+        subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", message], check=True)
         return subprocess.run([*git, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
 
-    ancestor = commit()
-    head = commit()
+    ancestor = commit("ancestor")
+    head = commit("head")
     subprocess.run([*git, "checkout", "-q", "--orphan", "side"], check=True)
-    unrelated = commit()
+    unrelated = commit("unrelated")
     subprocess.run([*git, "checkout", "-q", head], check=True)
     baseline = tmp_path / "coverage-baseline"
     baseline.mkdir()
