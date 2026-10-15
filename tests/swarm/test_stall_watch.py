@@ -252,6 +252,18 @@ def test_a_released_pull_request_stays_held_past_the_stall_limits(pull):
     assert swarm.inbox() == []
 
 
+@pytest.mark.parametrize("pull", [GREEN, RUNNING])
+def test_a_ready_release_since_the_snapshot_prevents_generic_stall_recovery(pull):
+    swarm = Swarm(pull, live=False)
+    assert swarm.tick(START) == []
+    before = copy.deepcopy(swarm.ledger.state(SLUG))
+    swarm.ledger.rows["t1"]["awaiting"] = ready.AWAITING
+    assert swarm.tick(START + 30 * MINUTE, before) == []
+    assert swarm.ledger.rows["t1"]["awaiting"] == ready.AWAITING
+    assert swarm.ledger.updates == []
+    assert swarm.retired == []
+
+
 def test_an_unmergeable_pull_request_reopens_after_five_minutes():
     swarm = Swarm(CONFLICTING, live=False)
     swarm.tick(START)
