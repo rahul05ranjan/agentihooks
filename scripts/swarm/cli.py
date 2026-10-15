@@ -1164,14 +1164,24 @@ def _git(run, *args):
         raise SwarmError(f"git {args[0]} could not run: {exc}") from exc
 
 
-def worktree_branch(run=subprocess.run):
+def worktree_branch(recorded, run=subprocess.run):
     current = _git(run, "branch", "--show-current")
     branch = current.stdout.strip() if current.returncode == 0 else ""
     if not branch:
         raise SwarmError("swarm branch runs in a worktree on a branch; this checkout is on none")
+    target = branch
+    if recorded and recorded != branch:
+        target = f"HEAD:{recorded}"
+        if _tracks(run, recorded):
+            branch = recorded
     if _git(run, "ls-remote", "--exit-code", "--heads", "origin", branch).returncode != 0:
-        raise SwarmError(f"branch {branch} is not on origin; push it first with git push -u origin {branch}")
+        raise SwarmError(f"branch {branch} is not on origin; push it first with git push -u origin {target}")
     return branch
+
+
+def _tracks(run, recorded):
+    done = _git(run, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+    return done.returncode == 0 and done.stdout.strip() == f"origin/{recorded}"
 
 
 PULL_HEAD = "headRefName,headRepository,headRepositoryOwner"
@@ -1216,10 +1226,13 @@ def cmd_publish(store, args):
 
 def cmd_branch(store, args):
     agent = _worker(store, args)
-    branch = worktree_branch()
+    ledger = LedgerClient()
+    row = ledger.task(args.slug, agent.task) or {}
+    branch = worktree_branch(row.get("branch"))
     fields = {"branch": branch, "branch_repo": origin_repo()}
-    LedgerClient().update_task(args.slug, agent.task, fields, by=agent.name)
-    print(json.dumps({"task": agent.task, **fields}))
+    ledger.update_task(args.slug, agent.task, fields, by=agent.name)
+    carried = {"pr_url": row["pr_url"]} if row.get("pr_url") else {}
+    print(json.dumps({"task": agent.task, **fields, **carried}))
 
 
 def cmd_pr(store, args):
