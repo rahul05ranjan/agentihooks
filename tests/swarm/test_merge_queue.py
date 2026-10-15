@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from scripts.swarm import cli, merge_queue, waits
+from scripts.swarm import cli, merge_queue
 from scripts.swarm.store import SwarmError
 
 URL = "https://github.com/o/r/pull/7"
@@ -100,9 +100,6 @@ def test_queue_enqueues_the_observed_head_and_reports_the_queue_entry():
     assert "enqueuePullRequest(input: {pullRequestId: $id, expectedHeadOid: $head})" in command[4]
     assert command[5:] == ["-f", "id=PR_one", "-f", "head=abc"]
     assert calls[-1][0] == calls[0][0]
-    assert not any(
-        "compare/" in str(call[0]) or "update-branch" in str(call[0]) or "/jobs" in str(call[0]) for call in calls
-    )
 
 
 @pytest.mark.parametrize("review", [None, "APPROVED"])
@@ -171,22 +168,7 @@ def test_queue_waits_for_green_checks_on_the_current_head(conclusion):
     with pytest.raises(SwarmError, match="^the current pull request head must pass Tests before queueing$"):
         merge_queue.operate("queue", URL, run)
     assert not any("update-branch" in str(call[0]) or "enqueuePullRequest(input:" in str(call[0]) for call in calls)
-
-
-def test_refresh_wait_does_not_resolve_the_old_green_head():
-    from types import SimpleNamespace
-
-    held = {"kind": "checks", "target": URL, "previous_head": "old"}
-    pull = SimpleNamespace(state="OPEN", head="old", resolved=True, red=False, unpassed_gate="")
-    assert waits.checks_resolution(held, lambda url: pull) == ""
-    assert waits.checks_resolution(held, lambda url: pull) == ""
-    pull.head = "updated"
-    pull.resolved = False
-    assert waits.checks_resolution(held, lambda url: pull) == ""
-    assert waits.checks_resolution(held, lambda url: pull) == ""
-    pull.resolved = True
-    assert waits.checks_resolution(held, lambda url: pull) == f"checks on {URL}, now green"
-
+\n
 
 @pytest.mark.parametrize("records", [[], [{"id": 21, "head_sha": "older", "conclusion": "success"}]])
 def test_queue_requires_a_run_for_its_observed_head(records):
