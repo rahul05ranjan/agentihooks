@@ -147,7 +147,7 @@ def test_semgrep_grades_registry_pack_findings_new_against_the_base_in_parallel(
     assert command[command.index("--baseline-commit") + 1] == '"$BASE"'
     assert {"--error", "--strict", "--verbose"} <= set(command)
     assert int(command[command.index("--timeout") + 1]) >= 30
-    assert command[:2] == ["semgrep", "scan"]
+    assert command[:4] == ["python", "scripts/ci_semgrep.py", "semgrep", "scan"]
     assert not [s for s in ("||", "&&", ";", "exit") if s in scan["steps"][-1]["run"]]
     assert not {"set", "--exclude", "--include"} & set(command)
     assert [command[i + 1] for i, a in enumerate(command) if a == "--exclude-rule"] == [
