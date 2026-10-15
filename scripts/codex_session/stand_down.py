@@ -62,9 +62,10 @@ def _unmanaged(slug: str, selector: str, sessions: "list[Session]") -> Refused:
     ids = ", ".join(sorted(s.session_id for s in sessions if s.process.pid == pid and s.session_id))
     return Refused(
         reason,
-        f"process {pid} hosts only conversations {ids}; "
+        f"process {pid} hosts conversations {ids}; "
         f"agentihooks terminate-agent {pid} --force-shared --dry-run names its process group, "
-        "and the same command without --dry-run ends exactly those conversations",
+        "and the same command without --dry-run ends every conversation in that process, "
+        "so run it only when all of them belong to this agent",
     )
 
 

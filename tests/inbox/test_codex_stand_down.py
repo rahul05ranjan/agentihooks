@@ -197,9 +197,10 @@ def test_a_conversation_without_a_managed_endpoint_is_refused_with_the_process_a
         "so its conversations cannot be stopped one at a time"
     )
     assert refused.value.alternative == (
-        "process 2448581 hosts only conversations uuid-1, uuid-2; "
+        "process 2448581 hosts conversations uuid-1, uuid-2; "
         "agentihooks terminate-agent 2448581 --force-shared --dry-run names its process group, "
-        "and the same command without --dry-run ends exactly those conversations"
+        "and the same command without --dry-run ends every conversation in that process, "
+        "so run it only when all of them belong to this agent"
     )
 
 
