@@ -93,6 +93,10 @@ LAYER_DOCKER = """#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "$PULL_LOG"
 if [[ "$1" == manifest ]]; then
+  if (( "$(grep -c '^manifest ' "$PULL_LOG")" <= ${MANIFEST_FAILURES:-0} )); then
+    echo 'manifest lookup: registry unavailable' >&2
+    exit 18
+  fi
   printf '%s\\n' '{"manifests":[{"digest":"sha256:runtime","platform":{"os":"linux","architecture":"amd64"}}]}'
   exit 0
 fi
@@ -117,7 +121,7 @@ def tools_with(tmp_path, docker):
     return tools
 
 
-def pull_runtime(tmp_path, failures):
+def pull_runtime(tmp_path, failures, manifest_failures=0):
     tools = tools_with(tmp_path, LAYER_DOCKER)
     log, waits = tmp_path / "docker.log", tmp_path / "waits.log"
     result = subprocess.run(
@@ -128,6 +132,7 @@ def pull_runtime(tmp_path, failures):
             "PULL_LOG": str(log),
             "WAITS": str(waits),
             "FAILURES": str(failures),
+            "MANIFEST_FAILURES": str(manifest_failures),
         },
         text=True,
         capture_output=True,
@@ -155,6 +160,20 @@ def test_runtime_pull_stops_at_three_attempts_and_keeps_the_final_failure(tmp_pa
     assert len(waits) == 2
     assert not tags
     assert result.stderr.rstrip().endswith("not found on attempt 3")
+
+
+def test_runtime_pull_retries_a_failed_digest_lookup_within_the_same_bound(tmp_path):
+    result, pulls, tags, waits = pull_runtime(tmp_path, 0, manifest_failures=1)
+    assert result.returncode == 0, result.stderr
+    assert len(pulls) == 1
+    assert len(waits) == 1
+    assert len(tags) == 1
+    (tmp_path / "exhausted").mkdir()
+    result, pulls, tags, waits = pull_runtime(tmp_path / "exhausted", 0, manifest_failures=99)
+    assert result.returncode != 0
+    assert not pulls
+    assert len(waits) == 2
+    assert result.stderr.count("manifest lookup: registry unavailable") == 3
 
 
 def dockerfile_bases():
