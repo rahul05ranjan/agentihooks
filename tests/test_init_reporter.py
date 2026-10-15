@@ -117,6 +117,31 @@ def test_codex_reuses_operator_profile(stored_profile, monkeypatch):
     assert calls == [("claude", "anton,brain"), ("codex", "anton,brain")]
 
 
+@pytest.mark.parametrize("verbose", [False, True])
+def test_kept_mcp_notices_are_verbose_and_unique(verbose, capsys):
+    from scripts.init_reporter import capture_details
+
+    seen = set()
+    for _ in range(2):
+        with capture_details(verbose, seen):
+            print("  [!!] Kept your existing MCP server(s), not overwritten: custom")
+            print("       Use force to replace it.")
+            print("Codex status line note")
+    output = capsys.readouterr().out
+    assert output.count("Kept your existing MCP server(s)") == int(verbose)
+    assert output.count("Use force to replace it.") == int(verbose)
+    assert ("Codex status line note" in output) is verbose
+
+
+@pytest.mark.parametrize("target", ["claude", "codex", "copilot"])
+def test_previous_install_rejects_role_only_state(target):
+    from scripts import install
+    from scripts.init_reporter import previous_install
+
+    state = {"targets": {"global": {target: {"profile": "engineer,brain"}}}}
+    assert previous_install(install, state, target) == {}
+
+
 def test_reporter_preserves_failures(capsys):
     from scripts.init_reporter import report_target
 
