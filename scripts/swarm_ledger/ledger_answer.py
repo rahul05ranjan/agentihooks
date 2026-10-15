@@ -1,7 +1,7 @@
 """Answer: the swarm master answers an agent's question as itself, so it leaves the operator's Priorities.
 
-Only the ledger's orchestrator or a master seat answers; the command allows it at delegate and full autonomy, where the master
-decides for the operator.
+Only the ledger's orchestrator or a master seat answers; the command allows it at delegate and full autonomy, where the
+master decides for the operator.
 """
 
 import re
