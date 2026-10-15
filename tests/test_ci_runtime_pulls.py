@@ -189,6 +189,15 @@ def test_kind_proof_pulls_every_dockerfile_base_through_the_bounded_pull_before_
         assert script.index(pull) < build
 
 
+def test_hive_join_pulls_its_images_through_the_bounded_pull_before_starting_them():
+    script = (ROOT / "scripts/packaging/hive-join-smoke.sh").read_text()
+    build = script.index('docker build --progress=plain -t "$image" .')
+    for image in {"mirror.gcr.io/library/redis:7-alpine", *dockerfile_bases()}:
+        pull = f"bash scripts/packaging/pull-runtime-image.sh {image}\n"
+        assert pull in script
+        assert script.index(pull) < build
+
+
 def test_hive_launch_pulls_the_worker_base_and_never_retries_the_launch(tmp_path):
     script = (ROOT / "scripts/packaging/hive-launch-smoke.sh").read_text()
     for base in dockerfile_bases():
