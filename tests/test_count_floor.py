@@ -165,10 +165,33 @@ def test_a_subject_moved_into_the_tests_tree_admits_nothing(tmp_path):
     assert "tests/test_mod.py::test_subject is in the base and not in the head" in result.stdout
 
 
-def test_an_unparseable_head_file_admits_nothing(tmp_path):
-    result = _lose_test_subject(tmp_path, {**_package(mod=KEPT), "broken.py": "def (:\n"})
+@pytest.mark.parametrize(
+    "sources",
+    [
+        {**_package(mod=KEPT), "broken.py": "def (:\n"},
+        _package(mod=KEPT + "\nfrom pkg.elsewhere import *\n", elsewhere=SUBJECT.replace("subject", "renamed")),
+    ],
+    ids=["unparseable", "star-import"],
+)
+def test_a_head_file_that_hides_its_names_admits_nothing(tmp_path, sources):
+    result = _lose_test_subject(tmp_path, sources)
     assert result.returncode == 1
-    assert "broken.py does not parse in the head, so no lost test is admitted" in result.stdout
+    assert "hides its names in the head (unparseable or a star import), so no lost test is admitted" in result.stdout
+    assert "tests/test_mod.py::test_subject is in the base and not in the head" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "survivor",
+    [
+        "try:\n    pass\nexcept ValueError as subject:\n    pass\n",
+        "match 1:\n    case subject:\n        pass\n",
+    ],
+    ids=["except", "match"],
+)
+def test_a_subject_name_rebound_by_except_or_match_admits_nothing(tmp_path, survivor):
+    result = _lose_test_subject(tmp_path, _package(mod=KEPT, elsewhere=survivor))
+    assert result.returncode == 1
+    assert "tests/test_mod.py::test_subject is in the base and not in the head" in result.stdout
 
 
 def test_an_attribute_of_a_non_module_never_matches_a_deleted_definition(tmp_path):

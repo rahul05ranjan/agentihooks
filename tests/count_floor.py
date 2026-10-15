@@ -75,21 +75,27 @@ def top_level_definitions(tree: Path, tests: str) -> set[tuple[str, str]]:
 
 
 def bound_names(tree: Path) -> tuple[set[str], list[Path]]:
-    names, unparsed = set(), []
+    names, opaque = set(), []
     for path in _sources(tree, set()):
         try:
             module = ast.parse(path.read_bytes())
         except (OSError, SyntaxError, ValueError):
-            unparsed.append(path)
+            opaque.append(path.relative_to(tree))
             continue
         for node in ast.walk(module):
-            if isinstance(node, _DEFINITIONS):
+            if isinstance(node, ast.alias) and node.name == "*":
+                opaque.append(path.relative_to(tree))
+            elif isinstance(node, _DEFINITIONS):
                 names.add(node.name)
             elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
                 names.add(node.id)
             elif isinstance(node, ast.alias):
                 names.add(node.asname or node.name.split(".")[0])
-    return names, unparsed
+            elif isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)) and node.name:
+                names.add(node.name)
+            elif isinstance(node, ast.MatchMapping) and node.rest:
+                names.add(node.rest)
+    return names, opaque
 
 
 def _dotted(node: ast.expr) -> str | None:
@@ -161,10 +167,10 @@ def main(argv: list[str] | None = None) -> int:
     lost = sorted(set(base) - set(head))
     admitted = {}
     if len(head) < len(base):
-        surviving, unparsed = bound_names(args.head)
-        for path in unparsed:
-            print(f"{path} does not parse in the head, so no lost test is admitted")
-        definitions = set() if unparsed else top_level_definitions(args.base, args.tests)
+        surviving, opaque = bound_names(args.head)
+        for path in opaque:
+            print(f"{path} hides its names in the head (unparseable or a star import), so no lost test is admitted")
+        definitions = set() if opaque else top_level_definitions(args.base, args.tests)
         deleted = {definition for definition in definitions if definition[1] not in surviving}
         for nodeid in lost:
             if subjects := sorted(".".join(subject) for subject in referenced_subjects(args.base, nodeid) & deleted):
