@@ -263,6 +263,13 @@ def test_a_merged_first_half_clears_the_active_pull_request_and_the_second_half_
     assert len(rig.ledger.updates) == 1
 
 
+def test_the_half_reset_writes_only_a_task_still_in_pr(rig):
+    rig.task.update(state="claimed", pr_url=URL, split=["1-10", "11-20"], split_pulls=[URL])
+    rig.pulls[URL] = MERGED
+    assert "you hold task t1 with no open pull request and no wait" in rig.stop().reason
+    assert (rig.ledger.updates, rig.task["pr_url"]) == ([], URL)
+
+
 def test_the_second_half_stops_on_its_own_pull_request_and_its_merge_owes_done(rig):
     second = URL + "1"
     rig.task.update(state="pr", pr_url=second, split=["1-10", "11-20"], split_pulls=[URL, second])
