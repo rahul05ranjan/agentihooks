@@ -12,6 +12,7 @@ cluster="swarm-kind-$(python3 -c 'import uuid; print(uuid.uuid4().hex[:8])')"
 ledger_pod="$release-ledger-0"
 controller=(-l "app.kubernetes.io/instance=$release,app.kubernetes.io/component=controller")
 ca_dir=""
+route=""
 
 python3 tests/kind_request.py
 
@@ -19,6 +20,9 @@ finish() {
   status=$?
   wait "$build" || true
   wait "$cluster_setup" || true
+  if [[ -n $route ]]; then
+    wait "$route" || true
+  fi
   if [[ -n $ca_dir ]]; then
     rm -rf "$ca_dir"
   fi
@@ -269,7 +273,8 @@ printf 'worker terminal Pod, Secret, Service and NetworkPolicy passed server sid
 wait "$build"
 bash scripts/packaging/swarm-image-clients.sh "$image"
 kind load docker-image "$image" "$bundle_image" "$terminal_image" --name "$cluster"
-bash "$chart/ci/terminal-route-proof.sh" "$image"
+bash "$chart/ci/terminal-route-proof.sh" "$image" &
+route=$!
 helm install "$release" "$chart" -f "$chart/ci/kind-values.yaml" --wait --timeout 5m
 helm test "$release" --logs --timeout 2m
 
@@ -829,4 +834,5 @@ if [[ $kept != *"refused {}"* ]]; then
 fi
 printf 'the controller start pass reached the herdr client and refused nothing\n'
 bash "$chart/ci/terminal-attach-proof.sh" "$terminal_image" "$release" "$slug"
+wait "$route"
 printf 'Helm chart kind proof passed\n'
