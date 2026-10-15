@@ -16,5 +16,4 @@ Every check in a repository's CI belongs to exactly one tier. A check runs where
 - **A red integration branch keeps merging; promotion does not advance.** A failed promotion run never closes the queue or holds other pull requests. The release branch stays on the last green promoted head until a later run passes.
 - **Promotion owns the slow checks.** A check whose run time does not fit the pull request or queue budget moves to promotion, never off the books. A pull request is never held for a check that only promotion runs.
 - **A red promotion files one fixer task per failing check.** Each is a `ci` task naming the check, the run and the commit, raised with a ledger alert, and closed by the next green promotion run. Fix the cause in code through a normal pull request; never rerun a promotion until it happens to pass.
-- **Promotion is automatic.** Agents never open or merge a pull request into the release branch; the promotion pipeline does, and tags the release from it.
 - A runner lost mid run is retried once; a retry is not a pass on a failed check.
