@@ -24,9 +24,9 @@ on:
         default: origin/dev
 
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && format('hosted-lane-{0}', ((endsWith(github.run_id, '0') || endsWith(github.run_id, '1') || endsWith(github.run_id, '2')) && 'a') || ((endsWith(github.run_id, '3') || endsWith(github.run_id, '4') || endsWith(github.run_id, '5')) && 'b') || 'c') || format('tests-{0}-{1}', github.event_name, github.event.pull_request.number || github.run_id) }}
+  group: ${{ github.event_name == 'workflow_dispatch' && format('hosted-lane-{0}', ((endsWith(github.run_id, '0') || endsWith(github.run_id, '1') || endsWith(github.run_id, '2')) && 'a') || ((endsWith(github.run_id, '3') || endsWith(github.run_id, '4') || endsWith(github.run_id, '5')) && 'b') || 'c') || github.event_name == 'push' && 'promotion-dev' || format('tests-{0}-{1}', github.event_name, github.event.pull_request.number || github.run_id) }}
   queue: ${{ github.event_name == 'workflow_dispatch' && 'max' || 'single' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 permissions:
   contents: read
@@ -822,7 +822,9 @@ jobs:
 
       - name: Check every shard's test time fits the fifteen minute budget
         if: github.event_name != 'merge_group'
-        run: python -m tests.shard_budget shard-durations/*/durations.json
+        env:
+          REPORT: ${{ github.event_name == 'push' && '--report' || '' }}
+        run: python -m tests.shard_budget $REPORT shard-durations/*/durations.json
 
   test-count:
     if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || needs.admission.result == 'success') }}
