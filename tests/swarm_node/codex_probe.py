@@ -8,10 +8,13 @@ from contextlib import suppress
 from pathlib import Path
 
 
-def run_codex(home: Path, timeout: float = 20) -> dict:
+def run_codex(home: Path, timeout: float = 20, tmp: Path | None = None) -> dict:
+    tmp = tmp or home
     registration = home / ".agentihooks" / "active-sessions.json"
+    registered_at = None
+    (tmp / "codex-run.started").write_text(str(time.time_ns()))
     started = time.monotonic()
-    with (home / "codex-run.txt").open("w") as output:
+    with (tmp / "codex-run.txt").open("w") as output:
         process = subprocess.Popen(
             ["codex", "exec", "--skip-git-repo-check", "--dangerously-bypass-hook-trust", "hello"],
             env=os.environ | {"HOME": str(home)},
@@ -29,14 +32,15 @@ def run_codex(home: Path, timeout: float = 20) -> dict:
                     registered_at = registration.stat().st_mtime
                     break
                 if process.poll() is not None:
-                    sys.exit("Codex session registration missing")
+                    break
                 time.sleep(0.1)
-            else:
-                sys.exit("Codex session registration missing")
         finally:
             with suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
             process.wait()
+    (tmp / "codex-run.exit").write_text(str(process.returncode))
+    if registered_at is None:
+        return {"registered_at": None, "elapsed_seconds": time.monotonic() - started}
     latency = time.time() - registered_at
     assert latency < 2, f"Codex cleanup exceeded two seconds: {latency}"
     return {
@@ -47,4 +51,7 @@ def run_codex(home: Path, timeout: float = 20) -> dict:
 
 
 if __name__ == "__main__":
-    print(json.dumps(run_codex(Path(sys.argv[1]), float(sys.argv[2]) if len(sys.argv) > 2 else 20)))
+    result = run_codex(Path(sys.argv[1]), float(sys.argv[2]) if len(sys.argv) > 2 else 20)
+    if result["registered_at"] is None:
+        sys.exit("Codex session registration missing")
+    print(json.dumps(result))

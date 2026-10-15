@@ -46,6 +46,8 @@ def test_codex_profile_probe_finishes_on_valid_registration_only(tmp_path, regis
     )
     ended = time.monotonic()
     assert result.returncode == (0 if registration == "valid" else 1), result.stderr
+    assert int((home / "codex-run.exit").read_text()) == -9
+    assert int((home / "codex-run.started").read_text()) < time.time_ns()
     if registration == "valid":
         assert ended - float((home / "registered").read_text()) < 2
         assert json.loads(result.stdout)["registration_to_exit_seconds"] < 2
