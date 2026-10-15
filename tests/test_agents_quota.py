@@ -589,6 +589,7 @@ def test_page_quota_lists_no_cached_account_whose_token_is_gone(monkeypatch):
     monkeypatch.setattr(agents_quota, "api_rows", lambda source, harness, now: [])
     monkeypatch.setattr(agents_quota, "_masters", lambda harness="": {})
     assert [r["account"] for r in agents_quota.page_quota(now=100.0)["rows"]] == ["acct1"]
+    assert "AH_CC_TOKEN_acct1" not in os.environ
 
 
 def test_one_table_sorts_each_harness_by_routing_left_and_shows_dashes_for_missing_values():

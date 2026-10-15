@@ -452,9 +452,12 @@ def test_a_refresh_drops_cached_accounts_whose_token_is_gone_in_every_mode(monke
     modes = {"normal": {"accounts": stale}, "fable": {"accounts": stale}, "broken": "x", "odd": {"accounts": "x"}}
     cache.write_text(json.dumps({"version": 1, "modes": modes}))
     alpha = balancer.Credential("AH_CC_TOKEN_ALPHA", "secret-a")
+    environ = {}
+    monkeypatch.setattr(balancer.operator_env, "fill", lambda filled: filled.update(AH_CC_TOKEN_KEPT="secret-k"))
 
-    balancer.collect_results([alpha], cache_file=cache, environ={}, now=1000)
+    balancer.collect_results([alpha], cache_file=cache, environ=environ, now=1000)
 
+    assert environ == {}
     modes = json.loads(cache.read_text())["modes"]
     assert (modes.pop("broken"), modes.pop("odd")) == ("x", {"accounts": "x"})
     assert {mode: sorted(data["accounts"]) for mode, data in modes.items()} == {
