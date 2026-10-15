@@ -60,6 +60,25 @@ def test_reporter_output(verbose, tmp_path, capsys):
         assert len(output.out.splitlines()) == 2
 
 
+@pytest.mark.parametrize("verbose", [False, True])
+def test_init_verbose_controls_all_details(verbose, monkeypatch, capsys):
+    from scripts import herdr_setup, install
+
+    monkeypatch.delenv("AGENTIHOOKS_TARGET", raising=False)
+    monkeypatch.setattr(install, "_load_state", lambda: {})
+    monkeypatch.setattr(install, "cmd_init_unified", lambda args: print("linked skill detail"))
+    monkeypatch.setattr(herdr_setup, "init_step", lambda *args: print("herdr detail"))
+    options = ["--verbose"] if verbose else []
+    monkeypatch.setattr(sys, "argv", ["agentihooks", "init", "--profile", "default", *options])
+    install.main()
+    output = capsys.readouterr().out
+    assert ("linked skill detail" in output) is verbose
+    assert ("herdr detail" in output) is verbose
+    assert sum(line.startswith(("claude ", "codex ")) for line in output.splitlines()) == 2
+    if not verbose:
+        assert len(output.splitlines()) == 2
+
+
 def test_reporter_preserves_failures(capsys):
     from scripts.init_reporter import report_target
 
