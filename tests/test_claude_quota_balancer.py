@@ -432,7 +432,10 @@ def test_probing_one_account_keeps_other_cached_accounts(monkeypatch, tmp_path):
 
     balancer.collect_results([alpha, beta], cache_file=cache, environ={}, now=1000)
     monkeypatch.setattr(balancer.operator_env, "fill", lambda environ: environ.update(AH_CC_TOKEN_BETA="secret-b"))
-    balancer.collect_results([alpha], cache_file=cache, environ={}, refresh=True, now=1100)
+    (tmp_path / ".env").write_text("")
+    balancer.collect_results(
+        [alpha], cache_file=cache, environ={"AGENTIHOOKS_HOME": str(tmp_path)}, refresh=True, now=1100
+    )
     observations = balancer.cached_observations(cache_file=cache)
 
     assert sorted((result.account, seen) for seen, result in observations) == [("ALPHA", 1100.0), ("BETA", 1000.0)]
@@ -452,12 +455,13 @@ def test_a_refresh_drops_cached_accounts_whose_token_is_gone_in_every_mode(monke
     modes = {"normal": {"accounts": stale}, "fable": {"accounts": stale}, "broken": "x", "odd": {"accounts": "x"}}
     cache.write_text(json.dumps({"version": 1, "modes": modes}))
     alpha = balancer.Credential("AH_CC_TOKEN_ALPHA", "secret-a")
-    environ = {}
+    (tmp_path / ".env").write_text("")
+    environ = {"AGENTIHOOKS_HOME": str(tmp_path)}
     monkeypatch.setattr(balancer.operator_env, "fill", lambda filled: filled.update(AH_CC_TOKEN_KEPT="secret-k"))
 
     balancer.collect_results([alpha], cache_file=cache, environ=environ, now=1000)
 
-    assert environ == {}
+    assert environ == {"AGENTIHOOKS_HOME": str(tmp_path)}
     modes = json.loads(cache.read_text())["modes"]
     assert (modes.pop("broken"), modes.pop("odd")) == ("x", {"accounts": "x"})
     assert {mode: sorted(data["accounts"]) for mode, data in modes.items()} == {
@@ -466,6 +470,32 @@ def test_a_refresh_drops_cached_accounts_whose_token_is_gone_in_every_mode(monke
     }
     assert [result.account for _, result in balancer.cached_observations(cache_file=cache)] == ["ALPHA"]
     assert balancer.cached_observations(include_fable=True, cache_file=cache) == []
+
+
+@pytest.mark.parametrize("env_file", [False, True])
+def test_a_refresh_keeps_every_cached_account_without_env_files_or_found_tokens(monkeypatch, tmp_path, env_file):
+    monkeypatch.setattr(
+        balancer,
+        "probe_credentials",
+        lambda credentials, *args, **kwargs: [
+            balancer.parse_probe(item.account, _stream(0.20, 0.30), 100) for item in credentials
+        ],
+    )
+    cache = tmp_path / "cache.json"
+    reading = balancer._result_data(balancer.parse_probe("GONE", _stream(0.20, 0.30), 100))
+    stale = {"AH_CC_TOKEN_GONE": {"observed_at": 990.0, "result": reading}}
+    cache.write_text(json.dumps({"version": 1, "modes": {"normal": {"accounts": stale}}}))
+    if env_file:
+        (tmp_path / ".env").write_text("")
+    fills = []
+    monkeypatch.setattr(balancer.operator_env, "fill", lambda filled: fills.append(sorted(filled)))
+    alpha = balancer.Credential("AH_CC_TOKEN_ALPHA", "secret-a")
+
+    balancer.collect_results([alpha], cache_file=cache, environ={"AGENTIHOOKS_HOME": str(tmp_path)}, now=1000)
+
+    accounts = json.loads(cache.read_text())["modes"]["normal"]["accounts"]
+    assert sorted(accounts) == ["AH_CC_TOKEN_ALPHA", "AH_CC_TOKEN_GONE"]
+    assert fills == ([["AGENTIHOOKS_HOME"]] if env_file else [])
 
 
 def test_table_marks_current_account_and_cache_age():
