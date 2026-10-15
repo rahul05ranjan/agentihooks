@@ -54,7 +54,12 @@ def ruling(task, pull, waiting, dependency=False):
 
 def between_halves(task, pull):
     pulls = task.get("split_pulls") or []
-    return pull is not None and pull.state == "MERGED" and task["pr_url"] in pulls and len(pulls) < len(task.get("split") or [])
+    return (
+        pull is not None
+        and pull.state == "MERGED"
+        and task["pr_url"] in pulls
+        and len(pulls) < len(task.get("split") or [])
+    )
 
 
 def parked_by(store, who, task):
