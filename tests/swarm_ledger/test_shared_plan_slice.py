@@ -52,7 +52,12 @@ def table(tmp_path, monkeypatch):
     ref = {"artifact": f"http://127.0.0.1:8765/artifacts/tables/{file['id']}", "lines": "2-9"}
     phase = {"id": "p1", "title": "Build", "description": "Fast integration.", "plan_ref": ref}
     tasks = [row("t1", "Cache the reads"), row("t2", "Batch the writes"), row("t3", "Drop the old index")]
-    return {"overview": "Project intent", "artifacts": [{"plan": True, "file": file}], "phases": [phase], "tasks": tasks}
+    return {
+        "overview": "Project intent",
+        "artifacts": [{"plan": True, "file": file}],
+        "phases": [phase],
+        "tasks": tasks,
+    }
 
 
 def task(doc, task_id):
