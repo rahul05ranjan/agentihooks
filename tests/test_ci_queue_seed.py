@@ -1,10 +1,14 @@
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
 import pytest
 import yaml
+
+from tests.test_ci_anton_runners import event as github_event
+from tests.test_ci_anton_runners import resolve
 
 _ROOT = Path(__file__).resolve().parents[1]
 pytestmark = pytest.mark.unit
@@ -41,7 +45,7 @@ def test_queue_runs_mint_a_read_only_app_token_and_skip_the_dev_cache_lookup():
         "client-id": "${{ secrets.TCC_CI_CLIENT_ID }}",
         "private-key": "${{ secrets.TCC_CI_APP_PRIVATE_KEY }}",
         "repositories": "${{ github.event.repository.name }}",
-        "permission-actions": "read",
+        "permission-actions": "${{ github.event_name == 'merge_group' && 'write' || 'read' }}",
         "permission-contents": "read",
     }
     assert job["permissions"] == {"contents": "read"}
@@ -94,7 +98,7 @@ def test_queue_has_no_coverage_baseline_publisher():
 )
 def test_baseline_dependencies_remain_only_for_protected_aggregation(name):
     needs = _jobs()[name].get("needs", [])
-    assert ("queue-baseline" in needs) is (name in {"gate-required", "stage-budget"})
+    assert ("queue-baseline" in needs) is (name in {"gate-required", "stage-budget", "coverage-ratchet"})
 
 
 @pytest.mark.parametrize(
@@ -213,24 +217,12 @@ def test_the_lookup_is_red_when_no_dev_push_run_passed(lookup):
 
 
 def _runs_on(step, event):
-    condition = str(step.get("if", "true")).lower().removeprefix("${{").removesuffix("}}").strip()
-    if condition == "true":
-        return True
-    for clause in condition.split("||"):
-        held = True
-        for atom in clause.split("&&"):
-            name, op, value = atom.strip().strip("()").split()
-            if name == "steps.provenance.outputs.recorded":
-                held = held and (value.strip("'") == "true")
-                continue
-            if name.startswith("hashfiles("):
-                held = held and ((_ROOT / name[len("hashfiles('") : -len("')")]).exists() == (op == "!="))
-                continue
-            assert name == "github.event_name", atom
-            held = held and ((value.strip("'") == event) == (op == "=="))
-        if held:
-            return True
-    return False
+    condition = str(step.get("if", "true")).removeprefix("${{").removesuffix("}}")
+    condition = condition.replace("steps.provenance.outputs.recorded", "'true'")
+    condition = re.sub(
+        r"hashFiles\('([^']+)'\)", lambda found: "'x'" if (_ROOT / found.group(1)).exists() else "''", condition
+    )
+    return bool(resolve("${{ " + condition + " }}", **github_event(event, actor="github-merge-queue[bot]")))
 
 
 def test_dispatch_runs_restore_durations_and_the_base_baseline_on_the_app_token():
@@ -312,9 +304,11 @@ def dispatch_lookup(tmp_path):
         "#!/usr/bin/env bash\n"
         'printf "%s\\n" "$@" >> "$ARGS"\n'
         'case "$2" in\n'
+        '  */compare/*) body=\'{"status":"ahead"}\' ;;\n'
+        '  */jobs*) jq -nc \'[range(1;13) | {name: ("unit (3.12, " + tostring + ")"), conclusion: "success"}] + [range(1;7) | {name: ("unit (3.11, " + tostring + ")"), conclusion: "success"}] + [{name: "coverage-baseline", conclusion: "success", steps: [{name: "Compute the coverage baseline", conclusion: "success"}, {name: "Publish the passed dev coverage baseline", conclusion: "success"}]}]\' | jq -c \'.[]\'; exit 0 ;;\n'
         '  */commits/*) [[ -z "$FAIL_COMMIT" ]] || exit 1; body="{\\"sha\\": \\"$FAKE_SHA\\"}" ;;\n'
         '  */runs\\?*) body=$(printf "%s\\n" $FAKE_RUNS | grep . | jq -R --arg sha "$FAKE_SHA" "$RUN_OF"'
-        ' | jq -s --arg q "&${2#*\\?}&" "$LISTED") ;;\n'
+        ' | jq -s --arg q "&${2#*\\?}&" "$LISTED" | jq --arg q "&${2#*\\?}&" \'.workflow_runs |= map(. + {event: "push", head_branch: "dev"} | select(($q | contains("&status=completed&") | not) or (.conclusion != "" and .conclusion != null)))\') ;;\n'
         '  */runs/*/artifacts*) run="${2#*/runs/}"; run="${run%%/*}"; v="KEPT_$run"; body="${!v:-[]}"'
         '; body="{\\"artifacts\\": $body}" ;;\n'
         "esac\n"
@@ -364,9 +358,9 @@ def test_dispatch_on_dev_restores_the_newest_passed_dev_push_run(dispatch_lookup
     assert not [arg for arg in args if "/commits/" in arg]
     assert (
         "repos/the-cloud-clockwork/agentihooks/actions/workflows/test.yml/runs"
-        "?branch=dev&event=push&status=success&per_page=20"
+        "?branch=dev&event=push&status=completed&per_page=20"
     ) in args
-    assert "from passed dev push run 222" in result.stdout
+    assert "from measured dev push run 222" in result.stdout
 
 
 def test_dispatch_on_a_pinned_commit_restores_its_passed_dev_push_run(dispatch_lookup):
@@ -384,7 +378,7 @@ def test_dispatch_on_a_pinned_commit_restores_its_passed_dev_push_run(dispatch_l
     assert "repos/the-cloud-clockwork/agentihooks/commits/" + pinned in args
     assert (
         "repos/the-cloud-clockwork/agentihooks/actions/workflows/test.yml/runs"
-        "?branch=dev&event=push&status=success&head_sha=" + pinned + "&per_page=20"
+        "?branch=dev&event=push&status=completed&head_sha=" + pinned + "&per_page=20"
     ) in args
 
 

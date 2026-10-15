@@ -84,12 +84,15 @@ def test_required_gate_runs_after_parallel_unit_and_lint():
             "mutation-stats",
             "reuse",
             "queue-baseline",
+            "queue-fail-fast",
             "stage-budget",
+            "select",
+            "unit-selected",
         }
     )
     assert gate["if"] == "${{ always() }}"
-    assert jobs["unit"]["needs"] in (["split", "reuse"], ["split", "reuse", "admission"])
-    assert jobs["split"]["needs"] in (["durations", "reuse"], ["durations", "reuse", "admission"])
+    assert jobs["unit"]["needs"] == ["split", "select", "reuse", "admission"]
+    assert jobs["split"]["needs"] == ["durations", "select", "reuse", "admission"]
     assert jobs["lint"]["needs"] in (["reuse"], ["reuse", "admission"])
     if "swarm-image" in gate["needs"]:
         assert jobs["swarm-image"]["uses"] == "./.github/workflows/swarm-smoke.yml"
@@ -147,7 +150,7 @@ def test_semgrep_grades_registry_pack_findings_new_against_the_base_in_parallel(
     assert command[command.index("--baseline-commit") + 1] == '"$BASE"'
     assert {"--error", "--strict", "--verbose"} <= set(command)
     assert int(command[command.index("--timeout") + 1]) >= 30
-    assert command[:2] == ["semgrep", "scan"]
+    assert command[:4] == ["python", "scripts/ci_semgrep.py", "semgrep", "scan"]
     assert not [s for s in ("||", "&&", ";", "exit") if s in scan["steps"][-1]["run"]]
     assert not {"set", "--exclude", "--include"} & set(command)
     assert [command[i + 1] for i, a in enumerate(command) if a == "--exclude-rule"] == [
@@ -263,7 +266,7 @@ def test_lint_and_test_count_grade_a_pull_request_that_merged_dev_from_the_curre
 def test_coverage_ratchet_grades_the_merged_shards_from_the_base_copy():
     jobs = _workflow()["jobs"]
     job = jobs["coverage-ratchet"]
-    assert job["needs"] == ["durations", "unit", "reuse"]
+    assert job["needs"] == ["durations", "unit", "queue-baseline", "reuse"]
     assert jobs["queue-baseline"]["if"] is False
     download = next(step for step in job["steps"] if step.get("name") == "Download shard coverage")
     assert download["with"]["pattern"] == "coverage-3.12-*"
@@ -341,6 +344,8 @@ def test_durations_restores_the_parent_baseline_when_the_dispatched_base_is_the_
     (bin_dir / "gh").write_text(
         "#!/usr/bin/env bash\n"
         'case "$2" in\n'
+        "  */compare/*) echo ahead ;;\n"
+        '  */jobs*) jq -nc \'[range(1;13) | {name: ("unit (3.12, " + tostring + ")"), conclusion: "success"}] + [range(1;7) | {name: ("unit (3.11, " + tostring + ")"), conclusion: "success"}] + [{name: "coverage-baseline", conclusion: "success", steps: [{name: "Compute the coverage baseline", conclusion: "success"}, {name: "Publish the passed dev coverage baseline", conclusion: "success"}]}]\' | jq -c \'.[]\' ;;\n'
         "  */commits/head) [[ $4 == .sha ]] && echo head || echo parent ;;\n"
         "  */commits/*) echo other ;;\n"
         '  */runs\\?*) s="${2##*head_sha=}"; s="${s%%&*}"; echo "run-$s $s" ;;\n'
@@ -431,7 +436,9 @@ def test_the_missed_baseline_comes_from_the_first_passed_run_that_kept_it(tmp_pa
     (bin_dir / "gh").write_text(
         "#!/usr/bin/env bash\n"
         'case "$2" in\n'
-        '  */runs\\?*) [[ $2 == *"?head_sha=base&status=success&"* ]] && printf "run-1\\nrun-2\\n" ;;\n'
+        "  */compare/*) echo ahead ;;\n"
+        '  */jobs*) jq -nc \'[range(1;13) | {name: ("unit (3.12, " + tostring + ")"), conclusion: "success"}] + [range(1;7) | {name: ("unit (3.11, " + tostring + ")"), conclusion: "success"}] + [{name: "coverage-baseline", conclusion: "success", steps: [{name: "Compute the coverage baseline", conclusion: "success"}, {name: "Publish the passed dev coverage baseline", conclusion: "success"}]}]\' | jq -c \'.[]\' ;;\n'
+        '  */runs\\?*) if [[ $2 == *"status=success"* ]]; then printf "run-1\\nrun-2\\n"; else printf "run-1 push\\nrun-2 push\\n"; fi ;;\n'
         f"  */run-1/*) echo {first} ;;\n"
         f"  */run-2/*) echo {second} ;;\n"
         "esac\n"
@@ -711,14 +718,22 @@ def test_chart_proof_rule_fails_on_an_unknown_base(kind_repo):
 
 def test_unit_and_lint_run_on_every_event_and_feed_the_required_gate():
     jobs = _workflow()["jobs"]
+    every_event = "${{ !cancelled() && (github.event_name != 'workflow_dispatch' || needs.admission.result == 'success') && (github.event_name != 'merge_group' || needs.reuse.outputs.reused != 'true') }}"
+    expected = {
+        "lint": every_event,
+        "unit": every_event.removesuffix(" }}")
+        + " && (github.event_name != 'pull_request' || needs.select.outputs.scope == 'full') }}",
+    }
     for name in ("unit", "lint"):
         job = jobs[name]
         assert job["if"] in (
+            expected[name],
             "${{ !cancelled() && (github.event_name != 'merge_group' || needs.reuse.outputs.reused != 'true') }}",
             "${{ !cancelled() && (github.event_name != 'workflow_dispatch' || needs.admission.result == 'success') && (github.event_name != 'merge_group' || needs.reuse.outputs.reused != 'true') }}",
-            "${{ !cancelled() && (github.event_name != 'workflow_dispatch' || needs.admission.result == 'success') }}",
+            "${{ !cancelled() && (github.event_name != 'workflow_dispatch' || needs.admission.result == 'success') && (github.event_name != 'pull_request' || needs.select.outputs.scope == 'full') }}",
             "${{ !cancelled() && (github.event_name != 'workflow_dispatch' || needs.admission.result == 'success') && github.event_name != 'merge_group' }}",
         )
+
         assert all("steps.lookup" not in step.get("if", "") for step in job["steps"])
     step = jobs["gate-required"]["steps"][0]
     result = subprocess.run(

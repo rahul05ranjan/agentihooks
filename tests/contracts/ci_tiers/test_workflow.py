@@ -10,9 +10,12 @@ from tests.test_ci_hosted_lanes import _resolve
 pytestmark = pytest.mark.unit
 
 ROOT = Path(__file__).parents[3]
-QUEUE = {"durations", "split", "unit", "shard-check", "test-count", "gate-required"}
-PULL_REQUEST = QUEUE | {"lint", "semgrep", "sonar", "mutation-plan", "mutation-stats", "mutation"}
+UNIT = {"durations", "split", "unit", "shard-check", "test-count", "gate-required"}
+QUEUE = UNIT | {"queue-fail-fast"}
+PULL_REQUEST = UNIT | {"select", "lint", "semgrep", "sonar", "mutation-plan", "mutation-stats", "mutation"}
+SELECTED = PULL_REQUEST - {"split", "unit", "shard-check"} | {"unit-selected"}
 PROMOTION = (PULL_REQUEST - {"mutation-plan", "mutation-stats", "mutation"}) | {
+    "queue-fail-fast",
     "reuse",
     "coverage-ratchet",
     "coverage-baseline",
@@ -48,7 +51,7 @@ def enabled(condition, event, needs, base_ref="dev"):
     )
 
 
-def jobs_for(event, base_ref="dev"):
+def jobs_for(event, base_ref="dev", scope="full"):
     jobs = yaml.safe_load((ROOT / ".github/workflows/test.yml").read_text())["jobs"]
     completed = {}
     pending = dict(jobs)
@@ -67,7 +70,8 @@ def jobs_for(event, base_ref="dev"):
             else:
                 runs = all(need.result == "success" for need in needs.values())
             completed[name] = SimpleNamespace(
-                result="success" if runs else "skipped", outputs=SimpleNamespace(due="true", reused="false")
+                result="success" if runs else "skipped",
+                outputs=SimpleNamespace(due="true", reused="false", scope=scope if runs else ""),
             )
             del pending[name]
             ready = True
@@ -80,6 +84,10 @@ def jobs_for(event, base_ref="dev"):
 )
 def test_each_event_runs_only_its_tier_jobs(event, expected):
     assert jobs_for(event) == expected
+
+
+def test_selected_pull_requests_run_the_selected_leg_instead_of_the_shards():
+    assert jobs_for("pull_request", scope="selected") == SELECTED
 
 
 def test_main_pull_requests_keep_their_nonmutation_checks():
