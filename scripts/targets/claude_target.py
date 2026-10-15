@@ -192,8 +192,9 @@ class ClaudeAdapter:
         from scripts.init_reporter import installed_counts
 
         installer = _install_module()
-        settings = installer.load_json(self.home() / "settings.json")
-        mcp = installer.load_json(installer._CLAUDE_JSON)
+        settings_path = self.home() / "settings.json"
+        settings = installer.load_json(settings_path) if settings_path.exists() else {}
+        mcp = installer.load_json(installer._CLAUDE_JSON) if installer._CLAUDE_JSON.exists() else {}
         return installed_counts(mcp.get("mcpServers", {}), self.home() / "skills", settings.get("enabledPlugins", {}))
 
     def write_settings(self, rendered: dict) -> Path:
