@@ -2073,10 +2073,9 @@ class TestInitInsideRenderedHome:
                 install.cmd_init_unified(self._args())
         assert exc.value.code == 1
         assert capsys.readouterr().err == (
-            f"ERROR: this session runs in a rendered profile home, so init would have written the rendered "
-            f"profile home {home} instead of the operator home.\n"
-            "Run `agentihooks init` from the operator's own shell, where CLAUDE_CONFIG_DIR and "
-            "AGENTIHOOKS_PROFILE are unset.\n"
+            "ERROR: agent sessions cannot change the operator's global profile install.\n"
+            "Run this command from the operator's own shell with AGENTIHOOKS_SWARM, AGENTIHOOKS_PROFILE, "
+            "CLAUDE_CONFIG_DIR, CODEX_HOME and COPILOT_HOME unset.\n"
         )
         assert not mock_install.called
         assert not mock_rerender.called
