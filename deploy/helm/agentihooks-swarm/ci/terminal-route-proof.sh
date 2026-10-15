@@ -41,7 +41,7 @@ sleeper=(python -c "import time; time.sleep(3600)")
 pod "$worker" "$workers" "$worker_labels" python -m http.server 2222
 pod allowed "$control" "$client_labels" "${sleeper[@]}"
 pod foreign-namespace "$other" "$client_labels" "${sleeper[@]}"
-pod unlabelled "$control" '{}' "${sleeper[@]}"
+pod unlabelled "$control" "$client_labels" "${sleeper[@]}"
 for target in "$workers/$worker" "$control/allowed" "$other/foreign-namespace" "$control/unlabelled"; do
   kubectl wait --for=condition=Ready --timeout 120s -n "${target%%/*}" "pod/${target##*/}"
 done
