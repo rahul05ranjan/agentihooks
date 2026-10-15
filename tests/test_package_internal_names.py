@@ -45,6 +45,15 @@ def test_package_names_nothing_internal():
         "Nestor",
         "colt",
         "someone@gmail.com",
+        "the-cloud-clockwork",
+        "The-Cloud-Clockwork/antoncore",
+        "https://github.com/the-cloud-clockwork/agentihooks-bundle/pull/1",
+        "the actor nestorcolt",
+        "agenticore-app[bot]",
+        "tcc-main-ci[bot]",
+        "runs-on: anton-oss-light",
+        "the anton-oss-queue pool",
+        "langfuse.homeofanton.com",
     ],
 )
 def test_package_scan_turns_red_on_a_planted_name(tmp_path, planted):
@@ -55,6 +64,20 @@ def test_package_scan_turns_red_on_a_planted_name(tmp_path, planted):
     assert internal_names(tree)["skills/planted.md"] == [f"3: Written for {planted}."]
 
 
-@pytest.mark.parametrize("clean", ["planet", "airplane", "host 172.15.0.1", "10.5 seconds", "colts"])
+@pytest.mark.parametrize(
+    "clean",
+    [
+        "planet",
+        "airplane",
+        "host 172.15.0.1",
+        "10.5 seconds",
+        "colts",
+        "clockworks",
+        "https://github.com/the-cloud-clockwork/agentihooks/pull/913",
+        "repos/the-cloud-clockwork/agentihooks",
+        "https://the-cloud-clockwork.github.io/agentihooks/docs/",
+        "the GitHub Pages site the-cloud-clockwork.github.io agentihooks",
+    ],
+)
 def test_package_scan_passes_words_that_only_contain_a_name(clean):
     assert not LEAKS.search(clean)
