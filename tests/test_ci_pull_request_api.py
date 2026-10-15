@@ -152,6 +152,7 @@ def test_no_script_a_step_runs_calls_the_api():
         "scripts/ci_mutation/browser.py",
         "scripts/ci_mutation/plan.py",
         "scripts/ci_queue_fail_fast.py",
+        "scripts/ci_semgrep.py",
         "scripts/ci_wiring.py",
         "scripts/packaging/compose-hive-smoke.sh",
         "scripts/packaging/hive-join-smoke.sh",
