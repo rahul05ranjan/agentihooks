@@ -248,12 +248,11 @@ def test_a_stop_after_the_merge_is_blocked(rig):
 def test_a_merged_first_half_clears_the_active_pull_request_and_the_second_half_stops_on_a_wait(rig):
     rig.task.update(state="pr", pr_url=URL, split=["1-10", "11-20"], split_pulls=[URL])
     rig.pulls[URL] = MERGED
-    idle.declare_wait(rig.store.redis, SLUG, ME, rig.clock[0] + 60_000, "second half", rig.clock[0])
-    assert rig.stop().allowed
+    assert "you hold task t1 with no open pull request and no wait" in rig.stop().reason
     assert rig.ledger.updates == [(SLUG, "t1", {"pr_url": "", "state": "claimed"}, "swarm")]
     assert (rig.task["split"], rig.task["split_pulls"]) == (["1-10", "11-20"], [URL])
-    rig.clock[0] += 60_000
-    assert "you hold task t1 with no open pull request and no wait" in rig.stop().reason
+    idle.declare_wait(rig.store.redis, SLUG, ME, rig.clock[0] + 60_000, "second half", rig.clock[0])
+    assert rig.stop().allowed
 
 
 def test_the_second_half_stops_on_its_own_pull_request_and_its_merge_owes_done(rig):
