@@ -57,6 +57,7 @@ def positive(attempt: Path) -> dict:
         "cli_session_start_hook_registrations": {target: len(found) for target, found in loaded.items()},
         "cli_mcp_list": listed,
         "configuration": docs,
+        "codex_probe": json.loads(Path("/tmp/codex-probe.json").read_text()),
     }
 
 
