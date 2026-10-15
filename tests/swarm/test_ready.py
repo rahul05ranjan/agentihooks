@@ -278,11 +278,14 @@ def test_repeated_ticks_never_respawn_a_released_task_waiting_on_its_pull_reques
     monkeypatch.setattr(stall_watch, "ntfy", lambda *args: "")
     attempts = []
 
-    def queue(action, url, run):
+    def queue(action, url):
         attempts.append(url)
+        if pull.queued:
+            return {}
         raise SwarmError("the current pull request head must pass Tests")
 
-    monkeypatch.setattr(ready.merge_queue, "operate", queue)
+    merge_pass = ready.Pass
+    monkeypatch.setattr(ready, "Pass", lambda *args: merge_pass(*args, queue=queue))
     for minutes in (0, 10, 30, 60):
         monkeypatch.setattr(cli, "now_ms", lambda: NOW + minutes * 60_000)
         cli.run_tick(store, "sw", ledger, cli.HerdrRuntime(), FakeHerdr({}))
@@ -290,7 +293,7 @@ def test_repeated_ticks_never_respawn_a_released_task_waiting_on_its_pull_reques
         assert ledger.rows["t1"]["awaiting"] == ready.AWAITING
         assert not any(a.task == "t1" for a in store.agents("sw"))
         assert ready.record(store, "sw", "t1")["head"] == HEAD
-    assert attempts == ([URL] * 4 if pull is GREEN else [])
+    assert attempts == ([URL] * 4 if pull is GREEN else [URL] if pull is QUEUED else [])
 
 
 def test_the_stop_gate_lets_a_ready_engineer_stop(released, tmp_path):
