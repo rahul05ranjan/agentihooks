@@ -118,7 +118,7 @@ class Transport:
 
             pipe.watch(store.key(self.slug, "executions"), store.key(self.slug, RECORDS))
         record = self.bindings.get(self.slug, self.execution_id)
-        if record is None or record.state in {EXITED, FAILED, STOOD_DOWN}:
+        if record is None or record.state in {EXITED, FAILED}:
             raise StaleExecution("execution is no longer current")
         current = store.execution_registry.occupants(self.slug, pipe).get(record.seat)
         if (
