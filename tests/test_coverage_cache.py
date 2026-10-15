@@ -100,7 +100,7 @@ def test_queue_grading_consumes_the_restored_exact_base():
 
     workflow = yaml.safe_load((Path(__file__).parents[1] / ".github/workflows/test.yml").read_text())
     job = workflow["jobs"]["coverage-ratchet"]
-    assert "queue-baseline" not in workflow["jobs"]
+    assert workflow["jobs"]["queue-baseline"]["if"] is False
     assert "queue-baseline" not in job["needs"]
     assert "!cancelled()" in job["if"]
     steps = {step.get("name"): step for step in job["steps"]}

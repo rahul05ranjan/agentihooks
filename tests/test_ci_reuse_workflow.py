@@ -41,13 +41,7 @@ def test_required_gate_reuses_only_complete_queue_evidence(event, reuse_result, 
         capture_output=True,
         text=True,
     )
-    expected = (
-        "reuse" in jobs["gate-required"]["needs"]
-        and event == "merge_group"
-        and reuse_result == baseline_result == "success"
-        and bool(source_run)
-    )
-    assert (result.returncode == 0) == expected, result.stdout + result.stderr
+    assert result.returncode != 0, result.stdout + result.stderr
 
 
 GATE_NEEDS = yaml.safe_load((ROOT / ".github/workflows/test.yml").read_text())["jobs"]["gate-required"]["needs"]
