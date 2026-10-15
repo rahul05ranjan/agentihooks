@@ -22,17 +22,19 @@ class InstallOutput(TextIOBase):
         self.stream = stream
         self.pending = ""
         self.diagnostic = ""
+        self.continuation = False
 
     def write(self, text: str) -> int:
         self.pending += text
         while "\n" in self.pending:
             line, self.pending = self.pending.split("\n", 1)
-            if self.diagnostic and line.startswith("       "):
+            if self.diagnostic and (self.continuation or line.startswith("       ")):
                 self.diagnostic += " " + line.strip()
             else:
                 self._emit_diagnostic()
                 if _DIAGNOSTIC.search(_ANSI.sub("", line)):
                     self.diagnostic = line
+            self.continuation = bool(self.diagnostic and self.pending)
         return len(text)
 
     def _emit_diagnostic(self) -> None:

@@ -83,12 +83,12 @@ def test_reporter_preserves_failures(capsys):
     from scripts.init_reporter import report_target
 
     def fail():
-        print("ERROR: install refused", file=sys.stderr)
+        print("ERROR: install refused\nRun from the operator shell.", file=sys.stderr)
         raise SystemExit(2)
 
     with pytest.raises(SystemExit, match="2"):
         report_target(fail, Mock(), lambda: {})
-    assert capsys.readouterr().err == "ERROR: install refused\n"
+    assert capsys.readouterr().err == "ERROR: install refused Run from the operator shell.\n"
 
 
 @pytest.mark.parametrize("target", ["claude", "codex", "copilot"])
