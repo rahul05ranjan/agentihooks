@@ -1670,6 +1670,18 @@ def test_codex_render_refreshes_when_session_isolation_changes(world):
     assert os.readlink(restored / "sessions") == str(world["home"] / ".codex" / "sessions")
 
 
+def test_swarm_codex_preparation_renders_isolated_storage(world):
+    from scripts import select_profile
+
+    env, _ = select_profile.prepare("rb-role", "codex", "", "", [], {"AGENTIHOOKS_SWARM": "crew"})
+    out = Path(env["CODEX_HOME"])
+
+    for item in ("sessions", "history.jsonl", "session_index.jsonl"):
+        assert not (out / item).is_symlink()
+    assert (out / "hooks.json").is_symlink()
+    assert tomllib.loads((out / "config.toml").read_text())["sqlite_home"] == str(out)
+
+
 def _hooks_entries(hooks: Path) -> list[str]:
     doc = json.loads(hooks.read_text())["hooks"]
     labels = {
