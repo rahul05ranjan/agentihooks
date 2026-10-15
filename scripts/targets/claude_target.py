@@ -188,6 +188,14 @@ class ClaudeAdapter:
     def home(self) -> Path:
         return _install_module().CLAUDE_HOME
 
+    def summary_counts(self) -> dict[str, int]:
+        from scripts.init_reporter import installed_counts
+
+        installer = _install_module()
+        settings = installer.load_json(self.home() / "settings.json")
+        mcp = installer.load_json(installer._CLAUDE_JSON)
+        return installed_counts(mcp.get("mcpServers", {}), self.home() / "skills", settings.get("enabledPlugins", {}))
+
     def write_settings(self, rendered: dict) -> Path:
         _i = _install_module()
         rendered = settings_document(rendered)

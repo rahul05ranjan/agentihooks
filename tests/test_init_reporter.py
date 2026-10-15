@@ -91,7 +91,7 @@ def test_adapter_summary_counts_installed_artifacts(target, tmp_path, monkeypatc
     monkeypatch.setattr(copilot_target, "copilot_home", lambda: home)
     monkeypatch.setattr(copilot_target, "agents_skills_home", lambda: skills)
     mcp_file = tmp_path / "claude.json"
-    monkeypatch.setattr(install, "USER_MCP_FILE", mcp_file)
+    monkeypatch.setattr(install, "_CLAUDE_JSON", mcp_file)
     mcp_file.write_text(json.dumps({"mcpServers": {"one": {}, "two": {}}}))
     (home / "settings.json").write_text(json.dumps({"enabledPlugins": {"on": True, "off": False}}))
     (home / "config.toml").write_text('[mcp_servers.one]\ncommand = "one"\n[mcp_servers.two]\ncommand = "two"\n')
