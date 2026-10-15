@@ -26,6 +26,13 @@ from tests.swarm.profile_fixture import validated
 def env(monkeypatch, tmp_path):
     import fakeredis
 
+    from scripts.swarm.health import merge_stall
+
+    monkeypatch.setattr(
+        merge_stall,
+        "observe",
+        lambda repo, at: {"repo": "", "queue": 0, "merged": 0, "failed": "none observed", "at": at},
+    )
     store = RedisStore(fakeredis.FakeRedis(decode_responses=True))
     ledger = FakeLedger([{"id": "t1", "lane": "eng"}, {"id": "t2", "lane": "ci"}])
     ledger.said = []
@@ -2251,7 +2258,9 @@ def _traced(env, monkeypatch, tmp_path, plan, *p_yes):
     asked["size"] = Answer(type="score", score=1.0, confidence=0.9)
     seen = []
     monkeypatch.setattr(trace_plan, "decide", lambda state, q, **k: seen.append(state) or DecisionResult(asked, "m"))
-    monkeypatch.setattr(intent, "judge", lambda state: seen.append(state) or ("pass", "the phase can use it"))
+    monkeypatch.setattr(
+        intent, "judged", lambda state: seen.append(state) or {"verdict": "pass", "reason": "the phase can use it"}
+    )
     folder = tmp_path / "_home" / ".agentihooks" / "swarm" / "sw" / "tasks" / "t1"
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "plan.md").write_text(plan)
@@ -2285,7 +2294,7 @@ def test_trace_plan_judges_intent_on_the_kept_pieces_before_the_pull_request_ope
     assert run("sw", "--as", "engineer@a1b2c3-0001", "trace-plan") == 0
     report = json.loads(capsys.readouterr().out)
     assert report["intent"] == {"verdict": "pass", "reason": "the phase can use it"}
-    assert seen[1]["pull_request_body"] == "- walls | doghouse | it shelters the dog\n"
+    assert seen[1]["planned_pieces"] == ["walls | doghouse | it shelters the dog"]
     assert [Verdicts("sw", "intent").read("t1")[k] for k in ("verdict", "at")] == ["pass", 4242]
 
 

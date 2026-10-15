@@ -41,9 +41,23 @@ def test_dev_extra_declares_test_plugin(plugin):
 
 def test_workflow_runs_whole_suite_in_parallel():
     command = _pytest_command()
-    assert "-n auto" in command
+    assert command.strip().startswith(("run: workers=$(", "run: start=$SECONDS && status=0 && workers=$("))
+    assert "ci_cpu_quota) && python -c " in command
+    assert '-n "$workers"' in command
+    assert "-n auto" not in command
     assert "tests/" in command
     assert "-m unit" not in command
+
+
+def test_workflow_worker_count_stays_within_this_container():
+    prefix = _pytest_command().strip().removeprefix("run: ").split(" && python -c ")[0]
+    result = subprocess.run(
+        ["bash", "-e", "-c", f'{prefix} && echo "$workers"'], cwd=_ROOT, capture_output=True, text=True, check=True
+    )
+    workers = int(result.stdout)
+    quota = re.search(r"cpu quota (\S+),", result.stderr).group(1)
+    assert 1 <= workers <= len(os.sched_getaffinity(0))
+    assert quota == "None" or workers <= max(1, int(float(quota)))
 
 
 def test_workflow_keeps_xdist_groups_on_one_worker():
@@ -255,7 +269,8 @@ def test_lint_runs_the_artifact_sanity_checks_in_a_real_browser():
 def test_queued_merges_select_artifact_checks_against_the_queue_base():
     select = next(s for s in _workflow()["jobs"]["lint"]["steps"] if s.get("id") == "artifacts")
     assert select["env"]["BASE"] == (
-        "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha"
+        "${{ github.event_name == 'pull_request' && github.base_ref == 'dev' && 'origin/dev'"
+        " || github.event.pull_request.base.sha || github.event.merge_group.base_sha"
         " || github.event.before || inputs.base }}"
     )
 
@@ -598,10 +613,45 @@ def test_unit_shards_upload_their_durations_for_the_refresh():
         if step["name"] == "Restore queue shard coverage":
             expected += " && matrix.python-version == '3.12'"
         assert step["if"] == expected
-    assert "if" not in upload
+    assert upload.get("if") in (None, "${{ !cancelled() && hashFiles('durations.json') != '' }}")
     assert upload["uses"].startswith("actions/upload-artifact@")
     assert upload["with"]["name"] == "durations-${{ matrix.python-version }}-${{ matrix.shard }}"
-    assert upload["with"]["path"].split() == ["durations.json", "durations.sha256"]
+    assert upload["with"]["path"].split() in (
+        ["durations.json", "durations.sha256"],
+        ["durations.json", "durations.sha256", "elapsed.json"],
+    )
+
+
+@pytest.mark.parametrize("status", [0, 3])
+def test_unit_step_records_elapsed_time_and_preserves_pytest_status(tmp_path, status):
+    import json
+
+    _, step = _unit_step_index(lambda item: item.get("name") == "Run tests")
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "__init__.py").touch()
+    (scripts / "ci_cpu_quota.py").write_text("print(1)\n")
+    (tmp_path / "pytest.py").write_text(
+        f"def main(args):\n    open('durations.json', 'w').write('{{}}')\n    return {status}\n"
+    )
+    result = subprocess.run(
+        ["bash", "-e", "-c", step["run"]],
+        cwd=tmp_path,
+        env={**os.environ, "PYTEST_ADDOPTS": ""},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == status, result.stdout + result.stderr
+    assert (tmp_path / "durations.json").is_file()
+    elapsed = json.loads((tmp_path / "elapsed.json").read_text())
+    assert isinstance(elapsed["seconds"], (int, float))
+    assert elapsed["seconds"] >= 0
+
+
+def test_unit_shards_upload_elapsed_time_after_failed_pytest():
+    _, upload = _unit_step_index(lambda step: step.get("name") == "Upload durations")
+    assert upload["if"] == "${{ !cancelled() && hashFiles('durations.json') != '' }}"
+    assert "elapsed.json" in upload["with"]["path"].split()
 
 
 def test_every_shard_records_the_hash_of_the_durations_it_splits_on():
@@ -826,7 +876,7 @@ def test_mutation_shards_come_from_a_plan_sized_on_stored_timings():
     step = next(step for step in plan["steps"] if step.get("id") == "plan")
     assert step["run"] == "python -m scripts.ci_mutation." + 'plan --base "$BASE"'
     assert step["env"] == {
-        "BASE": "${{ github.event.pull_request.base.sha || inputs.base }}",
+        "BASE": "${{ inputs.base || 'origin/dev' }}",
         "GH_TOKEN": "${{ steps.app-token.outputs.token }}",
     }
     names = [item.get("id") for item in plan["steps"]]

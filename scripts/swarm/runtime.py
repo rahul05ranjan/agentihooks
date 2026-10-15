@@ -691,7 +691,7 @@ class HerdrRuntime:
         ]
         argv += [
             "--name",
-            name,
+            naming.plain(name) if agent == "claude" else name,
             "--agent",
             agent,
             "--start-timeout",
@@ -732,6 +732,7 @@ class HerdrRuntime:
                     "AGENTIHOOKS_SWARM_TASK": task_id,
                     "AGENTIHOOKS_SWARM_AUTONOMY": config.autonomy,
                     "AGENTIHOOKS_SWARM_SPAWN": "1",
+                    "AGENTIHOOKS_AGENT_NAME": name,
                     effort_range.VARIABLE: ":".join(effort_range.of(config)),
                     **({"AGENTIHOOKS_COMPACT_LIMIT": str(config.compact_limit)} if config.compact_limit else {}),
                 },
@@ -1063,14 +1064,13 @@ class HerdrRuntime:
             listed = self.herdr(["agent", "list"]).get("agents", [])
         except Exception:
             return managed or None
-        remote = self.hive.conversations() if self.hive is not None else {}
         registered = _registered_conversations(sessions())
         local = {
             row["pane_id"]: _conversation_id(row.get("agent_session")) or registered.get(row.get("name"), "")
             for row in listed
             if row.get("pane_id")
         }
-        return {**local, **managed, **remote}
+        return {**local, **managed}
 
     def nudge(self, agent, text):
         from scripts.hive.orders import Orders

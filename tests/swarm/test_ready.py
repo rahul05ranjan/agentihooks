@@ -77,6 +77,19 @@ def working(store):
     return [a.state for a in store.agents("sw") if a.name == AGENT] == ["working"]
 
 
+@pytest.fixture
+def primary_checkout(released, monkeypatch):
+    shell = released[2]
+
+    def primary(argv):
+        if argv == ["git", "rev-parse", "--show-toplevel"]:
+            return subprocess.CompletedProcess(argv, 0, stdout="/home/me/dev/repo\n", stderr="")
+        return shell(argv)
+
+    monkeypatch.setattr(stack, "shell", primary)
+    return released
+
+
 @pytest.mark.parametrize("kind", ["code", "ci"])
 def test_ready_records_the_pull_request_and_head_and_ends_the_agent(released, capsys, kind):
     store, ledger, shell, doc = released
@@ -104,6 +117,71 @@ def test_ready_records_the_pull_request_and_head_and_ends_the_agent(released, ca
         "awaiting": "merge",
         "next": "stop now; the swarm carries the pull request to merge and closes this session",
     }
+
+
+@pytest.mark.parametrize("retained", [TOP, "", None])
+@pytest.mark.parametrize("source", ["ready", "handoff"])
+def test_ready_from_primary_carries_an_unchanged_queued_head(primary_checkout, retained, source):
+    store, ledger, shell, doc = primary_checkout
+    ledger.pulls[URL] = QUEUED
+    if source == "ready":
+        previous = ready.held_record(URL, HEAD, retained, "predecessor", 1)
+        if retained is None:
+            previous.pop("worktree")
+        ready.save(store, "sw", "t1", previous)
+    else:
+        envelope = {"pull_request": {"url": URL}, "remote_head": HEAD}
+        if retained is not None:
+            envelope["worktree"] = retained or "unknown"
+        store.put_handoff("sw", "t1", doc.read_text(), envelope=envelope)
+    assert release(doc) == 0
+    found = ready.record(store, "sw", "t1")
+    assert found["worktree"] == (retained or "")
+    assert found["head"] == HEAD
+    assert found["agent"] == AGENT
+    assert found["on"] == {"kind": "merge", "target": URL}
+    assert found["queued_at"] == NOW
+    assert not working(store)
+    assert ledger.rows["t1"]["awaiting"] == "merge"
+
+
+@pytest.mark.parametrize(
+    ("source", "url", "head"),
+    [
+        ("ready", URL, "b" * 40),
+        ("handoff", URL, "b" * 40),
+        ("ready", URL + "0", HEAD),
+        ("handoff", URL + "0", HEAD),
+        ("ready", URL, None),
+        ("handoff", URL, None),
+        ("missing", URL, HEAD),
+        ("unknown_pull", URL, HEAD),
+    ],
+)
+def test_ready_from_primary_refuses_a_moved_queued_head(primary_checkout, capsys, source, url, head):
+    store, ledger, shell, doc = primary_checkout
+    ledger.pulls[URL] = QUEUED
+    previous = None
+    if source == "ready":
+        previous = ready.held_record(url, head, TOP, "predecessor", 1)
+        ready.save(store, "sw", "t1", previous)
+    elif source == "handoff":
+        store.put_handoff(
+            "sw",
+            "t1",
+            doc.read_text(),
+            envelope={"pull_request": {"url": url}, "remote_head": head, "worktree": TOP},
+        )
+    elif source == "unknown_pull":
+        store.put_handoff("sw", "t1", doc.read_text(), envelope={"pull_request": "unknown"})
+    capsys.readouterr()
+    assert release(doc) == 1
+    assert capsys.readouterr().err == (
+        "swarm: park and ready remove only a worktree wt.sh new made under "
+        "/home/me/dev/worktrees; /home/me/dev/repo is not one\n"
+    )
+    assert working(store)
+    assert ready.record(store, "sw", "t1") == previous
 
 
 def test_a_second_ready_is_refused_once_the_seat_is_released(released, capsys):
@@ -424,7 +502,15 @@ def test_a_pull_request_the_queue_keeps_refusing_reopens_the_task(merging):
         f"task t1 reopened, {URL} could not be queued: GraphQL: Pull request is not mergeable",
         f"removed the worktree {TOP}",
     ]
-    assert merging.rows["t1"]["state"] == "open"
+    assert merging.rows["t1"]["state"] == "open" and merging.rows["t1"]["awaiting"] == "fix"
+    assert merging.ledger.comments == [
+        (
+            "t1",
+            f"Reopened by the swarm: its pull request {URL} could not be queued: GraphQL: Pull request is not "
+            "mergeable. The next engineer continues it from the handoff its engineer left.",
+            "swarm",
+        ),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -446,7 +532,7 @@ def test_an_unknown_merge_error_reopens_the_task_with_its_reason(merging, error)
         f"removed the worktree {TOP}",
     ]
     assert merging.rows["t1"]["state"] == "open"
-    assert merging.rows["t1"]["claimed_by"] == "" and merging.rows["t1"]["awaiting"] == ""
+    assert merging.rows["t1"]["claimed_by"] == "" and merging.rows["t1"]["awaiting"] == "fix"
     assert error in merging.ledger.comments[0][1]
     assert merging.store.handoff("sw", "t1") == "the handoff"
     assert merging.store.claimant("sw", "t1") is None
@@ -510,6 +596,17 @@ def test_a_merged_pull_request_closes_the_task_with_the_done_proof_and_removes_t
     assert merging.run() == []
 
 
+def test_a_merged_pull_request_without_a_checkout_closes_without_removing_one(merging):
+    found = ready.record(merging.store, "sw", "t1")
+    found["worktree"] = ""
+    ready.save(merging.store, "sw", "t1", found)
+    merging.pulls[URL] = MERGED
+    assert merging.run() == [f"task t1 done, {URL} merged"]
+    assert merging.rows["t1"]["state"] == "done"
+    assert merging.shell.calls == []
+    assert ready.record(merging.store, "sw", "t1") is None
+
+
 def test_a_merge_only_the_uncached_reread_sees_closes_the_task(merging):
     merging.rows["t1"]["group_members"] = ["t2"]
     queued_at_now(merging)
@@ -568,7 +665,7 @@ def test_red_checks_or_a_closed_pull_request_reopen_the_task_for_the_next_engine
     merging.pulls[URL] = pull
     assert merging.run() == [f"task t1 reopened, {URL} {what}", f"removed the worktree {TOP}"]
     assert merging.rows["t1"]["state"] == "open" and merging.rows["t1"]["claimed_by"] == ""
-    assert merging.rows["t1"]["awaiting"] == ""
+    assert merging.rows["t1"]["awaiting"] == "fix"
     assert merging.ledger.comments == [
         (
             "t1",
@@ -581,6 +678,51 @@ def test_red_checks_or_a_closed_pull_request_reopen_the_task_for_the_next_engine
     assert merging.store.handoff("sw", "t1") == "the handoff"
     assert merging.store.claimant("sw", "t1") is None
     assert ready.record(merging.store, "sw", "t1") is None
+
+
+@pytest.mark.parametrize("failed, step", [(("Tests", "Lint"), "Tests, Lint"), (("Tests",), "Tests")])
+def test_red_checks_reopen_the_task_awaiting_fix_with_the_failing_step_named(merging, failed, step):
+    merging.pulls[URL] = PullRequest("OPEN", None, 1, True, True, failed=failed, head=HEAD)
+    assert merging.run()[0] == f"task t1 reopened, {URL} has red checks: {step}"
+    assert merging.rows["t1"]["awaiting"] == "fix"
+    assert merging.ledger.comments == [
+        (
+            "t1",
+            f"Reopened by the swarm: its pull request {URL} has red checks: {step}. The next engineer continues it "
+            "from the handoff its engineer left.",
+            "swarm",
+        ),
+    ]
+
+
+def test_a_pull_request_that_conflicts_with_dev_reopens_instead_of_waiting_on_checks(merging):
+    merging.pulls[URL] = PullRequest("OPEN", None, 1, False, False, head=HEAD, mergeable="CONFLICTING")
+    what = "conflicts with dev and needs an update the swarm cannot make"
+    assert merging.run() == [f"task t1 reopened, {URL} {what}", f"removed the worktree {TOP}"]
+    assert merging.rows["t1"]["state"] == "open" and merging.rows["t1"]["awaiting"] == "fix"
+    assert merging.queued == []
+    assert ready.record(merging.store, "sw", "t1") is None
+
+
+def test_a_conflict_while_queued_is_left_to_the_queue(merging):
+    queued_at_now(merging)
+    merging.pulls[URL] = PullRequest("OPEN", None, 1, False, True, head=HEAD, queued=True, mergeable="CONFLICTING")
+    assert merging.run(NOW + 60_000) == []
+    assert merging.rows["t1"]["state"] == "pr"
+
+
+def test_a_branch_update_github_refuses_reopens_the_task_awaiting_fix(merging):
+    merging.pulls[URL] = GREEN
+    error = "could not update the branch from dev: gh: merge conflict between base and head (HTTP 422)"
+
+    def refused_update(action, url):
+        raise SwarmError(error)
+
+    assert merging.run(queuer=refused_update) == [
+        f"task t1 reopened, {URL} could not be queued: {error}",
+        f"removed the worktree {TOP}",
+    ]
+    assert merging.rows["t1"]["state"] == "open" and merging.rows["t1"]["awaiting"] == "fix"
 
 
 def test_a_pull_request_closed_while_queued_reopens_as_closed(merging):
@@ -603,6 +745,166 @@ def test_a_pull_request_that_leaves_the_queue_unmerged_reopens_the_task(merging)
     merging.pulls[URL] = GREEN
     assert merging.run(NOW + 120_000)[0] == f"task t1 reopened, {URL} left the merge queue without merging"
     assert merging.rows["t1"]["state"] == "open"
+
+
+@pytest.mark.parametrize(
+    "queued, mergeable, cause",
+    [
+        (True, "CONFLICTING", "has a merge conflict"),
+        (False, "CONFLICTING", "has a merge conflict"),
+        (True, "MERGEABLE", "is marked unmergeable by GitHub"),
+    ],
+)
+def test_an_unmergeable_entry_reopens_with_its_cause_within_one_tick(merging, queued, mergeable, cause):
+    from scripts.swarm.ledger_events import pull_request
+
+    queued_at_now(merging)
+    merging.pulls[URL] = pull_request(
+        {
+            "state": "OPEN",
+            "mergeable": mergeable,
+            "mergeQueueEntry": {"id": "entry", "state": "UNMERGEABLE"} if queued else None,
+        }
+    )
+
+    def dequeue(action, url):
+        assert (action, url) == ("dequeue", URL)
+        merging.queued.append((action, url))
+        return {"queued": False}
+
+    actions = merging.run(NOW + 60_000, queuer=dequeue)
+    assert actions[0] == f"task t1 reopened, {URL} {cause}"
+    assert merging.queued == [("queue", URL)] + ([("dequeue", URL)] if queued else [])
+    assert merging.rows["t1"]["state"] == "open"
+    assert merging.rows["t1"]["claimed_by"] == ""
+    assert merging.rows["t1"]["awaiting"] == "fix"
+    assert merging.store.claimant("sw", "t1") is None
+    assert ready.record(merging.store, "sw", "t1") is None
+    assert cause in merging.ledger.comments[0][1]
+    assert merging.run(NOW + 120_000, queuer=dequeue) == []
+
+
+@pytest.mark.parametrize("queued", [True, False])
+def test_a_conflict_reopens_a_task_whose_engineer_has_not_released_its_seat(merging, queued):
+    from scripts.swarm.ledger_events import pull_request
+
+    merging.rows["t1"]["awaiting"] = ""
+    ready.forget(merging.store, "sw", "t1")
+    merging.pulls[URL] = pull_request(
+        {
+            "state": "OPEN",
+            "mergeable": "CONFLICTING",
+            "mergeQueueEntry": {"id": "entry", "state": "UNMERGEABLE"} if queued else None,
+        }
+    )
+    merging.queue.extra = {"queued": False}
+    assert merging.run()[0] == f"task t1 reopened, {URL} has a merge conflict"
+    assert merging.queued == ([("dequeue", URL)] if queued else [])
+    assert merging.rows["t1"]["state"] == "open"
+    assert merging.rows["t1"]["claimed_by"] == ""
+    assert merging.store.claimant("sw", "t1") is None
+    assert "has a merge conflict" in merging.ledger.comments[0][1]
+    assert merging.shell.calls == []
+
+
+def test_one_tick_reports_every_unreleased_entry_it_dequeues(merging):
+    from scripts.swarm.ledger_events import pull_request
+
+    other_url = URL + "0"
+    merging.rows["t1"]["awaiting"] = ""
+    merging.rows["t2"].update({"state": "pr", "awaiting": "", "claimed_by": "another engineer", "pr_url": other_url})
+    merging.store.claim("sw", "t2", "another engineer", 60_000)
+    pull = pull_request({"state": "OPEN", "mergeQueueEntry": {"id": "entry", "state": "UNMERGEABLE"}})
+    merging.pulls.update({URL: pull, other_url: pull})
+    merging.queue.extra = {"queued": False}
+    assert merging.run() == [
+        f"task t1 reopened, {URL} is marked unmergeable by GitHub",
+        f"task t2 reopened, {other_url} is marked unmergeable by GitHub",
+    ]
+    assert merging.queued == [("dequeue", URL), ("dequeue", other_url)]
+    assert all(row["state"] == "open" and row["claimed_by"] == "" for row in merging.rows.values())
+    assert merging.store.claimant("sw", "t1") is None
+    assert merging.store.claimant("sw", "t2") is None
+    assert len(merging.ledger.comments) == 2
+
+
+def test_an_unowned_task_without_a_claimant_field_can_leave_the_queue(merging):
+    from scripts.swarm.ledger_events import pull_request
+
+    other_url = URL + "0"
+    merging.rows["t2"].update({"state": "pr", "pr_url": other_url})
+    merging.rows["t2"].pop("claimed_by")
+    merging.pulls[other_url] = pull_request(
+        {"state": "OPEN", "mergeQueueEntry": {"id": "entry", "state": "UNMERGEABLE"}}
+    )
+    merging.queue.extra = {"queued": False}
+    assert merging.run() == [f"task t2 reopened, {other_url} is marked unmergeable by GitHub"]
+    assert merging.rows["t2"]["state"] == "open"
+    assert merging.rows["t2"]["claimed_by"] == ""
+    assert merging.queued == [("dequeue", other_url)]
+
+
+@pytest.mark.parametrize("failure", ["GitHub did not answer", "still queued"])
+def test_a_dequeue_that_does_not_finish_keeps_the_task_for_the_next_tick(merging, failure):
+    from scripts.swarm.ledger_events import pull_request
+
+    queued_at_now(merging)
+    merging.pulls[URL] = pull_request({"state": "OPEN", "mergeQueueEntry": {"id": "entry", "state": "UNMERGEABLE"}})
+
+    def dequeue(action, url):
+        assert (action, url) == ("dequeue", URL)
+        if failure != "still queued":
+            raise SwarmError(failure)
+        return {"queued": True}
+
+    assert merging.run(NOW + 60_000, queuer=dequeue)
+    assert merging.rows["t1"]["state"] == "pr"
+    assert merging.rows["t1"]["claimed_by"] == AGENT
+    assert ready.record(merging.store, "sw", "t1") is not None
+    assert merging.ledger.comments == []
+    merging.queue.extra = {"queued": False}
+    assert merging.run(NOW + 120_000)[0] == f"task t1 reopened, {URL} is marked unmergeable by GitHub"
+
+
+def test_a_merge_racing_the_dequeue_is_confirmed_before_the_task_finishes(merging):
+    from scripts.swarm.ledger_events import pull_request
+
+    queued_at_now(merging)
+    merging.pulls[URL] = pull_request({"state": "OPEN", "mergeQueueEntry": {"id": "entry", "state": "UNMERGEABLE"}})
+    merging.queue.extra = {"state": "MERGED", "queued": False}
+    assert merging.run(NOW + 60_000) == [f"dequeue of {URL} for task t1 awaits confirmation"]
+    assert merging.rows["t1"]["state"] == "pr"
+    assert merging.ledger.comments == []
+    merging.pulls[URL] = MERGED
+    assert merging.run(NOW + 120_000)[0] == f"task t1 done, {URL} merged"
+    assert merging.rows["t1"]["state"] == "done"
+
+
+@pytest.mark.parametrize("entry_state", ["QUEUED", "AWAITING_CHECKS", "MERGEABLE", "LOCKED", None])
+@pytest.mark.parametrize("released", [True, False])
+def test_a_queue_entry_without_a_known_merge_problem_keeps_its_place(merging, entry_state, released):
+    from scripts.swarm.ledger_events import pull_request
+
+    queued_at_now(merging)
+    if not released:
+        merging.rows["t1"]["awaiting"] = ""
+    merging.pulls[URL] = pull_request(
+        {"state": "OPEN", "mergeable": "UNKNOWN", "mergeQueueEntry": {"id": "entry", "state": entry_state}}
+    )
+    assert merging.run(NOW + 60_000) == []
+    assert merging.rows["t1"]["state"] == "pr"
+    assert merging.rows["t1"]["claimed_by"] == AGENT
+    assert merging.queued == [("queue", URL)]
+    assert merging.ledger.comments == []
+
+
+def test_an_unreleased_task_is_preserved_when_github_cannot_answer(merging):
+    merging.rows["t1"]["awaiting"] = ""
+    merging.pulls[URL] = None
+    assert merging.run() == []
+    assert merging.rows["t1"]["state"] == "pr"
+    assert merging.rows["t1"]["claimed_by"] == AGENT
+    assert merging.queued == []
 
 
 def test_a_fresh_queue_entry_not_yet_listed_holds_until_its_grace_runs_out(merging):
@@ -652,6 +954,54 @@ def test_the_tick_runs_the_merge_pass_after_the_wait_pass(env, monkeypatch):
 
     actions = cli.run_tick(store, "sw", ledger, rt, FakeHerdr({}))
     assert order == ["waits", ("merge", "sw")] and "merged" in actions
+
+
+def test_a_planted_unmergeable_entry_leaves_the_queue_within_two_full_ticks(env, monkeypatch):
+    from scripts.swarm.ledger_events import pull_request
+    from tests.swarm.test_delivery import FakeHerdr
+
+    store, ledger, rt = env
+    cli.main(["sw", "create", "--repo", "/repo"])
+    ledger.rows["t1"].update({"state": "pr", "pr_url": URL, "claimed_by": AGENT, "awaiting": "merge"})
+    store.claim("sw", "t1", AGENT, 60_000)
+    found = ready.held_record(URL, HEAD, TOP, AGENT, NOW)
+    found["on"], found["queued_at"] = {"kind": "merge", "target": URL}, NOW
+    ready.save(store, "sw", "t1", found)
+    raw = {
+        "id": "pull",
+        "state": "OPEN",
+        "baseRefName": "dev",
+        "headRefOid": HEAD,
+        "mergeable": "CONFLICTING",
+        "mergeQueueEntry": {"id": "plant", "state": "UNMERGEABLE"},
+    }
+    ledger.pulls[URL] = pull_request(raw)
+    dequeued = []
+
+    def graphql(query, values, run):
+        if query == ready.merge_queue.DEQUEUE:
+            assert values == {"id": "pull"}
+            dequeued.append(values["id"])
+            raw["mergeQueueEntry"] = None
+            ledger.pulls[URL] = pull_request(raw)
+            return {}
+        assert query == ready.merge_queue.STATE
+        return {"resource": dict(raw)}
+
+    monkeypatch.setattr(ready.merge_queue, "graphql", graphql)
+    monkeypatch.setattr(cli.ledger_events, "views", lambda urls, cache=None: {url: ledger.pulls[url] for url in urls})
+    monkeypatch.setattr(stack, "shell", Shell())
+    for tick_number in (1, 2):
+        monkeypatch.setattr(cli, "now_ms", lambda: NOW + tick_number * 60_000)
+        cli.run_tick(store, "sw", ledger, rt, FakeHerdr({}))
+        if ledger.rows["t1"]["state"] == "open":
+            break
+    assert tick_number == 1
+    assert dequeued == ["pull"]
+    assert raw["mergeQueueEntry"] is None
+    assert ledger.rows["t1"]["state"] == "open"
+    assert ledger.rows["t1"]["claimed_by"] == ""
+    assert any("has a merge conflict" in text for _, text, _ in ledger.comments)
 
 
 def test_the_ready_usage_names_its_handoff_document(capsys):
