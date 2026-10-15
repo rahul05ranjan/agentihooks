@@ -157,7 +157,7 @@ def test_only_the_first_shard_installs_the_pinned_codex_cli_and_requires_its_liv
     use_index, use = _unit_step_index(lambda s: s.get("name") == "Use the Codex CLI")
     run_index, _ = _unit_step_index(lambda s: s.get("name") == "Run tests")
     assert restore["if"] in (only, f"needs.split.outputs.source == '' && {only}")
-    assert restore["uses"] == "actions/cache@v4"
+    assert restore["uses"] == "actions/cache/restore@v4"
     assert restore["with"] == {"path": "~/codex", "key": "codex-${{ runner.os }}-${{ env.CODEX_RELEASE }}"}
     install_if = "steps.codex.outcome == 'success' && steps.codex.outputs.cache-hit != 'true'"
     assert install["if"] in (install_if, f"needs.split.outputs.source == '' && {install_if}")
@@ -170,6 +170,36 @@ def test_only_the_first_shard_installs_the_pinned_codex_cli_and_requires_its_liv
         'echo "CODEX_CLI_REQUIRED=1" >> "$GITHUB_ENV"',
     ]
     assert restore_index < install_index < use_index < run_index
+
+
+def test_only_a_dev_push_saves_the_codex_cli_and_every_job_only_restores_it():
+    jobs = yaml.safe_load((_ROOT / ".github/workflows/test.yml").read_text())["jobs"]
+    saves = [
+        (name, step)
+        for name, job in jobs.items()
+        for step in job.get("steps", [])
+        if step.get("uses") == "actions/cache/save@v4" and step.get("with", {}).get("path") == "~/codex"
+    ]
+    assert [name for name, _ in saves] == ["unit"]
+    save = saves[0][1]
+    install_index, _ = _unit_step_index(lambda s: s.get("name") == "Install the Codex CLI")
+    save_index, _ = _unit_step_index(lambda s: s.get("name") == save["name"])
+    use_index, _ = _unit_step_index(lambda s: s.get("name") == "Use the Codex CLI")
+    assert install_index < save_index < use_index
+    assert save["with"] == {"path": "~/codex", "key": "${{ steps.codex.outputs.cache-primary-key }}"}
+    assert save["if"] == (
+        "needs.split.outputs.source == '' && steps.codex.outcome == 'success'"
+        " && steps.codex.outputs.cache-hit != 'true'"
+        " && github.event_name == 'push' && github.ref == 'refs/heads/dev'"
+    )
+    restores = [
+        step
+        for job in jobs.values()
+        for step in job.get("steps", [])
+        if step.get("with", {}).get("path") == "~/codex" and step.get("uses") != "actions/cache/save@v4"
+    ]
+    assert len(restores) == 2
+    assert {step["uses"] for step in restores} == {"actions/cache/restore@v4"}
 
 
 def test_unit_install_keeps_playwright_and_excludes_the_grpc_exporter():

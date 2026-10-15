@@ -793,7 +793,7 @@ jobs:
       - name: Restore the Codex CLI
         id: codex
         if: needs.split.outputs.source == '' && matrix.python-version == '3.12' && matrix.shard == 1
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ~/codex
           key: codex-${{ runner.os }}-${{ env.CODEX_RELEASE }}
@@ -805,6 +805,13 @@ jobs:
           mkdir -p ~/codex
           curl -fsSL --retry 3 "https://github.com/openai/codex/releases/download/${CODEX_RELEASE}/codex-x86_64-unknown-linux-musl.tar.gz" | tar -xzO > ~/codex/codex
           chmod +x ~/codex/codex
+
+      - name: Save the Codex CLI from dev
+        if: needs.split.outputs.source == '' && steps.codex.outcome == 'success' && steps.codex.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/codex
+          key: ${{ steps.codex.outputs.cache-primary-key }}
 
       - name: Use the Codex CLI
         if: needs.split.outputs.source == '' && steps.codex.outcome == 'success'
@@ -991,7 +998,7 @@ jobs:
       - name: Restore the Codex CLI
         id: codex
         if: matrix.python-version == '3.12' && contains(format(' {0} ', env.FILES), ' tests/routing/test_codex_api.py ')
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ~/codex
           key: codex-${{ runner.os }}-${{ env.CODEX_RELEASE }}
