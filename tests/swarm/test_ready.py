@@ -266,6 +266,33 @@ def test_the_reaper_retires_a_ready_agent_without_reopening_its_task(released):
     assert store.handoff("sw", "t1") == doc.read_text()
 
 
+@pytest.mark.parametrize("pull", [GREEN, RUNNING, QUEUED])
+def test_repeated_ticks_never_respawn_a_released_task_waiting_on_its_pull_request(released, monkeypatch, pull):
+    from scripts.swarm import stall_watch
+    from tests.swarm.test_delivery import FakeHerdr
+
+    store, ledger, _, doc = released
+    assert release(doc) == 0
+    ledger.pulls[URL] = pull
+    monkeypatch.setattr(cli.ledger_events, "views", lambda urls, cache=None: {url: ledger.pulls[url] for url in urls})
+    monkeypatch.setattr(stall_watch, "ntfy", lambda *args: "")
+    attempts = []
+
+    def queue(action, url, run):
+        attempts.append(url)
+        raise SwarmError("the current pull request head must pass Tests")
+
+    monkeypatch.setattr(ready.merge_queue, "operate", queue)
+    for minutes in (0, 10, 30, 60):
+        monkeypatch.setattr(cli, "now_ms", lambda: NOW + minutes * 60_000)
+        cli.run_tick(store, "sw", ledger, cli.HerdrRuntime(), FakeHerdr({}))
+        assert ledger.rows["t1"]["state"] == "pr"
+        assert ledger.rows["t1"]["awaiting"] == ready.AWAITING
+        assert not any(a.task == "t1" for a in store.agents("sw"))
+        assert ready.record(store, "sw", "t1")["head"] == HEAD
+    assert attempts == ([URL] * 4 if pull is GREEN else [])
+
+
 def test_the_stop_gate_lets_a_ready_engineer_stop(released, tmp_path):
     store, ledger, _, doc = released
     ledger.pulls[URL] = GREEN
