@@ -559,13 +559,20 @@ def render_copilot(name: str, force: bool = False, overlays: Sequence[str] = ())
 
 
 def render(
-    target: str, name: str, force: bool = False, overlays: Sequence[str] = (), bundle_revision: str = ""
+    target: str,
+    name: str,
+    force: bool = False,
+    overlays: Sequence[str] = (),
+    bundle_revision: str = "",
+    isolate: bool = False,
 ) -> Path | None:
     renderers = {"claude": render_claude, "codex": render_codex, "copilot": render_copilot}
     if target not in renderers:
         raise ValueError(f"{target} per-run profiles are not supported")
     if bundle_revision:
         _pin(_bundle(), bundle_revision)
+    if target == "codex":
+        return render_codex(name, force=force, overlays=overlays, isolate=isolate)
     return renderers[target](name, force=force, overlays=overlays)
 
 
