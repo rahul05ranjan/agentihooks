@@ -2919,3 +2919,75 @@ class TestAgentienvMultilineValues:
         assert r.stderr.count("span several lines") == 1, r.stderr
         assert "[agentienv] WARNING: these values span several lines" in r.stderr
         assert "[agentihooks]" not in r.stderr
+
+
+@pytest.fixture
+def operator_install(monkeypatch, tmp_path):
+    from scripts import install as installer
+
+    installer._save_state({"targets": {"global": {t: {"profile": "default"} for t in ("claude", "codex", "copilot")}}})
+    external = tmp_path / "external"
+    external.mkdir()
+    monkeypatch.setattr(installer, "_get_bundle_path", lambda: None)
+    monkeypatch.setattr(installer, "_rerender_profile_homes", lambda *args: None)
+    monkeypatch.setattr(installer, "_update_bashrc_block", lambda: None)
+    return installer, external
+
+
+def _call_operator_install(installer, external, caller):
+    if caller == "init":
+        installer.cmd_init_unified(TestInitLinkProfileFlag()._make_args(profile="default"))
+    elif caller == "settings":
+        installer._cmd_settings_profile(argparse.Namespace(sp_name="default", clear=False, for_target=None))
+    elif caller == "clear":
+        installer._cmd_settings_profile(argparse.Namespace(clear=True, for_target=None))
+    elif caller == "link":
+        installer.cmd_link_profile("link", str(external))
+    else:
+        installer.install_global(argparse.Namespace(profile="default", settings_profile="", install_target="claude"))
+
+
+@pytest.mark.parametrize("caller", ["init", "settings", "clear", "link", "global"])
+@pytest.mark.parametrize(
+    "signal", ["AGENTIHOOKS_SWARM", "AGENTIHOOKS_PROFILE", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "COPILOT_HOME"]
+)
+def test_agent_session_cannot_change_operator_install(operator_install, monkeypatch, capsys, caller, signal):
+    installer, external = operator_install
+    from scripts.profiles import render
+
+    value = (
+        "engineer"
+        if signal.startswith("AGENTIHOOKS_")
+        else str(render.rendered_root() / "engineer" / "generation" / "codex")
+    )
+    monkeypatch.setenv(signal, value)
+    before = installer.STATE_JSON.read_bytes()
+    with patch.object(installer, "_install_global_inner") as inner:
+        with pytest.raises(SystemExit) as exc:
+            _call_operator_install(installer, external, caller)
+    assert exc.value.code == 1
+    assert capsys.readouterr().err == (
+        "ERROR: agent sessions cannot change the operator's global profile install.\n"
+        "Run this command from the operator's own shell with AGENTIHOOKS_SWARM, AGENTIHOOKS_PROFILE, "
+        "CLAUDE_CONFIG_DIR, CODEX_HOME and COPILOT_HOME unset.\n"
+    )
+    inner.assert_not_called()
+    assert installer.STATE_JSON.read_bytes() == before
+
+
+@pytest.mark.parametrize("caller", ["init", "settings", "clear", "link", "global"])
+def test_operator_shell_can_install_profiles(operator_install, monkeypatch, caller):
+    installer, external = operator_install
+    for name in ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "COPILOT_HOME"):
+        monkeypatch.setenv(name, str(Path.home() / "custom" / name))
+    with patch.object(installer, "_install_global_inner") as inner:
+        _call_operator_install(installer, external, caller)
+    assert inner.called
+
+
+def test_global_install_refuses_before_taking_the_lock(operator_install, monkeypatch):
+    installer, external = operator_install
+    monkeypatch.setenv("AGENTIHOOKS_SWARM", "example")
+    with patch.object(installer, "_sync_lock") as lock, pytest.raises(SystemExit):
+        _call_operator_install(installer, external, "global")
+    lock.assert_not_called()
