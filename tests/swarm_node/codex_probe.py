@@ -39,7 +39,11 @@ def run_codex(home: Path, timeout: float = 20) -> dict:
             process.wait()
     latency = time.time() - registered_at
     assert latency < 2, f"Codex cleanup exceeded two seconds: {latency}"
-    return {"registration_to_exit_seconds": latency, "elapsed_seconds": time.monotonic() - started}
+    return {
+        "registered_at": registered_at,
+        "registration_to_exit_seconds": latency,
+        "elapsed_seconds": time.monotonic() - started,
+    }
 
 
 if __name__ == "__main__":
