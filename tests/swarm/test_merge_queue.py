@@ -83,15 +83,8 @@ def test_state_reports_an_open_pull_request_without_a_queue_entry():
 def test_queue_enqueues_the_observed_head_and_reports_the_queue_entry():
     run, calls = runner(
         {"data": {"resource": OPEN}},
-        {
-            "data": {
-                "resource": {"number": 12, "repository": {"nameWithOwner": "o/r", "ref": {"target": {"oid": "c" * 40}}}}
-            }
-        },
+        {"data": {"resource": {"number": 12, "repository": {"nameWithOwner": "o/r"}}}},
         {"workflow_runs": [{"id": 21, "head_sha": "abc", "conclusion": "success"}]},
-        {"jobs": [{"id": 31, "name": "test-count (3.11)", "conclusion": "success"}]},
-        "2026-10-09T09:20:05Z setup\n2026-10-09T09:20:06Z   BASE: cccccccccccccccccccccccccccccccccccccccc\n2026-10-09T09:20:07Z done\n",
-        {"data": {"resource": {"repository": {"ref": {"target": {"oid": "c" * 40}}}}}},
         {"data": {"enqueuePullRequest": {"mergeQueueEntry": {"id": "MQ_one"}}}},
         {"data": {"resource": {**OPEN, "mergeQueueEntry": ENTRY}}},
     )
@@ -102,12 +95,14 @@ def test_queue_enqueues_the_observed_head_and_reports_the_queue_entry():
         "queued": True,
         "entry": ENTRY,
     }
-    command, _ = calls[6]
+    command, _ = calls[3]
     assert command[:3] == ["gh", "api", "graphql"]
     assert "enqueuePullRequest(input: {pullRequestId: $id, expectedHeadOid: $head})" in command[4]
     assert command[5:] == ["-f", "id=PR_one", "-f", "head=abc"]
     assert calls[-1][0] == calls[0][0]
-    assert not any("compare/" in str(call[0]) for call in calls)
+    assert not any(
+        "compare/" in str(call[0]) or "update-branch" in str(call[0]) or "/jobs" in str(call[0]) for call in calls
+    )
 
 
 @pytest.mark.parametrize("review", [None, "APPROVED"])
@@ -157,24 +152,6 @@ def test_queue_without_a_queue_refuses_an_unready_pull_request(change):
     ):
         merge_queue.operate("queue", URL, run)
     assert len(calls) == 1
-
-
-def test_queue_enqueues_a_green_head_without_updating_it_from_dev():
-    run, calls = runner(
-        {"data": {"resource": OPEN}},
-        {"data": {"resource": {"number": 12, "repository": {"nameWithOwner": "o/r"}}}},
-        {"workflow_runs": [{"id": 21, "head_sha": "abc", "conclusion": "success"}]},
-        {"data": {"enqueuePullRequest": {"mergeQueueEntry": {"id": "MQ_one"}}}},
-        {"data": {"resource": {**OPEN, "mergeQueueEntry": ENTRY}}},
-    )
-    result = merge_queue.operate("queue", URL, run)
-    assert result["queued"] is True
-    assert result["head"] == "abc"
-    assert "waiting" not in result
-    assert calls[3][0][5:] == ["-f", "id=PR_one", "-f", "head=abc"]
-    assert not any(
-        "compare/" in str(call[0]) or "update-branch" in str(call[0]) or "/jobs" in str(call[0]) for call in calls
-    )
 
 
 @pytest.mark.parametrize("conclusion", [None, "failure", "cancelled"])
