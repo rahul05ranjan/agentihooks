@@ -5,6 +5,8 @@ import sys
 import tomllib
 from pathlib import Path
 
+from codex_probe import run_codex
+
 from scripts.swarm_v2 import worker_home
 from scripts.targets.codex_hook_trust import trusted_state
 
@@ -46,6 +48,7 @@ def sessions(home: Path) -> dict:
 def positive(attempt: Path) -> dict:
     record = json.loads(Path("/tmp/record.json").read_text(encoding="utf-8"))
     docs = configuration(attempt)
+    codex = run_codex(attempt / "homes" / "codex")
     loaded = {target: sessions(attempt / "homes" / target) for target in SERVERS}
     listed = {target: Path(f"/tmp/{target}-mcp.txt").read_text(encoding="utf-8") for target in SERVERS}
     missing = {t: [s for s in names if s not in listed[t]] for t, names in SERVERS.items()}
@@ -57,7 +60,7 @@ def positive(attempt: Path) -> dict:
         "cli_session_start_hook_registrations": {target: len(found) for target, found in loaded.items()},
         "cli_mcp_list": listed,
         "configuration": docs,
-        "codex_probe": json.loads(Path("/tmp/codex-probe.json").read_text()),
+        "codex_probe": codex,
     }
 
 

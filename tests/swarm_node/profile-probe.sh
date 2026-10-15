@@ -26,7 +26,6 @@ positive)
     git -C /home/worker/work init -q
     cd /home/worker/work
     HOME="$attempts/a1/homes/claude" timeout 60 claude -p hello > /tmp/claude-run.txt 2>&1 || true
-    python /opt/probe/codex_probe.py "$attempts/a1/homes/codex" > /tmp/codex-probe.json
     python /opt/probe/profile_probe.py positive "$attempts/a1"
     ;;
 rejection)
