@@ -168,7 +168,7 @@ def test_queue_waits_for_green_checks_on_the_current_head(conclusion):
     with pytest.raises(SwarmError, match="^the current pull request head must pass Tests before queueing$"):
         merge_queue.operate("queue", URL, run)
     assert not any("update-branch" in str(call[0]) or "enqueuePullRequest(input:" in str(call[0]) for call in calls)
-\n
+
 
 @pytest.mark.parametrize("records", [[], [{"id": 21, "head_sha": "older", "conclusion": "success"}]])
 def test_queue_requires_a_run_for_its_observed_head(records):
