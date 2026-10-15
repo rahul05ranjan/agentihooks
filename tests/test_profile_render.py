@@ -1630,6 +1630,46 @@ def test_codex_render_links_state_back_to_the_operator_home(world):
     assert (doc["model"], doc["service_tier"], doc["notify"]) == ("gpt-op", "fast", ["py", "-m", "shim"])
 
 
+def test_isolated_codex_render_keeps_session_state_private(world):
+    from scripts.profiles import render
+
+    home = world["home"]
+    _operator_codex(home)
+    _write(home / ".codex" / "auth.json", "{}")
+    for item in ("history.jsonl", "session_index.jsonl"):
+        _write(home / ".codex" / item, "operator state\n")
+    (home / ".codex" / "sessions").mkdir()
+
+    out = render.render_codex("rb-role", isolate=True)
+
+    for item in ("sessions", "history.jsonl", "session_index.jsonl"):
+        assert not (out / item).exists()
+        assert not (out / item).is_symlink()
+    for item in ("auth.json", "hooks.json"):
+        assert os.readlink(out / item) == str(home / ".codex" / item)
+    doc = tomllib.loads((out / "config.toml").read_text())
+    assert doc["sqlite_home"] == str(out)
+    assert render.render_codex("rb-role", isolate=True) is None
+
+
+def test_codex_render_refreshes_when_session_isolation_changes(world):
+    from scripts.profiles import render
+
+    shared = render.render_codex("rb-role")
+    isolated = render.render_codex("rb-role", isolate=True)
+
+    assert isolated is not None
+    assert isolated != shared
+    assert (shared / "sessions").is_symlink()
+    assert not (isolated / "sessions").is_symlink()
+
+    restored = render.render_codex("rb-role")
+
+    assert restored is not None
+    assert restored != isolated
+    assert os.readlink(restored / "sessions") == str(world["home"] / ".codex" / "sessions")
+
+
 def _hooks_entries(hooks: Path) -> list[str]:
     doc = json.loads(hooks.read_text())["hooks"]
     labels = {
