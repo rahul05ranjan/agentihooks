@@ -239,11 +239,11 @@ class Pump:
 
     def _pause(self, delay: float) -> None:
         while delay > 0:
+            if self.leased:
+                self._renew()
             piece = min(delay, self.timing.reconcile_s)
             self.timing.sleep(piece)
             delay -= piece
-            if self.leased:
-                self._renew()
 
     def _lease_s(self) -> int:
         return max(owner_ttl_s(), math.ceil(2 * self.timing.reconcile_s))

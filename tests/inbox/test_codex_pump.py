@@ -1098,19 +1098,19 @@ def test_repeated_reconnect_failures_past_the_lease_keep_ownership(rig, monkeypa
     rig.pump.binding = replace(rig.pump.binding, reconnect=reconnect)
     rig.pump.timing = replace(rig.pump.timing, sleep=sleep)
     assert rig.pump.run(lambda: len(owners) >= 7) == codex.STOPPED
-    assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0, 30, 2.0]
+    assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0, 30, 2.0, 30, 30.0]
     assert owners == [OWNER] * 7
 
 
-def test_a_failed_start_before_ownership_retries_without_renewing(rig, monkeypatch):
+def test_a_failed_start_before_ownership_retries_and_owns(rig, monkeypatch):
     from redis.exceptions import ConnectionError as RedisConnectionError
 
     original = rig.pump.dispatcher.own
     own = Mock(side_effect=[RedisConnectionError("redis unavailable"), original])
 
-    def claim(recipient, owner):
+    def claim(recipient, owner, **lease):
         outcome = own(recipient, owner)
-        return outcome(recipient, owner) if callable(outcome) else outcome
+        return outcome(recipient, owner, **lease) if callable(outcome) else outcome
 
     monkeypatch.setattr(rig.pump.dispatcher, "own", claim)
     assert rig.run(2) == codex.STOPPED
