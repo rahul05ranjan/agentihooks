@@ -144,6 +144,18 @@ def left(name, exit_text):
     return f"{name} {exit_text}; its branch {branches} was {'not ' if held else ''}pushed"
 
 
+def waiting_on_open_task(redis, doc, who, now):
+    """Whether the agent holds a live checked wait on a task not yet ended: its push may wait on that task."""
+    from scripts.swarm import idle, waits
+
+    held = idle.wait(redis, who.swarm, who.name) or {}
+    on = held.get("on") or {}
+    if not doc or on.get("kind") != "task" or held["until"] <= now:
+        return False
+    target = next((t for t in doc["tasks"] if t.get("id") == on["target"]), None)
+    return target is not None and target.get("state") not in waits.TASK_ENDS
+
+
 class PushStop:
     name = "push-stop"
     default_mode = "enforce"
@@ -172,6 +184,8 @@ class PushStop:
             owed = owed or (doc and tree.own and not task.get("pr_url") and self.unrecorded(store, doc, who))
         if not owed:
             self.settle(store, who)
+            return Decision()
+        if waiting_on_open_task(store.redis, doc, who, self.now()):
             return Decision()
         self.notify(store, who)
         return Decision.deny(" ".join([TEMPLATE, *failed]))
