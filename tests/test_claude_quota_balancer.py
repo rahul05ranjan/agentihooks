@@ -431,8 +431,8 @@ def test_probing_one_account_keeps_other_cached_accounts(monkeypatch, tmp_path):
     beta = balancer.Credential("AH_CC_TOKEN_BETA", "secret-b")
 
     balancer.collect_results([alpha, beta], cache_file=cache, environ={}, now=1000)
-    known = ["AH_CC_TOKEN_ALPHA", "AH_CC_TOKEN_BETA"]
-    balancer.collect_results([alpha], cache_file=cache, environ={}, refresh=True, now=1100, known=known)
+    monkeypatch.setattr(balancer.operator_env, "fill", lambda environ: environ.update(AH_CC_TOKEN_BETA="secret-b"))
+    balancer.collect_results([alpha], cache_file=cache, environ={}, refresh=True, now=1100)
     observations = balancer.cached_observations(cache_file=cache)
 
     assert sorted((result.account, seen) for seen, result in observations) == [("ALPHA", 1100.0), ("BETA", 1000.0)]
@@ -449,12 +449,14 @@ def test_a_refresh_drops_cached_accounts_whose_token_is_gone_in_every_mode(monke
     cache = tmp_path / "cache.json"
     reading = balancer._result_data(balancer.parse_probe("GONE", _stream(0.20, 0.30), 100))
     stale = {"AH_CC_TOKEN_GONE": {"observed_at": 990.0, "result": reading}}
-    cache.write_text(json.dumps({"version": 1, "modes": {"normal": {"accounts": stale}, "fable": {"accounts": stale}}}))
+    modes = {"normal": {"accounts": stale}, "fable": {"accounts": stale}, "broken": "x", "odd": {"accounts": "x"}}
+    cache.write_text(json.dumps({"version": 1, "modes": modes}))
     alpha = balancer.Credential("AH_CC_TOKEN_ALPHA", "secret-a")
 
     balancer.collect_results([alpha], cache_file=cache, environ={}, now=1000)
 
     modes = json.loads(cache.read_text())["modes"]
+    assert (modes.pop("broken"), modes.pop("odd")) == ("x", {"accounts": "x"})
     assert {mode: sorted(data["accounts"]) for mode, data in modes.items()} == {
         "normal": ["AH_CC_TOKEN_ALPHA"],
         "fable": [],
