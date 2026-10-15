@@ -53,6 +53,9 @@ fi
 """
     )
     python.chmod(0o755)
+    sleep = tools / "sleep"
+    sleep.write_text("#!/usr/bin/env bash\nset -euo pipefail\n")
+    sleep.chmod(0o755)
     result = subprocess.run(
         ["bash", str(ROOT / "scripts/packaging/swarm-smoke.sh")],
         env={
