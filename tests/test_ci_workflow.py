@@ -192,13 +192,13 @@ def test_only_a_dev_push_saves_the_codex_cli_and_every_job_only_restores_it():
         " && steps.codex.outputs.cache-hit != 'true'"
         " && github.event_name == 'push' && github.ref == 'refs/heads/dev'"
     )
-    restores = {
-        name: step["uses"]
+    restores = [
+        (name, step["uses"])
         for name, job in jobs.items()
         for step in job.get("steps", [])
         if step.get("with", {}).get("path") == "~/codex" and step.get("uses") != "actions/cache/save@v4"
-    }
-    assert restores == {"unit": "actions/cache/restore@v4", "unit-selected": "actions/cache/restore@v4"}
+    ]
+    assert restores == [("unit", "actions/cache/restore@v4"), ("unit-selected", "actions/cache/restore@v4")]
 
 
 def test_unit_install_keeps_playwright_and_excludes_the_grpc_exporter():
