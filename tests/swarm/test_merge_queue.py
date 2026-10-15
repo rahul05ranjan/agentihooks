@@ -179,65 +179,22 @@ def test_queue_without_a_queue_refuses_an_unready_pull_request(change):
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize(
-    "changed",
-    [
-        [{"filename": ".github/workflows/test.yml"}],
-        [{"filename": "scripts/ci_mutation/__init__.py"}],
-        [{"filename": "scripts/check_gate.py"}],
-        [{"filename": "tests/swarm/test_tick.py"}],
-        [{"filename": "docs/old.py", "previous_filename": "tests/old.py"}],
-        [{"filename": f"hooks/item{i}.py"} for i in range(300)],
-    ],
-)
-@pytest.mark.parametrize(
-    "head",
-    [
-        AUTHORED,
-        {**AUTHORED, "commit": {"message": "Merge branch 'dev' into ci-1"}},
-        {**REFRESHED, "commit": {"message": "Merge pull request #3 from o/side"}},
-        {**REFRESHED, "committer": None},
-        {**REFRESHED, "commit": {"message": "Merge branch 'dev' intoci-1"}},
-        {**REFRESHED, "commit": {"message": "Merge branch 'dev' from o/side"}},
-    ],
-)
-def test_queue_refreshes_changed_grading_inputs_before_enqueueing(changed, head):
+def test_queue_enqueues_a_green_head_without_updating_it_from_dev():
     run, calls = runner(
         {"data": {"resource": OPEN}},
-        {
-            "data": {
-                "resource": {
-                    "number": 12,
-                    "repository": {"nameWithOwner": "o/r", "ref": {"target": {"oid": "current"}}},
-                }
-            }
-        },
-        {
-            "workflow_runs": [
-                {
-                    "name": "Tests",
-                    "head_sha": "abc",
-                    "conclusion": "success",
-                    "id": 21,
-                }
-            ]
-        },
-        {"jobs": [{"id": 31, "name": "test-count (3.11)", "conclusion": "success"}]},
-        "2026-10-09T09:20:05Z setup\n2026-10-09T09:20:06Z   BASE: cccccccccccccccccccccccccccccccccccccccc\n2026-10-09T09:20:07Z done\n",
-        {"data": {"resource": {"repository": {"ref": {"target": {"oid": "current"}}}}}},
-        head,
-        {"files": changed, "total_commits": 1},
-        {"data": {"resource": {"repository": {"ref": {"target": {"oid": "current"}}}}}},
-        {"message": "Updating pull request branch."},
-        {"data": {"resource": {**OPEN, "headRefOid": "updated"}}},
+        {"data": {"resource": {"number": 12, "repository": {"nameWithOwner": "o/r"}}}},
+        {"workflow_runs": [{"id": 21, "head_sha": "abc", "conclusion": "success"}]},
+        {"data": {"enqueuePullRequest": {"mergeQueueEntry": {"id": "MQ_one"}}}},
+        {"data": {"resource": {**OPEN, "mergeQueueEntry": ENTRY}}},
     )
     result = merge_queue.operate("queue", URL, run)
-    assert result["queued"] is False
-    assert result["head"] == "updated"
-    assert result["waiting"] == "checks"
-    assert result["previous_head"] == "abc"
-    assert any("repos/o/r/pulls/12/update-branch" in call[0] for call in calls)
-    assert not any("enqueuePullRequest(input:" in str(call[0]) for call in calls)
+    assert result["queued"] is True
+    assert result["head"] == "abc"
+    assert "waiting" not in result
+    assert calls[3][0][5:] == ["-f", "id=PR_one", "-f", "head=abc"]
+    assert not any(
+        "compare/" in str(call[0]) or "update-branch" in str(call[0]) or "/jobs" in str(call[0]) for call in calls
+    )
 
 
 def test_a_branch_update_github_refuses_names_the_update_step():
