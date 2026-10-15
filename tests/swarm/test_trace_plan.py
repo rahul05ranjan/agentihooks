@@ -163,10 +163,66 @@ def test_intent_reads_project_phase_and_task():
         "task": "Doghouse",
         "task intent": "A house for the dog.",
         "task ids": ["t0", "t1"],
+        "scope authorizations": [],
     }
-    blank = dict.fromkeys(("project intent", "phase", "phase intent", "task", "task intent"), "")
+    blank = {
+        **dict.fromkeys(("project intent", "phase", "phase intent", "task", "task intent"), ""),
+        "scope authorizations": [],
+    }
     assert trace_plan.intent({}, "t1") == {**blank, "task ids": []}
     assert trace_plan.intent(doc, "t9") == {**blank, "project intent": "Keep the dog warm.", "task ids": ["t0", "t1"]}
+
+
+AUTHORIZED = {"id": "c-41a905ae9d", "by": "master@1-0", "text": "In scope: remove the obsolete allowance entries"}
+
+
+def test_intent_carries_the_scope_authorizations_the_master_or_operator_recorded_on_the_task():
+    relay = {
+        "id": "relay-80db2c4f89",
+        "by": "operator",
+        "text": "Approved: a dog bed too.",
+        "relayed_by": "master@1-0",
+        "quote": "a dog bed too",
+    }
+    comments = [
+        {"id": "c-1", "by": "operator", "text": "add a water bowl"},
+        relay,
+        AUTHORIZED,
+        {"id": "c-2", "by": "master@1-0", "text": "Master proof: the walls stand."},
+        {"id": "c-3", "by": "engineer@1-1", "text": "In scope: a diesel generator"},
+        {"id": "c-4", "by": "master@1-0", "text": "  in scope: the roof paint"},
+    ]
+    doc = {"tasks": [{"id": "t1", "description": "A house for the dog.", "comments": comments}]}
+    assert trace_plan.intent(doc, "t1")["scope authorizations"] == [
+        {"id": "c-1", "by": "operator", "text": "add a water bowl"},
+        {"id": "relay-80db2c4f89", "by": "operator", "text": "Approved: a dog bed too."},
+        AUTHORIZED,
+        {"id": "c-4", "by": "master@1-0", "text": "  in scope: the roof paint"},
+    ]
+
+
+def test_a_piece_the_description_omits_is_kept_by_the_authorization_its_why_names(ask):
+    fake = ask(0.0, 0.9, 0.0)
+    state = {**INTENT, "scope authorizations": [AUTHORIZED]}
+    pieces = [
+        piece("drop the obsolete allowance entries", why="the master authorized it in c-41a905ae9d"),
+        piece("walls and roof"),
+        piece("a diesel generator", why="authorized in c-999"),
+    ]
+    record = trace_plan.trace(pieces, state, None)
+    [(sent, _, _)] = fake.calls
+    assert sent["scope authorizations"] == [AUTHORIZED]
+    assert record["verdict"] == "pass"
+    assert [row["kept"] for row in record["pieces"]] == [True, True, False]
+    assert record["pieces"][0]["authorized"] == "c-41a905ae9d"
+    assert "authorized" not in record["pieces"][1] and "authorized" not in record["pieces"][2]
+
+
+def test_authorized_pieces_never_count_as_cut_toward_a_failed_plan(ask):
+    ask(0.0, 0.0, 0.9)
+    state = {**INTENT, "scope authorizations": [AUTHORIZED]}
+    pieces = [piece("a", why="per c-41a905ae9d"), piece("b"), piece("c")]
+    assert trace_plan.trace(pieces, state, None)["verdict"] == "pass"
 
 
 # trace
@@ -537,6 +593,25 @@ def test_run_files_each_cut_piece_once_and_writes_the_verdict(ask, tmp_path):
     assert len(record["pieces"]) == 4 and len(rows(home)) == 1
 
 
+def test_run_files_no_cut_for_a_piece_the_master_authorized_outside_the_description(ask, tmp_path):
+    folder, home, ledger = tmp_path / "t1", tmp_path / "home", Ledger()
+    write_plan(folder, DOGHOUSE.replace("it powers the light", "authorized in c-41a905ae9d"))
+    ask(0.9, 0.8, 0.0)
+    state = {**INTENT, "scope authorizations": [AUTHORIZED]}
+    record, block = trace_plan.run(folder, state, ledger, WHO, "enforce", home=home, now_ms=11)
+    assert (block, record["verdict"], record["filed"]) == (False, "pass", [])
+    assert ledger.followups == [] and rows(home) == []
+    assert record["pieces"][2] | {"probability": None} == {
+        "what": "a diesel generator",
+        "areas": ["power/generator"],
+        "why": "authorized in c-41a905ae9d",
+        "probability": None,
+        "kept": True,
+        "authorized": "c-41a905ae9d",
+    }
+    assert trace_plan.report("t1", record, block)["authorized"] == {"a diesel generator": "c-41a905ae9d"}
+
+
 def test_run_saves_the_filed_cut_before_its_follow_up(ask, tmp_path):
     from scripts.swarm.store import SwarmError
 
@@ -678,6 +753,7 @@ def test_report_tells_the_agent_what_comes_next():
         "verdict": "pass",
         "kept": ["a"],
         "cut": ["b"],
+        "authorized": {},
         "reasons": [],
         "next": "edit only inside the kept pieces' areas; each cut piece is a ledger follow up",
     }
