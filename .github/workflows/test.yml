@@ -1582,12 +1582,23 @@ jobs:
         with:
           path: ~/coverage-baseline
           key: coverage-baseline-${{ steps.base.outputs.tree }}
+          restore-keys: coverage-baseline-
+
+      - name: Grade from the newest dev baseline when the base run published none
+        id: restored
+        if: steps.cached.outputs.cache-hit != 'true' && steps.cached.outputs.cache-matched-key != ''
+        run: |
+          commit=$(jq -r '.commit // empty' ~/coverage-baseline/baseline.json)
+          if [[ -n "$commit" ]] && git merge-base --is-ancestor "$commit" HEAD; then
+            echo "Grading from the newest dev baseline at $commit; a newer push superseded the base run before it published."
+            echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          fi
 
       # The cache evicts a baseline seven days after its last read, and a dev commit the queue merged may get no push run,
       # so a miss falls back to the artifact any passed run of the base kept.
       - name: Mint the tcc main ci App token
         id: app-token
-        if: steps.cached.outcome == 'success' && steps.cached.outputs.cache-hit != 'true'
+        if: steps.cached.outcome == 'success' && steps.cached.outputs.cache-hit != 'true' && steps.restored.outputs.commit == ''
         uses: actions/create-github-app-token@v3.2.0
         with:
           client-id: ${{ secrets.TCC_CI_CLIENT_ID }}
@@ -1655,7 +1666,7 @@ jobs:
 
       - name: Hold every line the base ran
         env:
-          BASE: ${{ steps.base.outputs.commit }}
+          BASE: ${{ steps.restored.outputs.commit || steps.base.outputs.commit }}
         run: |
           base="$BASE"
           git worktree add --detach "$RUNNER_TEMP/base" "$base"
@@ -1958,6 +1969,7 @@ jobs:
         with:
           path: ~/coverage-baseline
           key: coverage-baseline-${{ steps.tree.outputs.previous }}
+          restore-keys: coverage-baseline-
 
       - name: Download this run's measured coverage
         uses: actions/download-artifact@v4
