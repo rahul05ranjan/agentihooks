@@ -51,7 +51,7 @@ def apply(doc, op, ctx):
     if member.get("role") != "orchestrator" and lane_of(op["by"]) != "master":
         ctx.refused.append(
             f"answer on {op['item']} refused: only the swarm master answers questions, "
-            f"and {op['by']} joined as {member.get('role', 'member')}"
+            f"and {op['by']} joined as {member['role']}"
         )
         return False
     text = op["text"].strip()
