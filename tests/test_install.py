@@ -718,7 +718,7 @@ class TestInitTargets:
 
         assert [args.install_target for args in calls] == ["codex"]
 
-    def test_target_environment_installs_only_that_target(self, monkeypatch):
+    def test_target_environment_does_not_enable_copilot(self, monkeypatch):
         calls = []
         monkeypatch.setenv("AGENTIHOOKS_TARGET", "copilot")
         monkeypatch.setattr(install, "cmd_init_unified", lambda args: calls.append(args))
@@ -726,7 +726,7 @@ class TestInitTargets:
 
         install.main()
 
-        assert [args.install_target for args in calls] == ["copilot"]
+        assert [args.install_target for args in calls] == ["claude", "codex"]
 
 
 # ---------------------------------------------------------------------------
