@@ -1069,6 +1069,7 @@ def test_losing_ownership_degrades_at_the_next_reconcile(rig):
 def test_a_renewal_late_past_one_interval_keeps_the_lease(rig, monkeypatch):
     monkeypatch.setattr("time.time", rig.clock)
     rig.pump.start()
+    assert rig.store.redis.ttl(owner_key(ME)) == 2 * rig.pump.timing.reconcile_s
     rig.pump.step()
     rig.clock.now = rig.pump.next_reconcile + rig.pump.timing.reconcile_s / 2
     rig.pump.step()
