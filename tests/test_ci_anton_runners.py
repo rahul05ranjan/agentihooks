@@ -54,6 +54,7 @@ MOVED = {
     ("swarm-node-image.yml", "image"): STANDARD,
     ("swarm-node-smoke.yml", "worker-health"): QUEUED,
     ("swarm-node-smoke.yml", "worker-image"): QUEUED,
+    ("swarm-node-smoke.yml", "worker-image-compare"): LIGHT,
     ("swarm-smoke.yml", "compose-hive"): QUEUED,
     ("swarm-smoke.yml", "hive-join"): QUEUED,
     ("swarm-smoke.yml", "hive-launch"): QUEUED,
@@ -66,27 +67,29 @@ MOVED = {
     ("test.yml", "coverage-ratchet"): LIGHT,
     ("test.yml", "durations"): LIGHT,
     ("test.yml", "flake-budget"): LIGHT,
+    ("test.yml", "gate-required"): LIGHT,
     ("test.yml", "kind-due"): LIGHT,
-    ("test.yml", "lint"): STANDARD,
+    ("test.yml", "lint"): QUEUED,
     ("test.yml", "mutation"): BATCH,
     ("test.yml", "mutation-plan"): LIGHT,
     ("test.yml", "mutation-stats"): BATCH,
-    ("test.yml", "queue-baseline"): STANDARD,
-    ("test.yml", "refresh-durations"): STANDARD,
+    ("test.yml", "queue-baseline"): LIGHT,
+    ("test.yml", "refresh-durations"): QUEUED,
+    ("test.yml", "reuse"): LIGHT,
     ("test.yml", "shard-check"): LIGHT,
-    ("test.yml", "sonar"): STANDARD,
-    ("test.yml", "split"): STANDARD,
+    ("test.yml", "sonar"): QUEUED,
+    ("test.yml", "split"): QUEUED,
     ("test.yml", "stage-budget"): LIGHT,
-    ("test.yml", "test-count"): STANDARD,
-    ("test.yml", "unit"): STANDARD,
+    ("test.yml", "test-count"): QUEUED,
+    ("test.yml", "unit"): QUEUED,
     ("worker-resources.yml", "measure"): BATCH,
 }
 
 # These exchange a GitHub OIDC token, which the Anton runners have timed out fetching.
 OIDC = {("pages.yml", "deploy"), ("publish-pypi.yml", "publish")}
 
-# The protected grader refuses a head that changes these, so they move only through the gate change protocol.
-PROTECTED = {("test.yml", "gate-required"), ("test.yml", "reuse"), ("runner-trust.yml", "actors")}
+# The runner trust loader contract fixes this job's runner.
+PROTECTED = {("runner-trust.yml", "actors")}
 
 # Runner trust never admits a pull_request_target run to a private runner.
 TARGET = {("gate-protected.yml", "grade")}
@@ -239,6 +242,9 @@ def test_the_expression_reader_tells_trusted_from_untrusted_runs():
     assert resolve(pool(LIGHT), **event("pull_request", head="stranger/agentihooks")) == "ubuntu-latest"
     assert resolve(pool(LIGHT), **event("pull_request_target")) == "ubuntu-latest"
     assert resolve("ubuntu-latest", **event("push")) == "ubuntu-latest"
+    assert resolve(pool(QUEUED), **event("merge_group", actor="github-merge-queue[bot]")) == QUEUE
+    assert resolve(pool(QUEUED), **event("pull_request")) == STANDARD
+    assert resolve(pool(QUEUED), **event("pull_request_target")) == "ubuntu-latest"
 
 
 def test_every_standard_job_the_tests_run_calls_sends_merge_group_runs_to_the_queue_pool():
