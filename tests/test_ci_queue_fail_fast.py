@@ -232,7 +232,18 @@ def test_every_merge_queue_job_but_the_watcher_is_graded():
         if "github.event_name == 'push'" in str(job.get("if", "")) and "merge_group" not in str(job.get("if", ""))
     }
     queued = set(jobs) - push_only - {"admission", "gate-required"}
-    assert push_only == {"refresh-durations", "flake-budget", "coverage-baseline"}
+    assert push_only == {
+        "refresh-durations",
+        "flake-budget",
+        "coverage-baseline",
+        "coverage-ratchet",
+        "stage-budget",
+        "kind-due",
+        "worker-image",
+        "swarm-image",
+        "brain-smoke",
+        "ledger-load",
+    }
     assert queued <= _gate_needs(jobs)
 
 
