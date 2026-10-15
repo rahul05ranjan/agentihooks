@@ -31,6 +31,7 @@ class Rig:
         self.clock = Clock()
         self.servers = {}
         self.connects = []
+        self.timeouts = []
         self.add(OLD, "exe-old", "thread-old", 1)
         self.add(NEW, "exe-new", "thread-new", 2)
 
@@ -49,6 +50,7 @@ class Rig:
 
     def connect(self, path, timeout):
         self.connects.append(path)
+        self.timeouts.append(timeout)
         return protocol.Connection(self.servers[path], 5, clock=self.clock), {}
 
     def pump(self, name, execution, thread):
@@ -108,6 +110,8 @@ def test_a_stand_down_interrupts_the_named_conversation_and_leaves_the_other_run
     assert new.turns[-1]["status"] == codex.IN_PROGRESS
     assert new.methods() == []
     assert rig.connects == ["/run/cx/exe-old/s"]
+    assert rig.timeouts == [stand_down.CONNECT_S]
+    assert [m["params"]["threadId"] for m in old.sent if m["method"] == "thread/read"] == ["thread-old"] * 2
     assert rig.record("exe-old").state == STOOD_DOWN
     assert rig.record("exe-new").state == CONNECTED
 
@@ -144,6 +148,7 @@ def test_the_interrupt_waits_for_an_inbox_publication_in_flight(rig):
 
     def sleep(seconds):
         sleeps.append(seconds)
+        rig.clock.sleep(seconds)
         rig.swarm.redis.hdel(key, f"ci-1@{SLUG}")
 
     plan = stand_down.plan(rig.bindings, SLUG, OLD, [])
@@ -187,13 +192,20 @@ def test_the_dry_run_names_what_stops_and_what_keeps_running(rig):
     assert rig.record("exe-old").state == CONNECTED
 
 
-def test_a_conversation_without_a_managed_endpoint_is_refused_with_the_process_alternative(rig):
+def test_the_dry_run_says_none_when_no_turn_was_recorded(rig):
+    plan = stand_down.plan(rig.bindings, SLUG, OLD, [])
+    assert "its active turn (last recorded: none) is interrupted" in plan.stops[0]
+
+
+@pytest.mark.parametrize("selector", ["ci@abc-0700", "2448581"])
+def test_a_conversation_without_a_managed_endpoint_is_refused_with_the_process_alternative(rig, selector):
     legacy = ("codex", "--no-daemon")
     others = [sharing(f"uuid-{n}", "ci@abc-0700", pid=2448581, argv=legacy) for n in (1, 2)]
+    others.append(sharing("uuid-9", "ci@abc-0701", pid=2448999, argv=legacy))
     with pytest.raises(stand_down.Refused) as refused:
-        stand_down.plan(rig.bindings, SLUG, "ci@abc-0700", others)
+        stand_down.plan(rig.bindings, SLUG, selector, others)
     assert refused.value.reason == (
-        "ci@abc-0700 has no managed Codex conversation in swarm fixture, "
+        f"{selector} has no managed Codex conversation in swarm fixture, "
         "so its conversations cannot be stopped one at a time"
     )
     assert refused.value.alternative == (
@@ -244,9 +256,15 @@ def test_the_command_finds_the_swarm_from_the_agent_name(rig, monkeypatch, capsy
     monkeypatch.setattr("scripts.terminate_agent.sessions", lambda: [])
     monkeypatch.setattr("scripts.swarm.store.connect", lambda: rig.swarm)
     monkeypatch.setattr(rig.swarm.names, "slug_of", lambda name: SLUG if name == OLD else "")
-    monkeypatch.setattr(stand_down, "execute", lambda bindings, plan: {"stood_down": plan.record.agent_name})
+    monkeypatch.setattr(
+        stand_down,
+        "execute",
+        lambda bindings, plan: {"stood_down": plan.record.agent_name, "store": bindings.store is rig.swarm},
+    )
     assert main([OLD, "--stand-down"]) == 0
-    assert capsys.readouterr().out.splitlines()[-1] == "result=stood-down stood_down=ci@abc-0815"
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == "action=stand-down"
+    assert out[-1] == "result=stood-down stood_down=ci@abc-0815 store=True"
 
 
 def test_the_command_prints_a_refusal_with_its_safe_alternative(rig, monkeypatch, capsys):
@@ -264,7 +282,10 @@ def test_the_command_without_a_swarm_names_the_flag(rig, monkeypatch, capsys):
     monkeypatch.setattr("scripts.terminate_agent.sessions", lambda: [])
     monkeypatch.setattr("scripts.swarm.store.connect", lambda: rig.swarm)
     assert main(["thread-old", "--stand-down"]) == 2
-    assert capsys.readouterr().err.splitlines()[-1] == "terminate-agent: safe alternative: pass --swarm <slug>"
+    assert capsys.readouterr().err.splitlines() == [
+        "terminate-agent: refused: no swarm given and thread-old names no swarm agent",
+        "terminate-agent: safe alternative: pass --swarm <slug>",
+    ]
 
 
 def test_a_failed_stand_down_exits_one_with_its_reason(rig, monkeypatch, capsys):

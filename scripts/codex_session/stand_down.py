@@ -33,9 +33,8 @@ RETRY = "run the same stand down again to interrupt its turn"
 
 class Refused(ValueError):
     def __init__(self, reason: str, alternative: str) -> None:
-        super().__init__(f"{reason}; {alternative}")
-        self.reason = reason
-        self.alternative = alternative
+        super().__init__(reason, alternative)
+        self.reason, self.alternative = self.args
 
 
 @dataclass(frozen=True)
@@ -102,7 +101,7 @@ def plan(bindings: BindingStore, slug: str, selector: str, sessions: "list[Sessi
 
 def _active(connection: protocol.Connection, thread_id: str) -> str:
     last = (protocol.read_thread(connection, thread_id).get("turns") or [{}])[-1]
-    return last.get("id", "") if last.get("status") == IN_PROGRESS else ""
+    return last["id"] if last.get("status") == IN_PROGRESS else ""
 
 
 def _settle(
