@@ -858,7 +858,7 @@ def test_an_unreadable_run_list_says_which_head(full_source, tmp_path):
     [
         (0, 502, 11, True),
         (1, 500, 27, True),
-        (2, 503, 54, True),
+        (2, 503, 53, True),
         (4, 504, 4, False),
         (1, 400, 1, False),
         (1, 403, 1, False),
