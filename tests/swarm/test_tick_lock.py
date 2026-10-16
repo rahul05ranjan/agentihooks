@@ -14,7 +14,7 @@ def locked_store():
     import fakeredis
 
     store = RedisStore(fakeredis.FakeRedis(decode_responses=True))
-    held = lease.acquire(store, "sw", "host", ttl_ms=60_000)
+    held = lease.acquire(store, "sw", "host")
     return store, held
 
 
@@ -63,7 +63,7 @@ def test_a_stale_controller_cannot_replace_or_renew_the_current_lock(locked_stor
     store, held = locked_store
     original = controller.take_tick_lock(store, "sw", held, 600_000)
     assert lease.release(store, "sw", held)
-    current = lease.acquire(store, "sw", "successor", ttl_ms=60_000)
+    current = lease.acquire(store, "sw", "successor")
     replacement = controller.take_tick_lock(store, "sw", current, 600_000)
     assert replacement is not None
     with pytest.raises(SwarmError, match="stale"):
