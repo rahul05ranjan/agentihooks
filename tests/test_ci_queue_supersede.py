@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -130,6 +131,33 @@ def test_the_sweep_runs_only_for_the_merge_queue_bot_on_the_app_token_minted_to_
         "RUN": "${{ github.run_id }}",
     }
     assert job["permissions"] == {"contents": "read"}
+
+
+@pytest.mark.parametrize("event", ["merge_group", "pull_request", "push", "workflow_dispatch"])
+@pytest.mark.parametrize(
+    ("actor", "triggering_actor", "trusted"),
+    [
+        ("nestorcolt", "nestorcolt", True),
+        ("agenticore-app[bot]", "tcc-main-ci[bot]", True),
+        ("tcc-main-ci[bot]", "agenticore-app[bot]", True),
+        ("github-merge-queue[bot]", "github-merge-queue[bot]", True),
+        ("github-merge-queue[bot]", "nestorcolt", True),
+        ("outsider", "nestorcolt", False),
+        ("nestorcolt", "outsider", False),
+    ],
+)
+def test_the_sweep_admits_trusted_queue_actors_and_rejects_other_events(event, actor, triggering_actor, trusted):
+    identities = {"actor": actor, "triggering_actor": triggering_actor}
+    condition = re.sub(
+        r"contains\(fromJSON\('([^']+)'\), github\.(actor|triggering_actor)\)",
+        lambda match: "'yes' == 'yes'" if identities[match[2]] in json.loads(match[1]) else "'yes' == 'no'",
+        _step()["if"],
+    )
+    for name, value in dict(event_name=event, **identities).items():
+        condition = condition.replace(f"github.{name}", f"'{value}'")
+    result = subprocess.run(["bash", "-c", f"[[ {condition} ]]"], capture_output=True, text=True)
+    assert result.returncode in (0, 1), result.stderr
+    assert (result.returncode == 0) == (event == "merge_group" and trusted)
 
 
 def test_older_runs_of_the_same_pull_request_and_older_runs_of_gone_branches_are_cancelled(tmp_path):
