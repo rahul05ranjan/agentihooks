@@ -31,16 +31,22 @@ class FakeQueue:
             args = dict(item.split("=", 1) for item in command[4::2])
             query = args.pop("query")
             if "enqueuePullRequest" in query:
+                assert query == merge_queue.QUEUE
+                assert set(args) == {"id", "head"}
                 number = int(args["id"][1:])
+                assert args["head"] == f"head{number}"
                 self.entries.append(self.entry(number))
                 self.mutations.append(("queue", number))
                 data = {"enqueuePullRequest": {"mergeQueueEntry": {"id": f"E{number}"}}}
             elif "dequeuePullRequest" in query:
+                assert query == merge_queue.DEQUEUE
+                assert set(args) == {"id"}
                 number = int(args["id"][1:])
                 self.entries = [e for e in self.entries if e["pullRequest"]["id"] != args["id"]]
                 self.mutations.append(("dequeue", number))
                 data = {"dequeuePullRequest": {"mergeQueueEntry": {"id": f"E{number}"}}}
             elif "entries(" in query:
+                assert args == {"url": URL}
                 data = {
                     "resource": {
                         "repository": {
@@ -54,6 +60,8 @@ class FakeQueue:
                     }
                 }
             else:
+                assert query in (merge_queue.STATE, merge_queue.FRESHNESS)
+                assert set(args) == {"url"}
                 number = int(args["url"].rsplit("/", 1)[1])
                 entry = next((e for e in self.entries if e["pullRequest"]["id"] == f"P{number}"), None)
                 data = {
@@ -82,7 +90,7 @@ def test_priority_preserves_displaced_order_and_running_entries(queued, expected
     assert result["displaced"] == [URL[:-1] + "2", URL[:-1] + "3"]
 
 
-@pytest.mark.parametrize("errors, status", [([], 0), (["restore refused"], 1)])
+@pytest.mark.parametrize("errors, status", [([], 0), (["restore refused", "second refusal"], 1)])
 def test_master_priority_notifies_displaced_owners(monkeypatch, capsys, errors, status):
     from tests.swarm.test_merge_queue import swarm_of
 
@@ -90,33 +98,46 @@ def test_master_priority_notifies_displaced_owners(monkeypatch, capsys, errors, 
     store.config = lambda slug: None
     monkeypatch.setattr(cli, "connect", lambda: store)
     monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", "engineer@a1b2c3-0001")
-    monkeypatch.setattr(
-        cli,
-        "LedgerClient",
-        lambda: SimpleNamespace(tasks=lambda slug: [{"pr_url": URL[:-1] + "2", "claimed_by": "ci@owner"}]),
-    )
-    monkeypatch.setattr(
-        merge_queue, "prioritize", lambda url: {"url": url, "displaced": [URL[:-1] + "2"], "errors": errors}
-    )
+    tasks = [
+        {"pr_url": URL[:-1] + "2", "claimed_by": "ci@owner"},
+        {"pr_url": URL[:-1] + "3", "claimed_by": ""},
+        {"pr_url": URL[:-1] + "4", "claimed_by": "ci@unrelated"},
+    ]
+
+    def ledger_tasks(slug):
+        assert slug == "sw"
+        return tasks
+
+    monkeypatch.setattr(cli, "LedgerClient", lambda: SimpleNamespace(tasks=ledger_tasks))
+
+    def prioritize(url):
+        assert url == URL
+        return {"url": url, "displaced": [URL[:-1] + "2", URL[:-1] + "3"], "errors": errors}
+
+    monkeypatch.setattr(merge_queue, "prioritize", prioritize)
     sent = []
-    monkeypatch.setattr(
-        cli,
-        "InboxStore",
-        lambda redis: SimpleNamespace(send=lambda sender, recipient, text: sent.append((sender, recipient, text))),
-    )
+
+    def inbox(redis):
+        assert redis is store.redis
+        return SimpleNamespace(send=lambda sender, recipient, text: sent.append((sender, recipient, text)))
+
+    monkeypatch.setattr(cli, "InboxStore", inbox)
     assert cli.main(["sw", "merge", "priority", URL]) == status
-    assert len(sent) == 1
-    assert sent[0][0:2] == ("engineer@a1b2c3-0001", "ci@owner")
-    assert "original order" in sent[0][2]
-    assert URL in sent[0][2]
+    assert sent == [
+        (
+            "engineer@a1b2c3-0001",
+            "ci@owner",
+            f"Your pull request {URL[:-1]}2 was requeued in its original order after priority request {URL}.",
+        )
+    ]
     output = capsys.readouterr()
     if errors:
-        assert "restore refused" in output.err
+        assert output.err == "swarm: restore refused; second refusal\n"
     else:
-        assert json.loads(output.out)["displaced"] == [URL[:-1] + "2"]
+        assert json.loads(output.out)["displaced"] == [URL[:-1] + "2", URL[:-1] + "3"]
 
 
-def test_worker_cannot_prioritize(monkeypatch):
+def test_worker_cannot_prioritize(monkeypatch, capsys):
     from tests.swarm.test_merge_queue import swarm_of
 
     store = swarm_of("ci")
@@ -125,6 +146,7 @@ def test_worker_cannot_prioritize(monkeypatch):
     monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", "engineer@a1b2c3-0001")
     monkeypatch.setattr(merge_queue, "prioritize", lambda url: pytest.fail("worker reordered queue"))
     assert cli.main(["sw", "merge", "priority", URL]) == 1
+    assert capsys.readouterr().err == "swarm: only the master or the operator prioritizes the merge queue\n"
 
 
 @pytest.mark.parametrize("failure", ["critical", "dequeue", "timeout"])
@@ -142,7 +164,8 @@ def test_priority_restores_entries_after_a_mutation_fails(failure):
         return done
 
     result = merge_queue.prioritize(URL, run=run)
-    assert result["errors"]
+    assert len(result["errors"]) == 1
+    assert "timed out" in result["errors"][0] if failure == "timeout" else result["errors"] == ["insertion refused"]
     assert [e["pullRequest"]["id"] for e in queue.entries] == ["P1", "P2", "P3"]
 
 
@@ -162,8 +185,14 @@ def test_priority_refuses_release_targets_and_missing_queues(base, queue_exists)
                 raw["repository"]["mergeQueue"] = None
         return subprocess.CompletedProcess(command, 0, json.dumps(response), "")
 
-    with pytest.raises(SwarmError):
+    with pytest.raises(SwarmError) as error:
         merge_queue.prioritize(URL, run=run)
+    expected = (
+        "queue priority requires an open pull request into dev"
+        if base == "main"
+        else "queue priority requires a dev merge queue"
+    )
+    assert str(error.value) == expected
     assert queue.mutations == []
 
 
@@ -193,3 +222,49 @@ def test_priority_attempts_every_restoration_after_one_is_refused():
     assert result["displaced"] == [URL[:-1] + "3"]
     assert "could not restore" in result["errors"][0]
     assert [e["pullRequest"]["id"] for e in queue.entries] == ["P1", "P9", "P3"]
+
+
+def test_priority_preserves_order_across_queue_pages():
+    queue = FakeQueue()
+    queue.entries += [queue.entry(4), queue.entry(5)]
+    pages = []
+
+    def run(command, **kwargs):
+        if command[2] == "graphql" and "entries(" in command[4]:
+            args = dict(item.split("=", 1) for item in command[4::2])
+            assert args.pop("url") == URL
+            args.pop("query")
+            if not pages:
+                assert args == {}
+                nodes = queue.entries[:2]
+                info = {"hasNextPage": True, "endCursor": "cursor"}
+            else:
+                assert args == {"after": "cursor"}
+                nodes = queue.entries[2:]
+                info = {"hasNextPage": False, "endCursor": None}
+            pages.append(nodes.copy())
+            data = {
+                "data": {"resource": {"repository": {"mergeQueue": {"entries": {"nodes": nodes, "pageInfo": info}}}}}
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(data), "")
+        return queue.run(command, **kwargs)
+
+    result = merge_queue.prioritize(URL, run=run)
+    assert len(pages) == 2
+    assert result == {"url": URL, "displaced": [URL[:-1] + n for n in ("2", "3", "4", "5")], "errors": []}
+    assert [e["pullRequest"]["id"] for e in queue.entries] == ["P1", "P9", "P2", "P3", "P4", "P5"]
+
+
+def test_priority_does_not_remove_an_entry_that_started_running():
+    queue = FakeQueue()
+
+    def run(command, **kwargs):
+        done = queue.run(command, **kwargs)
+        if command[2] == "graphql" and "entries(" in command[4]:
+            queue.entries[1]["state"] = "AWAITING_CHECKS"
+        return done
+
+    result = merge_queue.prioritize(URL, run=run)
+    assert result == {"url": URL, "displaced": [URL[:-1] + "3"], "errors": []}
+    assert queue.mutations == [("dequeue", 3), ("queue", 9), ("queue", 3)]
+    assert [e["pullRequest"]["id"] for e in queue.entries] == ["P1", "P2", "P9", "P3"]
