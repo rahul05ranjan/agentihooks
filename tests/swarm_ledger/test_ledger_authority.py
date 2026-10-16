@@ -38,6 +38,10 @@ def operation(kind, **fields):
     return {"op": kind, "id": uuid.uuid4().hex, **fields}
 
 
+class Burst(ThreadingHTTPServer):
+    request_queue_size = 64
+
+
 def pinned(name=WORKER):
     return patch.dict(os.environ, {"AGENTIHOOKS_SWARM": "rig-grade-swarm", "AGENTIHOOKS_AGENT_NAME": name})
 
@@ -45,7 +49,7 @@ def pinned(name=WORKER):
 @pytest.fixture(scope="module")
 def live():
     core.LEDGER_DIR.mkdir(parents=True, exist_ok=True)
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+    httpd = Burst(("127.0.0.1", 0), server.Handler)
     port = httpd.server_address[1]
     host = f"127.0.0.1:{port}"
     content = {"title": "Authority", "phases": [{"title": "Proof", "description": "word " * 101}]}
@@ -492,7 +496,7 @@ def _epoch_mutation_server(rejected):
         repository=SimpleNamespace(get_document=lambda *args, **kwargs: doc, apply_ops=apply_ops),
         authority=SimpleNamespace(refusal=lambda *args: "", fence=fence),
         core=SimpleNamespace(check_body=lambda *args: None),
-        talk=SimpleNamespace(Budget=lambda slug: SimpleNamespace(apply=lambda *args: True)),
+        write_gate=lambda slug: SimpleNamespace(apply=lambda *args: True, publish=lambda rejected: None),
         ledger_media=SimpleNamespace(resolve=lambda *args: None),
         ledger_artifacts=SimpleNamespace(resolve=lambda *args: None),
         relay_to_inbox=lambda *args: None,

@@ -37,7 +37,7 @@ import ledger_title
 import ledger_verdict
 import orjson
 
-from scripts.swarm_ledger import ledger_freezes, ledger_groups, ledger_phases, ledger_plans, ledger_rank
+from scripts.swarm_ledger import ledger_freezes, ledger_groups, ledger_phases, ledger_plans, ledger_rank, ledger_splits
 
 LEDGER_DIR = Path(os.environ.get("LEDGER_DIR", Path.home() / "development-ledger")).expanduser()
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,120}$")
@@ -91,6 +91,7 @@ DEFAULT_CHAT_INSTRUCTIONS = (
 )
 EVENTS_KEPT = 2000
 EVENTS_CEILING = 10000
+EVENTS_WINDOW_MS = 24 * 60 * 60 * 1000
 MAX_TEXT = 20000
 LOG_MAX_BYTES = 5 << 20
 LOCK = threading.Lock()
@@ -103,6 +104,7 @@ EXTENSION_OPS = {
         ledger_tasks,
         ledger_rank,
         ledger_groups,
+        ledger_splits,
         ledger_title,
         ledger_names,
         ledger_close,
@@ -467,6 +469,8 @@ def new_entry(op, by, at, text):
     entry = {"id": op["id"], "by": by, "at": at, "text": text}
     if op["thread"] == "notes":
         entry["comments"] = []
+    if "reply_to" in op:
+        entry["reply_to"] = op["reply_to"]
     return entry
 
 
@@ -553,8 +557,9 @@ def _screened(op):
 
 
 def _check_chat_address(op, chat_add):
-    if ("to" in op or "reply_to" in op) and not chat_add:
-        raise ValueError("to and reply_to address only an agent chat message")
+    answer = op["op"] == "add" and "by" in op and op["thread"].endswith("/comments")
+    if ("to" in op and not (chat_add or answer)) or ("reply_to" in op and not chat_add):
+        raise ValueError("to addresses only an agent chat message or comment, reply_to only an agent chat message")
     if op.get("to", "operator") != "operator" or not isinstance(op.get("reply_to", ""), str):
         raise ValueError("an agent chat message goes to the operator or answers his line by its id")
 
@@ -602,6 +607,7 @@ def check_op(op, task_ids=()):
         if op["op"] != "add" or not talks:
             raise ValueError("attachments ride only on an add to chat or a comment thread")
         ledger_media.check(op["attachments"])
+    ledger_comments.check_outcome(op)
     if "by" in op:
         talks = op["op"] != "clear" and (op["thread"] == "chat" or op["thread"].endswith("/comments"))
         if not talks or not AUTHOR_RE.match(str(op["by"])) or op["by"] == "operator":

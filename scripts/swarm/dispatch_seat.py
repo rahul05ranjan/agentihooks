@@ -1,16 +1,30 @@
 """The dispatcher's own LLM seat, `dispatcher@<slug>`, woken only on triggers the deterministic passes could not settle.
 
-At full autonomy a trigger wakes the live seat through its inbox or spawns it through the seat spawn helper; below
-full, or once every trigger closes, the seat is marked finished and the reap pass retires it. A trigger is a priority
-the sweep left unresolved for fifteen minutes, a bottleneck no lane rule covers held for the lane split's ticks, or a
-red dev holding blocked tasks, where a freeze or focus may be worth proposing.
+At full autonomy a trigger wakes the live seat through its inbox or, unless the swarm is paused, spawns it through the
+seat spawn helper; below full, once every trigger closes, or once the seat left the ledger, the seat is marked finished
+and the reap pass retires it. Triggers that a departed seat had received spawn no new seat; a new trigger spawns one
+primed with every open trigger. A trigger is a priority the sweep left unresolved for fifteen minutes, a bottleneck no
+lane rule covers held for the lane split's ticks, or a red dev holding blocked tasks, where a freeze or focus may be
+worth proposing. A priority that waits on an operator decision, or that a dispatcher seat handed to him by raising it
+again under its own name, is no trigger.
 """
 
 import json
 from dataclasses import replace
 
 from scripts.inbox.store import InboxStore
-from scripts.swarm import bottleneck, dev_red, lane_split, lifetime, seat_spawn
+from scripts.swarm import (
+    bottleneck,
+    capacity,
+    dev_red,
+    lane_split,
+    launch_check,
+    lifetime,
+    priority_sweep,
+    seat_spawn,
+    stage_cover,
+    templates,
+)
 from scripts.swarm.store import DISPATCH, FULL
 
 LANE = DISPATCH
@@ -18,7 +32,12 @@ SEAT = "dispatcher"
 SENDER = "swarm"
 STALE_MS = 15 * 60 * 1000
 SENT = "dispatch-sent"
+LEFT = "dispatch-left"
+CLOSED = "its triggers closed"
+DEPARTED = "it left the ledger"
 ENDED_STATES = ("stopping", "stopped")
+PAUSED = "paused"
+BOTTLENECK = "bottleneck:"
 REFUSED = "dispatcher triggers are still open; settle them, or the tick ends your seat once they close:\n{lines}"
 WAKE = "New dispatcher triggers in swarm {slug}:\n{lines}\nSettle each one, then tell the master what you did."
 LINES = {
@@ -33,17 +52,43 @@ def triggers(doc: dict, now_ms: int) -> list[dict]:
     return [
         {"id": row["id"], "item": row["item"], "text": row["text"], "minutes": (now_ms - row["at"]) // 60_000}
         for row in doc.get("priorities", [])
-        if now_ms - row["at"] >= STALE_MS
+        if now_ms - row["at"] >= STALE_MS and not priority_sweep.operator_only(doc, row)
     ]
+
+
+def _routing_applied(store, slug: str) -> bool:
+    key = store.key(slug, "dispatcher-quota-lanes")
+    decision = capacity.read(store, slug)
+    effective = decision.get("effective", {})
+    affected = json.loads(store.redis.get(key) or "{}")
+    if not affected:
+        affected = {
+            lane: effective[lane]
+            for lane, cap in decision.get("configured", {}).items()
+            if effective.get(lane, cap) < cap
+        }
+        if affected:
+            store.redis.set(key, json.dumps(affected))
+        return False
+    lanes = store.config(slug).lanes
+    return all(
+        lanes.get(lane, {}).get("agent", templates.AUTO) == templates.AUTO and effective.get(lane, 0) > cap
+        for lane, cap in affected.items()
+    )
 
 
 def uncovered(store, slug: str, now_ms: int) -> list[dict]:
     held = json.loads(store.redis.get(store.key(slug, lane_split.KEY)) or "{}")
     named = held.get("named")
     if not named or named in lane_split.MOVES or held["ticks"] < lane_split.TICKS or now_ms - held["at"] > STALE_MS:
+        store.redis.delete(store.key(slug, "dispatcher-quota-lanes"))
+        return []
+    if named != "quota":
+        store.redis.delete(store.key(slug, "dispatcher-quota-lanes"))
+    elif _routing_applied(store, slug):
         return []
     text = bottleneck.line(bottleneck.read(store, slug), now_ms)
-    return [{"id": f"bottleneck:{named}", "kind": "bottleneck", "ticks": held["ticks"], "text": text}]
+    return [{"id": f"{BOTTLENECK}{named}", "kind": "bottleneck", "ticks": held["ticks"], "text": text}]
 
 
 def red_dev(store, slug: str, doc: dict) -> list[dict]:
@@ -61,7 +106,14 @@ def line(trigger: dict) -> str:
 
 def open_triggers(slug: str, config, store, doc: dict, now_ms: int, sleeping: bool) -> list[dict]:
     active = config.autonomy == FULL and config.state not in ENDED_STATES and not sleeping
-    return triggers(doc, now_ms) + uncovered(store, slug, now_ms) + red_dev(store, slug, doc) if active else []
+    if not active:
+        return []
+    held = [
+        trigger
+        for trigger in uncovered(store, slug, now_ms)
+        if not stage_cover.covered(store, slug, doc, trigger["id"].removeprefix(BOTTLENECK), share=True)
+    ]
+    return triggers(doc, now_ms) + held + red_dev(store, slug, doc)
 
 
 def refusal(slug: str, config, store, doc: dict, now_ms: int) -> str:
@@ -74,13 +126,32 @@ def run(slug: str, config, store, runtime, doc: dict, now_ms: int, sleeping: boo
     seats = [a for a in store.agents(slug) if a.lane == LANE and a.state != "finished"]
     found = open_triggers(slug, config, store, doc, now_ms, sleeping)
     if not found:
-        store.redis.delete(store.key(slug, SENT))
+        store.redis.delete(store.key(slug, SENT), store.key(slug, LEFT))
         return [_end(slug, store, seat) for seat in seats]
+    gone = [seat for seat in seats if left(seat, doc)]
+    if gone:
+        if seen := set(store.redis.hkeys(store.key(slug, SENT))) & {trigger["id"] for trigger in found}:
+            store.redis.sadd(store.key(slug, LEFT), *seen)
+        return [_end(slug, store, seat, DEPARTED) for seat in gone]
     if seats:
         return _wake(slug, store, seats[0], found)
-    if refused := seat_spawn.no_slot(config, runtime, SEAT) or seat_spawn.host_hold(slug, store, now_ms, SEAT):
+    held = store.redis.smembers(store.key(slug, LEFT))
+    if closed := held - {trigger["id"] for trigger in found}:
+        store.redis.srem(store.key(slug, LEFT), *closed)
+    if config.state == PAUSED or all(trigger["id"] in held for trigger in found):
+        return []
+    if refused := (
+        seat_spawn.placed_elsewhere(runtime, LANE, {})
+        or seat_spawn.no_slot(config, runtime, SEAT)
+        or seat_spawn.host_hold(slug, store, now_ms, SEAT)
+    ):
         return [refused]
     return _spawn(slug, config, store, runtime, found, now_ms)
+
+
+def left(seat, doc: dict) -> bool:
+    members = doc.get("_meta", {}).get("members", {})
+    return seat.name not in members and launch_check.joined_at(seat, doc) is not None
 
 
 def _spawn(slug, config, store, runtime, found, now_ms):
@@ -110,9 +181,9 @@ def _wake(slug, store, seat, found):
     return [f"woke {seat.name} with {_count(new, 'new ')}"]
 
 
-def _end(slug, store, seat):
+def _end(slug, store, seat, why=CLOSED):
     store.put_agent(slug, replace(seat, state="finished"))
-    return f"ended dispatcher {seat.name}: its triggers closed"
+    return f"ended dispatcher {seat.name}: {why}"
 
 
 def _sent(store, slug, found):

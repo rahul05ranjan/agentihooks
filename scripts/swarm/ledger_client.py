@@ -1,8 +1,10 @@
 """The swarm's view of a swarm ledger: read tasks, write task fields, comments and chat over the ledger HTTP API."""
 
 import sys
+import urllib.error
 import uuid
 from pathlib import Path
+from urllib.parse import quote
 
 from scripts.swarm import notice_text
 from scripts.swarm.store import SwarmError
@@ -62,6 +64,18 @@ class LedgerClient:
     def tasks(self, slug):
         return self._resource(slug, "tasks", collection=True)
 
+    def task(self, slug, task_id):
+        """One task without its threads, or None when the ledger holds no such task."""
+        try:
+            return self._resource(slug, f"tasks/{quote(task_id, safe='')}")
+        except urllib.error.HTTPError as exc:
+            from scripts.swarm_ledger.api.client import failure
+
+            replay, error = failure(exc)
+            if exc.code != 404 or error.get("code") != "resource_missing":
+                raise replay from None
+            return None
+
     def events(self, slug):
         return self._resource(slug, "events", collection=True)
 
@@ -71,8 +85,10 @@ class LedgerClient:
     def hierarchy(self, slug):
         return self._resource(slug, "hierarchy", collection=True)
 
-    def update_task(self, slug, task_id, fields, by="swarm", if_state=()):
+    def update_task(self, slug, task_id, fields, by="swarm", if_state=(), if_match=None):
         guard = {"if_state": list(if_state)} if if_state else {}
+        if if_match is not None:
+            guard["if_match"] = if_match
         state = self._call(slug, [_op("task_update", by, item=f"tasks/{task_id}", fields=fields, **guard)])
         return next((t for t in state.get("tasks", []) if t["id"] == task_id), {})
 
@@ -103,8 +119,11 @@ class LedgerClient:
     def capacity_comment(self, slug: str, task_id: str, text: str, at: int) -> None:
         self.comment(slug, task_id, text, by="swarm")
 
-    def time_left(self, slug: str, slots: int, ci_minutes: float | None) -> None:
-        self._call(slug, [_op("time_left", "swarm", slots=slots, ci_minutes=ci_minutes)])
+    def time_left(
+        self, slug: str, slots: int, ci_minutes: float | None, fix_phase: str = "", watched: list[str] | None = None
+    ) -> None:
+        focus = {key: value for key, value in (("fix_phase", fix_phase), ("watched", watched)) if value}
+        self._call(slug, [_op("time_left", "swarm", slots=slots, ci_minutes=ci_minutes, **focus)])
 
     def ack_events(self, slug: str, revision: int) -> None:
         self._call(slug, [_op("events_ack", "swarm", rev=revision)])
@@ -128,11 +147,24 @@ class LedgerClient:
             op.pop("to")
         self._call(slug, [op])
 
-    def relay(self, slug, text, by):
-        LedgerClient(service=True)._call(slug, [_op("add", by, thread="chat", text=text, to="operator")])
+    def relay(self, slug: str, text: str, by: str, op_id: str = "") -> None:
+        op = _op("add", by, thread="chat", text=text, to="operator")
+        if op_id:
+            op["id"] = op_id
+        LedgerClient(service=True)._call(slug, [op])
+
+    def relay_comment(self, slug, entry, text, by, op_id):
+        op = {**_op("add", by, thread=f"{entry}/comments", text=text, to="operator"), "id": op_id}
+        LedgerClient(service=True)._call(slug, [op])
 
     def notify(self, slug, text):
         self._call(slug, [_op("notice", "swarm", text=text)])
+
+    def raise_alert(self, slug, source, text):
+        self._call(slug, [_op("alert_raise", "swarm", source=source, text=text)])
+
+    def close_alert(self, slug, alert_id, outcome):
+        self._call(slug, [_op("alert_close", "swarm", target=alert_id, outcome=outcome)])
 
     def followup(self, slug, text, needs_operator=False):
         flag = {"needs_operator": True} if needs_operator else {}
@@ -157,8 +189,8 @@ class LedgerClient:
     def ungroup_tasks(self, slug, lead):
         self._call(slug, [_op("task_ungroup", "swarm", item=f"tasks/{lead}")])
 
-    def rank_task(self, slug, task_id, rank, by, if_unranked=False):
-        guard = {"if_unranked": True} if if_unranked else {}
+    def rank_task(self, slug, task_id, rank, by, if_owned=False):
+        guard = {"if_owned": True} if if_owned else {}
         self._call(slug, [_op("task_rank", by, item=f"tasks/{task_id}", rank=rank, **guard)])
 
     def clear_priority(self, slug, priority_id, reason):

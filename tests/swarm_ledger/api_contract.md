@@ -30,10 +30,10 @@ All domain mutations use POST or PUT `/operations`. The envelope has a transport
 | Reconciliation | sync, stats_sync | Metadata |
 | Membership | join, leave, agent_rename; ack needs no guard because it only raises the caller's handled revision | Members |
 | Agent state | claim, set, add_item, retext, gate_bypass, gate_lift | Named item, list or metadata |
-| Tasks | task_add, task_update, task_rank, task_group, task_ungroup | Tasks collection or named task |
+| Tasks | task_add, task_update, task_rank, task_group, task_ungroup | Named task or tasks collection; task_add needs no guard because the locked apply refuses an id already in use, so adds of different ids never conflict |
 | Phases | phase_add, phase_update, phase_review, phase_append | Phases collection or named phase |
 | Decisions | priority, priority_clear, notification_clear, relay, answer, verdict | Priority or notification collection, or named item |
-| Ledger lifecycle | title_set, summary_set, close, reopen, size_set, source_add | Metadata or sources |
+| Ledger lifecycle | title_set, overview_set, summary_set, close, reopen, size_set, source_add | Metadata or sources |
 | Artifacts | artifact_add, artifact_delete, artifact_restore, artifact_purge | Artifacts |
 
 Operation schema names are checked against every domain dispatch name. Existing semantic validators are reused after the central strict field and type schemas. Receipts retain the latest one thousand transport identifiers and operation outcomes in repository metadata, including across server restarts. A replay within that retained window ignores its old expected revision and does not apply again. Outside the window the revision guard still applies.

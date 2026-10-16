@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from scripts.inbox.store import InboxStore
-from scripts.swarm import ledger_events
+from scripts.swarm import ledger_events, priority_sweep
 from scripts.swarm.store import MASTER, AgentRecord, RedisStore, SwarmConfig
 
 pytestmark = pytest.mark.xdist_group("fakeredis")
@@ -149,8 +149,34 @@ def test_the_event_cursor_is_stored_under_its_own_name(store):
         InboxStore(store.redis), store, "sw", recorded(rev=7), FakeLedger(), 0, github=lambda u: None
     )
     assert store.redis.get(store.key("sw", "events-cursor")) == "7"
-    assert ledger_events.new_events(store, "sw", recorded(rev=7), "other-cursor") == []
+    assert ledger_events.new_events(store, "sw", recorded(rev=7), "other-cursor", "other writes") == []
     assert store.redis.get(store.key("sw", "other-cursor")) == "7"
+
+
+def test_history_trimmed_past_any_tick_cursor_is_told_to_the_master(store):
+    def sweep(doc):
+        priority_sweep.priority_pass(store, "sw", doc, FakeLedger(), github=lambda url: None)
+
+    run(store, recorded())
+    sweep(recorded())
+    caught_up = recorded()
+    caught_up["_meta"]["events_trimmed"] = 10
+    run(store, caught_up)
+    sweep(caught_up)
+    behind = recorded(rev=40)
+    behind["_meta"]["events_trimmed"] = 30
+    sweep(behind)
+    actions = run(store, behind)
+    assert run(store, behind) == []
+    gap = "Ledger sw trimmed its history after revision 10 through revision 30 before the tick read it, so {} in that "
+    expected = [
+        gap.format(subject) + "range reached no one. Read the ledger for them."
+        for subject in (ledger_events.RELAYED, priority_sweep.JUDGED)
+    ]
+    assert sorted(text for text in texts(store, MASTER_SEAT) if "trimmed" in text) == sorted(expected)
+    assert sorted(actions) == [
+        f"told {MASTER_SEAT}: history-gap:{cursor}:10:30" for cursor in ("events-cursor", "priority-cursor")
+    ]
 
 
 def test_items_go_to_the_master_seat_when_no_master_is_live(store):
@@ -730,30 +756,30 @@ def test_a_head_with_only_skipped_checks_keeps_waiting(suites, gated):
     assert pull.resolved is (gated and suites != [QUEUED_TESTS])
     assert pull.red is (gated and suites != [QUEUED_TESTS])
     raw["statusCheckRollup"] = SKIPPED_ONLY + [{"name": GATE, "conclusion": "SUCCESS"}]
-    assert ledger_events.pull_request(raw).resolved is (suites != [QUEUED_TESTS])
+    assert ledger_events.pull_request(raw).resolved is (gated or suites != [QUEUED_TESTS])
 
 
-@pytest.mark.parametrize("gate", [None, "PENDING", "CANCELLED", "TIMED_OUT"])
+@pytest.mark.parametrize("gate", [None, "PENDING", "CANCELLED"])
 def test_a_gate_that_has_not_passed_or_failed_keeps_the_head_unresolved(gate):
     rollup = SKIPPED_ONLY + [{"name": "unit", "conclusion": "SUCCESS"}, {"name": GATE, "conclusion": gate}]
     raw = {"state": "OPEN", "gated": True, "statusCheckRollup": rollup, "checkSuites": [FINISHED_RUN]}
     assert ledger_events.pull_request(raw).resolved is False
 
 
-def test_a_passed_gate_resolves_green_once_nothing_is_pending():
+def test_a_passed_gate_resolves_green_beside_pending_workflows_and_checks():
     rollup = SKIPPED_ONLY + [{"name": GATE, "conclusion": "SUCCESS"}]
     raw = {"state": "OPEN", "gated": True, "statusCheckRollup": rollup, "checkSuites": [FINISHED_RUN, APP_SUITE]}
     pull = ledger_events.pull_request(raw)
     assert pull.resolved is True
     assert pull.red is False
     raw["checkSuites"] = [QUEUED_TESTS]
-    assert ledger_events.pull_request(raw).resolved is False
+    assert ledger_events.pull_request(raw).resolved is True
     raw["checkSuites"] = [FINISHED_RUN]
     raw["statusCheckRollup"] = rollup + [{"name": "sonar", "conclusion": None}]
-    assert ledger_events.pull_request(raw).resolved is False
+    assert ledger_events.pull_request(raw).resolved is True
     for state in ("PENDING", "EXPECTED", ""):
         raw["statusCheckRollup"] = rollup + [{"context": "sonar", "state": state}]
-        assert ledger_events.pull_request(raw).resolved is False
+        assert ledger_events.pull_request(raw).resolved is True
     raw["statusCheckRollup"] = rollup + [{"name": "sonar", "conclusion": "CANCELLED"}]
     assert ledger_events.pull_request(raw).resolved is True
 
@@ -779,16 +805,35 @@ def test_the_view_records_whether_the_required_gate_passed_beside_a_red_job(gate
     assert (pull.red, pull.resolved, pull.gate_passed) == (True, True, passed)
     raw["statusCheckRollup"] = [rollup[0], {"context": GATE, "state": gate}]
     assert ledger_events.pull_request(raw).gate_passed is passed
-    raw["statusCheckRollup"] = rollup + [{"name": GATE, "conclusion": "SUCCESS"}]
+    other = {"workflowRun": {"workflow": {"name": "CI Validate"}}}
+    raw["statusCheckRollup"] = rollup + [{"name": GATE, "conclusion": "SUCCESS", "checkSuite": other}]
     assert ledger_events.pull_request(raw).gate_passed is passed
+    raw["statusCheckRollup"] = [rollup[0], {"name": GATE, "conclusion": "FAILURE"}, {"name": GATE, "conclusion": gate}]
+    assert ledger_events.pull_request(raw).gate_passed is passed
+    raw["statusCheckRollup"] = [rollup[0], {"name": GATE, "conclusion": gate}, {"name": GATE, "conclusion": "FAILURE"}]
+    assert ledger_events.pull_request(raw).gate_passed is False
 
 
-def test_a_failed_check_beside_a_pending_gate_resolves_red_once_runs_finish():
+def test_distinct_failed_checks_all_stay_red():
+    rollup = [
+        {"name": "unit", "databaseId": 1, "conclusion": "FAILURE"},
+        {"name": "lint", "databaseId": 2, "conclusion": "FAILURE"},
+        {"context": "sonar", "createdAt": "2026-10-13T10:00:01Z", "state": "FAILURE"},
+        {"context": "codeql", "createdAt": "2026-10-13T10:00:02Z", "state": "FAILURE"},
+        {"name": "docs", "conclusion": "FAILURE"},
+    ]
+    raw = {"state": "OPEN", "statusCheckRollup": rollup, "checkSuites": [FINISHED_RUN]}
+    assert ledger_events.pull_request(raw).failed == ("unit", "lint", "sonar", "codeql", "docs")
+
+
+def test_a_failed_check_beside_a_pending_gate_resolves_red_while_runs_are_queued():
     rollup = [{"name": "unit", "conclusion": "FAILURE"}, {"name": GATE, "conclusion": None}]
     raw = {"state": "OPEN", "gated": True, "statusCheckRollup": rollup, "checkSuites": [FINISHED_RUN]}
     assert ledger_events.pull_request(raw).resolved is True
     raw["checkSuites"] = [QUEUED_TESTS]
-    assert ledger_events.pull_request(raw).resolved is False
+    pull = ledger_events.pull_request(raw)
+    assert pull.resolved is True
+    assert pull.red is True
 
 
 def test_a_gate_check_counts_only_by_its_exact_name():

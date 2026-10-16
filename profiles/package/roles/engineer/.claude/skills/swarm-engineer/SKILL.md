@@ -51,6 +51,31 @@ call. `agentihooks msg inbox` lists them, `agentihooks msg read <id>` shows one.
    A follow up you find is proposed, never queued as your own task:
    `agentihooks ledger --slug <slug> --as <name> followup add "<text>"`.
 
+## CI proofs
+
+Where the repository has a Proofs workflow, send focused tests and mutation
+there. Tests still runs every required check on pull requests, merge groups
+and dev pushes.
+
+```bash
+gh workflow run proofs.yml --ref <branch> -f proof=tests -f tests='<test paths>'
+gh workflow run proofs.yml --ref <branch> -f proof=mutation -f base=origin/dev
+```
+
+Give focused tests explicit paths under `tests/`; add `-f browser=true` for
+tests that drive Chromium. Use the dependency branch as `base` for a stacked
+mutation proof.
+
+Full Tests dispatch is for gate plant proofs. Declare that intent explicitly:
+
+```bash
+gh workflow run test.yml --ref <proof branch> -f gate_plant=true
+```
+
+The admission job refuses an ordinary full dispatch and names Proofs; expensive
+jobs require successful admission on dispatch. Record the proof run and head, and its expected red or
+green result, before continuing.
+
 ## Waits
 
 Name every wait so the swarm does not count you idle:
@@ -65,11 +90,20 @@ The swarm ends a checked wait when the thing resolves and tells you through the 
 
 ## Close with the proof
 
-Merge on green checks and closed review. On a base branch with a merge queue,
+A code or ci task at delegate or full autonomy closes at
+`agentihooks swarm <slug> ready <doc>` once both reviews closed and the
+pull request is out of draft and holds the worktree head: leave the crew first,
+then ready writes the short Handoff v2 and ends your session. The tick watches
+the checks, queues the pull request on green, waits for the merge, closes the
+task and removes the worktree; red checks reopen it for the next engineer.
+
+Otherwise, merge on green checks and closed review. On a base branch with a merge queue,
 a merge only queues the pull request and it lands when the queue run passes, so
 do not merge there: queue it on green checks with
 `agentihooks swarm <slug> merge queue <url>`, which goes through the GitHub API
-and works with any gh, then wait with
+and works with any gh. It queues the green head as is; do not merge dev into it
+first, since the merge group retests it against the newest dev. Merge dev only on
+a real conflict or when GitHub refuses the enqueue. Then wait with
 `agentihooks swarm <slug> wait --on merge <url>` and keep the worktree until it
 merges. `agentihooks swarm <slug> merge state <url>` reports whether it sits in
 the queue. GitHub refuses a push while the pull request sits in the queue. To

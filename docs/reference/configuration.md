@@ -214,8 +214,16 @@ See [Claude Account Load Balancing](../pillars/load-balancing.md).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AH_CC_TOKEN_<slug>` | — | One Claude subscription OAuth token per account |
-| `AH_CX_TOKEN_<slug>` | — | One Codex ChatGPT workspace access token per account |
+| `AH_CC_TOKEN_<slug>` | — | One Claude subscription OAuth token per account; `agentihooks claude login <slug>` writes it from `claude setup-token` |
+| `NO_COLOR` | — | Set to any value, even empty, turns off the coloured output of `agentihooks claude login`, `codex login` and `codex refresh` |
+| `AH_CX_TOKEN_<slug>` | — | One Codex ChatGPT workspace access token per account; once any is set the default `codex login` account leaves the pool. `agentihooks codex login <slug>` writes it |
+| `AGENTIHOOKS_AICODE_TOKEN_REFRESH` | `false` | `true` makes this machine the refresh authority: `agentihooks codex refresh` and the session-start kick run only here. `agentihooks codex login` sets it |
+| `AGENTIHOOKS_AICODE_TOKEN_STORE` | `local` | Where the refresher reads and writes accounts: `local` (`~/.agentihooks/codex/<slug>/auth.json`, then the rc block, then OpenBao when configured) or `openbao` (the OpenBao secret only) |
+| `AGENTIHOOKS_AICODE_TOKEN_REFRESH_DAYS` | `3` | Refresh an account whose access token has fewer days left |
+| `AGENTIHOOKS_CODEX_READING_MAX_AGE_H` | `6` | Hours a Codex quota reading keeps setting the account's cap while its 7-day window has not reset |
+| `AGENTIHOOKS_AICODE_TOKEN_REFRESH_INTERVAL_H` | `6` | Hours between the refreshes a session start kicks off |
+| `OPENBAO_URL`, `OPENBAO_TOKEN` | — | OpenBao address and token for the KV v2 secrets at `AGENTIHOOKS_CODEX_CREDS_PATH` (written by `codex login` and the refresher) and `secret/agentihooks/claude-creds` (written by `claude login`), both read by `accounts env` |
+| `AGENTIHOOKS_CODEX_CREDS_PATH` | `agentihooks/codex-creds` | KV v2 path on the `secret` mount holding every `AH_CX_TOKEN_<slug>` and `AH_CX_REFRESH_<slug>`, read by `accounts env` and written by `codex login` and `codex refresh` |
 | `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL` | — | Offer a Claude `api` slot: a `CLAUDE_CODE_USE_*` platform flag, a foreign `ANTHROPIC_BASE_URL` with either credential, or `ANTHROPIC_API_KEY` alone. Token children never inherit them |
 | `CODEX_API_KEY`, `OPENAI_API_KEY` | — | Either offers a Codex `api` slot (first set wins) |
 | `AH_CX_API_BASE_URL`, `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Base URL of the Codex api provider; must carry no user, password, query or fragment |
@@ -228,6 +236,9 @@ See [Claude Account Load Balancing](../pillars/load-balancing.md).
 | `AGENTIHOOKS_HANDOFF_5H_PCT` | `99` | 5-hour used % that triggers the quota policy |
 | `AGENTIHOOKS_HANDOFF_MIN_LEFT` | `20` | Routing left % (tighter of 5h and 7d) a handoff target needs |
 | `AGENTIHOOKS_WAIT_MIN_WEEK_LEFT` | `10` | 7-day left % that makes a spent 5-hour window wait for its reset instead of stopping |
+| `QUOTA_USAGE_INJECTION_ENABLED` | `true` | Inject the [quota usage banner](../pillars/load-balancing.md#quota-usage-banner) on every prompt and on the tool call cadence |
+| `QUOTA_USAGE_TOOL_CALLS` | `5` | Tool calls between quota usage banners |
+| `QUOTA_USAGE_STALE_SEC` | `300` | Age in seconds after which a quota reading is ignored by the banner and the quota policy |
 
 ---
 
@@ -362,5 +373,6 @@ duplicating them into its own environment file.
 | `RETRY_BREAKER_MAX` | `5` | Soft limit -- warn after this many identical failures. |
 | `RETRY_BREAKER_HARD_MAX` | `10` | Hard limit -- block after this many identical failures. |
 | `RETRY_BREAKER_TTL` | `300` | Seconds before a failure fingerprint expires from the counter. |
-| `CONTROLS_BYPASS_ENABLED` | `true` | Enable the controls toggle (bypass mode). Operator phrase `disable controls` short-circuits branch / PR / release-merge / hotfix / non-main force-push gates session-wide. See [Guardrail 9](/docs/pillars/guardrails/#guardrail-9-controls-toggle-bypass-mode). |
+| `CONTROLS_BYPASS_ENABLED` | `true` | Enable the controls toggle (bypass mode). Operator phrase `disable controls` lifts branch, non-protected PR, hotfix and non-main force-push gates session-wide. Protected promotion remains CI-only; PyPI publication still requires `release dance`. See [Guardrail 9](/docs/pillars/guardrails/#guardrail-9-controls-toggle-bypass-mode). |
 | `KUBECTL_MUTATION_GUARD_ENABLED` | `true` | HARD-FLOOR live-patching guard. PreToolUse Bash hook that blocks `kubectl exec`/`cp` writes, `kubectl edit`/`patch`/`set`/`scale`/`rollout-restart`/`annotate`/`label`/`drain`/`debug`/`create -f`/`apply -f`/`autoscale`, `helm install`/`upgrade`/`rollback` outside CI, `argocd app sync --local`, SSH-edit, `scp` INTO host, and `docker exec` writes. Does NOT honor bypass mode, hotfix signals, or release-gate signals — code is the source of truth. See CI Manifesto §3.5 and `rules/code-is-source.md`. |
+| `AGENTIHOOKS_SERENA` | `true` | Serena edit guard. PreToolUse hook that blocks a built-in or shell rewrite of Python in a linked worktree, routing it to Serena's symbol tools instead. `false` turns the whole guard off for that session or machine: every edit is let through and no Serena directive is injected; unset or any other value keeps it on. See Development Manifesto §7 and `rules/code-intelligence.md`. |

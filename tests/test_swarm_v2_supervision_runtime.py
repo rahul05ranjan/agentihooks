@@ -1,15 +1,18 @@
+import hashlib
 import json
 import os
 import shlex
 import signal
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
+from scripts.swarm_v2 import filesystem
 from scripts.swarm_v2 import supervision_agent as agent
 from scripts.swarm_v2 import supervision_protocol as protocol
 from scripts.swarm_v2 import supervision_runtime as runtime
@@ -17,13 +20,20 @@ from scripts.swarm_v2.supervision import Budgets, Launch, LaunchRefused
 
 
 @pytest.fixture
-def supervisor(tmp_path):
-    home = tmp_path / "homes" / "codex"
-    home.mkdir(parents=True)
+def supervisor(tmp_path, monkeypatch):
+    (tmp_path / "homes" / "codex").mkdir(parents=True)
+    execution = filesystem.Execution(tmp_path, filesystem.load())
     launch = Launch(
-        tmp_path, {"execution_id": "admitted"}, home, ("tool",), ("exporter",), ("herdr", "server"), Budgets(2, 1, 1, 1)
+        execution,
+        {"execution_id": "admitted"},
+        "codex",
+        ("tool",),
+        ("exporter",),
+        ("herdr", "server"),
+        Budgets(2, 1, 1, 1),
     )
     owner = runtime.Supervisor(launch)
+    monkeypatch.setattr(runtime.checkpoint_runtime, "validate_export", lambda *args: True)
     owner.root.mkdir(parents=True)
     protocol.write(owner.root / "context.json", owner.scope)
     return owner
@@ -108,6 +118,27 @@ def test_spawn_uses_private_environment_and_independent_session(supervisor, monk
     assert supervisor.environment["CLAUDE_CONFIG_DIR"] == str(supervisor.launch.home / ".claude")
 
 
+def test_the_mounted_account_token_reaches_the_agent_as_the_claude_oauth_token(tmp_path, monkeypatch):
+    for name in list(os.environ):
+        if name.startswith("AH_CC_TOKEN_") or name == "CLAUDE_CODE_OAUTH_TOKEN":
+            monkeypatch.delenv(name)
+    monkeypatch.setenv("AH_CC_TOKEN_claude_fixtureatexample_com", "value-one")
+    (tmp_path / "homes" / "claude").mkdir(parents=True)
+    execution = filesystem.Execution(tmp_path, filesystem.load())
+    launch = Launch(
+        execution,
+        {"execution_id": "admitted"},
+        "claude",
+        ("tool",),
+        ("exporter",),
+        ("herdr", "server"),
+        Budgets(2, 1, 1, 1),
+    )
+    owner = runtime.Supervisor(launch)
+    assert owner.environment["CLAUDE_CODE_OAUTH_TOKEN"] == "value-one"
+    assert owner.environment["AH_CC_TOKEN_claude_fixtureatexample_com"] == "value-one"
+
+
 @pytest.mark.parametrize("role", ["agent", "exporter"])
 def test_ready_requires_bound_receipt(supervisor, monkeypatch, role):
     monkeypatch.setattr(supervisor, "observe", lambda: None)
@@ -126,7 +157,7 @@ def test_ready_retries_transport_failure_until_stopped(supervisor, monkeypatch):
     monkeypatch.setattr(supervisor, "herdr", herdr)
     monkeypatch.setattr(supervisor, "wait", lambda: setattr(supervisor, "stop", signal.SIGTERM))
     assert not supervisor.ready("herdr", 1)
-    herdr.assert_called_once_with(["workspace", "list"])
+    herdr.assert_called_once_with(["workspace", "list"], 0.5)
 
 
 def test_ready_fails_on_service_exit(supervisor, monkeypatch):
@@ -171,6 +202,7 @@ def test_start_handshakes_before_launching_agent(supervisor, monkeypatch, failed
             str(supervisor.launch.attempt),
             "--no-focus",
         ]
+        assert [call.args[1] for call in herdr.call_args_list] == [2, 2]
         assert herdr.call_args_list[1].args[0][:3] == ["pane", "run", "pane"]
         assert shlex.split(herdr.call_args_list[1].args[0][3]) == [
             sys.executable,
@@ -194,6 +226,136 @@ def test_start_reports_termination_during_handshake(supervisor, monkeypatch):
     supervisor.stop = signal.SIGTERM
     monkeypatch.setattr(supervisor, "spawn", lambda *_: None)
     assert supervisor.start() == "termination"
+
+
+def test_start_without_an_exporter_launches_the_agent_after_herdr_alone(supervisor, monkeypatch):
+    supervisor.launch = replace(supervisor.launch, exporter=None)
+    calls = []
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: 0)
+    monkeypatch.setattr(supervisor, "spawn", lambda role, command: calls.append(("spawn", role, command)))
+    monkeypatch.setattr(supervisor, "ready", lambda role, deadline: calls.append(("ready", role, deadline)) or True)
+    monkeypatch.setattr(runtime, "native_command", Mock(return_value=supervisor.launch.agent))
+    monkeypatch.setattr(supervisor, "herdr", Mock(return_value={"result": {"root_pane": {"pane_id": "pane"}}}))
+
+    assert supervisor.start() is None
+
+    assert calls == [("spawn", "herdr", ("herdr", "server")), ("ready", "herdr", 2), ("ready", "agent", 2)]
+    assert "exporter" not in supervisor.children
+
+
+def started(supervisor, monkeypatch, ready=True):
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: 0)
+    monkeypatch.setattr(supervisor, "spawn", lambda role, command: None)
+    monkeypatch.setattr(supervisor, "ready", lambda role, deadline: role != "agent" or ready)
+    native = Mock(return_value=supervisor.launch.agent)
+    monkeypatch.setattr(runtime, "native_command", native)
+    herdr = Mock(return_value={"result": {"root_pane": {"pane_id": "pane"}}})
+    monkeypatch.setattr(supervisor, "herdr", herdr)
+    return supervisor.start(), native, herdr
+
+
+def test_start_opens_the_harness_in_the_prepared_checkout(supervisor, monkeypatch, tmp_path):
+    tree = tmp_path / "worktrees" / "engineer-323133-1222"
+    supervisor.launch = replace(supervisor.launch, checkout=tree)
+
+    reason, native, herdr = started(supervisor, monkeypatch)
+
+    assert reason is None
+    assert herdr.call_args_list[0].args[0] == ["workspace", "create", "--cwd", str(tree), "--no-focus"]
+    native.assert_called_once_with(supervisor.launch.agent, tree, supervisor.environment)
+
+
+def test_start_hands_the_opening_prompt_to_the_harness_and_logs_its_delivery(supervisor, monkeypatch, capsys):
+    text = "You are engineer@323133-1222. Your one task is t1 → résumé."
+    supervisor.launch = replace(supervisor.launch, prompt=text)
+
+    reason, _, herdr = started(supervisor, monkeypatch)
+
+    assert reason is None
+    held = supervisor.root / "prompt.md"
+    assert held.read_bytes() == text.encode()
+    assert oct(held.stat().st_mode & 0o777) == oct(0o600)
+    assert shlex.split(herdr.call_args_list[1].args[0][3]) == [
+        sys.executable,
+        "-m",
+        "scripts.swarm_v2.supervision_agent",
+        "--prompt-file",
+        str(held),
+        "tool",
+    ]
+    digest = hashlib.sha256(text.encode()).hexdigest()
+    assert json.loads(capsys.readouterr().out) == {
+        "supervisor": "prompt_delivered",
+        "incarnation": supervisor.root.name,
+        "bytes": len(text.encode()),
+        "sha256": digest,
+    }
+
+
+def test_the_delivered_prompt_line_reaches_the_pod_log_at_once(supervisor, monkeypatch):
+    supervisor.launch = replace(supervisor.launch, prompt="Your one task is t1.")
+    written = SimpleNamespace(text="", flushes=0)
+    stream = SimpleNamespace(
+        write=lambda text: setattr(written, "text", written.text + text),
+        flush=lambda: setattr(written, "flushes", written.flushes + 1),
+    )
+    monkeypatch.setattr(sys, "stdout", stream)
+
+    supervisor.delivered()
+
+    assert (json.loads(written.text)["supervisor"], written.flushes) == ("prompt_delivered", 1)
+
+
+def test_a_harness_that_never_starts_logs_no_delivered_prompt(supervisor, monkeypatch, capsys):
+    supervisor.launch = replace(supervisor.launch, prompt="Your one task is t1.")
+
+    reason, _, _ = started(supervisor, monkeypatch, ready=False)
+
+    assert reason == "agent_startup_failure"
+    assert capsys.readouterr().out == ""
+
+
+def test_a_launch_without_a_prompt_starts_the_harness_bare_and_logs_nothing(supervisor, monkeypatch, capsys):
+    reason, _, herdr = started(supervisor, monkeypatch)
+
+    assert reason is None
+    assert not (supervisor.root / "prompt.md").exists()
+    assert shlex.split(herdr.call_args_list[1].args[0][3])[3:] == ["tool"]
+    assert capsys.readouterr().out == ""
+
+
+def test_the_agent_wrapper_hands_the_prompt_file_text_to_the_harness_as_its_last_argument(tmp_path, monkeypatch):
+    protocol.write(tmp_path / "context.json", {"incarnation": "current"})
+    monkeypatch.setenv("SWARM_SUPERVISION_DIR", str(tmp_path))
+    monkeypatch.setattr(agent.signal, "signal", lambda sig, handler: None)
+    held = tmp_path / "prompt.md"
+    held.write_bytes("Your one task is t1 → résumé.\nRead steering first.".encode())
+    child = Mock(pid=321)
+    child.wait.return_value = 0
+    spawn = Mock(return_value=child)
+    monkeypatch.setattr(agent.subprocess, "Popen", spawn)
+    monkeypatch.setattr(agent, "_process", Mock(return_value=SimpleNamespace(start_time=1)))
+
+    assert agent.main(["--prompt-file", str(held), "claude", "--name", "eng"]) == 0
+
+    spawn.assert_called_once_with(
+        ["claude", "--name", "eng", "Your one task is t1 → résumé.\nRead steering first."], stdin=None
+    )
+
+
+def test_drain_without_an_exporter_waits_for_no_checkpoint_and_reports_it_incomplete(supervisor, monkeypatch):
+    supervisor.launch = replace(supervisor.launch, exporter=None)
+    monkeypatch.setattr(supervisor, "quiesce", lambda: True)
+    checkpoint, wait = Mock(return_value="checkpoint"), Mock()
+    monkeypatch.setattr(runtime, "checkpoint", checkpoint)
+    monkeypatch.setattr(supervisor, "wait", wait)
+    monkeypatch.setattr(runtime.trees, "cleanup", Mock())
+
+    result = supervisor.drain("agent_completed")
+
+    assert (result["checkpoint_status"], result["checkpoint_id"]) == ("incomplete", None)
+    checkpoint.assert_not_called()
+    wait.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -245,6 +407,7 @@ def test_quiesce_excludes_exporter_and_bounds_descendants(supervisor, monkeypatc
 @pytest.mark.parametrize("clean,identifier", [(True, "checkpoint"), (True, None), (False, None)])
 def test_drain_reports_acknowledged_material_only(supervisor, monkeypatch, clean, identifier, already_reaped):
     monkeypatch.setattr(supervisor, "quiesce", lambda: clean)
+    monkeypatch.setattr(runtime.time, "time", lambda: 123.456)
     supervisor.stop = signal.SIGTERM
     supervisor.exits.update(agent=0)
     supervisor.reaped.add(321)
@@ -269,6 +432,25 @@ def test_drain_reports_acknowledged_material_only(supervisor, monkeypatch, clean
     assert result["child_exits"] == {"agent": 0}
     assert result["supervisor_child_exit_total"] == 2
     assert protocol.read(supervisor.root / "result.json") == result
+    launch_record = protocol.read(supervisor.root / "launch.json")
+    assert result["launch_record"] == launch_record
+    assert {key: value for key, value in launch_record.items() if key != "checkpoint_acknowledgement"} == {
+        "schema_version": 1,
+        "authority": supervisor.launch.authority,
+        "harness": "codex",
+        "startup_seconds": 2,
+        "quiesce_seconds": 1,
+        "checkpoint_seconds": 1,
+        "kill_seconds": 1,
+    }
+    launch_ack = launch_record["checkpoint_acknowledgement"]
+    assert launch_ack == {
+        **supervisor.scope,
+        "status": result["checkpoint_status"],
+        "checkpoint_id": identifier,
+        "quiescence": result["quiescence"],
+        "acknowledged_at_ms": 123456,
+    }
     assert protocol.read(supervisor.root / "drain.json") == {
         **supervisor.scope,
         "reason": "termination",
@@ -300,15 +482,34 @@ def test_run_restores_handlers_and_returns_observed_outcome(supervisor, monkeypa
     monkeypatch.setattr(runtime.signal, "signal", handlers)
     monkeypatch.setattr(supervisor, "start", lambda: None)
     monkeypatch.setattr(supervisor, "running", lambda: reason)
-    monkeypatch.setattr(supervisor, "drain", lambda observed: {"reason": observed, "checkpoint_status": status})
+    outcome = {"reason": reason, "checkpoint_status": status, "launch_record": {"prompt": "private task instructions"}}
+
+    def drain(observed):
+        assert observed == reason
+        protocol.write(supervisor.root / "result.json", outcome)
+        return outcome
+
+    monkeypatch.setattr(supervisor, "drain", drain)
     printed = Mock(wraps=print)
     monkeypatch.setattr(runtime, "print", printed, raising=False)
     assert supervisor.run() == code
     printed.assert_called_once_with(
         json.dumps({"reason": reason, "checkpoint_status": status}, sort_keys=True), flush=True
     )
+    assert protocol.read(supervisor.root / "result.json") == outcome
     assert protocol.read(supervisor.root / "context.json") == supervisor.scope
     assert (supervisor.root.parent / "owner.lock").exists()
+    record = protocol.read(supervisor.root / "launch.json")
+    assert record == {
+        "schema_version": 1,
+        "authority": supervisor.launch.authority,
+        "harness": "codex",
+        "startup_seconds": 2,
+        "quiesce_seconds": 1,
+        "checkpoint_seconds": 1,
+        "kill_seconds": 1,
+        "checkpoint_acknowledgement": {"status": "pending"},
+    }
     assert [call.args for call in handlers.call_args_list[:3]] == [
         (sig, supervisor.signal) for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGCHLD)
     ]
@@ -406,7 +607,8 @@ def test_scope_and_runtime_environment_are_attempt_local(supervisor):
         "supervisor_pid": os.getpid(),
         "process_namespace": os.readlink("/proc/self/ns/pid"),
     }
-    assert supervisor.environment["XDG_RUNTIME_DIR"] == str(supervisor.launch.attempt / "tmp")
+    assert supervisor.environment["XDG_RUNTIME_DIR"] == str(supervisor.launch.attempt / "run")
+    assert supervisor.environment["TMPDIR"] == str(supervisor.launch.attempt / "tmp")
     assert supervisor.environment["HERDR_CONFIG_PATH"] == str(supervisor.root / "herdr.toml")
     assert supervisor.environment["SWARM_SUPERVISION_DIR"] == str(supervisor.root)
     assert supervisor.failure_class is None
@@ -415,9 +617,9 @@ def test_scope_and_runtime_environment_are_attempt_local(supervisor):
 def test_herdr_command_preserves_prefix_environment_and_call_budget(supervisor, monkeypatch):
     launch = supervisor.launch
     supervisor.launch = Launch(
-        launch.attempt,
+        launch.execution,
         launch.authority,
-        launch.home,
+        launch.harness,
         launch.agent,
         launch.exporter,
         ("python", "fixture", "herdr", "server"),
@@ -425,15 +627,53 @@ def test_herdr_command_preserves_prefix_environment_and_call_budget(supervisor, 
     )
     run = Mock(return_value=SimpleNamespace(stdout=b'{"result": {"ready": true}}'))
     monkeypatch.setattr(runtime.subprocess, "run", run)
-    assert supervisor.herdr(["workspace", "list"]) == {"result": {"ready": True}}
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: 3)
+    assert supervisor.herdr(["workspace", "list"], 10) == {"result": {"ready": True}}
     run.assert_called_once_with(
         ["python", "fixture", "herdr", "workspace", "list"],
         env=supervisor.environment,
         stdin=subprocess.DEVNULL,
         capture_output=True,
-        timeout=0.5,
+        timeout=7,
         check=True,
     )
+
+
+def test_a_delayed_workspace_command_succeeds_within_the_remaining_startup_budget(supervisor):
+    script = "import json, time; time.sleep(1); print(json.dumps({'result': {'root_pane': {'pane_id': 'pane'}}}))"
+    supervisor.launch = replace(supervisor.launch, herdr=(sys.executable, "-c", script, "server"))
+    reply = supervisor.herdr(["workspace", "create"], runtime.time.monotonic() + 10)
+    assert reply == {"result": {"root_pane": {"pane_id": "pane"}}}
+
+
+@pytest.mark.parametrize("now", [10, 11])
+def test_a_spent_startup_budget_refuses_the_workspace_command_without_running_it(supervisor, monkeypatch, now):
+    run = Mock()
+    monkeypatch.setattr(runtime.subprocess, "run", run)
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: now)
+    with pytest.raises(subprocess.TimeoutExpired) as refused:
+        supervisor.herdr(["workspace", "create"], 10)
+    run.assert_not_called()
+    assert refused.value.cmd == ["herdr", "workspace", "create"]
+    assert refused.value.timeout == 0
+
+
+def test_a_sliver_of_startup_budget_still_runs_the_workspace_command(supervisor, monkeypatch):
+    run = Mock(return_value=SimpleNamespace(stdout=b""))
+    monkeypatch.setattr(runtime.subprocess, "run", run)
+    monkeypatch.setattr(runtime.time, "monotonic", lambda: 9.75)
+    assert supervisor.herdr(["workspace", "create"], 10) == {}
+    assert run.call_args.kwargs["timeout"] == 0.25
+
+
+def test_a_hanging_workspace_command_still_fails_at_the_startup_deadline(supervisor):
+    supervisor.launch = replace(
+        supervisor.launch, herdr=(sys.executable, "-c", "import time; time.sleep(60)", "server")
+    )
+    started = runtime.time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        supervisor.herdr(["workspace", "create"], started + 1)
+    assert runtime.time.monotonic() - started < 10
 
 
 def test_ready_accepts_agent_handshake_even_after_agent_exit(supervisor, monkeypatch):
@@ -454,11 +694,11 @@ def test_exporter_readiness_cannot_mask_service_failure(supervisor, monkeypatch)
 
 def test_ready_accepts_successful_herdr_transport(supervisor, monkeypatch):
     monkeypatch.setattr(supervisor, "observe", lambda: None)
-    monkeypatch.setattr(runtime.time, "monotonic", Mock(side_effect=[0]))
+    monkeypatch.setattr(runtime.time, "monotonic", Mock(side_effect=[0, 0.75]))
     transport = Mock(return_value={})
     monkeypatch.setattr(supervisor, "herdr", transport)
     assert supervisor.ready("herdr", 1)
-    transport.assert_called_once_with(["workspace", "list"])
+    transport.assert_called_once_with(["workspace", "list"], 1)
 
 
 def test_readiness_closes_at_deadline(supervisor, monkeypatch):
@@ -523,6 +763,57 @@ def test_checkpoint_window_closes_at_deadline(supervisor, monkeypatch):
     monkeypatch.setattr(runtime, "checkpoint", checkpoint)
     assert supervisor.drain("termination")["checkpoint_status"] == "incomplete"
     checkpoint.assert_not_called()
+
+
+def test_remote_validation_cannot_extend_the_checkpoint_deadline(supervisor, monkeypatch):
+    import threading
+
+    release = threading.Event()
+    finished = threading.Event()
+    joins = []
+
+    class Recorded(threading.Thread):
+        def join(self, timeout=None):
+            joins.append((self.daemon, timeout))
+            super().join(timeout)
+
+    def validate(*_):
+        release.wait(30)
+        finished.set()
+        return True
+
+    supervisor.launch = replace(supervisor.launch, budgets=Budgets(checkpoint=0.05))
+    supervisor.environment[runtime.checkpoint_runtime.REMOTE] = "true"
+    monkeypatch.setattr(runtime, "threading", SimpleNamespace(Event=threading.Event, Thread=Recorded))
+    monkeypatch.setattr(supervisor, "quiesce", lambda: True)
+    monkeypatch.setattr(runtime, "checkpoint", lambda *_: "checkpoint")
+    monkeypatch.setattr(runtime.checkpoint_runtime, "validate_export", validate)
+    cleanup = Mock()
+    monkeypatch.setattr(runtime.trees, "cleanup", cleanup)
+    try:
+        result = supervisor.drain("termination")
+        assert len(joins) == 1
+        daemon, timeout = joins[0]
+        assert daemon is True
+        assert 0 <= timeout <= 0.05
+        assert not finished.is_set()
+        assert result["checkpoint_status"] == "incomplete"
+        assert result["checkpoint_id"] is None
+        cleanup.assert_called_once()
+    finally:
+        release.set()
+
+
+def test_remote_validation_finishing_at_the_checkpoint_deadline_is_incomplete(supervisor, monkeypatch):
+    supervisor.environment[runtime.checkpoint_runtime.REMOTE] = "true"
+    monkeypatch.setattr(supervisor, "quiesce", lambda: True)
+    monkeypatch.setattr(runtime, "checkpoint", lambda *_: "checkpoint")
+    monkeypatch.setattr(runtime.checkpoint_runtime, "validate_export", lambda *_: True)
+    monkeypatch.setattr(runtime.trees, "cleanup", lambda *_: None)
+    monkeypatch.setattr(runtime.time, "monotonic", Mock(side_effect=[0, 0, 0, 1]))
+    result = supervisor.drain("termination")
+    assert result["checkpoint_status"] == "incomplete"
+    assert result["checkpoint_id"] is None
 
 
 def test_exporter_exit_ends_checkpoint_wait_and_stale_agent_is_not_counted(supervisor, monkeypatch):

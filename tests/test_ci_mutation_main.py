@@ -78,6 +78,25 @@ def test_cli_defaults_and_success(tmp_path, monkeypatch):
     assert main() == 0
 
 
+def test_cli_passes_the_original_checkout_to_cached_collectors(tmp_path, monkeypatch):
+    import os
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["gate"])
+    monkeypatch.setattr("scripts.ci_mutation.__main__.discover_changes", lambda *args: {})
+    for folder in ("", str(tmp_path / "cache")):
+        monkeypatch.setenv("MUTATION_STATS_CACHE", folder)
+        monkeypatch.setenv("MUTATION_STATS_ROOT", "previous")
+        expected = str(tmp_path) if folder else "previous"
+
+        def gate(*args):
+            assert os.environ["MUTATION_STATS_ROOT"] == expected
+            return {"failed": False}
+
+        monkeypatch.setattr("scripts.ci_mutation.__main__.run_gate", gate)
+        assert main() == 0
+
+
 @pytest.mark.parametrize(
     ("extra", "part", "line"),
     [
@@ -179,6 +198,30 @@ def test_browser_preflight_skips_test_only_changes(tmp_path, monkeypatch, capsys
     assert browser.main() == 0
     assert output.read_text() == "browser=false\n"
     assert "Selected mutation tests: 0" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(("given", "bases"), [("earlier,merged", ["earlier", "merged"]), ("", [""])])
+@pytest.mark.parametrize("entry", ["gate", "browser"])
+def test_resolved_bases_from_the_plan_are_graded_as_given(tmp_path, monkeypatch, entry, given, bases):
+    from scripts.ci_mutation import __main__ as gate
+    from scripts.ci_mutation import browser
+
+    module = gate if entry == "gate" else browser
+    (tmp_path / "hooks").mkdir()
+    (tmp_path / "scripts").mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    calls = []
+
+    def discover(root, base, head):
+        calls.append((root, base, head))
+        return {}
+
+    monkeypatch.setattr(module, "discover_changes", discover)
+    monkeypatch.setattr(gate, "run_gate", lambda *args: {"failed": False})
+    monkeypatch.setattr("sys.argv", [entry, "--bases", given])
+    assert module.main() == 0
+    assert calls == [(tmp_path, bases, "HEAD")]
 
 
 def test_browser_preflight_uses_mutation_test_selection(tmp_path, monkeypatch, capsys):

@@ -1,8 +1,9 @@
 """Agent writes on a swarm ledger as inbox items, sent by the minute tick so the master hears of them asleep or awake.
 
-New ledger events past the swarm's cursor go to the master. Time rules raise a follow-up nobody decided, watch each
-task's pull request on GitHub and pass every new health finding on for a verdict. Each item is sent once, so a replay
-of the same ledger sends nothing; the wake ladder then carries every item to a reader.
+New ledger events past the swarm's cursor go to the master owning their phase, else the lead. Time rules raise a
+follow-up nobody decided, watch each task's pull request on GitHub and pass every new health finding on for a verdict.
+Each item is sent once, so a replay of the same ledger sends nothing; the wake ladder then carries every item to a
+reader.
 """
 
 import functools
@@ -13,13 +14,16 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
-from scripts.inbox.seats import seat_address
 from scripts.inbox.store import CLOSED, InboxError
+from scripts.swarm import merge_queue, operator_mail, outage
 from scripts.swarm.health.verdicts import VERDICTS
 from scripts.swarm.naming import lane_of
-from scripts.swarm.store import MASTER, PREFIX
+from scripts.swarm.store import MASTER, PREFIX, SwarmError
+from scripts.swarm_v2 import masters
 
 MINUTE_MS = 60_000
+TASK_FINDINGS = frozenset({"proof loop", "failed launch", "stale claim"})
+HELD_FINDINGS = frozenset({"idle with claim", "waiting on input", "stalled", "working on drain"})
 FOLLOWUP_RAISE_MS = 15 * MINUTE_MS
 FOLLOWUP_OPERATOR_MS = 30 * MINUTE_MS
 MERGED_ENGINEER_MS = 10 * MINUTE_MS
@@ -27,6 +31,8 @@ MERGED_MASTER_MS = 20 * MINUTE_MS
 RED_QUIET_MS = 20 * MINUTE_MS
 SENT_TTL_S = 30 * 24 * 3600
 SENDER = "swarm"
+EVENTS_CURSOR = "events-cursor"
+RELAYED = "agent follow ups, questions and task changes"
 OPERATOR = "operator"
 ASK_WORDS = 12
 RED = {"FAILURE", "ERROR", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED"}
@@ -36,15 +42,33 @@ PENDING = {None, "", "PENDING", "EXPECTED"}
 GATE = "Gate — Required"
 RED_NOTICE = re.compile(r"^Your pull request (\S+) for .* has red checks and no push for twenty minutes\.")
 GATE_JOB = re.compile(rf"^[ \t]+name:[ \t]*(['\"]?){re.escape(GATE)}\1[ \t]*$", re.MULTILINE)
-PULL_QUERY = (
-    "query($url:URI!){resource(url:$url){...on PullRequest{state mergedAt headRefOid mergeQueueEntry{id} "
-    "commits(last:1){nodes{commit{committedDate "
-    'file(path:".github/workflows"){object{...on Tree{entries{object{...on Blob{text}}}}}} '
-    "statusCheckRollup{contexts(first:100){"
-    "nodes{...on CheckRun{name conclusion completedAt} ...on StatusContext{context state createdAt}} "
-    "pageInfo{hasNextPage}}} checkSuites(first:100){nodes{status workflowRun{databaseId createdAt}} "
-    "pageInfo{hasNextPage}}}}}}}}"
+CONTEXT_NODES = (
+    "nodes{...on CheckRun{databaseId name conclusion completedAt isRequired(pullRequestNumber:$number) "
+    "checkSuite{workflowRun{workflow{name}}}} "
+    "...on StatusContext{context state createdAt isRequired(pullRequestNumber:$number)}} "
+    "pageInfo{hasNextPage endCursor}"
 )
+SUITE_NODES = "nodes{status conclusion workflowRun{databaseId createdAt}} pageInfo{hasNextPage endCursor}"
+PULL_QUERY = (
+    "query($url:URI!){resource(url:$url){...on PullRequest{state mergedAt headRefOid mergeQueueEntry{id state} "
+    "mergeable isDraft "
+    "commits(last:1){nodes{commit{id committedDate "
+    'file(path:".github/workflows"){object{...on Tree{entries{object{...on Blob{text}}}}}} '
+    + "statusCheckRollup{contexts(first:100){"
+    + CONTEXT_NODES
+    + "}} checkSuites(first:100){"
+    + SUITE_NODES
+    + "}}}}}}}"
+)
+PAGE_PREFIX = "query($id:ID!,$after:String!){node(id:$id){...on Commit{"
+PAGES = {
+    "contexts": (
+        PAGE_PREFIX + "statusCheckRollup{contexts(first:100,after:$after){" + CONTEXT_NODES + "}}}}}",
+        ("statusCheckRollup", "contexts"),
+    ),
+    "checkSuites": (PAGE_PREFIX + "checkSuites(first:100,after:$after){" + SUITE_NODES + "}}}}", ("checkSuites",)),
+}
+MAX_PAGES = 20
 
 
 @dataclass(frozen=True)
@@ -60,6 +84,10 @@ class PullRequest:
     unpassed_gate: str = ""
     queued: bool = False
     gate_passed: bool = False
+    merge_problem: str = ""
+    mergeable: str = ""
+    draft: bool = False
+    latest_run_cancelled: bool = False
 
 
 def iso_ms(text):
@@ -67,7 +95,8 @@ def iso_ms(text):
 
 
 def pull_request(raw):
-    commits, checks = raw.get("commits") or [], raw.get("statusCheckRollup") or []
+    everything = _newest(raw.get("statusCheckRollup") or [])
+    commits, checks = raw.get("commits") or [], _required(raw.get("gated"), everything)
     suites = raw.get("checkSuites") or []
     results = [check.get("conclusion") or check.get("state") for check in checks]
     running = any(suite.get("workflowRun") and suite.get("status") != "COMPLETED" for suite in suites)
@@ -84,23 +113,66 @@ def pull_request(raw):
     if not pushes and commits:
         pushes = [iso_ms(commits[-1]["committedDate"])]
     unpassed_gate = _unpassed_gate(raw.get("gated"), checks, results, running)
+    failing = any(result in RED for result in results)
     return PullRequest(
         raw["state"],
         iso_ms(raw["mergedAt"]) if raw.get("mergedAt") else None,
         min(pushes, default=None),
-        any(result in RED for result in results) or bool(unpassed_gate),
+        failing or bool(unpassed_gate),
         _resolved(raw.get("gated"), checks, results, running) or bool(unpassed_gate),
         tuple(
             check.get("name") or check.get("context") or "a check"
-            for check, result in zip(checks, results)
-            if result in RED
-        ),
+            for check in everything
+            if (check.get("conclusion") or check.get("state")) in RED
+        )
+        if failing
+        else (),
         raw.get("headRefOid") or "",
         min(reds, default=None),
         unpassed_gate,
         raw.get("mergeQueueEntry") is not None,
         bool(raw.get("gated")) and set(_gate(checks, results)) == {"SUCCESS"},
+        "has a merge conflict"
+        if raw.get("mergeable") == "CONFLICTING"
+        else "is marked unmergeable by GitHub"
+        if (raw.get("mergeQueueEntry") or {}).get("state") == "UNMERGEABLE"
+        else "",
+        raw.get("mergeable") or "",
+        bool(raw.get("isDraft")),
+        _latest_run_cancelled(suites),
     )
+
+
+def _newest(checks):
+    latest = {}
+    for order, check in sorted(enumerate(checks), key=_mark):
+        run = ((check.get("checkSuite") or {}).get("workflowRun") or {}).get("workflow") or {}
+        latest[(run.get("name"), check.get("name"), check.get("context"))] = (order, check)
+    return [check for _, check in sorted(latest.values())]
+
+
+def _required(gated, checks):
+    required = [
+        check
+        for check in checks
+        if check.get("isRequired", True) or (check.get("name") or check.get("context")) == GATE
+    ]
+    return required if gated or required else checks
+
+
+def _mark(item):
+    order, check = item
+    return check.get("databaseId") or 0, check.get("createdAt") or "", order
+
+
+def _latest_run_cancelled(suites):
+    runs = [suite for suite in suites if (suite.get("workflowRun") or {}).get("createdAt")]
+    latest = max(
+        runs,
+        key=lambda suite: (suite["workflowRun"]["createdAt"], suite["workflowRun"].get("databaseId", 0)),
+        default={},
+    )
+    return latest.get("conclusion") == "CANCELLED"
 
 
 def red_window(pushed_at, red_at, now_ms):
@@ -116,14 +188,11 @@ def _unpassed_gate(gated, checks, results, running):
 
 
 def _resolved(gated, checks, results, running):
+    if gated:
+        return any(result in FINAL_RED | {"TIMED_OUT"} for result in results) or "SUCCESS" in _gate(checks, results)
     if not running and any(result in FINAL_RED for result in results):
         return True
-    if not gated:
-        return not running and "SUCCESS" in results and all(result in PASSED for result in results)
-    gate = _gate(checks, results)
-    if any(result in FINAL_RED for result in gate):
-        return True
-    return "SUCCESS" in gate and not running and not any(result in PENDING for result in results)
+    return not running and "SUCCESS" in results and all(result in PASSED for result in results)
 
 
 def _gate(checks, results):
@@ -137,36 +206,68 @@ def declares_gate(tree):
 
 
 def view(url, run=subprocess.run):
+    number = _number(url)
     try:
         done = run(
-            ["gh", "api", "graphql", "-f", f"query={PULL_QUERY}", "-f", f"url={url}"],
+            ["gh", "api", "graphql", "-f", f"query={PULL_QUERY.replace('$number', number)}", "-f", f"url={url}"],
             capture_output=True,
             text=True,
             timeout=20,
         )
         if done.returncode != 0:
             return None
-        return _view_resource(json.loads(done.stdout)["data"]["resource"])
+        return _view_resource(json.loads(done.stdout)["data"]["resource"], number, run=run)
     except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
         return None
 
 
-def _view_resource(raw, gated=None):
+def head(url, run=subprocess.run):
+    try:
+        owner, repo, _, number = url.split("/")[-4:]
+        return merge_queue.rest(f"repos/{owner}/{repo}/pulls/{number}", run)["head"]["sha"]
+    except (SwarmError, ValueError, KeyError, TypeError):
+        return ""
+
+
+def _number(url):
+    found = re.search(r"/pull/(\d+)", url)
+    return found[1] if found else "0"
+
+
+def _view_resource(raw, number, gated=None, run=subprocess.run):
     try:
         raw = dict(raw)
         commits = [node["commit"] for node in raw["commits"]["nodes"]]
-        rollup = (commits[-1].get("statusCheckRollup") or {}) if commits else {}
-        contexts = rollup.get("contexts") or {}
-        suites = commits[-1]["checkSuites"] if commits else {"nodes": [], "pageInfo": {}}
-        if contexts.get("pageInfo", {}).get("hasNextPage") or suites["pageInfo"].get("hasNextPage"):
+        commit = commits[-1] if commits else {}
+        contexts = (commit.get("statusCheckRollup") or {}).get("contexts") or {}
+        contexts = {"nodes": contexts.get("nodes") or [], "pageInfo": contexts.get("pageInfo") or {}}
+        suites = commit["checkSuites"] if commits else {"nodes": [], "pageInfo": {}}
+        checks = _paged(commit.get("id"), "contexts", contexts, run, number)
+        suites = _paged(commit.get("id"), "checkSuites", suites, run, number)
+        if checks is None or suites is None:
             return None
         raw["commits"] = commits
-        raw["statusCheckRollup"] = contexts.get("nodes") or []
-        raw["checkSuites"] = list(suites["nodes"])
-        raw["gated"] = gated if gated is not None else bool(commits) and declares_gate(commits[-1].get("file"))
+        raw["statusCheckRollup"] = checks
+        raw["checkSuites"] = suites
+        raw["gated"] = gated if gated is not None else bool(commits) and declares_gate(commit.get("file"))
         return pull_request(raw)
     except (ValueError, KeyError, TypeError):
         return None
+
+
+def _paged(commit, field, page, run, number):
+    nodes, info = list(page["nodes"]), page["pageInfo"]
+    for _ in range(MAX_PAGES):
+        if not info.get("hasNextPage"):
+            return nodes
+        if not commit:
+            return None
+        query, path = PAGES[field]
+        page = _graphql(query.replace("$number", number), run, id=commit, after=info["endCursor"]).get("node")
+        for key in path:
+            page = page[key]
+        nodes, info = nodes + list(page["nodes"]), page["pageInfo"]
+    return None if info.get("hasNextPage") else nodes
 
 
 def views(
@@ -180,20 +281,24 @@ def views(
     )
     for start in range(0, len(urls), 20):
         batch = urls[start : start + 20]
-        fields = [f"p{i}:" + selection.replace("$url", json.dumps(url)) for i, url in enumerate(batch)]
+        fields = [
+            f"p{i}:" + selection.replace("$url", json.dumps(url)).replace("$number", _number(url))
+            for i, url in enumerate(batch)
+        ]
         data = _graphql("{" + " ".join(fields) + "}", run)
         gates = _workflow_gates(data, run, cache)
         for i, url in enumerate(batch):
             raw = data.get(f"p{i}")
             gated = gates.get(_workflow_id(raw))
-            found[url] = _view_resource(raw, gated) if gated is not None else None
+            found[url] = _view_resource(raw, _number(url), gated, run) if gated is not None else None
     return found
 
 
-def _graphql(query, run):
+def _graphql(query, run, **variables):
     try:
         done = run(
-            ["gh", "api", "graphql", "-f", f"query={query}"],
+            ["gh", "api", "graphql", "-f", f"query={query}"]
+            + [arg for name, value in variables.items() for arg in ("-f", f"{name}={value}")],
             capture_output=True,
             text=True,
             timeout=20,
@@ -262,13 +367,22 @@ def tick_view(inbox: object, store: object, slug: str, doc: dict) -> Callable[[s
 
 
 class Mail:
-    def __init__(self, inbox, store, slug):
-        self.inbox, self.store, self.slug = inbox, store, slug
-        live = [a for a in store.agents(slug) if a.state != "finished"]
+    def __init__(self, inbox, store, slug, doc=None):
+        self.inbox, self.store, self.slug, self.doc = inbox, store, slug, doc or {}
+        agents = store.agents(slug)
+        live = [a for a in agents if a.state != "finished"]
         self.seats = {a.name: a.seat or a.name for a in live}
-        boss = next((a for a in live if a.lane == MASTER), None)
-        self.has_master = boss is not None
-        self.master = self.seats[boss.name] if boss else seat_address(slug, MASTER)
+        self.held = {a.name: a.task for a in agents if a.lane != MASTER}
+        self.has_master = any(a.lane == MASTER for a in live)
+        self.master = operator_mail.master_address(slug, live)
+        self.masters = masters.live_seats(live)
+
+    @functools.cached_property
+    def owners(self):
+        return masters.MasterSeats(self.store.redis).owners(self.slug, self.doc) if self.doc else {}
+
+    def owner(self, target):
+        return masters.route(target, self.doc, lambda: self.owners, self.masters, self.master)
 
     def once(self, key, act):
         marker = self.store.key(self.slug, "events-sent", key)
@@ -295,21 +409,35 @@ class Mail:
         self.store.redis.hset(self.red_index(), item.id, url)
 
     def engineer(self, task):
-        return self.seats.get(task.get("claimed_by", ""), self.master)
+        return self.seats.get(task.get("claimed_by")) or self.owner(f"tasks/{task['id']}")
 
 
 def event_pass(inbox, store, slug, doc, ledger, now_ms, github=view):
-    mail, github = Mail(inbox, store, slug), functools.cache(github)
+    mail, github = Mail(inbox, store, slug, doc), functools.cache(github)
     events = doc.get("_meta", {}).get("events", [])
     tasks = {t["id"]: t for t in doc.get("tasks", [])}
     raised = _raised_for_operator(doc, events)
     return (
-        _events(mail, new_events(store, slug, doc, "events-cursor"), tasks, raised)
+        _events(mail, new_events(store, slug, doc, EVENTS_CURSOR, RELAYED), tasks, raised)
+        + _history_gaps(mail)
         + _followups(mail, doc, events, ledger, now_ms)
         + _pull_requests(mail, tasks.values(), now_ms, github)
         + _settle_red_notices(mail, github)
         + _priorities(mail, doc, raised)
     )
+
+
+def _history_gaps(mail):
+    key, sent = mail.store.key(mail.slug, "history-gaps"), []
+    for gap, value in mail.store.redis.hgetall(key).items():
+        cursor, trimmed, subject = json.loads(value)
+        text = (
+            f"Ledger {mail.slug} trimmed its history after revision {cursor} through revision {trimmed} before the "
+            f"tick read it, so {subject} in that range reached no one. Read the ledger for them."
+        )
+        sent += mail.send(f"history-gap:{gap}", mail.master, text)
+        mail.store.redis.hdel(key, gap)
+    return sent
 
 
 def _raised_for_operator(doc, events):
@@ -363,26 +491,41 @@ def _settled(found):
     return "turned green" if found.resolved and not found.red else ""
 
 
-def findings_pass(inbox, store, slug, shown):
-    mail, sent = Mail(inbox, store, slug), []
+def findings_pass(inbox, store, slug, shown, doc=None):
+    from scripts.swarm.health import merge_stall
+
+    mail, sent = Mail(inbox, store, slug, doc), merge_stall.deliver(inbox, store, slug)
     for found in shown:
-        if found["kind"] == "spawn stall":
+        if found["kind"] == "merge stall":
+            continue
+        if found["kind"] in ("spawn stall", "stall") or found["kind"] in outage.HELD.values():
             continue
         judged = (found.get("verdict") or {}).get("at", 0)
         text = (
             f"New health finding on swarm {slug}: {found['summary']} ({found['kind']}). Give it a verdict: "
             f'agentihooks swarm {slug} verdict {found["id"]} {"|".join(VERDICTS)} --note "<why>"'
         )
-        sent += mail.send(f"finding:{found['id']}:{judged}", mail.master, text)
+        sent += mail.send(f"finding:{found['id']}:{judged}", _finding_owner(mail, found), text)
     return sent
 
 
-def new_events(store, slug, doc, cursor_name):
+def _finding_owner(mail, found):
+    kind, subject = found["kind"], found["subject"]
+    task = subject if kind in TASK_FINDINGS else kind in HELD_FINDINGS and mail.held.get(subject)
+    return mail.owner(f"tasks/{task}") if task else mail.master
+
+
+def new_events(store, slug, doc, cursor_name, subject):
+    """Events past the named cursor, which moves to the ledger revision; history trimmed past it is kept as a gap."""
     key, rev = store.key(slug, cursor_name), doc["_meta"]["rev"]
     cursor = store.redis.get(key)
     store.redis.set(key, rev)
     if cursor is None:
         return []
+    trimmed = doc["_meta"].get("events_trimmed")
+    if trimmed is not None and trimmed > int(cursor):
+        gap = json.dumps([cursor, trimmed, subject])
+        store.redis.hset(store.key(slug, "history-gaps"), f"{cursor_name}:{cursor}:{trimmed}", gap)
     return [e for e in doc["_meta"].get("events", []) if int(cursor) < e.get("rev", 0) <= rev]
 
 
@@ -400,7 +543,7 @@ def _events(mail, events, tasks, raised):
         if text:
             sent += mail.send(
                 f"event:{event['rev']}:{event['kind']}:{event['target']}",
-                mail.master,
+                mail.owner(event["target"]),
                 text,
                 ref=f"{mail.slug}:event:{event['target']}",
                 fyi=event["kind"] == "task done",
@@ -444,7 +587,7 @@ def _followups(mail, doc, events, ledger, now_ms):
                 f"A follow-up on ledger {mail.slug} is still open fifteen minutes after {event['by']} added it: "
                 f"{followup['text']}\nDecide it now, or it goes to the operator's Priorities."
             )
-            sent += mail.send(f"{target}:raised", mail.master, text, ref=f"{mail.slug}:event:{target}")
+            sent += mail.send(f"{target}:raised", mail.owner(target), text, ref=f"{mail.slug}:event:{target}")
         if age >= FOLLOWUP_OPERATOR_MS:
             ask = "Open half an hour without a decision: " + " ".join(followup["text"].split()[:ASK_WORDS])
             if mail.once(f"{target}:operator", lambda: ledger.priority(mail.slug, target, ask)):
@@ -471,8 +614,9 @@ def _priorities(mail, doc, raised):
                 f"New priority on ledger {mail.slug} for {item}: {row['text']}\n"
                 "Triage it: resolve it if the call is yours, else leave it for the operator."
             )
-            mail.inbox.send(SENDER, mail.master, text, ref=f"{mail.slug}:priority:{item}")
-            sent.append(f"told {mail.master}: priority {item}")
+            owner = mail.owner(item)
+            mail.inbox.send(SENDER, owner, text, ref=f"{mail.slug}:priority:{item}")
+            sent.append(f"told {owner}: priority {item}")
         mail.store.redis.sadd(key, item)
     mail.store.redis.set(marker, 1)
     return sent
@@ -498,7 +642,7 @@ def _pull_requests(mail, tasks, now_ms, github):
                 sent += mail.send(f"{url}:merged:engineer", mail.engineer(task), text)
             if age >= MERGED_MASTER_MS:
                 text = f"{title} on ledger {mail.slug} is still in pull request twenty minutes after {url} merged."
-                sent += mail.send(f"{url}:merged:master", mail.master, text)
+                sent += mail.send(f"{url}:merged:master", mail.owner(f"tasks/{task['id']}"), text)
         elif found.state == "CLOSED":
             text = f"Your pull request {url} for {title} was closed without merging. Reopen it, open a new one, or block the task."
             sent += mail.send(f"{url}:closed", mail.engineer(task), text)

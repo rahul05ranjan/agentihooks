@@ -2,11 +2,15 @@
 /.semgrep/ @nestorcolt
 /scripts/ci_mutation/ @nestorcolt
 /scripts/ci_*.py @nestorcolt
+/scripts/ci_reuse_job.yml @nestorcolt
 /scripts/gates/ @nestorcolt
 /scripts/gate_* @nestorcolt
 /scripts/size_limits.py @nestorcolt
 /scripts/check_* @nestorcolt
+/scripts/github_access.sh @nestorcolt
 /scripts/swarm_ledger/artifact_sanity.py @nestorcolt
+/scripts/swarm_v2/resource_bench.py @nestorcolt
+/scripts/swarm_v2/startup_bench.py @nestorcolt
 /tests/registry/ @nestorcolt
 /tests/*MANIFEST* @nestorcolt
 /tests/*BASELINE* @nestorcolt
@@ -15,6 +19,7 @@
 /tests/coverage_*.py @nestorcolt
 /tests/test_coverage_*.py @nestorcolt
 /tests/dev_durations.py @nestorcolt
+/tests/flake_budget.py @nestorcolt
 /tests/leaks.py @nestorcolt
 /tests/refresh_durations.py @nestorcolt
 /tests/shard_budget.py @nestorcolt
@@ -26,6 +31,7 @@
 /tests/test_dev_durations.py @nestorcolt
 /tests/test_gate_protected.py @nestorcolt
 /tests/test_rulesets.py @nestorcolt
+/tests/test_github_access.py @nestorcolt
 /tests/test_shard_budget.py @nestorcolt
 /tests/test_shard_check.py @nestorcolt
 /tests/test_shards.py @nestorcolt
@@ -33,3 +39,4 @@
 /mutation-cleared.txt @nestorcolt
 /mutation-clearances/ @nestorcolt
 /delivery.yaml @nestorcolt
+/.github/workflows/trusted-actors.json @nestorcolt
