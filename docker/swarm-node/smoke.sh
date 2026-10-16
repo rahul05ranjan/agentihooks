@@ -113,19 +113,31 @@ if [[ "$proof" != startup ]]; then
                 volume=/home/worker:uid=10001,gid=10001
             fi
             (
-                docker run --rm --network none --read-only --tmpfs "$volume" --tmpfs /tmp \
+                run=(--rm)
+                if [[ "$case" == positive* ]]; then run=(--cidfile "$context/profile-$case.cid"); fi
+                status=0
+                docker run "${run[@]}" --network none --read-only --tmpfs "$volume" --tmpfs /tmp \
                 -v "$fixtures:/fixtures:ro" -v "$probe:/opt/probe:ro" \
                 "$image" bash /opt/probe/profile-probe.sh "${case%-second}" \
-                > "$output/profile-$case.json" 2> "$output/profile-$case.log"
+                > "$output/profile-$case.json" 2> "$output/profile-$case.log" || status=$?
             if [[ "$case" == positive* ]]; then
-                python3 - "$output/profile-$case.json" <<'PYEXIT'
+                container="$(< "$context/profile-$case.cid")"
+                finished="$(docker inspect -f '{{.State.FinishedAt}}' "$container")"
+                docker rm "$container" > /dev/null
+                if (( status )); then exit "$status"; fi
+                python3 - "$output/profile-$case.json" "$finished" <<'PYEXIT'
 import json, sys, time
+from datetime import datetime, timezone
 from pathlib import Path
 path = Path(sys.argv[1])
 report = json.loads(path.read_text())
-latency = time.time() - report['codex_probe']['registered_at']
+registered = report['codex_probe']['registered_at']
+stamp, _, fraction = sys.argv[2].rstrip('Z').partition('.')
+exited = datetime.strptime(stamp, '%Y-%m-%dT%H:%M:%S').replace(tzinfo=timezone.utc).timestamp()
+latency = exited + float('0.' + (fraction or '0')) - registered
 assert 0 <= latency < 2, f"Codex registration to container exit took {latency:.3f} seconds"
 report['codex_probe']['registration_to_container_exit_seconds'] = latency
+report['codex_probe']['registration_to_container_removed_seconds'] = time.time() - registered
 path.write_text(json.dumps(report) + '\n')
 print(f"Codex registration to container exit took {latency:.3f} seconds")
 PYEXIT
