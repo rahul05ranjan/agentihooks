@@ -191,7 +191,8 @@ def test_cancel_gives_up_at_the_deadline_when_a_workflow_never_runs(monkeypatch)
     monkeypatch.setattr(lanes.time, "monotonic", lambda: next(clock))
     sleeps = []
     monkeypatch.setattr(lanes.time, "sleep", sleeps.append)
-    monkeypatch.setattr(lanes, "api", lambda *a: {})
+    listings = iter([{}, {}])
+    monkeypatch.setattr(lanes, "api", lambda *a: next(listings))
     assert lanes.cancel("o/r", "abc", {"dispatch.yml"}, 2, step=0.5) == set()
     assert sleeps == [0.5]
 
