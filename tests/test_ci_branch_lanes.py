@@ -187,13 +187,18 @@ def test_stop_reports_whether_github_accepted_the_cancel(monkeypatch, code, stop
 
 
 def test_cancel_gives_up_at_the_deadline_when_a_workflow_never_runs(monkeypatch):
-    clock = iter([0.0, 1.0, 2.5])
+    clock = iter([0.0, 1.0, 2.0])
     monkeypatch.setattr(lanes.time, "monotonic", lambda: next(clock))
     sleeps = []
     monkeypatch.setattr(lanes.time, "sleep", sleeps.append)
-    monkeypatch.setattr(lanes, "api", lambda *a: {"workflow_runs": []})
+    monkeypatch.setattr(lanes, "api", lambda *a: {})
     assert lanes.cancel("o/r", "abc", {"dispatch.yml"}, 2, step=0.5) == set()
     assert sleeps == [0.5]
+
+
+def test_the_head_is_required():
+    with pytest.raises(SystemExit):
+        lanes.main([])
 
 
 def test_api_and_git_read_their_commands(monkeypatch):
