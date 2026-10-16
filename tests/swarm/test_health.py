@@ -297,6 +297,20 @@ def test_reruns_with_no_reviews_report_zero_rounds():
     assert found["evidence"] == ["task t1", "started 4 times (3 reruns)", "0 review rounds"]
 
 
+@pytest.mark.parametrize("cause", ["watchdog", "park", "master"])
+def test_restarts_after_a_watchdog_reopen_a_park_or_a_master_change_are_not_reruns(cause):
+    first = ev("task started", "tasks/t1", by="swarm")
+    events = [first] + [{**first, "after": cause} for _ in range(5)]
+    assert run({"tasks": [task("t1")], "_meta": {"events": events}}) == []
+
+
+def test_plain_restarts_among_excused_ones_still_raise_the_proof_loop():
+    plain = ev("task started", "tasks/t1", by="swarm")
+    events = [plain, {**plain, "after": "park"}, plain, {**plain, "after": "watchdog"}, plain, plain]
+    [found] = run({"tasks": [task("t1")], "_meta": {"events": events}})
+    assert found["evidence"] == ["task t1", "started 4 times (3 reruns)", "0 review rounds"]
+
+
 def test_an_idle_agent_holding_a_claim_is_named_with_its_task():
     ledger = {
         "tasks": [task("t1", state="claimed", pr_url="", title="Fold the chat panel")],
