@@ -977,6 +977,29 @@ def test_timer_ensure_also_runs_the_alert_intake_service(tmp_path):
     assert calls[-1][0] == ["systemctl", "--user", "enable", "--now", "agentihooks-swarm.timer"]
 
 
+def test_timer_reconcile_installs_a_newly_added_service_and_leaves_current_units_alone(tmp_path):
+    calls = []
+    run = lambda argv, **kw: calls.append(argv) or subprocess.CompletedProcess(argv, 0)  # noqa: E731
+    assert timer.ensure("/bin/agentihooks", tmp_path, run=run)
+    calls.clear()
+    assert timer.reconcile("/bin/agentihooks", tmp_path, run=run)
+    assert calls == []
+
+    (tmp_path / "agentihooks-alert-intake.service").unlink()
+    assert timer.reconcile("/bin/agentihooks", tmp_path, run=run)
+    assert (tmp_path / "agentihooks-alert-intake.service").read_text() == timer.units("/bin/agentihooks")[
+        "agentihooks-alert-intake.service"
+    ]
+    assert calls[0] == ["systemctl", "--user", "daemon-reload"]
+    assert ["systemctl", "--user", "enable", "--now", "agentihooks-alert-intake.service"] in calls
+
+
+def test_the_host_tick_reconciles_the_user_services_once_per_pass(monkeypatch):
+    monkeypatch.setattr(timer, "entry_point", lambda: "/installed/bin/agentihooks")
+    store = _tick_all(monkeypatch, lambda store, slug: [], ["a", "b"])
+    assert store.reconciled == ["/installed/bin/agentihooks"]
+
+
 def test_main_runs_the_alert_intake_without_a_slug(monkeypatch):
     ran = []
     monkeypatch.setattr(cli, "connect", lambda: "store")
@@ -2521,7 +2544,9 @@ def _tick_all(monkeypatch, run_tick, slugs, tick_seconds=0.05):
 
     monkeypatch.setattr(cli, "TICK_SECONDS", tick_seconds)
     monkeypatch.setattr(cli, "run_tick", bounded)
-    store = types.SimpleNamespace(slugs=lambda: slugs)
+    reconciled = []
+    monkeypatch.setattr(timer, "reconcile", lambda binary: reconciled.append(binary) or True)
+    store = types.SimpleNamespace(slugs=lambda: slugs, reconciled=reconciled)
     cli.cmd_tick(store, None)
     assert filled == [os.environ]
     assert swept == [(dict(os.environ), 77, True)]
