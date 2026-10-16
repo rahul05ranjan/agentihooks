@@ -120,7 +120,7 @@ from scripts.swarm.health import activity
 from scripts.swarm.health import findings as health
 from scripts.swarm.ledger_client import LedgerClient, LedgerGone, LedgerRefused
 from scripts.swarm.runtime import HerdrRuntime
-from scripts.swarm.status import auto_snapshot, findings, status_report, task_counts, verdict_store
+from scripts.swarm.status import auto_snapshot, findings, live_agents, status_report, task_counts, verdict_store
 from scripts.swarm.store import (
     ASSIST,
     AUTO_SCALING,
@@ -282,7 +282,8 @@ def run_tick(store, slug, ledger=None, runtime=None, messenger=None, scheduled=F
             if store.config(slug).template == "doctor":
                 from scripts.doctor import cli as doctor
 
-                actions += skip_refused(doctor.timer, store, slug, now_ms(), scheduled)
+                with lease.kept(store, slug, held):
+                    actions += skip_refused(doctor.timer, store, slug, now_ms(), scheduled)
             herdr = messenger or delivery.HerdrMessenger()
             timing.call(delivery.migrate_outbox, store, slug, inbox)
             agents = [a for a in timing.call(store.agents, slug) if a.state != "finished"]
@@ -335,7 +336,8 @@ def run_tick(store, slug, ledger=None, runtime=None, messenger=None, scheduled=F
             actions += skip_refused(
                 wake.wake_pass, inbox, slug, agents, herdr, ledger, now_ms(), window, wake.quiet_ms(os.environ)
             )
-            taken = timing.call(snapshot.auto, store, slug, now_ms(), os.environ)
+            with lease.kept(store, slug, held):
+                taken = timing.call(snapshot.auto, store, slug, now_ms(), os.environ)
             store.redis.set(store.key(slug, "last-tick"), now_ms())
             doc = timing.call(ledger.state, slug)
             return probed + controls + actions + ([f"took automatic snapshot {taken.name}"] if taken else [])
@@ -904,11 +906,11 @@ def _affinity_line(report):
 def cmd_status(store, args):
     if args.json:
         store.config(args.slug)
-        print(json.dumps(status_report(store, args.slug, LedgerClient().state(args.slug))))
+        print(json.dumps(status_report(store, args.slug, LedgerClient().state(args.slug), HerdrRuntime())))
         return
     outage.show(args.slug, False)
     config = store.config(args.slug)
-    agents = store.agents(args.slug)
+    agents = live_agents(store.agents(args.slug), HerdrRuntime())
     ledger = LedgerClient()
     doc = ledger.state(args.slug)
     tasks = doc["tasks"]
@@ -1445,7 +1447,7 @@ def cmd_wait(store, args):
         get = InboxStore(store.redis).get
         if problem := waits.target_problem(held["kind"], held["target"], agent.task, rows, get):
             raise SwarmError(problem)
-        if held["kind"] == "checks":
+        if held["kind"] == "checks" and waits.PULL_URL.fullmatch(held["target"]):
             head = ledger_events.head(held["target"])
             if not head:
                 raise SwarmError("cannot read the pull request head; retry the checks wait")

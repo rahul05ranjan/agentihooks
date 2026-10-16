@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import time
 import tomllib
@@ -48,6 +49,44 @@ def configuration(attempt: Path) -> dict:
 def sessions(home: Path) -> dict:
     registered = json.loads((home / ".agentihooks" / "active-sessions.json").read_text(encoding="utf-8"))
     return {session: entry["cwd"] for session, entry in registered.items()}
+
+
+def codex_session_start(home: Path, tmp: Path | None = None) -> dict:
+    tmp = tmp or home
+    document = json.loads((home / ".codex/hooks.json").read_text(encoding="utf-8"))
+    commands = [hook["command"] for group in document["hooks"]["SessionStart"] for hook in group["hooks"]]
+    assert commands, "the rendered Codex profile has no SessionStart hook"
+    payload = json.dumps(
+        {
+            "hook_event_name": "SessionStart",
+            "session_id": "worker-profile-codex",
+            "cwd": str(Path.cwd()),
+            "source": "startup",
+        }
+    )
+    (tmp / "codex-run.started").write_text(str(time.time_ns()))
+    started = time.monotonic()
+    with (tmp / "codex-run.txt").open("w") as output:
+        for command in commands:
+            result = subprocess.run(
+                command,
+                shell=True,
+                input=payload,
+                text=True,
+                env=os.environ | {"HOME": str(home), "CODEX_HOME": str(home / ".codex")},
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                timeout=60,
+            )
+            (tmp / "codex-run.exit").write_text(str(result.returncode))
+            result.check_returncode()
+    assert sessions(home) == {"worker-profile-codex": str(Path.cwd())}
+    registered_at = (home / ".agentihooks/active-sessions.json").stat().st_mtime
+    return {
+        "registered_at": registered_at,
+        "registration_to_exit_seconds": time.time() - registered_at,
+        "elapsed_seconds": time.monotonic() - started,
+    }
 
 
 def harness(target: str, attempt: Path, tmp: Path = TMP) -> dict:
@@ -110,20 +149,23 @@ def diagnose(
 
 def positive(attempt: Path, tmp: Path = TMP) -> dict:
     record = json.loads((tmp / "record.json").read_text(encoding="utf-8"))
-    diagnostics = diagnose(attempt, tmp)
     docs = configuration(attempt)
     listed = {target: (tmp / f"{target}-mcp.txt").read_text(encoding="utf-8") for target in SERVERS}
     missing = {t: [s for s in names if s not in listed[t]] for t, names in SERVERS.items()}
     assert record["reused"] is False
     assert not any(missing.values()), (missing, listed)
+    codex = codex_session_start(attempt / "homes" / "codex", tmp=tmp)
+    diagnostics = diagnose(attempt, tmp)
     return {
         "record": record,
+        "session_start_invocation": {"claude": "native CLI", "codex": "rendered hook replay"},
         "cli_session_start_hook_registrations": {
             target: len(entry["sessions"]) for target, entry in diagnostics["harnesses"].items()
         },
         "harness_diagnostics": diagnostics,
         "cli_mcp_list": listed,
         "configuration": docs,
+        "codex_probe": codex,
     }
 
 
@@ -240,6 +282,8 @@ def main() -> None:
     mode, path = sys.argv[1], Path(sys.argv[2])
     if mode == "snapshot":
         print(json.dumps(snapshot(path)))
+    elif mode == "codex-session-start":
+        codex_session_start(path)
     elif mode == "crash":
         crash(path, sys.argv[3])
     else:
