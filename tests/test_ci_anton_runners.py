@@ -29,6 +29,7 @@ def pool(label):
 
 MOVED = {
     ("access-audit.yml", "audit"): LIGHT,
+    ("branch-lanes.yml", "grade"): LIGHT,
     ("hive-worker.yml", "contracts"): LIGHT,
     ("hive-worker.yml", "kind"): STANDARD,
     ("hive-worker.yml", "publish"): STANDARD,
