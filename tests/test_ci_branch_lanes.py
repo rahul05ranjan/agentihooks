@@ -42,6 +42,7 @@ def test_the_lane_is_the_one_the_dev_workflows_share():
 def test_a_laned_job_passes():
     assert lanes.lane_problem(LANED) is None
     assert lanes.lane_problem({"group": GROUP, "queue": "max"}) is None
+    assert lanes.lane_problem({"group": GROUP.replace(" || ", " ||\n  "), "queue": "max"}) is None
 
 
 @pytest.mark.parametrize(
@@ -51,6 +52,12 @@ def test_a_laned_job_passes():
         (GROUP, "has no shared hosted lane concurrency group"),
         ({"group": "replay-${{ github.ref }}", "queue": "max"}, "has no shared hosted lane concurrency group"),
         ({"queue": "max"}, "has no shared hosted lane concurrency group"),
+        ({"group": lanes.LANE, "queue": "max"}, "has no shared hosted lane concurrency group"),
+        ({"group": GROUP + "-${{ github.ref }}", "queue": "max"}, "has no shared hosted lane concurrency group"),
+        (
+            {"group": "${{ github.event_name == 'push' && 'own' || " + lanes.LANE + " }}", "queue": "max"},
+            "has no shared hosted lane concurrency group",
+        ),
         ({"group": GROUP}, "queues on the lane without queue: max"),
         ({"group": GROUP, "queue": "single"}, "queues on the lane without queue: max"),
         ({"group": GROUP, "queue": "max", "cancel-in-progress": True}, "may cancel other runs on the shared lane"),
@@ -86,6 +93,8 @@ def test_a_workflow_without_jobs_has_no_problem_and_a_non_mapping_is_refused():
     assert lanes.problems({"name": "Empty"}) == []
     assert lanes.problems(["not", "a", "workflow"]) == ["is not a workflow mapping"]
     assert lanes.problems(None) == ["is not a workflow mapping"]
+    assert lanes.problems(_workflow(LANED, a=None, b="x")) == []
+    assert lanes.problems(_workflow(a=None)) == ["job a has no shared hosted lane concurrency group"]
 
 
 def test_only_workflows_absent_on_the_base_are_graded(tmp_path, monkeypatch):
@@ -144,13 +153,13 @@ def _run(number, path, status="in_progress"):
 
 def test_cancel_stops_each_open_run_once_and_waits_until_every_refused_workflow_shows(monkeypatch):
     pages = [
-        [_run(1, "a.yml"), _run(2, "keep.yml")],
+        [_run(1, "a.yml"), _run(2, "keep.yml"), _run(5, "b.yml", "completed")],
         [_run(1, "a.yml"), _run(3, "b.yml@refs/heads/x"), _run(4, "a.yml", "completed")],
     ]
     calls, sleeps = [], []
 
-    def api(*args):
-        calls.append(args)
+    def api(*args, check=True):
+        calls.append((*args, check))
         return {"workflow_runs": pages.pop(0)} if args[0].endswith("per_page=100") else {}
 
     monkeypatch.setattr(lanes, "api", api)
@@ -158,10 +167,10 @@ def test_cancel_stops_each_open_run_once_and_waits_until_every_refused_workflow_
     assert lanes.cancel("o/r", "abc", {"a.yml", "b.yml"}, 60) == {1, 3}
     assert sleeps == [5.0]
     assert calls == [
-        ("repos/o/r/actions/runs?head_sha=abc&per_page=100",),
-        ("-X", "POST", "repos/o/r/actions/runs/1/cancel"),
-        ("repos/o/r/actions/runs?head_sha=abc&per_page=100",),
-        ("-X", "POST", "repos/o/r/actions/runs/3/cancel"),
+        ("repos/o/r/actions/runs?head_sha=abc&per_page=100", True),
+        ("-X", "POST", "repos/o/r/actions/runs/1/cancel", False),
+        ("repos/o/r/actions/runs?head_sha=abc&per_page=100", True),
+        ("-X", "POST", "repos/o/r/actions/runs/3/cancel", False),
     ]
 
 
@@ -184,16 +193,19 @@ def test_api_and_git_read_their_commands(monkeypatch):
 
     monkeypatch.setattr(lanes.subprocess, "run", run)
     assert lanes.api("-X", "POST", "x") == {}
+    assert lanes.api("z", check=False) == {}
     assert lanes.git("show", "y") == "out"
     assert seen == [
         (["gh", "api", "-X", "POST", "x"], {"capture_output": True, "check": True}),
+        (["gh", "api", "z"], {"capture_output": True, "check": False}),
         (["git", "show", "y"], {"capture_output": True, "text": True, "check": True}),
     ]
 
 
 def test_the_workflow_grades_every_branch_push_with_the_dev_grader():
     workflow = yaml.safe_load((ROOT / lanes.WORKFLOWS / "branch-lanes.yml").read_text())
-    assert workflow[True] == {"push": {"branches-ignore": ["dev", "main", "gh-readonly-queue/**"]}}
+    assert workflow[True] == {"push": {"branches-ignore": ["dev", "main", "gh-readonly-queue/**", "diffcheck/**"]}}
+    assert workflow["concurrency"]["cancel-in-progress"] is False
     assert workflow["permissions"] == {"contents": "read", "actions": "write"}
     steps = workflow["jobs"]["grade"]["steps"]
     assert steps[0]["with"]["ref"] == "dev"

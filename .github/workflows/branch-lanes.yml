@@ -3,11 +3,11 @@ name: Branch workflow lanes
 # A workflow that exists only on a branch cannot be capped from dev, so dev's grader refuses one whose jobs skip the shared hosted lanes and cancels its runs on that head.
 on:
   push:
-    branches-ignore: [dev, main, "gh-readonly-queue/**"]
+    branches-ignore: [dev, main, "gh-readonly-queue/**", "diffcheck/**"]
 
 concurrency:
   group: branch-lanes-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read

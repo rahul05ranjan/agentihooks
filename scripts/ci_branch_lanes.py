@@ -12,18 +12,19 @@ LANE = (
     "((endsWith(github.run_id, '0') || endsWith(github.run_id, '1') || endsWith(github.run_id, '2')) && 'a') || "
     "((endsWith(github.run_id, '3') || endsWith(github.run_id, '4') || endsWith(github.run_id, '5')) && 'b') || 'c')"
 )
+GROUP = "${{ " + LANE + " }}"
 
 
 def git(*args: str) -> str:
     return subprocess.run(["git", *args], capture_output=True, text=True, check=True).stdout
 
 
-def api(*args: str) -> dict:
-    return json.loads(subprocess.run(["gh", "api", *args], capture_output=True, check=True).stdout or "{}")
+def api(*args: str, check: bool = True) -> dict:
+    return json.loads(subprocess.run(["gh", "api", *args], capture_output=True, check=check).stdout or "{}")
 
 
 def branch_only(head: str, root: Path) -> list[str]:
-    listed = git("ls-tree", "--name-only", f"{head}:{WORKFLOWS}").split()
+    listed = git("ls-tree", "-z", "--name-only", f"{head}:{WORKFLOWS}").split("\0")
     return [
         f"{WORKFLOWS}/{name}"
         for name in listed
@@ -32,7 +33,7 @@ def branch_only(head: str, root: Path) -> list[str]:
 
 
 def lane_problem(block: object) -> str | None:
-    if not isinstance(block, dict) or LANE not in str(block.get("group")):
+    if not isinstance(block, dict) or " ".join(str(block.get("group")).split()) != GROUP:
         return "has no shared hosted lane concurrency group"
     if block.get("queue") != "max":
         return "queues on the lane without queue: max"
@@ -46,6 +47,7 @@ def problems(workflow: object) -> list[str]:
         return ["is not a workflow mapping"]
     found = []
     for name, job in (workflow.get("jobs") or {}).items():
+        job = job if isinstance(job, dict) else {}
         problem = lane_problem(job.get("concurrency", workflow.get("concurrency")))
         if problem:
             found.append(f"job {name} {problem}")
@@ -62,10 +64,11 @@ def cancel(repo: str, head: str, paths: set[str], wait: float, step: float = 5.0
     deadline = time.monotonic() + wait
     while True:
         for run in api(f"repos/{repo}/actions/runs?head_sha={head}&per_page=100").get("workflow_runs", []):
-            if run["path"].split("@")[0] in paths:
-                seen.add(run["path"].split("@")[0])
-                if run["status"] != "completed" and run["id"] not in cancelled:
-                    api("-X", "POST", f"repos/{repo}/actions/runs/{run['id']}/cancel")
+            path = run["path"].split("@")[0]
+            if path in paths and run["status"] != "completed":
+                seen.add(path)
+                if run["id"] not in cancelled:
+                    api("-X", "POST", f"repos/{repo}/actions/runs/{run['id']}/cancel", check=False)
                     cancelled.add(run["id"])
         if seen >= paths or time.monotonic() >= deadline:
             return cancelled
@@ -73,9 +76,7 @@ def cancel(repo: str, head: str, paths: set[str], wait: float, step: float = 5.0
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Refuse workflows that exist only on the pushed head unless every job queues on a hosted lane."
-    )
+    parser = argparse.ArgumentParser()
     parser.add_argument("--head", required=True)
     parser.add_argument("--repo")
     parser.add_argument("--wait", type=float, default=60.0)
