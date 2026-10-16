@@ -118,3 +118,42 @@ def test_worker_cannot_prioritize(monkeypatch):
     monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", "engineer@a1b2c3-0001")
     monkeypatch.setattr(merge_queue, "prioritize", lambda url: pytest.fail("worker reordered queue"))
     assert cli.main(["sw", "merge", "priority", URL]) == 1
+
+
+@pytest.mark.parametrize("failure", ["critical", "dequeue"])
+def test_priority_restores_entries_after_a_mutation_fails(failure):
+    from scripts.swarm.store import SwarmError
+
+    queue = FakeQueue()
+
+    def run(command, **kwargs):
+        if ("enqueuePullRequest" in command[4] and "id=P9" in command and failure == "critical") or (
+            "dequeuePullRequest" in command[4] and "id=P2" in command and failure == "dequeue"
+        ):
+            return subprocess.CompletedProcess(command, 1, "", "insertion refused")
+        return queue.run(command, **kwargs)
+
+    with pytest.raises(SwarmError, match="insertion refused"):
+        merge_queue.prioritize(URL, run=run)
+    assert [e["pullRequest"]["id"] for e in queue.entries] == ["P1", "P2", "P3"]
+
+
+@pytest.mark.parametrize("base, queue_exists", [("main", True), ("dev", False)])
+def test_priority_refuses_release_targets_and_missing_queues(base, queue_exists):
+    from scripts.swarm.store import SwarmError
+
+    queue = FakeQueue()
+
+    def run(command, **kwargs):
+        done = queue.run(command, **kwargs)
+        response = json.loads(done.stdout)
+        raw = response["data"].get("resource")
+        if raw and "baseRefName" in raw:
+            raw["baseRefName"] = base
+            if not queue_exists:
+                raw["repository"]["mergeQueue"] = None
+        return subprocess.CompletedProcess(command, 0, json.dumps(response), "")
+
+    with pytest.raises(SwarmError):
+        merge_queue.prioritize(URL, run=run)
+    assert queue.mutations == []
