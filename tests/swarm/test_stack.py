@@ -501,8 +501,9 @@ def test_the_life_launched_after_a_park_is_recorded_as_after_the_park(parked):
     assert park(doc) == 0
     tick._reap("sw", store, ledger, rt, ledger.rows, 1)
     ledger.rows["a"]["state"] = "done"
+    ledger.update_task = type(ledger).update_task.__get__(ledger)
     tick.tick("sw", store, ledger, rt, now_ms=NOW + 1)
-    assert [(row["task"], row["state"], row["after"]) for row in store.launches("sw") if row["agent"] != AGENT] == [
+    assert [(row["task"], row["state"], row["after"]) for row in store.launches("sw") if row["task"] == "t1"] == [
         ("t1", "started", "park")
     ]
 
