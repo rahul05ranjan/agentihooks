@@ -234,11 +234,14 @@ def test_lint_and_test_count_grade_a_pull_request_that_merged_dev_from_the_curre
         "artifacts": next(s for s in jobs["lint"]["steps"] if s.get("id") == "artifacts"),
     }
     event = {"pull_request": {"base": {"sha": pinned}}}
+    logs = {}
     for name, step in steps.items():
         (tmp_path / name).mkdir()
         base = _evaluate(step["env"]["BASE"], event_name="pull_request", base_ref="dev", event=event)
         env = dict(os.environ, BASE=base, RUNNER_TEMP=str(tmp_path / name), GITHUB_OUTPUT=str(tmp_path / name / "out"))
-        subprocess.run(["bash", "-e", "-c", step["run"]], cwd=repo, env=env, check=True, capture_output=True)
+        done = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=repo, env=env, check=True, capture_output=True)
+        logs[name] = done.stdout.decode()
+    assert f"BASE: {merged}" in logs["test-count"]
     assert _git(tmp_path / "test-count" / "base", "rev-parse", "HEAD") == merged
     assert _git(tmp_path / "lint" / "base", "rev-parse", "HEAD") == merged
     assert (tmp_path / "docs" / "docs-changes").read_text() == "docs/own.md\n"

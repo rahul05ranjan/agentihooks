@@ -183,8 +183,8 @@ def test_queue_requires_a_run_for_its_observed_head(records):
         merge_queue.operate("queue", URL, run)
 
 
-def dev_moved(head=AUTHORED, changed=(), conclusion="success", jobs=None, log="", dev=("current",), refuse=""):
-    calls, devs = [], iter(dev)
+def dev_moved(head=AUTHORED, changed=(), conclusion="success", jobs=None, log="", refuse=""):
+    calls = []
     test_count = [{"id": 31, "name": "test-count (3.11)", "conclusion": "success"}]
 
     def run(command, **kwargs):
@@ -198,12 +198,7 @@ def dev_moved(head=AUTHORED, changed=(), conclusion="success", jobs=None, log=""
         elif path == "graphql" and command[4] == f"query={merge_queue.STATE}":
             reply = {"data": {"resource": {**OPEN, "mergeQueueEntry": ENTRY if queued else None}}}
         elif path == "graphql":
-            oid = next(devs, dev[-1])
-            reply = {
-                "data": {
-                    "resource": {"number": 12, "repository": {"nameWithOwner": "o/r", "ref": {"target": {"oid": oid}}}}
-                }
-            }
+            reply = {"data": {"resource": {"repository": {"nameWithOwner": "o/r"}}}}
         elif "/workflows/test.yml/runs" in path:
             reply = {"workflow_runs": [{"id": 21, "head_sha": "abc", "conclusion": conclusion}]}
         elif path.endswith("/logs"):
@@ -259,7 +254,7 @@ def assert_enqueued_as_is(result, calls):
     ],
 )
 def test_queue_enqueues_a_green_head_as_is_whatever_dev_changed(changed, head):
-    run, calls = dev_moved(head, changed, dev=("c" * 40, "current"))
+    run, calls = dev_moved(head, changed)
     assert_enqueued_as_is(merge_queue.operate("queue", URL, run), calls)
 
 
@@ -288,11 +283,6 @@ def test_queue_enqueues_without_the_base_its_checks_graded(log):
 )
 def test_queue_enqueues_without_a_green_test_count_job(jobs):
     run, calls = dev_moved(jobs=jobs)
-    assert_enqueued_as_is(merge_queue.operate("queue", URL, run), calls)
-
-
-def test_queue_enqueues_while_dev_keeps_moving():
-    run, calls = dev_moved(changed=[{"filename": "scripts/swarm/intent.py"}], dev=("c" * 40, "current", "newer"))
     assert_enqueued_as_is(merge_queue.operate("queue", URL, run), calls)
 
 
@@ -478,10 +468,10 @@ def test_cli_queue_declares_no_checks_wait(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out) == {"url": URL, "queued": True, "entry": ENTRY}
 
 
-def test_a_checks_wait_naming_a_previous_head_resolves_on_that_green_head():
+def test_a_checks_wait_on_the_queued_head_resolves_once_it_is_green():
     from types import SimpleNamespace
 
-    held = {"kind": "checks", "target": URL, "previous_head": "old"}
+    held = {"kind": "checks", "target": URL, "head": "old"}
     pull = SimpleNamespace(state="OPEN", head="old", resolved=False, red=False, unpassed_gate="")
     assert waits.checks_resolution(held, lambda url: pull) == ""
     pull.resolved = True
