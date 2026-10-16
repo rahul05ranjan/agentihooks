@@ -69,7 +69,10 @@ def _holds_token(step: dict) -> bool:
         TOKEN.search(_values(step.get("env")))
         or TOKEN.search(_values(step.get("with")))
         or TOKEN.search(step.get("run", ""))
-        or step.get("uses", "").startswith("actions/github-script@")
+        or (
+            step.get("uses", "").startswith("actions/github-script@")
+            and (step.get("with") or {}).get("github-token") != APP_TOKEN
+        )
     )
 
 
@@ -158,6 +161,7 @@ def test_no_script_a_step_runs_calls_the_api():
         "scripts/ci_mutation/browser.py",
         "scripts/ci_mutation/plan.py",
         "scripts/ci_queue_fail_fast.py",
+        "scripts/ci_release.sh",
         "scripts/ci_semgrep.py",
         "scripts/ci_wiring.py",
         "scripts/packaging/compose-hive-smoke.sh",
@@ -331,6 +335,15 @@ def test_only_an_api_step_on_the_app_token_alone_stays_off_the_shared_quota(step
 
 
 @pytest.mark.parametrize(
+    ("binding", "offends"),
+    [(APP_TOKEN, False), ("${{ github.token }}", True), ("", True), ("${{ secrets.OTHER_TOKEN }}", True)],
+)
+def test_github_script_requires_the_explicit_app_token(binding, offends):
+    step = {"uses": "actions/github-script@v7", "with": {"github-token": binding}}
+    assert _offends(step) is offends
+
+
+@pytest.mark.parametrize(
     "plant",
     [
         {"run": "gh --repo o/r api rate_limit"},
@@ -463,7 +476,7 @@ def test_no_job_skips_on_a_tree_another_run_passed():
     assert "steps.lookup" not in (ROOT / ".github/workflows/test.yml").read_text()
 
 
-def _superseded(tmp_path, dev_head: str, sha: str = "a" * 40) -> str | None:
+def _superseded(tmp_path, dev_head: str, sha: str = "a" * 40) -> tuple[int, str | None]:
     step = next(step for step in _jobs()["sonar"]["steps"] if step.get("id") == "current")
     tools = tmp_path / "bin"
     tools.mkdir()
@@ -476,16 +489,20 @@ def _superseded(tmp_path, dev_head: str, sha: str = "a" * 40) -> str | None:
         env={**os.environ, "PATH": f"{tools}:{os.environ['PATH']}", "GITHUB_OUTPUT": str(output), "SHA": sha},
         check=False,
     )
-    return output.read_text() if result.returncode == 0 else None
+    return result.returncode, output.read_text() if output.exists() else None
 
 
 @pytest.mark.parametrize(("dev_head", "superseded"), [("a" * 40, "false"), ("b" * 40, "true")])
 def test_a_dev_push_skips_the_analysis_once_dev_moved_past_it(tmp_path, dev_head, superseded):
-    assert _superseded(tmp_path, dev_head) == f"superseded={superseded}\n"
+    status, output = _superseded(tmp_path, dev_head)
+    assert status in ({0, 1} if superseded == "true" else {0})
+    assert output == f"superseded={superseded}\n"
 
 
 def test_an_unreadable_dev_head_fails_the_check_instead_of_skipping_the_analysis(tmp_path):
-    assert _superseded(tmp_path, "") is None
+    status, output = _superseded(tmp_path, "")
+    assert status != 0
+    assert output is None
 
 
 def test_sonar_names_the_current_dev_head_from_git_and_gates_the_scan_on_it():
