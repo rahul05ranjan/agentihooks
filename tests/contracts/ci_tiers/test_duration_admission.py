@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from scripts import ci_wiring, gate_protected
+from scripts import ci_reuse, ci_wiring, gate_protected
 
 pytestmark = pytest.mark.unit
 ROOT = Path(__file__).resolve().parents[3]
 
 
-def combined(base):
+def combined(base, promotion=True):
     head = copy.deepcopy(base)
     jobs = head["test.yml"]["jobs"]
     durations = jobs.pop("durations")
@@ -23,6 +23,7 @@ def combined(base):
         if isinstance(job.get("needs"), list):
             job["needs"] = list(dict.fromkeys("select" if name == "durations" else name for name in job["needs"]))
     head["test.yml"]["jobs"] = json.loads(json.dumps(jobs).replace("needs.durations.outputs.", "needs.select.outputs."))
+    head["test.yml"]["jobs"]["gate-required"]["steps"] = ci_reuse.gate_steps(queue_tier=True, promotion=promotion)
     step = head["test.yml"]["jobs"]["gate-required"]["steps"][0]
     step["run"] = (
         step["run"]
@@ -39,9 +40,10 @@ def grade(base, head):
 
 
 @pytest.mark.parametrize("already_combined", [False, True])
-def test_protected_grading_accepts_combined_duration_admission(already_combined):
+@pytest.mark.parametrize("promotion", [False, True])
+def test_protected_grading_accepts_combined_duration_admission(already_combined, promotion):
     base = ci_wiring.load(ROOT)
-    head = combined(base)
+    head = combined(base, promotion)
     if already_combined:
         base = copy.deepcopy(head)
     assert grade(base, head) == []
@@ -68,7 +70,9 @@ def test_combined_admission_keeps_provenance_before_head_execution():
     base = ci_wiring.load(ROOT)
     head = combined(base)
     head["test.yml"]["jobs"]["select"]["steps"].insert(0, {"run": "echo forged"})
-    assert any("provenance" in problem for problem in grade(base, head))
+    problems = grade(base, head)
+    assert any("provenance" in problem for problem in problems)
+    assert any("base need durations" in problem for problem in problems)
 
 
 def test_combined_admission_cannot_retire_another_required_gate():
@@ -83,3 +87,36 @@ def test_combined_admission_requires_an_existing_selection_job():
     head = combined(base)
     del base["test.yml"]["jobs"]["select"]
     assert any("existing selection" in problem for problem in grade(base, head))
+
+
+@pytest.mark.parametrize("missing", ["base", "head", "both"])
+def test_missing_all_provenance_producers_is_reported(missing):
+    base = ci_wiring.load(ROOT)
+    head = combined(base)
+    for workflows in [base] if missing == "base" else [head] if missing == "head" else [base, head]:
+        workflows["test.yml"]["jobs"].pop("durations", None)
+        workflows["test.yml"]["jobs"].pop("select", None)
+    assert any("provenance" in problem for problem in grade(base, head))
+
+
+def test_missing_base_duration_outputs_is_reported():
+    base = ci_wiring.load(ROOT)
+    head = combined(base)
+    del base["test.yml"]["jobs"]["durations"]["outputs"]
+    assert any("provenance context outputs" in problem for problem in grade(base, head))
+
+
+def test_separate_duration_producer_cannot_be_unhooked_from_the_gate():
+    base = ci_wiring.load(ROOT)
+    head = copy.deepcopy(base)
+    head["test.yml"]["jobs"]["gate-required"]["needs"].remove("durations")
+    assert any("base need durations" in problem for problem in grade(base, head))
+
+
+def test_missing_reuse_cannot_retire_the_duration_dependency():
+    base = ci_wiring.load(ROOT)
+    head = combined(base)
+    del head["test.yml"]["jobs"]["reuse"]
+    problems = grade(base, head)
+    assert "The head removes the protected reuse job." in problems
+    assert any("base need durations" in problem for problem in problems)
