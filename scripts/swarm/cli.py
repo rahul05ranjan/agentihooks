@@ -1320,6 +1320,8 @@ def cmd_merge(store, args):
                     task["claimed_by"],
                     f"Your pull request {task['pr_url']} was requeued in its original order after priority request {args.url}.",
                 )
+        if result["errors"]:
+            raise SwarmError("; ".join(result["errors"]))
     else:
         agent = _worker(store, args) if args.action != "state" else None
         if agent is not None:
