@@ -496,6 +496,17 @@ def test_a_refused_park_leaves_no_restart_mark(parked, capsys):
     assert store.take_restart("sw", "t1") == ""
 
 
+def test_the_life_launched_after_a_park_is_recorded_as_after_the_park(parked):
+    store, ledger, rt, _, doc = parked
+    assert park(doc) == 0
+    tick._reap("sw", store, ledger, rt, ledger.rows, 1)
+    ledger.rows["a"]["state"] = "done"
+    tick.tick("sw", store, ledger, rt, now_ms=NOW + 1)
+    assert [(row["task"], row["state"], row["after"]) for row in store.launches("sw") if row["agent"] != AGENT] == [
+        ("t1", "started", "park")
+    ]
+
+
 def test_shell_runs_with_captured_text_and_a_timeout(monkeypatch):
     seen = []
     done = subprocess.CompletedProcess(["git", "status"], 0, stdout="ok\n", stderr="")

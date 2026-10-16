@@ -308,6 +308,13 @@ def test_plain_restarts_among_excused_ones_still_raise_the_proof_loop():
     plain = ev("task started", "tasks/t1", by="swarm")
     events = [plain, {**plain, "after": "park"}, plain, {**plain, "after": "watchdog"}, plain, plain]
     [found] = run({"tasks": [task("t1")], "_meta": {"events": events}})
+    assert found["evidence"] == ["task t1", "started 6 times (3 reruns)", "0 review rounds"]
+
+
+def test_plain_restarts_after_an_excused_first_life_are_all_reruns():
+    plain = ev("task started", "tasks/t1", by="swarm")
+    events = [{**plain, "at": NOW + n} for n in (3, 2, 1)] + [{**plain, "after": "master", "at": NOW}]
+    [found] = run({"tasks": [task("t1")], "_meta": {"events": events}})
     assert found["evidence"] == ["task t1", "started 4 times (3 reruns)", "0 review rounds"]
 
 
