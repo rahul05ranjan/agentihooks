@@ -21,7 +21,9 @@ def legacy(workflows):
     durations = copy.deepcopy(selection)
     durations["steps"] = durations["steps"][:end]
     durations["outputs"] = {name: selection["outputs"].pop(name) for name in ("key", "queued", "base", "source")}
-    durations["timeout-minutes"] = "${{ (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch') && 4 || 2 }}"
+    durations["timeout-minutes"] = (
+        "${{ (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch') && 4 || 2 }}"
+    )
     selection["steps"] = selection["steps"][end:]
     selection["if"] = selection["if"].replace("!cancelled()", "!cancelled() && github.event_name != 'merge_group'")
     jobs["durations"] = durations
@@ -35,6 +37,7 @@ def legacy(workflows):
     jobs["gate-required"]["needs"].append("durations")
     jobs["gate-required"]["steps"] = ci_reuse.gate_steps(queue_tier=True, promotion=True)
     return base
+
 
 def combined(base, promotion=True):
     head = copy.deepcopy(base)
