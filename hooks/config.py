@@ -1,7 +1,15 @@
 """Configuration for hooks module."""
 
 import os
+import re
+import sys
 from pathlib import Path
+
+from scripts import gh_config
+
+# A name outside this shape cannot be a shell variable, and a mistyped line can
+# put a secret in the name, so such a line is reported by position only.
+_VALID_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 # Keys whose current os.environ value came from an .env file rather than the
 # surrounding process. Only these may be refreshed by reload_user_env() — a
@@ -16,7 +24,7 @@ def _parse_env_file(
     override_file_owned: bool = False,
     pass_keys: set[str] | None = None,
     blocked_keys: set[str] | None = None,
-) -> None:
+) -> set[str]:
     """Parse a single .env file and set variables in os.environ.
 
     Precedence, highest first:
@@ -36,15 +44,21 @@ def _parse_env_file(
     previous pass, so a long-lived process (the agentihooks MCP server) picks
     up an edited .env instead of reporting whatever was true at import.
     """
+    multiline: set[str] = set()
     if not env_file.is_file():
-        return
+        return multiline
     if pass_keys is None:
         pass_keys = set()
     # Keys written by THIS file. Within one file the first definition wins —
     # scripts/mcp_daemon.py's scanner resolves duplicates the same way and the
     # two are asserted to agree, so "later wins" applies between files only.
     this_file: set[str] = set()
-    for _raw in env_file.read_text(encoding="utf-8").splitlines():
+    _open_quote = ""
+    for _n, _raw in enumerate(env_file.read_text(encoding="utf-8").splitlines(), 1):
+        if _open_quote:
+            if _open_quote in _raw:
+                _open_quote = ""
+            continue
         _line = _raw.strip()
         if not _line or _line.startswith("#"):
             continue
@@ -55,19 +69,29 @@ def _parse_env_file(
             continue
         _key, _, _val = _line.partition("=")
         _key = _key.strip()
-        if blocked_keys and _key in blocked_keys:
-            continue
         _val = _val.strip()
         # Handle quoted values: KEY="value" or KEY='value'
         if _val and _val[0] in ('"', "'"):
             _q = _val[0]
             _end = _val.find(_q, 1)
             _val = _val[1:_end] if _end != -1 else _val[1:]
+            if _end == -1:
+                _open_quote = _q
         elif "#" in _val:
             # Strip inline comment: KEY=value # comment
             _val = _val[: _val.index("#")].rstrip()
+        if blocked_keys and _key in blocked_keys:
+            continue
         if not _key:
             continue
+        if not _VALID_NAME.fullmatch(_key):
+            print(
+                f"[agentihooks] {env_file} line {_n}: variable name is not a valid identifier, line skipped",
+                file=sys.stderr,
+            )
+            continue
+        if _open_quote:
+            multiline.add(_key)
         if _key in this_file:
             continue  # first definition within a file wins
         if _key in pass_keys:
@@ -83,6 +107,25 @@ def _parse_env_file(
             os.environ[_key] = _val
             pass_keys.add(_key)
             this_file.add(_key)
+    return multiline
+
+
+# Shared with the bashrc agentienv check, so the shell and every process it starts name a value once.
+_MULTILINE_REPORTED = "AGENTIHOOKS_MULTILINE_REPORTED"
+
+
+def _report_multiline_values(from_files: set[str]) -> None:
+    names = from_files | {k for k, v in os.environ.items() if "\n" in v and _VALID_NAME.fullmatch(k)}
+    reported = os.environ.get(_MULTILINE_REPORTED, "").split()
+    names -= set(reported)
+    # Hook processes write stderr into block messages, so only a person at a terminal is told.
+    if names and sys.stderr.isatty():
+        print(
+            "[agentihooks] these values span several lines, and line based tools such as env "
+            "print their later lines as if they were names: " + ", ".join(sorted(names)),
+            file=sys.stderr,
+        )
+        os.environ[_MULTILINE_REPORTED] = " ".join([*reported, *sorted(names)])
 
 
 # Connection and client settings adopted from the brain's own directory, where
@@ -192,7 +235,7 @@ def _load_user_env(*, override_file_owned: bool = False) -> None:
 
     # 1. Main .env first
     blocked = set(_BRAIN_KEYS_FROM_KERNEL)
-    _parse_env_file(
+    multiline = _parse_env_file(
         _home / ".env",
         override_file_owned=override_file_owned,
         pass_keys=_pass_keys,
@@ -204,12 +247,13 @@ def _load_user_env(*, override_file_owned: bool = False) -> None:
         for _extra in sorted(_home.glob("*.env")):
             if _extra.name == ".env":
                 continue
-            _parse_env_file(
+            multiline |= _parse_env_file(
                 _extra,
                 override_file_owned=override_file_owned,
                 pass_keys=_pass_keys,
                 blocked_keys=blocked,
             )
+    _report_multiline_values(multiline)
 
 
 def _brain_http_configured() -> bool:
@@ -252,6 +296,9 @@ def _env_files_fingerprint() -> tuple:
 _load_user_env()
 _load_brain_env()
 _ENV_FINGERPRINT = _env_files_fingerprint()
+# The scripts package pin ran before the env files above could set XDG_CONFIG_HOME.
+gh_config.pin(os.environ)
+gh_config.persist(os.environ)
 
 
 def reload_brain_env(force: bool = False) -> dict:
@@ -440,6 +487,12 @@ RETRY_BREAKER_TTL = int(os.getenv("RETRY_BREAKER_TTL", "3600"))
 #      agentihooks-bundle/profiles/*/.claude/rules/code-is-source.md
 KUBECTL_MUTATION_GUARD_ENABLED = _env_bool("KUBECTL_MUTATION_GUARD_ENABLED", "true")
 
+# Python in a linked worktree is edited through Serena (Development Manifesto §7).
+# AGENTIHOOKS_SERENA=false is the one off switch for every session or machine: the
+# guard lets every edit through and injects no Serena directive. Unset or any other
+# value keeps it on.
+SERENA_EDIT_GUARD_ENABLED = os.getenv("AGENTIHOOKS_SERENA", "true") != "false"
+
 # =============================================================================
 # BRAIN ADAPTER
 # =============================================================================
@@ -505,12 +558,16 @@ QUOTA_USAGE_STALE_SEC: int = int(os.getenv("QUOTA_USAGE_STALE_SEC", "300"))
 # Quota policy — what a session does when its own quota runs out (hooks/context/quota_policy.py).
 # Handoff when 7d used >= WEEK_PCT or 5h used >= 5H_PCT; a target account needs MIN_LEFT% routing
 # left; a spent 5h window with >= WAIT_MIN_WEEK_LEFT% of the week left waits for the reset.
-# AGENTIHOOKS_MAX_SESSIONS_PER_ACCOUNT (default 2) is read by hooks/context/account_sessions.py.
 QUOTA_POLICY_ENABLED = _env_bool("QUOTA_POLICY_ENABLED", "true")
 QUOTA_HANDOFF_WEEK_PCT: float = float(os.getenv("AGENTIHOOKS_HANDOFF_WEEK_PCT", "98"))
 QUOTA_HANDOFF_5H_PCT: float = float(os.getenv("AGENTIHOOKS_HANDOFF_5H_PCT", "99"))
+QUOTA_WARN_WEEK_PCT: float = float(os.getenv("AGENTIHOOKS_HANDOFF_WARN_WEEK_PCT", "90"))
+QUOTA_WARN_5H_PCT: float = float(os.getenv("AGENTIHOOKS_HANDOFF_WARN_5H_PCT", "95"))
 QUOTA_HANDOFF_MIN_LEFT: float = float(os.getenv("AGENTIHOOKS_HANDOFF_MIN_LEFT", "20"))
 QUOTA_WAIT_MIN_WEEK_LEFT: float = float(os.getenv("AGENTIHOOKS_WAIT_MIN_WEEK_LEFT", "10"))
+QUOTA_RESERVE_ACCOUNTS: frozenset[str] = frozenset(
+    slug.strip() for slug in os.getenv("AGENTIHOOKS_RESERVE_ACCOUNTS", "").split(",") if slug.strip()
+)
 
 # =============================================================================
 # CONTEXT AUDIT — per-tool token consumption tracking
@@ -542,6 +599,8 @@ MCP_SCHEMA_AVG_TOKENS: int = int(os.getenv("MCP_SCHEMA_AVG_TOKENS", "150"))
 # SMART COMPACT SUGGESTIONS
 # =============================================================================
 COMPACT_SUGGEST_ENABLED = _env_bool("COMPACT_SUGGEST_ENABLED", "true")
+COMPACT_LIMIT: int = int(os.getenv("AGENTIHOOKS_COMPACT_LIMIT", "600"))
+HANDOFF_MARGIN: int = int(os.getenv("AGENTIHOOKS_HANDOFF_MARGIN", "50"))
 
 # =============================================================================
 # CLAUDE.MD SANITY CHECK
@@ -608,6 +667,8 @@ BROADCAST_MAX_PER_PROMPT: int = int(os.getenv("BROADCAST_MAX_PER_PROMPT", "8"))
 # envelope headroom.
 BROADCAST_MAX_BYTES_PRETOOL: int = int(os.getenv("BROADCAST_MAX_BYTES_PRETOOL", "0"))
 BROADCAST_MAX_BYTES_PROMPT: int = int(os.getenv("BROADCAST_MAX_BYTES_PROMPT", "0"))
+# Characters one Claude hook event may inject in total; 0 turns the budget off.
+HOOK_INJECTION_MAX_CHARS: int = int(os.getenv("HOOK_INJECTION_MAX_CHARS", "9000"))
 BROADCAST_PERSISTENT_THROTTLE = _env_bool("BROADCAST_PERSISTENT_THROTTLE", "true")
 BROADCAST_DELIVERY_STATE_FILE: str = os.getenv(
     "BROADCAST_DELIVERY_STATE_FILE",
@@ -663,14 +724,57 @@ CONTROLS_BYPASS_ENABLED: bool = _env_bool("CONTROLS_BYPASS_ENABLED", "true")
 CI_MANIFESTO_ENABLED = _env_bool("CI_MANIFESTO_ENABLED", "true")
 
 
+def manifesto_name(name: str) -> str:
+    return Path(name.strip()).stem.casefold()
+
+
 # Manifesto resolution loads every Markdown manifesto in deterministic filename
 # order. CI_MANIFESTO_PATH remains a single-file compatibility override.
 def _manifesto_skip_names() -> set[str]:
     raw = os.getenv("AGENTIHOOKS_SKIP_MANIFESTO", "")
-    return {Path(name.strip()).stem.casefold() for name in raw.split(",") if name.strip()}
+    return {manifesto_name(name) for name in raw.split(",") if name.strip()}
 
 
-def _resolve_manifesto_paths(bundle_root: str | Path | None = None) -> list[str]:
+_FRONT_MATTER = re.compile(r"\A---[ \t]*\n(.*?)^---[ \t]*(?:\n|\Z)", re.S | re.M)
+
+
+def _manifesto_front(text: str) -> tuple[dict, str]:
+    import yaml
+
+    match = _FRONT_MATTER.match(text)
+    if not match:
+        return {}, text
+    try:
+        data = yaml.safe_load(match.group(1))
+    except yaml.YAMLError:
+        return {}, text
+    return (data, text[match.end() :].lstrip("\n")) if isinstance(data, dict) else ({}, text)
+
+
+def manifesto_body(path: str | Path) -> str:
+    return _manifesto_front(Path(path).read_text(encoding="utf-8"))[1]
+
+
+def manifesto_roles(path: str | Path) -> list[str] | None:
+    roles = _manifesto_front(Path(path).read_text(encoding="utf-8"))[0].get("roles")
+    if roles is None:
+        return None
+    return [str(role).casefold() for role in (roles if isinstance(roles, list) else [roles])]
+
+
+def _receives(path: Path, role: str | None, choice: dict[str, bool]) -> bool:
+    picked = choice.get(manifesto_name(path.name))
+    if picked is not None:
+        return picked
+    if role is None:
+        return True
+    roles = manifesto_roles(path)
+    return roles is None or role.casefold() in roles
+
+
+def _resolve_manifesto_paths(
+    bundle_root: str | Path | None = None, role: str | None = None, choice: dict[str, bool] | None = None
+) -> list[str]:
     explicit = os.getenv("CI_MANIFESTO_PATH")
     if explicit:
         path = Path(explicit).expanduser()
@@ -689,7 +793,9 @@ def _resolve_manifesto_paths(bundle_root: str | Path | None = None) -> list[str]
         return [
             str(path)
             for path in sorted(directory.glob("*.md"), key=lambda item: item.name.casefold())
-            if path.name.casefold() != "readme.md" and path.stem.casefold() not in skip
+            if path.name.casefold() != "readme.md"
+            and path.stem.casefold() not in skip
+            and _receives(path, role, choice or {})
         ]
     legacy = Path.home() / "dev" / "tcc-ecosystem" / "documents" / "anton" / "ANTON-CORE-CI-MANIFESTO.md"
     return [str(legacy)] if legacy.is_file() and legacy.stem.casefold() not in skip else []
@@ -717,7 +823,7 @@ CI_MANIFESTO_RUNTIME_INJECT: bool = _env_bool("CI_MANIFESTO_RUNTIME_INJECT", "fa
 CI_MANIFESTO_REFRESH_EVERY: int = int(os.getenv("CI_MANIFESTO_REFRESH_EVERY", "8"))
 
 # Auto dev-switch — at SessionStart, if cwd is on main/master, switch to dev.
-AUTO_DEV_SWITCH_ENABLED = _env_bool("AUTO_DEV_SWITCH_ENABLED", "true")
+AGENTIHOOKS_FORCE_DEV_BRANCH = _env_bool("AGENTIHOOKS_FORCE_DEV_BRANCH", "false")
 
 # =============================================================================
 # OTEL — Custom hook telemetry (Layer 2)
@@ -727,8 +833,32 @@ AUTO_DEV_SWITCH_ENABLED = _env_bool("AUTO_DEV_SWITCH_ENABLED", "true")
 OTEL_HOOKS_ENABLED = _env_bool("OTEL_HOOKS_ENABLED", "true")
 OTEL_HOOKS_SERVICE_NAME = os.getenv("OTEL_HOOKS_SERVICE_NAME", "agentihooks")
 
+
 # Langfuse OTEL destination (traces only, OTLP HTTP)
-OTEL_LANGFUSE_ENABLED = _env_bool("OTEL_LANGFUSE_ENABLED", "false")
-OTEL_LANGFUSE_ENDPOINT = os.getenv("OTEL_LANGFUSE_ENDPOINT", "")
+def langfuse_enabled(environ) -> bool:
+    """Claude Code strips every OTEL_* variable from hook processes, so the unprefixed name is the one hooks see."""
+    names = ("AGENTIHOOKS_LANGFUSE_ENABLED", "OTEL_LANGFUSE_ENABLED")
+    return any(environ.get(name, "").lower() in ("true", "1", "yes") for name in names)
+
+
+OTEL_LANGFUSE_ENABLED = langfuse_enabled(os.environ)
+
+
+def langfuse_route(environ) -> tuple[str, str]:
+    """(endpoint, Host header). The default LAN ingress routes by Host; the public name sits behind Cloudflare Access."""
+    endpoint = environ.get("OTEL_LANGFUSE_ENDPOINT", "")
+    host = environ.get("OTEL_LANGFUSE_HOST_HEADER", "") or ("" if endpoint else "langfuse.homeofanton.com")
+    return endpoint or "http://10.10.30.200/api/public/otel", host
+
+
+def hook_collector(environ) -> tuple[str, str]:
+    """(endpoint, protocol) of the hook telemetry collector; Claude Code strips every OTEL_* variable from hook processes."""
+    endpoint = environ.get("AGENTIHOOKS_OTLP_ENDPOINT", "") or environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+    protocol = environ.get("AGENTIHOOKS_OTLP_PROTOCOL", "") or environ.get("OTEL_EXPORTER_OTLP_PROTOCOL", "")
+    return endpoint, protocol
+
+
+OTEL_LANGFUSE_ENDPOINT, OTEL_LANGFUSE_HOST_HEADER = langfuse_route(os.environ)
 OTEL_LANGFUSE_PUBLIC_KEY = os.getenv("OTEL_LANGFUSE_PUBLIC_KEY", "") or os.getenv("LANGFUSE_PUBLIC_KEY", "")
 OTEL_LANGFUSE_SECRET_KEY = os.getenv("OTEL_LANGFUSE_SECRET_KEY", "") or os.getenv("LANGFUSE_SECRET_KEY", "")
+LANGFUSE_FIELD_MAX_CHARS = int(os.getenv("AGENTIHOOKS_LANGFUSE_FIELD_MAX_CHARS", "32000"))

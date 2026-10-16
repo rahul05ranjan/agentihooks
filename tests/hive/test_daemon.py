@@ -1,0 +1,753 @@
+import json
+from unittest.mock import Mock
+
+import pytest
+
+from scripts.hive import daemon, registry
+
+pytestmark = [pytest.mark.unit, pytest.mark.xdist_group("fakeredis")]
+
+
+@pytest.fixture
+def redis():
+    import fakeredis
+
+    return fakeredis.FakeRedis(server=fakeredis.FakeServer(), decode_responses=True)
+
+
+def test_beat_refreshes_reported_fields_and_expires_telemetry(redis, monkeypatch):
+    registry.update(redis, "machine", ["name=Worker", "max-agents=8"])
+    report = {
+        "slots": [{"harness": "claude", "account": "one", "kind": "subscription", "cap": 4}],
+        "interactive": {"claude": "", "codex": "default"},
+        "repos": ["/repos/project"],
+        "sessions": {"claude:one": 2},
+        "quota": {
+            "claude:one": {
+                "five_hour": {"used": 22, "resets_at": 800},
+                "seven_day": {"used": 36, "resets_at": 900},
+                "observed_at": 120,
+            }
+        },
+    }
+    monkeypatch.setattr(daemon, "observe", lambda **kwargs: report)
+    monkeypatch.setattr(daemon.time, "time", lambda: 123.456)
+    daemon.beat(redis, "machine")
+    record = registry.show(redis, "machine")
+    assert record["name"] == "Worker"
+    assert record["max_agents"] == 8
+    assert record["heartbeat_at"] == 123456
+    for field in ("slots", "interactive", "repos"):
+        assert record[field] == report[field]
+    for field in ("sessions", "quota"):
+        key = f"{registry.key('machine')}:{field}"
+        assert json.loads(redis.get(key)) == report[field]
+        assert redis.ttl(key) == 45
+    report.update(slots=[], repos=[], sessions={}, quota={})
+    daemon.beat(redis, "machine")
+    assert registry.show(redis, "machine")["slots"] == []
+    assert json.loads(redis.get(f"{registry.key('machine')}:sessions")) == {}
+
+
+def test_three_missed_beats_expire_both_keys(redis, monkeypatch):
+    import time
+
+    monkeypatch.setattr(
+        daemon, "observe", lambda **kwargs: {"slots": [], "interactive": {}, "repos": [], "sessions": {}, "quota": {}}
+    )
+    daemon.beat(redis, "machine")
+    future = time.time() + 46
+    with monkeypatch.context() as patcher:
+        patcher.setattr(time, "time", lambda: future)
+        assert redis.get(f"{registry.key('machine')}:sessions") is None
+        assert redis.get(f"{registry.key('machine')}:quota") is None
+    assert redis.exists(registry.key("machine"))
+
+
+def test_run_beats_immediately_then_waits_fifteen_seconds(monkeypatch):
+    events = []
+    connection = object()
+    monkeypatch.setattr(daemon, "beat", lambda redis, hive: events.append((redis, hive)))
+    monkeypatch.setattr(daemon, "hive_id", lambda: "local")
+    monkeypatch.setattr(daemon.time, "monotonic", lambda: 0)
+
+    def sleep(seconds):
+        events.append(seconds)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(daemon.time, "sleep", sleep)
+    with pytest.raises(KeyboardInterrupt):
+        daemon.run(connection)
+    assert events == [(connection, "local"), 15]
+
+
+def test_run_deducts_observation_time_from_the_beat_interval(monkeypatch):
+    monkeypatch.setattr(daemon, "hive_id", lambda: "local")
+    monkeypatch.setattr(daemon, "beat", lambda redis, hive: None)
+    timestamps = iter([100, 103])
+    monkeypatch.setattr(daemon.time, "monotonic", lambda: next(timestamps))
+    sleep = Mock(side_effect=KeyboardInterrupt)
+    monkeypatch.setattr(daemon.time, "sleep", sleep)
+    with pytest.raises(KeyboardInterrupt):
+        daemon.run(object())
+    sleep.assert_called_once_with(12)
+
+
+def test_install_writes_the_service_and_enables_it(tmp_path):
+    run = Mock(return_value=Mock(returncode=0))
+    assert daemon.install("/bin/agentihooks", tmp_path, run)
+    service = tmp_path / "agentihooks-hive.service"
+    assert service.read_text() == daemon.unit("/bin/agentihooks")
+    assert 'ExecStart="/bin/agentihooks" hive run\n' in service.read_text()
+    assert "EnvironmentFile=-%h/.agentihooks/hive.env\n" in service.read_text()
+    assert "Restart=always\nRestartSec=5\n" in service.read_text()
+    assert run.call_args_list[0].args[0] == ["systemctl", "--user", "daemon-reload"]
+    assert run.call_args_list[1].args[0] == ["systemctl", "--user", "enable", "--now", "agentihooks-hive.service"]
+    run.reset_mock()
+    daemon.install("/bin/agentihooks", tmp_path, run)
+    assert run.call_count == 1
+
+
+def test_install_reports_enable_failure(tmp_path):
+    assert daemon.install("/bin/agentihooks", tmp_path, Mock(return_value=Mock(returncode=1))) is False
+
+
+def test_observe_selects_fields_and_never_publishes_credentials(redis, monkeypatch, tmp_path):
+    from scripts import claude_quota_balancer as balancer
+    from scripts import codex_quota, codex_router
+
+    sentinel = "credential-sentinel"
+    monkeypatch.setattr(daemon, "claude_signed_in", lambda: False)
+    monkeypatch.setenv("AH_CC_TOKEN_one", sentinel)
+    monkeypatch.setenv("AH_CX_TOKEN_two", sentinel)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", sentinel)
+    monkeypatch.setenv("OPENAI_API_KEY", sentinel)
+    monkeypatch.setattr(daemon.account_sessions, "sessions_by_account", lambda **kwargs: {"one": 2})
+    monkeypatch.setattr(daemon.account_sessions, "codex_sessions_by_account", lambda **kwargs: {"two": 3, "default": 1})
+    result = balancer.ProbeResult(
+        "one", "allowed", "OK", 60, balancer.QuotaWindow(20, 1000), balancer.QuotaWindow(40, 2000), error=sentinel
+    )
+    monkeypatch.setattr(balancer, "cached_observations", lambda **kwargs: [(120.5, result)])
+    monkeypatch.setattr(
+        codex_router,
+        "accounts",
+        lambda environ: [codex_router.CodexAccount("default"), codex_router.CodexAccount("two", "AH_CX_TOKEN_two")],
+    )
+    quota = codex_quota.CodexQuota(121, sentinel, balancer.QuotaWindow(30, 1000), balancer.QuotaWindow(50, 2000))
+    monkeypatch.setattr(codex_router, "quotas", lambda pool, environ: {"two": quota})
+    monkeypatch.setattr(daemon, "repositories", lambda: [str(tmp_path)])
+    monkeypatch.setattr(daemon.time, "time", lambda: 122)
+    report = daemon.observe()
+    assert report["sessions"]["claude:one"] == 2
+    assert report["sessions"]["codex:two"] == 3
+    assert report["sessions"]["codex:default"] == 1
+    assert report["interactive"]["codex"] == "default"
+    assert report["repos"] == [str(tmp_path)]
+    assert report["quota"]["claude:one"] == {
+        "five_hour": {"used": 20, "resets_at": 1000},
+        "seven_day": {"used": 40, "resets_at": 2000},
+        "observed_at": 120.5,
+    }
+    assert report["quota"]["codex:two"] == {
+        "five_hour": {"used": 30, "resets_at": 1000},
+        "seven_day": {"used": 50, "resets_at": 2000},
+        "observed_at": 121,
+    }
+    assert report["quota"]["codex:default"]["observed_at"] is None
+    assert (
+        next(slot for slot in report["slots"] if slot["harness"] == "codex" and slot["account"] == "default")["cap"]
+        == 0
+    )
+    assert {(slot["harness"], slot["account"], slot["kind"]) for slot in report["slots"]} >= {
+        ("claude", "one", "subscription"),
+        ("codex", "two", "subscription"),
+        ("codex", "default", "interactive"),
+        ("claude", "api", "api"),
+        ("codex", "api", "api"),
+    }
+    daemon.beat(redis, "machine")
+    for key in redis.scan_iter():
+        value = (
+            redis.hgetall(key)
+            if redis.type(key) == "hash"
+            else (redis.smembers(key) if redis.type(key) == "set" else redis.get(key))
+        )
+        assert sentinel not in str(value)
+
+
+def test_repositories_discover_checkouts_and_refresh_removals(monkeypatch, tmp_path):
+    monkeypatch.setenv("HIVE_REPO_ROOT", str(tmp_path))
+    repo = tmp_path / "org" / "project"
+    repo.mkdir(parents=True)
+    (repo / ".git").mkdir()
+    direct = tmp_path / "direct"
+    direct.mkdir()
+    (direct / ".git").write_text("gitdir: elsewhere")
+    (tmp_path / "empty").mkdir()
+    assert daemon.repositories() == sorted([str(direct), str(repo)])
+    (repo / ".git").rmdir()
+    assert daemon.repositories() == [str(direct)]
+
+
+def test_cli_runs_the_daemon_and_installs_service(monkeypatch):
+    from scripts.hive import cli
+
+    connection = object()
+    monkeypatch.setattr(cli, "redis_client", lambda: connection)
+    run = Mock()
+    install = Mock(return_value=True)
+    monkeypatch.setattr(daemon, "run", run)
+    monkeypatch.setattr(daemon, "install", install)
+    assert cli.main(["run"]) == 0
+    run.assert_called_once_with(connection)
+    assert cli.main(["install"]) == 0
+    install.assert_called_once_with()
+    install.return_value = False
+    assert cli.main(["install"]) == 1
+
+
+def test_snapshot_quota_uses_the_newest_attributed_local_reading(monkeypatch, tmp_path):
+    from hooks.context import broadcast, quota_usage
+    from scripts import claude_quota_balancer as balancer
+
+    monkeypatch.setattr(daemon.account_sessions, "live_sessions", lambda: {11: "one", 12: "one"})
+    monkeypatch.setattr(
+        broadcast,
+        "_load_sessions",
+        lambda: {
+            "old": {"pid": 11, "account": "one"},
+            "new": {"pid": 12, "account": "one"},
+            "other": {"pid": 13, "account": "one"},
+        },
+    )
+    monkeypatch.setattr(quota_usage, "_snapshot_path", lambda session: tmp_path / f"{session}.json")
+    for session, at, used in (("old", 100, 10), ("new", 110, 20), ("other", 120, 90)):
+        (tmp_path / f"{session}.json").write_text(
+            json.dumps(
+                {
+                    "updated_at": at,
+                    "rate_limits": {
+                        "five_hour": {"used_percentage": used, "resets_at": 1000},
+                        "seven_day": {"used_percentage": 30, "resets_at": 2000},
+                    },
+                }
+            )
+        )
+    monkeypatch.setattr(daemon, "claude_signed_in", lambda: False)
+    monkeypatch.setattr(daemon.codex_router, "accounts", lambda environ: [])
+    monkeypatch.setattr(balancer, "cached_observations", lambda **kwargs: [])
+    slots, quota = daemon._subscriptions({"AH_CC_TOKEN_one": "sentinel"}, {"claude": {}, "codex": {}}, 122)
+    assert quota["claude:one"]["observed_at"] == 110
+    assert quota["claude:one"]["five_hour"] == {"used": 20, "resets_at": 1000}
+    assert quota["claude:one"]["seven_day"] == {"used": 30, "resets_at": 2000}
+
+
+def test_idle_claude_login_is_advertised_without_credentials(monkeypatch):
+    monkeypatch.setattr(
+        daemon.subprocess,
+        "run",
+        Mock(
+            return_value=Mock(
+                returncode=0, stdout=json.dumps({"loggedIn": True, "authMethod": "claude.ai", "extra": "sentinel"})
+            )
+        ),
+    )
+    assert daemon.claude_signed_in() is True
+    daemon.subprocess.run.assert_called_once_with(
+        ["claude", "auth", "status", "--json"], capture_output=True, text=True, timeout=5
+    )
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"loggedIn": False, "authMethod": "claude.ai"},
+        {"loggedIn": True, "authMethod": "api_key"},
+    ],
+)
+def test_claude_status_requires_an_interactive_login(monkeypatch, result):
+    monkeypatch.setattr(daemon.subprocess, "run", Mock(return_value=Mock(returncode=0, stdout=json.dumps(result))))
+    assert daemon.claude_signed_in() is False
+
+
+def test_missing_claude_binary_is_not_an_interactive_login(monkeypatch):
+    monkeypatch.setattr(daemon.subprocess, "run", Mock(side_effect=FileNotFoundError))
+    assert daemon.claude_signed_in() is False
+
+
+def test_service_contract():
+    assert daemon.unit("/bin/agentihooks") == (
+        "[Unit]\nDescription=agentihooks hive heartbeat\n\n"
+        "[Service]\nType=simple\n"
+        "Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin:/bin\n"
+        "EnvironmentFile=-%h/.agentihooks/.env\n"
+        "EnvironmentFile=-%h/.agentihooks/hive.env\n"
+        'ExecStart="/bin/agentihooks" hive run\n'
+        "Restart=always\nRestartSec=5\n\n"
+        "[Install]\nWantedBy=default.target\n"
+    )
+
+
+def test_cli_help_describes_run_and_install():
+    from scripts.hive import cli
+
+    help_text = cli._parser().format_help()
+    assert "  Publish hive telemetry every fifteen seconds\n" in help_text
+    assert "  Write and enable the hive user service\n" in help_text
+
+
+def test_initial_beat_creates_a_complete_registry_record(redis, monkeypatch):
+    monkeypatch.setattr(
+        daemon,
+        "observe",
+        lambda **kwargs: {
+            "slots": [],
+            "interactive": {"claude": "", "codex": ""},
+            "repos": [],
+            "sessions": {},
+            "quota": {},
+        },
+    )
+    daemon.beat(redis, "machine")
+    assert registry.show(redis, "machine") == {
+        "id": "machine",
+        "name": "machine",
+        "ui": "no",
+        "ephemeral": "no",
+        "roles": [],
+        "prefer": {},
+        "max_agents": 1,
+        "harnesses": [],
+        "slots": [],
+        "interactive": {"claude": "", "codex": ""},
+        "repos": [],
+        "heartbeat_at": registry.show(redis, "machine")["heartbeat_at"],
+        "version": "",
+    }
+    assert redis.smembers(registry.INDEX) == {"machine"}
+
+
+def test_an_overlong_beat_does_not_sleep_again(monkeypatch):
+    monkeypatch.setattr(daemon, "hive_id", lambda: "local")
+    monkeypatch.setattr(daemon, "beat", lambda redis, hive: None)
+    timestamps = iter([100, 116])
+    monkeypatch.setattr(daemon.time, "monotonic", lambda: next(timestamps))
+    sleep = Mock(side_effect=KeyboardInterrupt)
+    monkeypatch.setattr(daemon.time, "sleep", sleep)
+    with pytest.raises(KeyboardInterrupt):
+        daemon.run(object())
+    sleep.assert_called_once_with(0)
+
+
+def test_default_install_location_and_executable_discovery(monkeypatch, tmp_path):
+    monkeypatch.setattr(daemon.shutil, "which", lambda binary: "/bin/agentihooks" if binary == "agentihooks" else None)
+    monkeypatch.setattr(daemon.Path, "home", lambda: tmp_path)
+    run = Mock(return_value=Mock(returncode=0))
+    assert daemon.install(run=run)
+    assert (tmp_path / ".config/systemd/user/agentihooks-hive.service").read_text() == daemon.unit("/bin/agentihooks")
+    assert run.call_args_list[0].kwargs == {"capture_output": True, "text": True, "timeout": 30, "check": True}
+    assert run.call_args_list[1].kwargs == {"capture_output": True, "text": True, "timeout": 30}
+
+
+def test_install_refuses_a_missing_executable(monkeypatch, tmp_path):
+    monkeypatch.setattr(daemon.shutil, "which", lambda binary: None)
+    with pytest.raises(registry.HiveError) as caught:
+        daemon.install(unit_dir=tmp_path)
+    assert str(caught.value) == "agentihooks executable not found"
+
+
+def test_install_reloads_a_changed_service(tmp_path):
+    (tmp_path / "agentihooks-hive.service").write_text("old")
+    run = Mock(return_value=Mock(returncode=0))
+    assert daemon.install("/bin/agentihooks", tmp_path, run)
+    assert run.call_count == 2
+    assert (tmp_path / "agentihooks-hive.service").read_text() == daemon.unit("/bin/agentihooks")
+
+
+def test_repositories_default_root_and_checkout_boundaries(monkeypatch, tmp_path):
+    monkeypatch.delenv("HIVE_REPO_ROOT", raising=False)
+    monkeypatch.setattr(daemon.Path, "home", lambda: tmp_path)
+    assert daemon.repositories() == []
+    root = tmp_path / "dev"
+    root.mkdir()
+    (root / "file").write_text("data")
+    repo = root / "project"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    nested = repo / "nested"
+    nested.mkdir()
+    (nested / ".git").mkdir()
+    assert daemon.repositories() == [str(repo)]
+
+
+@pytest.fixture
+def observations(monkeypatch):
+    from scripts import claude_quota_balancer as balancer
+
+    monkeypatch.setattr(daemon, "claude_signed_in", lambda: False)
+    monkeypatch.setattr(daemon, "_claude_snapshots", lambda observed: None)
+    monkeypatch.setattr(balancer, "cached_observations", Mock(return_value=[]))
+    monkeypatch.setattr(daemon.codex_router, "accounts", Mock(return_value=[]))
+    monkeypatch.setattr(daemon.codex_router, "quotas", Mock(return_value={}))
+    return balancer
+
+
+def test_subscription_records_include_caps_unknown_readings_and_login(observations, monkeypatch):
+    from scripts.codex_quota import CodexQuota
+
+    balancer = observations
+    result = balancer.ProbeResult(
+        "one", "allowed", "OK", 60, balancer.QuotaWindow(65, 1000), balancer.QuotaWindow(40, 2000)
+    )
+    balancer.cached_observations.return_value = [(120, result)]
+    account = daemon.codex_router.CodexAccount("two", "AH_CX_TOKEN_two")
+    daemon.codex_router.accounts.return_value = [account, daemon.codex_router.CodexAccount("off", signed_in=False)]
+    reading = CodexQuota(121, "", balancer.QuotaWindow(30, 1000), balancer.QuotaWindow(40, 2000))
+    daemon.codex_router.quotas.return_value = {"two": reading}
+    monkeypatch.setattr(daemon, "claude_signed_in", lambda: True)
+    environ = {"AH_CC_TOKEN_one": "sentinel", "AH_CC_TOKEN_empty": "", "unrelated": "sentinel"}
+    slots, quota = daemon._subscriptions(environ, {"claude": {"unobserved": 1, "api": 1}, "codex": {}}, 122)
+    assert slots == [
+        {"harness": "claude", "account": name, "kind": kind, "cap": cap}
+        for name, kind, cap in sorted(
+            [
+                ("one", "subscription", 3),
+                ("unobserved", "subscription", 0),
+                (daemon.account_sessions.UNROUTED, "interactive", 0),
+            ]
+        )
+    ] + [{"harness": "codex", "account": "two", "kind": "subscription", "cap": 6}]
+    assert quota["claude:unobserved"] == {
+        "five_hour": {"used": None, "resets_at": None},
+        "seven_day": {"used": None, "resets_at": None},
+        "observed_at": None,
+    }
+    balancer.cached_observations.assert_called_once_with(environ=environ)
+    daemon.codex_router.accounts.assert_called_once_with(environ)
+    daemon.codex_router.quotas.assert_called_once_with([account], environ)
+
+
+def test_a_signed_out_codex_reading_publishes_no_quota_and_no_cap(observations):
+    from scripts.codex_quota import CodexQuota
+
+    balancer = observations
+    balancer.cached_observations.return_value = []
+    account = daemon.codex_router.CodexAccount("two", "AH_CX_TOKEN_two")
+    daemon.codex_router.accounts.return_value = [account]
+    reading = CodexQuota(121, "", balancer.QuotaWindow(30, 1000), balancer.QuotaWindow(40, 2000), expired=True)
+    daemon.codex_router.quotas.return_value = {"two": reading}
+    slots, quota = daemon._subscriptions({}, {"claude": {}, "codex": {}}, 122)
+    assert slots == [{"harness": "codex", "account": "two", "kind": "subscription", "cap": 0}]
+    assert quota["codex:two"] == {
+        "five_hour": {"used": None, "resets_at": None},
+        "seven_day": {"used": None, "resets_at": None},
+        "observed_at": None,
+    }
+
+
+def test_stale_claude_reading_does_not_advertise_capacity(observations):
+    result = observations.ProbeResult(
+        "one", "allowed", "OK", 60, observations.QuotaWindow(20, 100000), observations.QuotaWindow(40, 200000)
+    )
+    observations.cached_observations.return_value = [(1, result)]
+    slots, quota = daemon._subscriptions({"AH_CC_TOKEN_one": "sentinel"}, {"claude": {}, "codex": {}}, 10000)
+    assert slots == [{"harness": "claude", "account": "one", "kind": "subscription", "cap": 0}]
+    assert quota["claude:one"]["observed_at"] == 1
+
+
+def test_snapshot_missing_windows_bad_records_and_newer_cache(monkeypatch, tmp_path):
+    from hooks.context import quota_usage
+    from scripts import claude_quota_balancer as balancer
+
+    monkeypatch.setattr(daemon.account_sessions, "live_sessions", lambda: {1: "one"})
+    rows = {
+        "unrelated": {"pid": 2},
+        "broken": {"pid": 1},
+        "partial": {"pid": 1},
+        "older": {"pid": 1},
+        "same": {"pid": 1},
+    }
+    monkeypatch.setattr(daemon.broadcast, "_load_sessions", lambda: rows)
+    monkeypatch.setattr(quota_usage, "_snapshot_path", lambda session: tmp_path / f"{session}.json")
+    (tmp_path / "broken.json").write_text("bad json")
+    for name, at, windows in (
+        ("partial", 0.5, {}),
+        ("older", 0.25, {"five_hour": {"used_percentage": 99, "resets_at": 8}}),
+        ("same", 0.5, {"seven_day": {"used_percentage": 88, "resets_at": 9}}),
+    ):
+        (tmp_path / f"{name}.json").write_text(json.dumps({"updated_at": at, "rate_limits": windows}))
+    observed = {}
+    daemon._claude_snapshots(observed)
+    at, result = observed["one"]
+    assert at == 0.5
+    assert result.five_hour == balancer.QuotaWindow()
+    assert result.seven_day == balancer.QuotaWindow()
+
+
+def test_api_fields_empty_login_and_zero_sessions(observations, monkeypatch):
+    from scripts.routing.slots import Slot
+
+    monkeypatch.setattr(daemon.account_sessions, "sessions_by_account", lambda **kwargs: {})
+    monkeypatch.setattr(daemon.account_sessions, "codex_sessions_by_account", lambda **kwargs: {})
+    monkeypatch.setattr(daemon, "repositories", lambda: [])
+    monkeypatch.setattr(daemon.time, "time", lambda: 122)
+    calls = []
+
+    def slots(source, environ, now):
+        calls.append((environ, now))
+        return [Slot("claude", "api", 0, 0, kind="api", provider="anthropic")]
+
+    monkeypatch.setattr(daemon.claude_api.ClaudeApiSource, "slots", slots)
+    monkeypatch.setattr(daemon.codex_api.CodexApiSource, "slots", lambda *args: [])
+    report = daemon.observe()
+    assert report["interactive"] == {"claude": "", "codex": ""}
+    assert report["sessions"] == {"claude:api": 0}
+    assert report["slots"] == [
+        {"harness": "claude", "account": "api", "kind": "api", "cap": 0, "provider": "anthropic"}
+    ]
+    assert calls == [(daemon.os.environ, 122)]
+
+
+def test_observe_reports_host_counts_in_nonlocal_mode(observations, monkeypatch):
+    monkeypatch.setenv("AGENTIHOOKS_RUNTIME_BACKEND", "kubernetes")
+    monkeypatch.setattr(
+        daemon.account_sessions, "sessions_by_account", lambda *, local=False: {"one": 2 if local else 99}
+    )
+    monkeypatch.setattr(
+        daemon.account_sessions,
+        "codex_sessions_by_account",
+        Mock(side_effect=lambda *, local=False: {} if local else {"two": 99}),
+    )
+    report = daemon.observe()
+    assert report["sessions"]["claude:one"] == 2
+    daemon.account_sessions.codex_sessions_by_account.assert_called_once_with(local=True)
+
+
+def test_beat_keeps_a_launch_counted_between_process_samples(redis, monkeypatch):
+    from scripts.routing import aggregate, reservation
+
+    monkeypatch.setattr("time.time", lambda: 100)
+    slots = reservation.LaunchSlots(redis)
+    started = []
+
+    def observe(**kwargs):
+        assert slots.reserve("claude:one", "first", 1, 1000)
+        assert slots.acknowledge("first")
+        started.append("first")
+        return {
+            "slots": [{"harness": "claude", "account": "one", "kind": "subscription", "cap": 1}],
+            "interactive": {},
+            "repos": [],
+            "quota": {},
+            "sessions": {"claude:one": 0},
+        }
+
+    monkeypatch.setattr(daemon, "observe", observe)
+    monkeypatch.setattr(
+        daemon, "_executions", lambda redis, hive, processes: {"claude:one": list(started)} if started else {}
+    )
+    daemon.beat(redis, "hive")
+    assert aggregate.read(redis, 100)["claude:one"]["sessions"] == 1
+    assert not slots.reserve("claude:one", "second", 1, 1000)
+
+
+@pytest.mark.parametrize("hive,host,remaining", [("", "hive", 0), ("hive", "cluster", 0), ("other", "hive", 1)])
+def test_beat_exit_between_samples_cannot_create_negative_capacity(
+    redis, observations, monkeypatch, hive, host, remaining
+):
+    from scripts.routing import aggregate, reservation
+    from scripts.swarm.store import AgentRecord, RedisStore, SwarmConfig
+    from scripts.swarm_v2.controller import Controller
+    from scripts.swarm_v2.registry import Scope, Session, encode
+
+    monkeypatch.setattr("time.time", lambda: 100)
+    store = RedisStore(redis)
+    store.create(SwarmConfig("swarm", "repo", 1, 0))
+    controller = Controller(store, "swarm", [], lambda: True)
+    assert controller.acquire()
+    agent = controller.admit(
+        AgentRecord(
+            store.next_name("swarm", "eng"),
+            "eng",
+            "task",
+            hive=hive,
+            seat="eng-1@swarm",
+            harness="claude",
+            account="one",
+        ),
+    )
+    session = Session(
+        "session",
+        Scope("kubernetes", host, "worker"),
+        4242,
+        1,
+        "claude",
+        execution_id=agent.execution_id,
+        generation=agent.generation,
+    )
+    redis.hset(store.key("swarm", "fleet-sessions"), session.key(), encode(session))
+    monkeypatch.setattr(daemon.account_sessions, "local_processes", lambda: {"claude": {4242: "one"}, "codex": {}})
+    slots = reservation.LaunchSlots(redis)
+    assert slots.reserve("claude:one", agent.execution_id, 1, 1000)
+    assert slots.acknowledge(agent.execution_id)
+    original = daemon.observe
+
+    def observe(**kwargs):
+        assert slots.release(agent.execution_id)
+        return original(**kwargs)
+
+    monkeypatch.setattr(daemon, "observe", observe)
+    daemon.beat(redis, "hive")
+    assert aggregate.read(redis, 100)["claude:one"]["sessions"] == remaining
+    assert slots.reserve("claude:one", "second", 1, 1000) is (remaining == 0)
+    assert not slots.reserve("claude:one", "third", 1, 1000)
+
+
+def test_observe_reports_interactive_counts_with_their_harness_and_account(observations, monkeypatch):
+    from scripts.routing import reservation
+
+    monkeypatch.setattr(
+        daemon,
+        "_subscriptions",
+        lambda env, counts, now: ([{"harness": "codex", "account": "one", "kind": "subscription", "cap": 1}], {}),
+    )
+    monkeypatch.setattr(
+        reservation, "interactive_sessions", lambda harness, account: 2 if (harness, account) == ("codex", "one") else 0
+    )
+    assert daemon.observe({"claude": {}, "codex": {1000: "one"}})["sessions"] == {
+        "codex:one": 1,
+        "interactive:codex:one": 2,
+    }
+
+
+def test_execution_report_deduplicates_processes_and_skips_stale_records(redis, monkeypatch):
+    from scripts.swarm.store import AgentRecord, RedisStore, SwarmConfig
+    from scripts.swarm_v2.controller import Controller
+    from scripts.swarm_v2.registry import CLOSED, Scope, Session, encode
+
+    monkeypatch.setattr("time.time", lambda: 100)
+    store = RedisStore(redis)
+    store.create(SwarmConfig("swarm", "repo", 8, 0))
+    controller = Controller(store, "swarm", [], lambda: True)
+    assert controller.acquire()
+    agents = [
+        controller.admit(
+            AgentRecord(
+                store.next_name("swarm", "eng"),
+                "eng",
+                str(index),
+                hive="hive",
+                seat=f"eng-{index}@swarm",
+                harness="claude",
+                account="one",
+            )
+        )
+        for index in range(7)
+    ]
+    orphan = Session(
+        "orphan", Scope("kubernetes", "hive", "worker"), 70, 7, "claude", execution_id="exe-absent", generation=1
+    )
+    redis.hset(store.key("swarm", "fleet-sessions"), orphan.key(), encode(orphan))
+    records = [
+        (agents[0], 10, 1, "claude"),
+        (agents[1], 20, 1, "claude"),
+        (agents[2], 30, 1, "claude"),
+        (agents[3], 30, 1, "claude"),
+        (agents[4], 40, 2, "claude"),
+        (agents[5], 50, 1, "unknown"),
+        (agents[6], 60, 1, "claude"),
+    ]
+    for index, (agent, pid, generation, harness) in enumerate(records):
+        session = Session(
+            f"session-{index}",
+            Scope("kubernetes", "hive", "worker"),
+            pid,
+            index,
+            harness,
+            execution_id=agent.execution_id,
+            generation=generation,
+            **({"state": CLOSED} if index == 1 else {}),
+        )
+        redis.hset(store.key("swarm", "fleet-sessions"), session.key(), encode(session))
+    processes = {"claude": {10: "other", 20: "one", 30: "one", 40: "one", 60: "one"}, "codex": {}}
+    assert daemon._executions(redis, "hive", processes) == {
+        "claude:one": [agents[2].execution_id, agents[6].execution_id]
+    }
+    processes["claude"][10] = "one"
+    assert daemon._executions(redis, "hive", processes) == {
+        "claude:one": [agents[0].execution_id, agents[2].execution_id, agents[6].execution_id]
+    }
+
+
+def test_beat_publishes_what_this_hive_sees_of_its_own_executions(redis, monkeypatch):
+    from dataclasses import replace
+
+    from scripts.hive import orders, reports
+    from scripts.swarm.pane import PaneObservation
+    from scripts.swarm.store import AgentRecord, RedisStore, SwarmConfig
+
+    store = RedisStore(redis)
+    store.create(SwarmConfig("swarm", "repo", 8, 0))
+    here = AgentRecord(
+        store.next_name("swarm", "eng"), "eng", "one", pane_id="w1:p1", runtime_target={"host_id": "machine"}
+    )
+    elsewhere = AgentRecord(
+        store.next_name("swarm", "eng"), "eng", "two", pane_id="w1:p2", runtime_target={"host_id": "other"}
+    )
+    here = store.start_execution("swarm", replace(here, seat="eng-1@swarm"))
+    store.put_agent("swarm", here)
+    store.put_agent("swarm", store.start_execution("swarm", replace(elsewhere, seat="eng-2@swarm")))
+    herdr = Mock()
+    herdr.live_names.return_value = {here.name, "engineer@stray-0001"}
+    herdr.bindings.return_value = {here.name: {"process": False}}
+    herdr.conversations.return_value = {"w1:p1": "conversation"}
+    herdr.observe.return_value = PaneObservation("idle", typed="half")
+    herdr.reported.return_value = True
+    consumer = Mock(runtime=Mock(herdr=herdr))
+    monkeypatch.setattr(orders.Consumer, "local", lambda redis, hive: consumer)
+    monkeypatch.setattr(
+        daemon, "observe", lambda **kwargs: {"slots": [], "interactive": {}, "repos": [], "sessions": {}, "quota": {}}
+    )
+    daemon.beat(redis, "machine")
+    assert [a.name for a in herdr.bindings.call_args.args[0]] == [here.name]
+    assert herdr.reported.call_args.args[0].execution_id == here.execution_id
+    assert herdr.observe.call_args.args[0].execution_id == here.execution_id
+    assert json.loads(redis.get(reports.key("machine"))) == {
+        "names": sorted({here.name, "engineer@stray-0001"}),
+        "panes": {"w1:p1": "conversation"},
+        "executions": {
+            here.execution_id: {
+                "slug": "swarm",
+                "name": here.name,
+                "generation": here.generation,
+                "reported": True,
+                "binding": {"process": False},
+                "pane": {
+                    "state": "idle",
+                    "prompt_title": "",
+                    "typed": "half",
+                    "provider_error": "",
+                    "provider_checked": False,
+                    "provider_error_id": "",
+                },
+            }
+        },
+    }
+    assert redis.ttl(reports.key("machine")) == 45
+    consumer.poll.assert_called_once_with()
+    consumer.poll_commands.assert_called_once_with()
+
+
+def test_a_hive_with_no_executions_reports_names_without_asking_herdr_more(redis, monkeypatch):
+    from scripts.hive import orders, reports
+
+    herdr = Mock()
+    herdr.live_names.return_value = set()
+    monkeypatch.setattr(orders.Consumer, "local", lambda redis, hive: Mock(runtime=Mock(herdr=herdr)))
+    monkeypatch.setattr(
+        daemon, "observe", lambda **kwargs: {"slots": [], "interactive": {}, "repos": [], "sessions": {}, "quota": {}}
+    )
+    daemon.beat(redis, "machine")
+    assert json.loads(redis.get(reports.key("machine"))) == {"names": [], "panes": {}, "executions": {}}
+    herdr.bindings.assert_not_called()
+    herdr.conversations.assert_not_called()

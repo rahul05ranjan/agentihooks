@@ -13,7 +13,7 @@ Native fields used from Claude Code's statusline JSON:
   - cost.total_cost_usd, total_duration_ms, total_api_duration_ms
   - rate_limits.five_hour.used_percentage/resets_at
   - rate_limits.seven_day.used_percentage/resets_at
-  - model.display_name, vim.mode, worktree.*
+  - model.id, model.display_name, effort.level, vim.mode, worktree.*
 """
 
 import json
@@ -185,6 +185,34 @@ def main() -> None:
             except Exception:
                 pass
 
+        if session_id and cw:
+            try:
+                from hooks.context.context_usage import record_context_usage
+
+                record_context_usage(session_id, cw, cost_data.get("total_cost_usd"))
+                from hooks.config import TOKEN_MONITOR_ENABLED
+
+                if TOKEN_MONITOR_ENABLED:
+                    from hooks.observability import otel
+                    from hooks.observability.token_monitor import update_context_metrics
+
+                    size = cw.get("context_window_size") or 0
+                    percentage = cw.get("used_percentage")
+                    if size > 0 and percentage is not None:
+                        used = int(size * percentage / 100)
+                        update_context_metrics({**payload, "context_window": {"used": used, "remaining": size - used}})
+                        otel.flush()
+            except Exception:
+                pass
+
+        effort = (payload.get("effort") or {}).get("level")
+        try:
+            from hooks.context.swarm_heartbeat import report
+
+            report(model_data.get("id"), effort)
+        except Exception:
+            pass
+
         # Context window — trust Claude Code's native used_percentage
         used_pct = cw.get("used_percentage") or 0.0
         ctx_size = cw.get("context_window_size") or 0
@@ -193,7 +221,7 @@ def main() -> None:
         total = ctx_size
 
         # Model
-        model_name = model_data.get("display_name", "")
+        model_name = " ".join(filter(None, (model_data.get("display_name"), effort)))
 
         # Cost
         cost_usd = cost_data.get("total_cost_usd")
@@ -278,6 +306,11 @@ def main() -> None:
                 _g_profile = _ah_rec.get("profile", "") or "none"
                 _g_sp = _ah_rec.get("settings_profile", "") or "none"
 
+            _run_profile = os.environ.get("AGENTIHOOKS_PROFILE")
+            if _run_profile:
+                _g_profile = _run_profile
+                _g_sp = "none"
+
             # Channels — env-driven via AGENTIHOOKS_BASE_CHANNELS (single source
             # of truth in hooks.config; broadcast.py re-exports the same value).
             from hooks.config import BASE_CHANNELS as _BASE_CHANNELS
@@ -295,6 +328,12 @@ def main() -> None:
             _ch_str = ",".join(_l_channels)
             _ch_display = f"{_DIM}{_ch_str}{_RESET}"
 
+            from hooks.context.profile_chain import rendered_overlays as _rendered_overlays
+
+            _home = os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude"
+            _overlays = _rendered_overlays(Path(_home))
+            _ovl_display = f"{_CYAN}{','.join(_overlays)}{_RESET}" if _overlays else f"{_DIM}none{_RESET}"
+
             _voice_str = ""
             _voice_sid = payload.get("session_id", "")
             if _voice_sid:
@@ -307,6 +346,7 @@ def main() -> None:
             print(
                 f"  {_DIM}agentihooks:{_RESET} {_prof_display}"
                 f"  {_DIM}settings:{_RESET}{_sp_display}"
+                f"  {_DIM}overlay:{_RESET}{_ovl_display}"
                 f"  {_DIM}channels:{_RESET}{_ch_display}"
                 f"{_voice_str}"
             )

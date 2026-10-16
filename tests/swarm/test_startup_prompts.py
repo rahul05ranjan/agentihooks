@@ -1,0 +1,523 @@
+from pathlib import Path
+
+import pytest
+
+from scripts.swarm.runtime import HerdrRuntime
+from scripts.swarm.store import AgentRecord
+
+pytestmark = pytest.mark.xdist_group("fakeredis")
+
+CAPTURE = Path(__file__).parents[1] / "fixtures/swarm/claude-import-prompt.txt"
+TITLE = "Allow external CLAUDE.md file imports?"
+
+
+def test_saved_import_prompt_overrides_herdr_working_status(tmp_path):
+    calls = []
+
+    def herdr(args):
+        calls.append(args)
+        if args[:2] == ["pane", "read"]:
+            return {"text": CAPTURE.read_text()}
+        return {"agent": {"name": "engineer-one", "pane_id": "w:p1", "agent_status": "working"}}
+
+    runtime = HerdrRuntime(home=tmp_path, herdr=herdr)
+    agent = AgentRecord("engineer-one", "eng", "task", pane_id="w:p1")
+    assert runtime.status(agent) == "waiting"
+    observed = runtime.observe(agent)
+    assert observed.state == "waiting"
+    assert observed.prompt_title == TITLE
+    assert all(call[:2] in (["agent", "get"], ["pane", "read"]) for call in calls)
+    assert [call for call in calls if call[:2] == ["pane", "read"]] == [
+        ["pane", "read", "w:p1", "--source", "visible", "--format", "ansi"],
+        ["pane", "read", "w:p1", "--source", "visible", "--format", "ansi"],
+    ]
+
+
+def test_observe_reports_the_text_typed_into_the_input_line(tmp_path):
+    def herdr(args):
+        if args[:2] == ["pane", "read"]:
+            return {"text": "earlier output\n\x1b[2m────\x1b[0m\n❯ wait, before you\n────────\n  ? for shortcuts"}
+        return {"agent": {"name": "engineer-one", "pane_id": "w:p1", "agent_status": "idle"}}
+
+    runtime = HerdrRuntime(home=tmp_path, herdr=herdr)
+    observed = runtime.observe(AgentRecord("engineer-one", "eng", "task", pane_id="w:p1"))
+    assert (observed.state, observed.typed) == ("idle", "wait, before you")
+
+
+def test_claimed_selection_prompt_counts_consecutive_ticks_and_reports_health():
+    import fakeredis
+
+    from scripts.swarm.idle import beat
+    from scripts.swarm.pane import PaneObservation
+    from scripts.swarm.status import status_report
+    from scripts.swarm.store import RedisStore, SwarmConfig
+    from scripts.swarm.tick import _watch_idle
+    from tests.swarm.test_tick import FakeLedger, FakeRuntime
+
+    store = RedisStore(fakeredis.FakeRedis(decode_responses=True))
+    store.create(SwarmConfig("prompt-proof", "/repo", max_eng=1, max_ci=0))
+    agent = AgentRecord("engineer-one", "eng", "task", idle_ticks=2)
+    store.put_agent("prompt-proof", agent)
+    ledger = FakeLedger([{"id": "task", "state": "claimed", "title": "Startup proof"}])
+    runtime = FakeRuntime()
+    runtime.live.add(agent.name)
+    runtime.observe = lambda a: PaneObservation("waiting", TITLE)
+    for n in range(1, 5):
+        beat(store.redis, "prompt-proof", agent.name, "working", n)
+        agent = store.agents("prompt-proof")[0]
+        _watch_idle("prompt-proof", store, ledger, runtime, ledger.rows, agent, n)
+        report = status_report(store, "prompt-proof", ledger.state("prompt-proof"), runtime)
+        assert report["agents"][0]["status"] == "waiting"
+        assert report["agents"][0]["input_ticks"] == n
+        assert report["agents"][0]["input_prompt"] == TITLE
+        assert report["agents"][0]["idle_ticks"] == 0
+        found = [f for f in report["findings"] if f["kind"] == "waiting on input"]
+        assert len(found) == (1 if n > 3 else 0)
+    assert found[0]["subject"] == agent.name
+    assert TITLE in str(found[0])
+    assert runtime.nudged == runtime.killed == []
+    runtime.observe = lambda a: PaneObservation("working")
+    _watch_idle("prompt-proof", store, ledger, runtime, ledger.rows, store.agents("prompt-proof")[0], 5)
+    report = status_report(store, "prompt-proof", ledger.state("prompt-proof"), runtime)
+    assert report["agents"][0]["status"] == "working"
+    assert report["agents"][0]["input_ticks"] == 0
+    assert report["agents"][0]["input_prompt"] == ""
+    assert not report["findings"]
+
+
+def test_herdr_capture_reads_only_visible_plain_text(monkeypatch):
+    from subprocess import CompletedProcess
+    from unittest.mock import Mock
+
+    from scripts.swarm.runtime import herdr_call
+
+    run = Mock(return_value=CompletedProcess([], 0, CAPTURE.read_text(), ""))
+    monkeypatch.setattr("scripts.herdr_host.binary", lambda: "/herdr")
+    monkeypatch.setattr("scripts.swarm.runtime.subprocess.run", run)
+    args = ["pane", "read", "w:p1", "--source", "visible", "--format", "text"]
+    assert herdr_call(args) == {"text": CAPTURE.read_text()}
+    run.assert_called_once_with(["/herdr", *args], capture_output=True, text=True, timeout=30, check=True)
+
+
+def test_waiting_pane_beats_a_working_heartbeat_and_declared_wait():
+    from scripts.swarm.idle import verdict
+
+    assert verdict("waiting", {"state": "working", "at": 10}, {"until": 20}, 10) == "waiting"
+
+
+def test_unclaimed_or_finished_agents_do_not_raise_input_findings():
+    from scripts.swarm.health.findings import waiting_on_input
+
+    agent = {"name": "engineer", "task": "task", "input_prompt": TITLE, "input_ticks": 4}
+    for state in ("open", "done", "blocked", "handoff"):
+        assert waiting_on_input([agent], {"task": {"id": "task", "state": state}}) == []
+    assert waiting_on_input([{**agent, "input_prompt": ""}], {"task": {"id": "task", "state": "claimed"}}) == []
+
+
+def test_input_prompt_changes_restart_the_counter_and_native_waiting_has_a_title():
+    import fakeredis
+
+    from scripts.swarm.pane import PaneObservation
+    from scripts.swarm.store import RedisStore
+    from scripts.swarm.tick import _watch_idle, agent_status
+    from tests.swarm.test_tick import FakeLedger, FakeRuntime
+
+    store = RedisStore(fakeredis.FakeRedis(decode_responses=True))
+    agent = AgentRecord("engineer", "eng", "task", input_prompt="Old prompt?", input_ticks=8)
+    runtime = FakeRuntime()
+    runtime.observe = lambda a: PaneObservation("waiting", TITLE)
+    ledger = FakeLedger([])
+    _watch_idle("sw", store, ledger, runtime, {}, agent, 0)
+    changed = store.agents("sw")[0]
+    assert changed.input_ticks == 1
+    assert changed.input_prompt == TITLE
+    runtime.observe = lambda a: PaneObservation("waiting")
+    _watch_idle("sw", store, ledger, runtime, {}, changed, 1)
+    changed = store.agents("sw")[0]
+    assert changed.input_prompt == "Waiting on input"
+    assert changed.input_ticks == 1
+    assert agent_status(changed) == "waiting"
+    assert agent_status(AgentRecord("ended", "eng", "task", state="finished", input_prompt=TITLE)) == "finished"
+
+
+def test_runtime_read_failure_uses_the_observed_herdr_state(tmp_path):
+    def herdr(args):
+        if args[:2] == ["pane", "read"]:
+            raise RuntimeError("read unavailable")
+        return {"agent": {"name": "engineer", "pane_id": "w:p1", "status": "idle"}}
+
+    runtime = HerdrRuntime(home=tmp_path, herdr=herdr)
+    observed = runtime.observe(AgentRecord("engineer", "eng", "task", pane_id="w:p1"))
+    assert observed.state == "idle"
+    assert observed.prompt_title == ""
+
+
+def test_a_master_selection_prompt_is_visible_without_idle_nudges():
+    import fakeredis
+
+    from scripts.swarm.pane import PaneObservation
+    from scripts.swarm.store import RedisStore, SwarmConfig
+    from scripts.swarm.tick import tick
+    from tests.swarm.test_tick import FakeLedger, FakeRuntime
+
+    store = RedisStore(fakeredis.FakeRedis(decode_responses=True))
+    store.create(SwarmConfig("sw", "/repo", max_eng=0, max_ci=0, state="paused"))
+    agent = AgentRecord("master", "master", "")
+    store.put_agent("sw", agent)
+    runtime = FakeRuntime()
+    runtime.live.add(agent.name)
+    runtime.observe = lambda a: PaneObservation("waiting", TITLE)
+    tick("sw", store, FakeLedger([]), runtime, 1)
+    master = store.agents("sw")[0]
+    assert master.input_prompt == TITLE
+    assert master.input_ticks == 1
+    assert runtime.nudged == runtime.killed == []
+    runtime.observe = lambda a: PaneObservation("idle")
+    tick("sw", store, FakeLedger([]), runtime, 2)
+    master = store.agents("sw")[0]
+    assert master.input_prompt == ""
+    assert master.idle_ticks == 0
+    assert runtime.nudged == runtime.killed == []
+
+
+def test_input_finding_keeps_all_evidence_and_skips_other_agents():
+    from scripts.swarm.health.findings import Finding, waiting_on_input
+
+    agents = [
+        {"name": "ready", "task": "task", "input_prompt": TITLE, "input_ticks": 0},
+        {"name": "waiting", "task": "task", "input_prompt": TITLE, "input_ticks": 4},
+    ]
+    tasks = {"task": {"id": "task", "title": "Startup proof", "state": "claimed"}}
+    assert waiting_on_input(agents, tasks) == [
+        Finding(
+            "waiting on input",
+            "waiting",
+            "waiting on input for 4 ticks while holding a task",
+            (f"prompt: {TITLE}", "task Startup proof (claimed)"),
+            "more than 3 consecutive ticks waiting on input",
+            4,
+        )
+    ]
+
+
+def test_owned_pane_without_status_is_unknown(tmp_path):
+    runtime = HerdrRuntime(home=tmp_path, herdr=lambda args: {"agent": {"name": "engineer", "pane_id": "w:p1"}})
+    assert runtime.observe(AgentRecord("engineer", "eng", "task", pane_id="w:p1")).state == "unknown"
+
+
+def test_master_prompt_observation_preserves_previous_retirement_actions():
+    import fakeredis
+
+    from scripts.swarm.pane import PaneObservation
+    from scripts.swarm.store import RedisStore
+    from scripts.swarm.tick import _reap
+    from tests.swarm.test_tick import FakeLedger, FakeRuntime
+
+    store = RedisStore(fakeredis.FakeRedis(decode_responses=True))
+    store.put_agent("sw", AgentRecord("finished", "eng", "task", state="finished"))
+    store.put_agent("sw", AgentRecord("master", "master", ""))
+    runtime = FakeRuntime()
+    runtime.live.update(("finished", "master"))
+    runtime.observe = lambda a: PaneObservation("waiting", TITLE)
+    actions = _reap("sw", store, FakeLedger([]), runtime, {}, 1)
+    assert actions == ["retired finished"]
+
+
+FIXTURES = Path(__file__).parents[1] / "fixtures/swarm"
+TRUST = "Quick safety check: Is this a project you created or one you trust?"
+
+
+def _herdr_showing(capture, status="working"):
+    def herdr(args):
+        if args[:2] == ["pane", "read"]:
+            return {"text": (FIXTURES / capture).read_text()}
+        return {"agent": {"name": "engineer-one", "pane_id": "w:p1", "agent_status": status}}
+
+    return herdr
+
+
+@pytest.mark.parametrize(
+    ("capture", "title"),
+    [
+        ("claude-trust-prompt.txt", TRUST),
+        ("codex-update-prompt.txt", "Update available · 0.160.0 → 0.160.1"),
+    ],
+)
+def test_real_claude_and_codex_startup_captures_read_as_waiting(tmp_path, capture, title):
+    runtime = HerdrRuntime(home=tmp_path, herdr=_herdr_showing(capture))
+    observed = runtime.observe(AgentRecord("engineer-one", "eng", "task", pane_id="w:p1"))
+    assert (observed.state, observed.prompt_title) == ("waiting", title)
+
+
+def test_real_codex_idle_composer_is_not_waiting(tmp_path):
+    runtime = HerdrRuntime(home=tmp_path, herdr=_herdr_showing("codex-idle-composer.txt", "idle"))
+    observed = runtime.observe(AgentRecord("engineer-one", "eng", "task", pane_id="w:p1"))
+    assert (observed.state, observed.prompt_title) == ("idle", "")
+
+
+def test_a_pane_herdr_reports_blocked_is_waiting_even_without_a_known_dialog(tmp_path):
+    runtime = HerdrRuntime(home=tmp_path, herdr=_herdr_showing("codex-idle-composer.txt", "blocked"))
+    observed = runtime.observe(AgentRecord("engineer-one", "eng", "task", pane_id="w:p1"))
+    assert (observed.state, observed.prompt_title) == ("waiting", "")
+
+
+def test_status_text_shows_a_pane_held_at_a_prompt_as_waiting_and_the_finding_names_it(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    import fakeredis
+
+    from scripts.swarm import cli
+    from scripts.swarm.store import RedisStore, SwarmConfig
+    from scripts.swarm.tick import _watch_idle
+    from tests.swarm.test_tick import FakeLedger, FakeRuntime
+
+    store = RedisStore(fakeredis.FakeRedis(decode_responses=True))
+    store.create(SwarmConfig("prompt-proof", "/repo", max_eng=1, max_ci=0))
+    store.put_agent("prompt-proof", AgentRecord("engineer-one", "eng", "task", pane_id="w:p1"))
+    ledger = FakeLedger([{"id": "task", "state": "claimed", "title": "Startup proof"}])
+    monkeypatch.setattr(cli, "LedgerClient", lambda: ledger)
+    runtime = FakeRuntime()
+    runtime.live.add("engineer-one")
+    monkeypatch.setattr(cli, "HerdrRuntime", lambda: runtime)
+    runtime.observe = HerdrRuntime(home=tmp_path, herdr=_herdr_showing("claude-trust-prompt.txt")).observe
+    for tick in range(1, 5):
+        agent = store.agents("prompt-proof")[0]
+        _watch_idle("prompt-proof", store, ledger, runtime, ledger.rows, agent, tick)
+        cli.cmd_status(store, SimpleNamespace(slug="prompt-proof", json=False))
+        out = capsys.readouterr().out
+        row = next(line.split("\t") for line in out.splitlines() if line.startswith("engineer-one\t"))
+        assert row[8] == "waiting"
+    assert f"prompt: {TRUST}" in out
+    assert "finding  waiting on input  engineer-one" in out
+
+
+def test_the_spawn_prompt_names_each_running_task_that_shares_an_area():
+    from scripts.swarm import prompt
+
+    task = {
+        "id": "t3",
+        "title": "Build it",
+        "overlaps": [
+            {"task": "t1", "claimant": "engineer@a1b2c3-0001", "areas": ["hooks"]},
+            {"task": "t2", "claimant": "engineer@a1b2c3-0002", "areas": ["docs/a.md", "scripts/swarm/tick.py"]},
+        ],
+    }
+    lines = prompt.build("sw", "/repo", "eng", "engineer@a1b2c3-0003", task).splitlines()
+    start = lines.index(prompt.OVERLAP_LINE)
+    assert lines[start + 1 : start + 3] == [
+        "Task t1, claimed by engineer@a1b2c3-0001, shares hooks.",
+        "Task t2, claimed by engineer@a1b2c3-0002, shares docs/a.md and scripts/swarm/tick.py.",
+    ]
+    assert "inbox" in prompt.OVERLAP_LINE and "merge dev" in prompt.OVERLAP_LINE
+
+
+def test_a_prompt_without_overlaps_says_nothing_about_shared_areas():
+    from scripts.swarm import prompt
+
+    text = prompt.build("sw", "/repo", "eng", "engineer@a1b2c3-0003", {"id": "t3", "title": "Build it", "overlaps": []})
+    assert prompt.OVERLAP_LINE not in text and "shares" not in text
+
+
+ENGINEER = "engineer@a1b2c3-0003"
+CUT = "wt.sh new engineer-a1b2c3-0003"
+
+
+def _steps(task, lane="eng"):
+    from scripts.swarm import prompt
+
+    return prompt.build("sw", "/repo", lane, ENGINEER, {"id": "t3", "title": "Build it", **task}).splitlines()
+
+
+def _step(lines, number):
+    return [line for line in lines if line.startswith(f"{number}. ")][-1]
+
+
+@pytest.mark.parametrize("kind", ["code", "ci"])
+def test_the_code_steps_push_and_record_the_branch_at_the_first_commit(kind):
+    step = _step(_steps({"kind": kind}), 4)
+    assert 'publish --message "<commit message>" -- <explicit touched files>' in step
+    assert "Then review per the dev-cycle skill" in step
+    assert "Tests run only in CI." in step
+    if kind == "ci":
+        assert "2. Prepare your task worktree: agentihooks swarm sw prepare" in _step(_steps({"kind": kind}), 2)
+    assert "commits only those files, runs the committed HEAD prepush gate, then pushes and records the branch" in step
+
+
+@pytest.mark.parametrize("kind", ["code", "ci"])
+def test_the_code_steps_start_each_review_round_with_the_review_command(kind):
+    assert _step(_steps({"kind": kind}), 4).endswith(
+        "review closes after three rounds. Start every review round with agentihooks swarm sw review; "
+        "the third round closes review and a fourth is refused."
+    )
+
+
+def test_a_stacked_claim_starts_from_the_dependency_branch_builds_pushes_and_parks():
+    lines = _steps({"kind": "code", "stack_base": [{"task": "t1", "branch": "engineer-a1b2c3-0001"}]})
+    text = "\n".join(lines)
+    assert "Dependency t1 is still open on branch engineer-a1b2c3-0001." in lines
+    assert _step(lines, 1).startswith("1. If the repo has GitHub issues")
+    assert f"{CUT} --from origin/engineer-a1b2c3-0001" in _step(lines, 2)
+    assert "Build what you can" in _step(lines, 3)
+    push = _step(lines, 4)
+    assert "Refs #<n>" in push and "git push -u origin HEAD" in push and "agentihooks swarm sw branch" in push
+    park = _step(lines, 5)
+    assert "handoff skill" in park and "agentihooks swarm sw park <doc>" in park
+    assert park.index("ledger --slug sw --as engineer@a1b2c3-0003 leave") < park.index("park <doc>")
+    assert "pr <pr url>" not in text and "done --pr" not in text
+
+
+def test_a_stacked_claim_reuses_the_recorded_issue_and_merges_every_other_open_dependency():
+    lines = _steps(
+        {
+            "kind": "code",
+            "issue_url": "https://github.com/o/r/issues/7",
+            "stack_base": [{"task": "t1", "branch": "eng-one"}, {"task": "t2", "branch": "eng-two"}],
+        }
+    )
+    assert _step(lines, 1) == "1. Reuse the task's issue https://github.com/o/r/issues/7; open no new one."
+    assert f"{CUT} --from origin/eng-one" in _step(lines, 2)
+    assert "git merge origin/eng-two" in _step(lines, 2)
+
+
+def test_a_stacked_claim_names_the_repository_of_a_dependency_branch_in_a_second_repository():
+    other = "https://github.com/o/other"
+    lines = _steps({"kind": "code", "stack_base": [{"task": "t1", "branch": "eng-one", "repo": other}]})
+    assert f"Dependency t1 is still open on branch eng-one in repository {other}." in lines
+    assert _step(lines, 2) == (
+        "2. Every open dependency branch lives in another repository, so cut your worktree from dev in your own "
+        f"repository: {CUT}, then call {SERENA_LINE}"
+    )
+    assert "origin/eng-one" not in "\n".join(lines)
+
+
+def test_a_stacked_claim_cuts_from_the_dependency_branch_in_its_own_repository_and_skips_the_other():
+    lines = _steps(
+        {
+            "kind": "code",
+            "stack_base": [
+                {"task": "t1", "branch": "eng-one", "repo": "https://github.com/o/other"},
+                {"task": "t2", "branch": "eng-two"},
+                {"task": "t3", "branch": "eng-three"},
+            ],
+        }
+    )
+    assert "Dependency t2 is still open on branch eng-two." in lines
+    worktree = _step(lines, 2)
+    assert f"{CUT} --from origin/eng-two, then call" in worktree
+    assert worktree.endswith("Merge each other open dependency into it: git merge origin/eng-three.")
+    assert "eng-one" not in worktree
+
+
+def test_a_stacked_claim_continues_its_predecessors_branch_over_the_dependency_branch():
+    envelope = {"continue_from": "origin/eng-mine", "remote_head": "abc"}
+    lines = _steps({"kind": "code", "stack_base": [{"task": "t1", "branch": "eng-one"}], "handoff_envelope": envelope})
+    assert f"{CUT} --from origin/eng-mine," in _step(lines, 2)
+    assert "--from origin/eng-one" not in "\n".join(lines)
+
+
+def test_a_parked_task_finishes_from_its_branch_after_a_restack():
+    envelope = {"continue_from": "origin/eng-parked", "remote_head": "abc"}
+    lines = _steps(
+        {
+            "kind": "code",
+            "branch": "eng-parked",
+            "parked_on": ["t1"],
+            "stacked_base": "abc",
+            "issue_url": "https://github.com/o/r/issues/7",
+            "stack_base": [],
+            "handoff": "## Intent\nx",
+            "handoff_envelope": envelope,
+        }
+    )
+    text = "\n".join(lines)
+    assert "Your task was parked on branch eng-parked until its dependency finished." in lines
+    assert _step(lines, 1) == "1. Reuse the task's issue https://github.com/o/r/issues/7; open no new one."
+    worktree = _step(lines, 2)
+    assert f"{CUT} --from origin/eng-parked " in worktree
+    assert "agentihooks swarm sw restack" in worktree and "git rebase --continue" in worktree
+    assert "agentihooks swarm sw pr <pr url>" in _step(lines, 5)
+    assert "ready <handoff doc>" in _step(lines, 6)
+    assert "HEAD:eng-parked" not in text
+
+
+@pytest.mark.parametrize("stack", [{}, {"branch": "eng-parked"}, {"stacked_base": "abc"}])
+def test_a_parked_task_with_no_branch_or_base_starts_fresh_from_dev_with_the_park_noted(stack):
+    lines = _steps({"kind": "code", "parked_on": ["gb4", "tc117"], **stack})
+    text = "\n".join(lines)
+    assert (
+        "Your task was parked on gb4, tc117, but the park lacks a branch or a stacked base: start it fresh from dev."
+        in lines
+    )
+    assert f"2. Create your worktree: {CUT} (never edit the primary checkout)" in _step(lines, 2)
+    assert "restack" not in text and "--from origin/" not in text
+
+
+def test_stacked_steps_apply_only_to_code_work():
+    lines = _steps({"kind": "research", "stack_base": [{"task": "t1", "branch": "eng-one"}]})
+    assert "park <doc>" not in "\n".join(lines)
+
+
+SERENA_LINE = (
+    "mcp__serena__activate_project with its absolute path. Python is read and edited through Serena "
+    "(find_symbol, replace_symbol_body, insert_after_symbol, replace_content); built-in Edit and shell "
+    "rewrites of existing .py files are blocked."
+)
+
+
+def _block(lines, first, count):
+    start = lines.index(first)
+    return lines[start : start + count]
+
+
+def test_a_stacked_claim_on_two_dependencies_reads_exactly():
+    lines = _steps(
+        {"kind": "code", "stack_base": [{"task": "t1", "branch": "eng-one"}, {"task": "t2", "branch": "eng-two"}]}
+    )
+    head = (
+        "Your task depends on work still open. Build on top of it, push and park; the next engineer finishes it "
+        "once its dependency is done:"
+    )
+    assert _block(lines, head, 9) == [
+        head,
+        "Dependency t1 is still open on branch eng-one.",
+        "Dependency t2 is still open on branch eng-two.",
+        "1. If the repo has GitHub issues (gh repo view --json hasIssuesEnabled), open an issue naming the seams "
+        "and record it: agentihooks swarm sw issue <issue url>. Without issues the ledger task is the spec: skip "
+        "this step.",
+        f"2. Create your worktree from the dependency branch: {CUT} --from origin/eng-one, then call {SERENA_LINE} "
+        "Merge each other open dependency into it: git merge origin/eng-two.",
+        "3. Build what you can on top of the dependency: red test, least code to green. Leave what needs the "
+        "dependency finished and name it in your handoff.",
+        "4. Gates green on what you built, commit with the issue in the message (Refs #<n>) so the branch points "
+        "at the issue, push the branch (git push -u origin HEAD) and record it: agentihooks swarm sw branch.",
+        "5. Write a Handoff v2 document with the handoff skill whose Stopped at names the open dependency and what "
+        "waits on it. Leave the crew with agentihooks ledger --slug sw --as engineer@a1b2c3-0003 leave, then park: "
+        "agentihooks swarm sw park <doc>. Park comments the branch on the issue so they point at each other, and "
+        "the task waits on its branch. The swarm then closes this session; stop working.",
+        "",
+    ]
+
+
+def test_a_stacked_claim_names_one_merge_per_further_dependency():
+    deps = [{"task": f"t{n}", "branch": f"eng-{n}"} for n in (1, 2, 3)]
+    step = _step(_steps({"kind": "code", "stack_base": deps}), 2)
+    assert step.endswith(
+        f"{SERENA_LINE} Merge each other open dependency into it: git merge origin/eng-2. "
+        "Merge each other open dependency into it: git merge origin/eng-3."
+    )
+
+
+def test_a_parked_task_opens_with_exact_finish_steps():
+    lines = _steps({"kind": "code", "branch": "eng-parked", "parked_on": ["t1"], "stacked_base": "abc"})
+    head = "Your task was parked on branch eng-parked until its dependency finished."
+    assert _block(lines, head, 4) == [
+        head,
+        "Work it end to end with the dev-cycle skill, then stop:",
+        "1. If the repo has GitHub issues (gh repo view --json hasIssuesEnabled), open an issue naming the seams "
+        "and record it: agentihooks swarm sw issue <issue url>. Without issues the ledger task is the spec: skip "
+        "this step.",
+        f"2. Create your worktree: {CUT} --from origin/eng-parked (never edit the primary checkout), then call "
+        f"{SERENA_LINE} Then run agentihooks swarm sw restack in it: it rebases the parked work onto dev. On a "
+        "conflict it lists the files: resolve them, run git rebase --continue, then run agentihooks swarm sw "
+        "restack again.",
+    ]

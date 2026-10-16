@@ -7,8 +7,9 @@ from typing import Callable
 
 from hooks.lifecycle.act import ActionError, Journal, apply, finish_pending
 from hooks.lifecycle.config import load_roots
-from hooks.lifecycle.files import classify_files
+from hooks.lifecycle.files import classify_files, classify_traces
 from hooks.lifecycle.lease import read_lease
+from hooks.lifecycle.ledger_servers import sweep_servers
 from hooks.lifecycle.liveness import Snapshot, lease_alive, path_in_use, take_snapshot
 from hooks.lifecycle.locks import removing
 from hooks.lifecycle.model import ACTIONABLE, Finding, Root
@@ -35,6 +36,8 @@ def collect(roots: list[Root], snap: Snapshot) -> list[Finding]:
             findings += classify_scratch(root, snap, held)
         elif root.kind in ("ttl", "archive"):
             findings += classify_files(root, snap)
+        elif root.kind == "traces":
+            findings += classify_traces(root, snap)
     return findings
 
 
@@ -44,6 +47,8 @@ def _still_safe(item: Finding, roots: dict[str, Root], fresh: Snapshot) -> bool:
     path = Path(item.path)
     if path_in_use(item.path, fresh) or (path / ".keep").exists():
         return False
+    if item.category == "trace":
+        return path.stem not in fresh.sessions.values()
     return not (item.category == "scratch" and lease_alive(read_lease(path, "scratch"), fresh))
 
 
@@ -110,5 +115,6 @@ def sweep(
         if act:
             findings = enforce(findings, roots, home, fresh)
         report = summarize(findings, snap)
+        report["ledger_servers"] = sweep_servers(snap.table, home, scope, act)
         (home / "gc-last.json").write_text(json.dumps(report), encoding="utf-8")
         return report

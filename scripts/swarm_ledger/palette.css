@@ -1,0 +1,79 @@
+/* The only file in the ledger front end that holds colour values. */
+:root {
+  --ink-000: transparent;
+  --ink-950: #050812;
+  --navy-900: #0d1424;
+  --steel-060: #0e131b;
+  --steel-100: #151c29;
+  --steel-160: #1b2636;
+  --steel-200: #222f44;
+  --indigo-300: #9188dd;
+  --indigo-600: #3a3dee;
+  --blue-700: #1d4ed8;
+  --blue-600: #155dfc;
+  --blue-500: #3b82f6;
+  --blue-400: #60a5fa;
+  --blue-300: #93c5fd;
+  --red-500: #ef4444;
+  --red-055: rgba(239, 68, 68, .55);
+  --yellow-400: #facc15;
+  --yellow-200: #fde68a;
+  --green-400: #4ade80;
+  --slate-050: #f8fafc;
+  --slate-300: #cbd5e1;
+  --slate-400: #9aa8bd;
+  --indigo-300-055: rgba(145, 136, 221, .55);
+  --indigo-600-030: rgba(58, 61, 238, .30);
+  --indigo-600-012: rgba(58, 61, 238, .12);
+  --indigo-600-004: rgba(58, 61, 238, .04);
+  --blue-500-035: rgba(59, 130, 246, .35);
+  --blue-500-018: rgba(59, 130, 246, .18);
+  --blue-500-006: rgba(59, 130, 246, .06);
+  --blue-300-010: rgba(147, 197, 253, .10);
+  --bay-050: rgba(147, 197, 253, .05);
+  --bay-075: rgba(147, 197, 253, .075);
+
+  --canvas: var(--ink-950);
+  --backdrop: radial-gradient(ellipse 70% 45% at 50% -8%, var(--indigo-600-012), transparent 70%),
+    radial-gradient(ellipse 40% 30% at 100% 0%, var(--blue-500-006), transparent 75%);
+  --veil: var(--steel-060);
+  --surface-1: var(--ink-000);
+  --surface-2: var(--steel-160);
+  --hover: var(--steel-100);
+  --panel: var(--navy-900);
+  --overlay: var(--navy-900);
+  --menu: var(--ink-950);
+  --text: var(--slate-050);
+  --text-2: var(--slate-300);
+  --logo: var(--slate-050);
+  --muted: var(--slate-400);
+  --dim: var(--slate-400);
+  --rule: var(--steel-100);
+  --edge: var(--steel-200);
+  --panel-edge: var(--blue-300-010);
+  --panel-lift: inset 0 1px 0 var(--blue-300-010), 0 10px 30px -14px var(--blue-500-035), 0 0 0 1px var(--blue-500-018);
+  --tab-active: var(--indigo-300);
+  --tab-spill: 0 6px 12px -8px var(--indigo-300-055);
+  --ring: var(--blue-600);
+  --data-line: var(--indigo-600);
+  --data-fill-start: var(--indigo-600-030);
+  --data-fill-end: var(--indigo-600-004);
+  --accent: var(--blue-500);
+  --accent-2: var(--blue-300);
+  --link: var(--blue-400);
+  --signal: var(--red-500);
+  --signal-soft: var(--red-055);
+  --positive: var(--green-400);
+  --warn: var(--yellow-400);
+  --warn-2: var(--yellow-200);
+  --destructive: var(--red-500);
+  --pending: var(--slate-050);
+  --selection: var(--blue-700);
+  --grip: var(--blue-400);
+  --frozen: var(--blue-300);
+}
+
+main:not(.home) {
+  --surface-1: var(--bay-050);
+  --surface-2: var(--bay-075);
+}

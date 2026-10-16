@@ -15,8 +15,11 @@ Design constraints:
 
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import os
 import time
+from pathlib import Path
 from typing import Any
 
 _tracer = None
@@ -24,17 +27,28 @@ _meter = None
 _log_emitter = None
 _initialized = False
 _gauges: dict[str, Any] = {}
+_providers: list = []
+FLUSH_TIMEOUT_SEC = 1.0
+FLUSH_COOLDOWN_SEC = 60
 
 
 def _can_init() -> bool:
-    """Check if OTEL endpoint is configured and hooks telemetry is enabled."""
-    from hooks.config import OTEL_HOOKS_ENABLED
+    """Check if a collector is configured and hooks telemetry is enabled."""
+    from hooks.config import OTEL_HOOKS_ENABLED, hook_collector
 
-    return (
-        OTEL_HOOKS_ENABLED
-        and bool(os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"))
-        and bool(os.environ.get("CLAUDE_CODE_ENABLE_TELEMETRY"))
-    )
+    return OTEL_HOOKS_ENABLED and bool(hook_collector(os.environ)[0])
+
+
+def _collector_endpoints() -> tuple[str, dict[str, str]]:
+    """Protocol and per-signal exporter endpoint; an HTTP exporter given an endpoint posts to it verbatim."""
+    from hooks.config import hook_collector
+
+    endpoint, protocol = hook_collector(os.environ)
+    protocol = protocol or "grpc"
+    signals = ("traces", "metrics", "logs")
+    if protocol == "grpc":
+        return protocol, dict.fromkeys(signals, endpoint)
+    return protocol, {signal: f"{endpoint.rstrip('/')}/v1/{signal}" for signal in signals}
 
 
 # ---------------------------------------------------------------------------
@@ -51,6 +65,8 @@ _worker: _threading.Thread | None = None
 _q: _queue.Queue | None = None
 _init_done = _threading.Event()  # set once _init_sdk finishes (success OR fail)
 _worker_lock = _threading.Lock()
+_counts: dict[tuple[str, str, str], int] = {}
+_counts_lock = _threading.Lock()
 
 
 def _ensure_worker() -> None:
@@ -94,21 +110,39 @@ def _dispatch_op(op: tuple) -> None:
     if kind == "event":
         _, name, attrs = op
         if _log_emitter is None:
+            _count(attrs, "events", "unsupported")
             return
-        from opentelemetry._logs import SeverityNumber
-        from opentelemetry.sdk._logs import LogRecord
+        from opentelemetry._logs import LogRecord, SeverityNumber
 
-        attrs = dict(attrs)
+        attrs = {**_correlation(attrs), **attrs}
         attrs["event.name"] = name
         attrs["event.timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
-        _log_emitter.emit(LogRecord(body=name, severity_number=SeverityNumber.INFO, attributes=attrs))
+        _log_emitter.emit(
+            LogRecord(timestamp=time.time_ns(), body=name, severity_number=SeverityNumber.INFO, attributes=attrs)
+        )
     elif kind == "gauge":
         _, name, value, attrs = op
         if _meter is None:
+            _count(attrs, "gauges", "unsupported")
             return
         if name not in _gauges:
             _gauges[name] = _meter.create_gauge(name)
-        _gauges[name].set(value, dict(attrs))
+        _gauges[name].set(value, {**_correlation(attrs), **attrs})
+    elif kind == "flush":
+        try:
+            succeeded = True
+            for provider in _providers:
+                if provider.force_flush(int(FLUSH_TIMEOUT_SEC * 1000)) is False:
+                    succeeded = False
+            op[2][0] = succeeded
+        finally:
+            op[1].set()
+
+
+def _correlation(attrs: dict) -> dict:
+    from hooks.observability.correlation import resolve
+
+    return resolve(str(attrs.get("session.id") or ""))
 
 
 def init() -> None:
@@ -117,8 +151,7 @@ def init() -> None:
     No-op if:
       - OTEL SDK is not installed (ImportError)
       - OTEL_HOOKS_ENABLED is false
-      - OTEL_EXPORTER_OTLP_ENDPOINT is not set
-      - CLAUDE_CODE_ENABLE_TELEMETRY is not set
+      - no collector is set (AGENTIHOOKS_OTLP_ENDPOINT or OTEL_EXPORTER_OTLP_ENDPOINT)
     """
     # init() is now just "ensure worker thread is running". The worker
     # does the actual SDK bootstrap off the main thread so exporter hangs
@@ -150,7 +183,7 @@ def _init_sdk() -> None:
 
         from hooks.config import OTEL_HOOKS_SERVICE_NAME
 
-        protocol = os.environ.get("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc")
+        protocol, endpoints = _collector_endpoints()
         if protocol == "grpc":
             from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
             from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
@@ -164,45 +197,23 @@ def _init_sdk() -> None:
 
         # Traces — immediate export (safe for short-lived processes)
         tp = TracerProvider(resource=resource)
-        tp.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+        tp.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoints["traces"])))
         trace.set_tracer_provider(tp)
         _tracer = trace.get_tracer("agentihooks")
 
-        # Langfuse — additional trace exporter (OTLP HTTP only, traces only)
-        from hooks.config import (
-            OTEL_LANGFUSE_ENABLED,
-            OTEL_LANGFUSE_ENDPOINT,
-            OTEL_LANGFUSE_PUBLIC_KEY,
-            OTEL_LANGFUSE_SECRET_KEY,
-        )
-
-        if OTEL_LANGFUSE_ENABLED and OTEL_LANGFUSE_ENDPOINT:
-            import base64
-
-            auth = base64.b64encode(f"{OTEL_LANGFUSE_PUBLIC_KEY}:{OTEL_LANGFUSE_SECRET_KEY}".encode()).decode()
-            from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
-                OTLPSpanExporter as LangfuseSpanExporter,
-            )
-
-            langfuse_exporter = LangfuseSpanExporter(
-                endpoint=f"{OTEL_LANGFUSE_ENDPOINT}/v1/traces",
-                headers={
-                    "Authorization": f"Basic {auth}",
-                    "x-langfuse-ingestion-version": "4",
-                },
-            )
-            tp.add_span_processor(BatchSpanProcessor(langfuse_exporter))
-
         # Metrics — periodic export, flushed on atexit
-        reader = PeriodicExportingMetricReader(OTLPMetricExporter(), export_interval_millis=60_000)
+        reader = PeriodicExportingMetricReader(
+            OTLPMetricExporter(endpoint=endpoints["metrics"]), export_interval_millis=60_000
+        )
         mp = MeterProvider(resource=resource, metric_readers=[reader])
         metrics.set_meter_provider(mp)
         _meter = metrics.get_meter("agentihooks")
 
         # Logs/Events — immediate export (matches Claude Code's event pattern)
         lp = LoggerProvider(resource=resource)
-        lp.add_log_record_processor(BatchLogRecordProcessor(OTLPLogExporter()))
+        lp.add_log_record_processor(BatchLogRecordProcessor(OTLPLogExporter(endpoint=endpoints["logs"])))
         _log_emitter = lp.get_logger("agentihooks")
+        _providers.extend((tp, mp, lp))
 
         # No atexit flush — both our worker and OTEL's internal batch threads
         # are daemons; they die with the process. force_flush() honors its
@@ -211,6 +222,37 @@ def _init_sdk() -> None:
 
     except Exception:
         pass  # OTEL SDK not installed or init failed — all functions remain no-ops
+
+
+LANGFUSE_EXPORT_TIMEOUT_SEC = 10
+
+
+def langfuse_exporter_config() -> dict | None:
+    """Endpoint and headers of the Langfuse trace exporter; None when disabled or a key is missing."""
+    import base64
+
+    from hooks import config
+
+    public_key, secret_key = config.OTEL_LANGFUSE_PUBLIC_KEY, config.OTEL_LANGFUSE_SECRET_KEY
+    if not (config.OTEL_LANGFUSE_ENABLED and config.OTEL_LANGFUSE_ENDPOINT and public_key and secret_key):
+        return None
+    auth = base64.b64encode(f"{public_key}:{secret_key}".encode()).decode()
+    headers = {"Authorization": f"Basic {auth}", "x-langfuse-ingestion-version": "4"}
+    if config.OTEL_LANGFUSE_HOST_HEADER:
+        headers["Host"] = config.OTEL_LANGFUSE_HOST_HEADER
+    return {"endpoint": f"{config.OTEL_LANGFUSE_ENDPOINT.rstrip('/')}/v1/traces", "headers": headers}
+
+
+def langfuse_exporter():
+    """OTLP HTTP span exporter for Langfuse, or None when it is not configured."""
+    settings = langfuse_exporter_config()
+    if settings is None:
+        return None
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+
+    return OTLPSpanExporter(
+        endpoint=settings["endpoint"], headers=settings["headers"], timeout=LANGFUSE_EXPORT_TIMEOUT_SEC
+    )
 
 
 def get_tracer():
@@ -235,28 +277,92 @@ def get_meter():
 def emit_event(name: str, attributes: dict[str, str] | None = None) -> None:
     """Enqueue an OTEL log event for the worker thread. Always non-blocking.
 
-    If the worker hasn't finished init, or the queue is full, the event is
-    dropped silently — telemetry loss is acceptable; hook latency is not.
+    A full queue drops the event and counts it; hook latency outranks telemetry.
     """
-    init()
-    if _q is None:
-        return
-    try:
-        _q.put_nowait(("event", name, dict(attributes or {})))
-    except _queue.Full:
-        pass
-    except Exception:
-        pass
+    _enqueue("events", ("event", name, dict(attributes or {})))
 
 
 def record_gauge(name: str, value: float, attributes: dict[str, str] | None = None) -> None:
     """Enqueue a gauge metric for the worker thread. Always non-blocking."""
+    _enqueue("gauges", ("gauge", name, float(value), dict(attributes or {})))
+
+
+def _count(attrs: dict, signal: str, outcome: str) -> None:
+    key = (str(attrs.get("session.id") or ""), signal, outcome)
+    with _counts_lock:
+        _counts[key] = _counts.get(key, 0) + 1
+
+
+def _enqueue(signal: str, op: tuple) -> None:
     init()
+    attrs = op[-1]
     if _q is None:
+        _count(attrs, signal, "unsupported")
         return
     try:
-        _q.put_nowait(("gauge", name, float(value), dict(attributes or {})))
+        _q.put_nowait(op)
     except _queue.Full:
-        pass
-    except Exception:
-        pass
+        _count(attrs, signal, "dropped")
+        return
+    _count(attrs, signal, "queued")
+
+
+def _flush_pending() -> bool:
+    done = _threading.Event()
+    result = [False]
+    try:
+        _q.put_nowait(("flush", done, result))
+    except _queue.Full:
+        return False
+    return done.wait(FLUSH_TIMEOUT_SEC) and result[0]
+
+
+def flush() -> None:
+    if _q is None:
+        return
+    _persist_counts(_drain())
+
+
+def _persist_counts(confirmed: bool) -> None:
+    """Writes this process's signal counts; queued signals a failed or skipped flush leaves are unconfirmed."""
+    from hooks.observability import signals
+
+    with _counts_lock:
+        counts = dict(_counts)
+        _counts.clear()
+    if not confirmed:
+        for (session, signal, outcome), count in list(counts.items()):
+            if outcome == "queued":
+                counts[(session, signal, "unconfirmed")] = count
+    signals.record(counts)
+
+
+def _drain() -> bool:
+    from hooks.config import AGENTIHOOKS_HOME, hook_collector
+
+    endpoint, protocol = hook_collector(os.environ)
+    if not endpoint:
+        return _flush_pending()
+    key = hashlib.sha256(f"{endpoint}|{protocol}".encode()).hexdigest()
+    state = Path(AGENTIHOOKS_HOME) / "telemetry" / f"flush-{key}"
+    try:
+        if state.exists() and time.time() < state.stat().st_mtime + FLUSH_COOLDOWN_SEC:
+            return False
+        if _flush_pending():
+            state.unlink(missing_ok=True)
+            return True
+        state.parent.mkdir(parents=True, exist_ok=True)
+        with state.with_suffix(".lock").open("w") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return False
+            if state.exists() and time.time() < state.stat().st_mtime + FLUSH_COOLDOWN_SEC:
+                return False
+            state.touch()
+            from hooks.common import log
+
+            log(f"Telemetry flush failed; skipping flush waits for {FLUSH_COOLDOWN_SEC}s")
+    except OSError:
+        return False
+    return False

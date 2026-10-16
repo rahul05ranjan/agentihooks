@@ -34,7 +34,9 @@ from hooks.config import (
     ENFORCEMENT_INJECTION_ENABLED,
     ENFORCEMENT_MATCH_COUNTER_FILE,
 )
-from hooks.context import tool_matcher
+from hooks.context import injection_trace, quarantine, tool_matcher
+from hooks.targets import codex_home, copilot_home, current_target
+from scripts.claude_config import claude_home
 
 
 def _store_path() -> Path:
@@ -176,6 +178,7 @@ def _load_json_enforcements(path: Path, source: str) -> list[dict]:
             return []
         for e in entries:
             e["source"] = source
+            e["store"] = str(path)
         return entries
     except (json.JSONDecodeError, OSError):
         return []
@@ -192,8 +195,10 @@ def _load_profile_enforcements() -> list[dict]:
     profile = _get_active_profile()
     if not profile:
         return []
+    home = {"claude": claude_home, "codex": codex_home, "copilot": copilot_home}[current_target()]()
+    profile = ",".join([profile, *profile_chain.rendered_overlays(home)])
     entries = []
-    for _name, profile_dir in profile_chain.profile_dirs(_get_bundle_path(), profile, _get_linked_profiles()):
+    for _name, profile_dir in profile_chain.rendered_dirs(_get_bundle_path(), profile, _get_linked_profiles()):
         entries.extend(_load_json_enforcements(profile_dir / "enforcements.json", "profile"))
     return entries
 
@@ -226,6 +231,7 @@ def load_all_enforcements(cwd: str | Path | None = None) -> list[dict]:
             by_id[eid] = e
     for e in _load_store():
         e["source"] = "runtime"
+        e["store"] = str(_store_path())
         eid = e.get("id")
         if eid:
             by_id[eid] = e
@@ -514,6 +520,17 @@ def format_enforcement_context(msgs: list[dict]) -> str:
     return "\n\n".join(format_enforcement_banner(m) for m in msgs)
 
 
+def _deliver(session_id: str, entries: list[dict], *, record: bool = True) -> str | None:
+    entries = quarantine.keep(
+        session_id, "enforcement", entries, lambda e: [e.get("id")], lambda e: e.get("message") or e.get("path")
+    )
+    if not entries:
+        return None
+    if record:
+        injection_trace.record_enforcements(session_id, entries)
+    return format_enforcement_context(entries)
+
+
 # ---------------------------------------------------------------------------
 # Hook entry point
 # ---------------------------------------------------------------------------
@@ -524,10 +541,7 @@ def get_session_start_enforcements(session_id: str, cwd: str | Path | None = Non
         return None
     try:
         plain, _ = _split_by_matcher(load_all_enforcements(cwd))
-        entries = _claim_unseen_enforcements(session_id, plain)
-        if not entries:
-            return None
-        return format_enforcement_context(entries)
+        return _deliver(session_id, _claim_unseen_enforcements(session_id, plain))
     except Exception:
         return None
 
@@ -537,10 +551,7 @@ def get_user_prompt_enforcements(session_id: str, cwd: str | Path | None = None)
         return None
     try:
         plain, _ = _split_by_matcher(load_all_enforcements(cwd))
-        entries = _claim_unseen_enforcements(session_id, plain)
-        if not entries:
-            return None
-        return format_enforcement_context(entries)
+        return _deliver(session_id, _claim_unseen_enforcements(session_id, plain))
     except Exception:
         return None
 
@@ -563,9 +574,7 @@ def get_pretool_enforcements(
         unseen = _claim_unseen_enforcements(session_id, plain, claim=claim_unseen)
         due = _due_enforcements(plain, count)
         selected = _merge_enforcements(unseen, due, _matched_due(session_id, matched, increment=True))
-        if not selected:
-            return None
-        return format_enforcement_context(selected)
+        return _deliver(session_id, selected, record=claim_unseen)
     except Exception:
         return None
 
@@ -585,9 +594,7 @@ def get_posttool_enforcements(
         unseen = _claim_unseen_enforcements(session_id, plain)
         due = _due_enforcements(plain, count)
         selected = _merge_enforcements(unseen, due, _matched_due(session_id, matched, increment=False))
-        if not selected:
-            return None
-        return format_enforcement_context(selected)
+        return _deliver(session_id, selected)
     except Exception:
         return None
 

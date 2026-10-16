@@ -17,8 +17,10 @@ from typing import Any, Optional
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
+from scripts.claude_config import claude_home, claude_json
+
 AGENTIHOOKS_HOME = Path(os.getenv("AGENTIHOOKS_HOME", str(Path.home() / ".agentihooks")))
-CLAUDE_HOME = Path(os.getenv("AGENTIHOOKS_CLAUDE_HOME", str(Path.home() / ".claude")))
+CLAUDE_HOME = claude_home()
 STATE_JSON = AGENTIHOOKS_HOME / "state.json"
 
 # ── Color tags (matching install.py conventions) ────────────────────────
@@ -399,7 +401,7 @@ def _save_tool_cache(server_tools: dict[str, Optional[int]]) -> None:
 def check_mcp() -> dict[str, Any]:
     """Full MCP state: servers, enabled/disabled per project, real tool counts for all."""
     try:
-        user_mcp_path = Path.home() / ".claude.json"
+        user_mcp_path = claude_json()
         user_data = {}
         if user_mcp_path.exists():
             user_data = json.loads(user_mcp_path.read_text(encoding="utf-8"))
@@ -571,6 +573,15 @@ def check_broadcast() -> dict[str, Any]:
         return {"enabled": False, "sessions": 0, "messages": 0, "ok": True}
 
 
+def check_serena_router() -> dict[str, Any]:
+    from scripts import serena_router_daemon
+
+    body = serena_router_daemon._request("/status.json")
+    if body is None:
+        return {"running": False, "url": serena_router_daemon.base_url(), "backends": 0}
+    return {"running": True, "url": serena_router_daemon.base_url(), "backends": len(body["backends"])}
+
+
 def run_all_checks(session_id: Optional[str] = None) -> dict[str, Any]:
     results: dict[str, Any] = {
         "profile": check_profile(),
@@ -582,6 +593,7 @@ def run_all_checks(session_id: Optional[str] = None) -> dict[str, Any]:
         "mcp": check_mcp(),
         "quota": check_quota(),
         "broadcast": check_broadcast(),
+        "serena_router": check_serena_router(),
     }
     if session_id:
         results["session"] = check_session(session_id)
@@ -655,6 +667,12 @@ def format_cli(results: dict[str, Any]) -> str:
         lines.append(_cprint(f"[OK] Broadcast: {b['sessions']} sessions, {b['messages']} messages"))
     else:
         lines.append(_cprint("[--] Broadcast: disabled"))
+
+    s = results.get("serena_router", {})
+    if s.get("running"):
+        lines.append(_cprint(f"[OK] Serena router: {s['url']}, {s['backends']} backend(s)"))
+    else:
+        lines.append(_cprint(f"[--] Serena router: not running ({s.get('url', '')})"))
 
     # Guardrails
     g = results["guardrails"]
@@ -788,6 +806,7 @@ def check_hook_injection() -> dict:
     import os
     import subprocess
     import sys
+    from concurrent.futures import ThreadPoolExecutor
 
     repo_root = Path(__file__).resolve().parent.parent
     events = [
@@ -800,11 +819,12 @@ def check_hook_injection() -> dict:
     results: list[dict] = []
     warnings: list[str] = []
 
-    for event in events:
+    env = {**os.environ, "CLAUDE_HOOK_LOG_ENABLED": "false", "BROADCAST_ENABLED": "false"}
+
+    def _run(event: str):
         payload = _synthetic_payload(event)
-        env = {**os.environ, "CLAUDE_HOOK_LOG_ENABLED": "false", "BROADCAST_ENABLED": "false"}
         try:
-            proc = subprocess.run(
+            return subprocess.run(
                 [sys.executable, "-m", "hooks"],
                 cwd=repo_root,
                 input=_json.dumps(payload),
@@ -814,6 +834,13 @@ def check_hook_injection() -> dict:
                 timeout=30,
             )
         except subprocess.TimeoutExpired:
+            return None
+
+    with ThreadPoolExecutor(max_workers=len(events)) as pool:
+        procs = list(pool.map(_run, events))
+
+    for event, proc in zip(events, procs):
+        if proc is None:
             results.append({"event": event, "ok": False, "reason": "timeout >30s"})
             warnings.append(f"{event}: hook timed out (>30s)")
             continue

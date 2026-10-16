@@ -1,6 +1,6 @@
 [project]
 name = "agentihooks"
-version = "2.17.0"
+dynamic = ["version"]
 description = "Hook system and MCP tool server for Claude Code agents"
 readme = "README.md"
 license = {text = "MIT"}
@@ -19,11 +19,13 @@ classifiers = [
 ]
 
 dependencies = [
+    "tree-sitter>=0.25",
+    "tree-sitter-bash>=0.25",
     # Upper bound is load-bearing: mcp 2.0.0 removes `mcp.server.fastmcp`
     # outright (replaced by `mcp.server.mcpserver.MCPServer`, a different API),
     # so an unbounded spec resolves to a version where `hooks/mcp/__init__.py`
     # fails at import. Lift only alongside a migration off FastMCP.
-    "mcp[cli]>=1.0.0,<2.0.0",
+    "mcp[cli]>=1.28,<2.0.0",
     "anyio>=4.0",
     "PyJWT>=2.8.0",
     "requests>=2.31.0",
@@ -41,9 +43,20 @@ dependencies = [
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-exporter-otlp-proto-grpc>=1.20.0",
     "opentelemetry-exporter-otlp-proto-http>=1.20.0",
+    # The swarm keeps its claims and agent registry in Redis (scripts/swarm/store.py).
+    "redis>=5.0.0",
+    "jsonschema>=4.23",
+    # The ledger repository writes a multi-megabyte indented document on every sync;
+    # the stdlib encoder takes the pure Python path whenever indent is set.
+    "orjson>=3.10",
+    # Operator architecture approvals are Ed25519 signed (scripts/swarm_v2/architecture.py).
+    "cryptography>=42",
+    # The Codex app server client connects over a unix socket (scripts/codex_session/protocol.py).
+    "websockets>=15.0",
 ]
 
 [project.optional-dependencies]
+ledger = ["redis>=5.0.0", "jsonschema>=4.23", "orjson>=3.10", "pyyaml>=6.0", "tomlkit>=0.12", "requests>=2.31.0", "cryptography>=42", "boto3>=1.34.0"]
 postgres = ["psycopg2-binary>=2.9.9"]
 otel = [
     "opentelemetry-api>=1.20.0",
@@ -61,16 +74,32 @@ all = [
     "opentelemetry-exporter-otlp-proto-http>=1.20.0",
 ]
 dev = [
+    "Pillow>=10.0",
     "pytest>=8.0",
     "pytest-cov>=5.0",
+    "pytest-xdist>=3.5",
+    "pytest-split>=0.10",
     "pytest-asyncio>=0.23",
-    "ruff>=0.4",
+    "ruff==0.15.12",
     "boto3>=1.34.0",
-    "fakeredis>=2.0",
+    "fakeredis[lua]>=2.0",
+    "mutmut==3.6.0",
+    "pytest-random-order>=1.2",
+    "pytest-reportlog>=1.0",
+    "pytest-rerunfailures>=16.7",
+    "detect-test-pollution==1.2.0",
+    "uv>=0.5",
 ]
 
 [project.scripts]
 agentihooks = "scripts.install:main"
+agentihooks-skill-eval = "scripts.skill_eval:main"
+
+[build-system]
+requires = ["setuptools>=80", "setuptools-scm>=9.2"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools_scm]
 
 [tool.setuptools.packages.find]
 include = ["hooks*", "scripts*", "profiles*"]
@@ -80,12 +109,14 @@ include = ["hooks*", "scripts*", "profiles*"]
 # systemd unit template for the network-transport agentihooks MCP daemon. Lives
 # under scripts/ so AGENTIHOOKS_ROOT-relative resolution works from a wheel too.
 "scripts" = ["packaging/**/*.template"]
+"scripts.swarm_v2.worker" = ["*.sh"]
+"scripts.swarm_ledger" = ["*.html", "*.css", "*.js", "static/**/*.js", "static/**/*.css"]
 # Ship every native config and Markdown artifact under profiles/ — personas,
 # rules, settings, and profile manifests. Recursive ** globs cover .claude/
 # and target-specific subdirectories at any depth.
 # One entry per discovered profiles package; the bare "profiles" key also
 # captures files under non-package subdirs like profiles/package/rules/.
-"profiles" = ["**/*.json", "**/*.toml", "**/*.yml", "**/*.yaml", "**/*.md", "**/*.sh"]
+"profiles" = ["**/*.json", "**/*.toml", "**/*.yml", "**/*.yaml", "**/*.md", "**/*.sh", "**/*.py"]
 "profiles._base" = ["**/*.json", "**/*.toml", "**/*.yml", "**/*.yaml", "**/*.md"]
 "profiles.default" = ["**/*.json", "**/*.toml", "**/*.yml", "**/*.yaml", "**/*.md"]
 
@@ -96,8 +127,14 @@ Issues = "https://github.com/The-Cloud-Clockwork/agentihooks/issues"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["unit: Unit tests"]
+markers = [
+    "unit: Unit tests",
+    "wall_clock: asserts an elapsed real time bound; the mutation stats pass deselects it",
+]
 asyncio_mode = "auto"
+
+[tool.mutmut]
+source_paths = ["hooks/", "scripts/"]
 
 [tool.ruff]
 target-version = "py311"

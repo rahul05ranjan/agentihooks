@@ -1,6 +1,7 @@
 """Conditions: filename grammar, layered discovery, the index cache, the script
 contract, result merging, and the envelopes hook_manager emits per target."""
 
+import errno
 import json
 import os
 import subprocess
@@ -81,6 +82,10 @@ class TestFilename:
             ("pre-bash.git-guard.sh", "pre", "bash.git", "guard", False),
             ("pre-edit+write-lint.sh", "pre", "edit+write", "lint", False),
             ("post-mcp-audit.async.py", "post", "mcp", "audit", True),
+            ("stop-idle.sh", "stop", "any", "idle", False),
+            ("stop-idle.async.py", "stop", "any", "idle", True),
+            ("start-greeting.sh", "start", "any", "greeting", False),
+            ("start-greeting.async.py", "start", "any", "greeting", True),
             (
                 "pre-mcp__gateway-tools__github-create_pull_request-audit.py",
                 "pre",
@@ -99,7 +104,11 @@ class TestFilename:
         [
             ("pre-bash.git-audit", "extension"),
             ("pre-bash.sh", "expected"),
-            ("stop-bash-x.sh", "unknown step"),
+            ("begin-any-x.sh", "unknown step"),
+            ("stop-bash-x.sh", "expected stop-<name>"),
+            ("stop.sh", "expected stop-<name>"),
+            ("start-bash-x.sh", "expected start-<name>"),
+            ("start.sh", "expected start-<name>"),
             ("pre-bad*-x.sh", "invalid characters"),
             ("pre--x.sh", "empty matcher"),
         ],
@@ -182,6 +191,29 @@ class TestIndexCache:
         _state(bundle, profile="beta")
         assert [e["file"] for e in conditions.matching("pre", "Bash", {})] == ["pre-bash-one.sh", "pre-bash-beta.sh"]
 
+    @pytest.mark.parametrize("master_profile", ["master", "master,brain"])
+    def test_session_profile_change_keeps_guards_isolated(self, layers, monkeypatch, master_profile):
+        bundle, global_dir, _ = layers
+        role_dirs = [bundle / "profiles" / role / ".claude" / "conditions" for role in ("engineer", "master")]
+        for role, directory in zip(("engineer", "master"), role_dirs, strict=True):
+            directory.mkdir(parents=True)
+            _write(directory, f"pre-edit-{role}.sh", "echo")
+        _age(profile_chain.state_path(), global_dir, *role_dirs)
+        monkeypatch.setattr(conditions, "_cache_path", REAL_CACHE_PATH)
+        monkeypatch.setenv("AGENTIHOOKS_PROFILE", "engineer")
+        assert [e["file"] for e in conditions.matching("pre", "Edit", {})] == ["pre-edit-engineer.sh"]
+        engineer_cache = REAL_CACHE_PATH()
+        assert engineer_cache.exists()
+
+        monkeypatch.setenv("AGENTIHOOKS_PROFILE", master_profile)
+        assert [e["file"] for e in conditions.matching("pre", "Edit", {})] == ["pre-edit-master.sh"]
+        assert REAL_CACHE_PATH() != engineer_cache
+        assert REAL_CACHE_PATH().exists()
+
+        monkeypatch.setattr(conditions, "scan_layers", lambda *a: (_ for _ in ()).throw(AssertionError("scanned")))
+        monkeypatch.setenv("AGENTIHOOKS_PROFILE", "engineer")
+        assert [e["file"] for e in conditions.matching("pre", "Edit", {})] == ["pre-edit-engineer.sh"]
+
     def test_profile_dir_appearing_invalidates(self, layers):
         bundle, _, _ = layers
         _state(bundle, profile="alpha,gamma")
@@ -208,6 +240,19 @@ class TestIndexCache:
         monkeypatch.setenv("AGENTIHOOKS_TARGET", "codex")
         assert REAL_CACHE_PATH() != claude
         assert REAL_CACHE_PATH().name.startswith("conditions-index.codex.")
+
+
+def _wait_gone(pid: int, seconds: float = 3) -> bool:
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        try:
+            state = Path(f"/proc/{pid}/stat").read_text().split()[2]
+        except (FileNotFoundError, ProcessLookupError):
+            return True
+        if state == "Z":
+            return True
+        time.sleep(0.05)
+    return False
 
 
 class TestScriptContract:
@@ -244,23 +289,45 @@ class TestScriptContract:
         assert "failed (exit 3: boom)" in result.contexts[0]
 
     def test_timeout_kills_the_process_group(self, layers, monkeypatch, tmp_path):
-        monkeypatch.setattr("hooks.config.CONDITIONS_TIMEOUT_SEC", 0.5)
+        monkeypatch.setattr("hooks.config.CONDITIONS_TIMEOUT_SEC", 0.2)
         pidfile = tmp_path / "child.pid"
         _write(layers[1], "pre-bash-slow.sh", f"sleep 30 & echo $! > {pidfile}; wait")
         result = conditions.run_step("pre", _bash("ls"))
         assert "timed out" in result.contexts[0]
         pid = int(pidfile.read_text())
-        deadline = time.time() + 3
-        while time.time() < deadline:
-            try:
-                state = Path(f"/proc/{pid}/stat").read_text().split()[2]
-            except FileNotFoundError:
-                break
-            if state == "Z":
-                break
-            time.sleep(0.05)
-        else:
-            pytest.fail(f"child {pid} survived the timeout")
+        assert _wait_gone(pid), f"child {pid} survived the timeout"
+
+    def test_timeout_tolerates_a_group_already_gone(self, layers, monkeypatch, tmp_path):
+        monkeypatch.setattr("hooks.config.CONDITIONS_TIMEOUT_SEC", 0.2)
+        pidfile = tmp_path / "child.pid"
+        _write(layers[1], "pre-bash-slow.sh", f"sleep 30 & echo $! > {pidfile}; wait")
+        real_killpg = os.killpg
+
+        def killpg_on_a_gone_group(pgid, sig):
+            real_killpg(pgid, sig)
+            raise ProcessLookupError(errno.ESRCH, os.strerror(errno.ESRCH))
+
+        monkeypatch.setattr(conditions.os, "killpg", killpg_on_a_gone_group)
+        result = conditions.run_step("pre", _bash("ls"))
+        assert "timed out" in result.contexts[0]
+        pid = int(pidfile.read_text())
+        assert _wait_gone(pid), f"child {pid} survived the timeout"
+
+    def test_a_child_reaped_mid_read_counts_as_gone(self, monkeypatch):
+        child = subprocess.Popen(["sleep", "30"])
+        stat = Path(f"/proc/{child.pid}/stat")
+        real_read_text = Path.read_text
+
+        def read_after_reap(path, *args, **kwargs):
+            if path != stat:
+                return real_read_text(path, *args, **kwargs)
+            with open(path) as handle:
+                child.kill()
+                child.wait()
+                return handle.read()
+
+        monkeypatch.setattr(Path, "read_text", read_after_reap)
+        assert _wait_gone(child.pid)
 
     def test_executable_without_known_extension(self, layers):
         _write(layers[1], "pre-bash-exe.run", "#!/bin/sh\necho via shebang\n", mode=0o755)
@@ -444,6 +511,155 @@ class TestPostToolUseEnvelope:
         assert "trimmed" in out["additionalContext"] and "cannot apply it" in out["additionalContext"]
 
 
+def _stop(**extra) -> dict:
+    return {
+        "hook_event_name": "Stop",
+        "session_id": "sid-conditions",
+        "cwd": "/tmp",
+        "stop_hook_active": False,
+        "last_assistant_message": "all done",
+        **extra,
+    }
+
+
+class TestStopStep:
+    def test_exit_2_blocks_with_stderr(self, layers):
+        _write(layers[1], "stop-idle.sh", "echo 'your task is still claimed' >&2; exit 2")
+        reason = conditions.stop_block(_stop())
+        assert reason == "[condition stop-idle.sh] your task is still claimed"
+
+    def test_json_deny_blocks(self, layers):
+        _write(layers[2], "stop-idle.sh", 'echo \'{"decision": "deny", "reason": "run swarm done"}\'')
+        assert conditions.stop_block(_stop()) == "[condition stop-idle.sh] run swarm done"
+
+    def test_every_denying_condition_is_named_one_per_line(self, layers):
+        _write(layers[1], "stop-claim.sh", "echo 'task still claimed' >&2; exit 2")
+        _write(layers[1], "stop-wait.sh", "echo 'no checked wait' >&2; exit 2")
+        assert conditions.stop_block(_stop()) == (
+            "[condition stop-claim.sh] task still claimed\n[condition stop-wait.sh] no checked wait"
+        )
+
+    def test_a_stop_file_with_a_matcher_names_the_stop_grammar(self):
+        with pytest.raises(ValueError) as refused:
+            conditions.parse_filename("stop-bash-idle.sh")
+        assert str(refused.value) == "expected stop-<name>.<ext>: Stop has no tool to match"
+
+    def test_a_deny_without_a_reason_still_blocks(self, layers):
+        _write(layers[1], "stop-idle.sh", 'echo \'{"decision": "deny"}\'')
+        assert conditions.stop_block(_stop()) == "blocked by a condition"
+
+    def test_sees_the_stop_payload_and_env(self, layers):
+        _write(
+            layers[1],
+            "stop-probe.py",
+            _py(
+                "print('|'.join([os.environ['AH_STEP'], os.environ['AH_EVENT'], str(payload['stop_hook_active']), "
+                "payload['last_assistant_message'], payload['session_id'], payload['transcript_path']]), "
+                "file=sys.stderr)\nsys.exit(2)\n"
+            ),
+        )
+        assert conditions.stop_block(_stop(stop_hook_active=True, transcript_path="/t/s.jsonl")) == (
+            "[condition stop-probe.py] stop|Stop|True|all done|sid-conditions|/t/s.jsonl"
+        )
+
+    @pytest.mark.parametrize(
+        "body",
+        ["exit 0", "echo just a note", 'echo \'{"decision": "allow"}\'', "echo boom >&2; exit 3", "sleep 5"],
+    )
+    def test_anything_but_a_deny_lets_the_stop_through(self, layers, monkeypatch, body):
+        monkeypatch.setattr("hooks.config.CONDITIONS_TIMEOUT_SEC", 0.5)
+        _write(layers[1], "stop-idle.sh", body)
+        assert conditions.stop_block(_stop()) is None
+
+    def test_tool_conditions_do_not_run_at_stop(self, layers):
+        _write(layers[1], "pre-any-no.sh", "echo no >&2; exit 2")
+        _write(layers[1], "post-any-no.sh", "echo no >&2; exit 2")
+        assert conditions.stop_block(_stop()) is None
+
+    def test_stop_conditions_do_not_run_on_tool_calls(self, layers):
+        _write(layers[1], "stop-idle.sh", "echo no >&2; exit 2")
+        assert conditions.run_step("pre", _bash("ls")) is None
+
+    def test_disabled_runs_nothing(self, layers, monkeypatch):
+        _write(layers[1], "stop-idle.sh", "echo no >&2; exit 2")
+        monkeypatch.setattr("hooks.config.CONDITIONS_ENABLED", False)
+        assert conditions.stop_block(_stop()) is None
+
+    def test_on_stop_blocks_before_any_stop_work(self, isolated_hook, monkeypatch):
+        beats = []
+        monkeypatch.setattr(hm, "_swarm_heartbeat", lambda *a, **k: beats.append(a))
+        _write(isolated_hook[1], "stop-idle.sh", "echo 'your task is still claimed' >&2; exit 2")
+        with pytest.raises(BlockAction, match="your task is still claimed"):
+            hm.on_stop(_stop())
+        assert beats == []
+
+    def test_a_failing_engine_lets_the_stop_through(self, isolated_hook, monkeypatch):
+        def broken(payload):
+            raise RuntimeError("index unreadable")
+
+        monkeypatch.setattr(conditions, "stop_block", broken)
+        beats, logged = [], []
+        monkeypatch.setattr(hm, "_swarm_heartbeat", lambda *a, **k: beats.append(a))
+        monkeypatch.setattr(hm, "log", lambda *a, **k: logged.append(a))
+        monkeypatch.setattr("hooks._async.fork_and_call", lambda *a, **k: None)
+        hm.on_stop(_stop())
+        assert beats == [("idle",)]
+        assert ("conditions stop failed", {"error": "index unreadable"}) in logged
+
+
+def _start(**extra) -> dict:
+    return {
+        "hook_event_name": "SessionStart",
+        "session_id": "sid-conditions",
+        "cwd": "/tmp",
+        "source": "startup",
+        **extra,
+    }
+
+
+class TestStartStep:
+    def test_plain_text_becomes_context(self, layers):
+        _write(layers[1], "start-greet.sh", "echo hello from start")
+        effect = conditions.start_effect(_start())
+        assert effect.contexts == ["[condition start-greet.sh]\nhello from start"]
+
+    def test_a_start_file_with_a_matcher_names_the_start_grammar(self):
+        with pytest.raises(ValueError) as refused:
+            conditions.parse_filename("start-bash-greet.sh")
+        assert str(refused.value) == "expected start-<name>.<ext>: SessionStart has no tool to match"
+
+    def test_decision_deny_never_blocks(self, layers):
+        _write(layers[1], "start-greet.sh", 'echo \'{"decision": "deny", "reason": "nope", "context": "hi"}\'')
+        effect = conditions.start_effect(_start())
+        assert effect.contexts == ["[condition start-greet.sh]\nhi"]
+
+    def test_exit_2_never_blocks(self, layers):
+        _write(layers[1], "start-greet.sh", "echo 'should not block' >&2; exit 2")
+        effect = conditions.start_effect(_start())
+        assert effect.contexts == []
+
+    def test_tool_input_rewrite_is_ignored(self, layers):
+        _write(layers[1], "start-greet.sh", 'echo \'{"tool_input": {"command": "x"}, "context": "hi"}\'')
+        effect = conditions.start_effect(_start())
+        assert effect.contexts == ["[condition start-greet.sh]\nhi"]
+
+    def test_no_conditions_returns_none(self, layers):
+        assert conditions.start_effect(_start()) is None
+
+    def test_tool_conditions_do_not_run_at_start(self, layers):
+        _write(layers[1], "pre-any-no.sh", "echo no >&2; exit 2")
+        assert conditions.start_effect(_start()) is None
+
+    def test_start_conditions_do_not_run_on_tool_calls(self, layers):
+        _write(layers[1], "start-greet.sh", "echo no")
+        assert conditions.run_step("pre", _bash("ls")) is None
+
+    def test_disabled_runs_nothing(self, layers, monkeypatch):
+        _write(layers[1], "start-greet.sh", "echo hi")
+        monkeypatch.setattr("hooks.config.CONDITIONS_ENABLED", False)
+        assert conditions.start_effect(_start()) is None
+
+
 class TestHookProcess:
     def test_python_m_hooks_emits_rewrite(self, tmp_path):
         home = tmp_path / "ahome"
@@ -475,3 +691,36 @@ class TestHookProcess:
         out = json.loads(proc.stdout.strip().splitlines()[-1])["hookSpecificOutput"]
         assert out["updatedInput"]["command"] == "echo rewritten"
         assert out["permissionDecision"] == "allow"
+
+    @pytest.mark.parametrize(
+        "body, code",
+        [("echo 'your task is still claimed' >&2; exit 2", 2), ("exit 0", 0)],
+    )
+    def test_python_m_hooks_blocks_stop(self, tmp_path, body, code):
+        home = tmp_path / "ahome"
+        bundle = tmp_path / "bundle"
+        conditions_dir = bundle / ".claude" / "conditions"
+        conditions_dir.mkdir(parents=True)
+        home.mkdir()
+        (home / "state.json").write_text(json.dumps({"bundle": {"path": str(bundle)}}))
+        _write(conditions_dir, "stop-idle.sh", body)
+        env = {
+            **os.environ,
+            "AGENTIHOOKS_HOME": str(home),
+            "AGENTIHOOKS_TARGET": "claude",
+            "AGENTIHOOKS_DISABLE_BYPASS_LOOKUP": "1",
+            "CONDITIONS_ENABLED": "true",
+            "BRAIN_ENABLED": "false",
+            "BROADCAST_ENABLED": "false",
+        }
+        proc = subprocess.run(
+            [sys.executable, "-m", "hooks"],
+            input=json.dumps(_stop(cwd=str(tmp_path))),
+            capture_output=True,
+            text=True,
+            cwd=_PROJECT_ROOT,
+            env=env,
+            timeout=60,
+        )
+        assert proc.returncode == code, proc.stderr
+        assert ("[condition stop-idle.sh] your task is still claimed" in proc.stderr) == (code == 2)

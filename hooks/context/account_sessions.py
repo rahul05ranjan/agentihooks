@@ -10,26 +10,67 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 TOKEN_PREFIX = "AH_CC_TOKEN_"
+CODEX_TOKEN_PREFIX = "AH_CX_TOKEN_"
+CODEX_DEFAULT = "default"
 UNROUTED = "unrouted"
-MAX_SESSIONS_ENV = "AGENTIHOOKS_MAX_SESSIONS_PER_ACCOUNT"
-DEFAULT_MAX_SESSIONS = 2
+API_MARKER = "AH_ROUTE_API"
+INTERACTIVE_PREFIX = "AH_ROUTE_INTERACTIVE_"
+API_ACCOUNT = "api"
 _SHELLS = frozenset({"sh", "bash", "dash", "zsh", "fish", "ksh"})
 _PROC = Path("/proc")
-
-
-def max_sessions(environ: Mapping[str, str] | None = None) -> int:
-    raw = (os.environ if environ is None else environ).get(MAX_SESSIONS_ENV, "")
-    try:
-        return max(1, int(raw)) if raw else DEFAULT_MAX_SESSIONS
-    except ValueError:
-        return DEFAULT_MAX_SESSIONS
-
-
-def account_from_names(names: Iterable[str]) -> str:
-    slugs = {
-        name.removeprefix(TOKEN_PREFIX) for name in names if name.startswith(TOKEN_PREFIX) and name != TOKEN_PREFIX
+REMOTE = "--remote"
+VALUE_FLAGS = frozenset(
+    {
+        "-c",
+        "--config",
+        "--enable",
+        "--disable",
+        REMOTE,
+        "--remote-auth-token-env",
+        "-i",
+        "--image",
+        "-m",
+        "--model",
+        "--local-provider",
+        "-p",
+        "--profile",
+        "-s",
+        "--sandbox",
+        "-C",
+        "--cd",
+        "--add-dir",
+        "-a",
+        "--ask-for-approval",
     }
+)
+SERVERS = frozenset({"app-server", "mcp-server"})
+INTERNAL_RUN = "AGENTIHOOKS_INTERNAL_RUN"
+LISTEN = "--listen"
+UNIX = "unix://"
+MANAGED_RUNTIME = "cx"
+MANAGED_SOCKET = "s"
+_LAST_HELD: set[tuple[str, str]] = set()
+
+
+def account_from_names(names: Iterable[str], prefix: str = TOKEN_PREFIX) -> str:
+    names = list(names)
+    if API_MARKER in names:
+        return API_ACCOUNT
+    interactive = {
+        name.removeprefix(INTERACTIVE_PREFIX)
+        for name in names
+        if name.startswith(INTERACTIVE_PREFIX) and name != INTERACTIVE_PREFIX
+    }
+    if interactive:
+        return interactive.pop() if len(interactive) == 1 else UNROUTED
+    slugs = {name.removeprefix(prefix) for name in names if name.startswith(prefix) and name != prefix}
     return slugs.pop() if len(slugs) == 1 else UNROUTED
+
+
+def codex_account_from_names(names: Iterable[str]) -> str:
+    """A Codex process runs on a token account only when the router left it exactly one AH_CX_TOKEN_<slug>."""
+    slug = account_from_names(names, CODEX_TOKEN_PREFIX)
+    return CODEX_DEFAULT if slug == UNROUTED else slug
 
 
 def environment_account(environ: Mapping[str, str] | None = None) -> str:
@@ -87,7 +128,8 @@ def agent_pid(start: int | None = None, proc: Path = _PROC) -> int:
 
 
 def pid_account(pid: int, proc: Path = _PROC) -> str:
-    return account_from_names(_env_names(pid, proc))
+    names = _env_names(pid, proc)
+    return codex_account_from_names(names) if _is_codex(pid, proc) else account_from_names(names)
 
 
 def session_account(pid: int, proc: Path = _PROC) -> str:
@@ -121,6 +163,125 @@ def live_sessions(proc: Path = _PROC, exclude_pids: Iterable[int] = ()) -> dict[
     return sessions
 
 
+def _is_codex(pid: int, proc: Path) -> bool:
+    argv = _cmdline(pid, proc)
+    return bool(argv) and (_comm(pid, proc) == "codex" or Path(argv[0]).name == "codex")
+
+
+def _codex_positionals(argv: list[str]) -> list[str]:
+    rest = argv[1:]
+    while rest and rest[0].startswith("-"):
+        rest = rest[2:] if rest[0] in VALUE_FLAGS else rest[1:]
+    return rest
+
+
+def _is_codex_session(pid: int, proc: Path) -> bool:
+    if not _is_codex(pid, proc):
+        return False
+    argv = _cmdline(pid, proc)
+    if "app-server" in argv[0] or SERVERS.intersection(_codex_positionals(argv)[:1]):
+        return False
+    if any(part == REMOTE or part.startswith(f"{REMOTE}=") for part in argv[1:]):
+        return False
+    if INTERNAL_RUN in _env_names(pid, proc):
+        return False
+    return _comm(_ppid(pid, proc), proc) != "codex"
+
+
+def execution_key(endpoint: str) -> str:
+    if not endpoint.startswith(UNIX):
+        return ""
+    path = Path(endpoint)
+    return path.parent.name if path.name == MANAGED_SOCKET and path.parent.parent.name == MANAGED_RUNTIME else ""
+
+
+def _managed_execution(pid: int, proc: Path) -> str:
+    if not _is_codex(pid, proc):
+        return ""
+    argv = _cmdline(pid, proc)
+    if _codex_positionals(argv)[:1] != ["app-server"] or LISTEN not in argv[:-1]:
+        return ""
+    return execution_key(argv[argv.index(LISTEN) + 1])
+
+
+def _codex_processes(proc: Path) -> tuple[dict[int, str], dict[tuple[str, str], int]]:
+    """Codex sessions by pid, and each managed execution by execution key and account with its server pid."""
+    sessions: dict[int, str] = {}
+    managed: dict[tuple[str, str], int] = {}
+    try:
+        entries = sorted(int(entry.name) for entry in proc.iterdir() if entry.name.isdigit())
+    except OSError:
+        return sessions, managed
+    for pid in entries:
+        if _is_codex_session(pid, proc):
+            sessions[pid] = codex_account_from_names(_env_names(pid, proc))
+        elif key := _managed_execution(pid, proc):
+            managed.setdefault((key, codex_account_from_names(_env_names(pid, proc))), pid)
+    return sessions, managed
+
+
+def live_codex_sessions(proc: Path = _PROC) -> int:
+    """Interactive Codex sessions, exec runs and managed executions on this host; one CODEX_HOME is one account."""
+    sessions, managed = _codex_processes(proc)
+    return len(sessions) + len(managed)
+
+
+def _held(raw: str) -> tuple[str, str] | None:
+    from scripts.codex_session import binding
+
+    try:
+        record = binding.decode(raw)
+    except (binding.BindingError, ValueError, TypeError, AttributeError):
+        return raw, CODEX_DEFAULT
+    if record.state in (binding.EXITED, binding.FAILED):
+        return None
+    return execution_key(record.endpoint_ref) or record.execution_id, record.account or CODEX_DEFAULT
+
+
+def managed_held() -> set[tuple[str, str]]:
+    """Transport records are written before the server starts; an unreadable record or store holds what it last held."""
+    from hooks._redis import get_redis
+
+    redis = get_redis()
+    if redis is None:
+        return set()
+    from redis.exceptions import RedisError
+
+    from scripts.codex_session import binding
+    from scripts.swarm.store import RedisStore
+
+    store = RedisStore(redis)
+    try:
+        raws = [raw for slug in store.slugs() for raw in redis.hvals(store.key(slug, binding.RECORDS))]
+    except RedisError:
+        return set(_LAST_HELD)
+    _LAST_HELD.clear()
+    _LAST_HELD.update(held for raw in raws if (held := _held(raw)))
+    return set(_LAST_HELD)
+
+
+def codex_sessions_by_account(proc: Path = _PROC, *, local: bool = False) -> dict[str, int]:
+    """Codex sessions per account: a token slug or the default login; a managed execution counts once."""
+    from scripts.routing import aggregate
+
+    if not local and aggregate.enabled():
+        import time
+
+        return aggregate.counts("codex", time.time())
+    sessions, managed = _codex_processes(proc)
+    executions = set(managed) if local else set(managed) | managed_held()
+    counts: dict[str, int] = {}
+    for account in [*sessions.values(), *(account for _, account in executions)]:
+        counts[account] = counts.get(account, 0) + 1
+    return counts
+
+
+def local_processes(proc: Path = _PROC) -> dict[str, dict[int, str]]:
+    sessions, managed = _codex_processes(proc)
+    executions = {pid: account for (_, account), pid in managed.items()}
+    return {"claude": live_sessions(proc, handed_off_pids()), "codex": sessions | executions}
+
+
 def handed_off_pids() -> set[int]:
     from hooks.context.broadcast import _load_sessions
 
@@ -131,8 +292,38 @@ def handed_off_pids() -> set[int]:
     }
 
 
-def sessions_by_account(proc: Path = _PROC) -> dict[str, int]:
+def fleet_held(environ: Mapping[str, str] | None = None) -> dict[str, int]:
+    """Account slots held across the fleet that this host's /proc cannot see; none while distributed launches are off."""
+    from scripts.swarm_v2.runtime.base import LOCAL, RuntimeRouter
+
+    if RuntimeRouter.from_environ((), os.environ if environ is None else environ).spawn_backend() == LOCAL:
+        return {}
+    from hooks._redis import get_redis
+
+    redis = get_redis()
+    if redis is None:
+        return {}
+    from redis.exceptions import RedisError
+
+    from scripts.swarm import lease
+    from scripts.swarm.store import RedisStore
+    from scripts.swarm_v2 import accounts
+
+    store = RedisStore(redis)
+    try:
+        return accounts.fleet_held(store, lease.now_ms(store))
+    except RedisError:
+        return {}
+
+
+def sessions_by_account(proc: Path = _PROC, *, local: bool = False) -> dict[str, int]:
     """Live sessions per account; sessions that already handed off their work do not hold a slot."""
+    from scripts.routing import aggregate
+
+    if not local and aggregate.enabled():
+        import time
+
+        return aggregate.counts("claude", time.time())
     try:
         skip = handed_off_pids()
     except Exception:
@@ -140,4 +331,7 @@ def sessions_by_account(proc: Path = _PROC) -> dict[str, int]:
     counts: dict[str, int] = {}
     for account in live_sessions(proc, skip).values():
         counts[account] = counts.get(account, 0) + 1
+    if not local:
+        for account, held in fleet_held().items():
+            counts[account] = counts.get(account, 0) + held
     return counts

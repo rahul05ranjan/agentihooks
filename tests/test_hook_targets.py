@@ -131,6 +131,26 @@ class TestCodexToolNames:
         for name in ("exec", "shell", "local_shell", "unified_exec"):
             assert normalize_payload({"tool_name": name, "tool_input": {}})["tool_name"] == "Bash"
 
+    def test_question_tool_maps_to_ask_user_question(self, codex):
+        questions = [{"id": "plan_color", "question": "Red or blue?", "options": []}]
+        payload = normalize_payload({"tool_name": "request_user_input", "tool_input": {"questions": questions}})
+        assert payload["tool_name"] == "AskUserQuestion"
+        assert payload["tool_input"] == {"questions": questions}
+        assert "tool_response" not in payload
+
+    def test_question_answers_string_takes_the_claude_answers_shape(self, codex):
+        answer = '{"answers":{"plan_color":{"answers":["Red","Blue"]},"size":{"answers":[]}}}'
+        payload = normalize_payload({"tool_name": "request_user_input", "tool_response": answer})
+        assert payload["tool_response"] == {"answers": {"plan_color": "Red, Blue", "size": ""}}
+        assert payload["tool_output"] == payload["tool_response"]
+
+    def test_question_response_that_is_not_answers_json_is_kept(self, codex):
+        for response in ("request_user_input is unavailable in Default mode", "[1]", '{"answers": []}'):
+            payload = normalize_payload({"tool_name": "request_user_input", "tool_response": response})
+            assert payload["tool_response"] == response
+        shell = normalize_payload({"tool_name": "exec", "tool_response": '{"answers":{"q":{"answers":["a"]}}}'})
+        assert shell["tool_response"] == '{"answers":{"q":{"answers":["a"]}}}'
+
     def test_list_command_becomes_a_string(self, codex):
         payload = normalize_payload({"tool_name": "shell", "tool_input": {"command": ["ls", "a b"]}})
         assert payload["tool_input"]["command"] == "ls 'a b'"
@@ -394,12 +414,7 @@ class TestCodexRolloutResolverHardening:
             normalizer.normalize_payload({"hook_event_name": event, "session_id": "abc"})
         assert len(calls) == 4
 
-    def test_deep_history_stays_fast(self, codex, tmp_path, monkeypatch):
-        """Resolution must not scale with total session history."""
-        import time
-
-        from hooks.targets.normalizer import codex_rollout_path
-
+    def deep_history(self, tmp_path, monkeypatch):
         monkeypatch.setenv("CODEX_HOME", str(tmp_path))
         sessions = tmp_path / "sessions"
         for month in range(1, 9):  # 8 months of history
@@ -410,7 +425,24 @@ class TestCodexRolloutResolverHardening:
                     (d / f"rollout-2026-{month:02d}-{day:02d}T00-00-{n:02d}-old{month}{day}{n}.jsonl").touch()
         sid = "019fed99-aaaa-bbbb-cccc-ddddeeeeffff"
         newest = sessions / "2026" / "08" / "28"
-        (newest / f"rollout-2026-08-28T12-00-00-{sid}.jsonl").write_text("{}\n")
+        rollout = newest / f"rollout-2026-08-28T12-00-00-{sid}.jsonl"
+        rollout.write_text("{}\n")
+        return sid, rollout
+
+    def test_deep_history_resolves_the_newest_rollout(self, codex, tmp_path, monkeypatch):
+        from hooks.targets.normalizer import codex_rollout_path
+
+        sid, rollout = self.deep_history(tmp_path, monkeypatch)
+        assert codex_rollout_path(sid) == str(rollout)
+
+    @pytest.mark.wall_clock
+    def test_deep_history_stays_fast(self, codex, tmp_path, monkeypatch):
+        """Resolution must not scale with total session history."""
+        import time
+
+        from hooks.targets.normalizer import codex_rollout_path
+
+        sid, _ = self.deep_history(tmp_path, monkeypatch)
         start = time.perf_counter()
         for _ in range(20):
             assert codex_rollout_path(sid)
@@ -547,6 +579,35 @@ class TestCodexEnforcementFallback:
         )
         assert calls == [("codex-local", "/project", "Unknown")]
         assert captured == ["local enforcement"]
+
+    def test_a_codex_swarm_agent_at_the_compact_limit_gets_the_recycle_directive(self, codex, monkeypatch, tmp_path):
+        import hooks.common as common
+        import hooks.context.broadcast as broadcast
+        import hooks.context.context_recycle as recycle
+        import hooks.context.enforcement as enforcement
+        import hooks.hook_manager as hm
+
+        captured = []
+        monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", "sw-eng-1")
+        monkeypatch.setattr(recycle, "AGENTIHOOKS_HOME", tmp_path)
+        monkeypatch.setattr(recycle, "used_tokens", lambda session_id: 900_000)
+        monkeypatch.setattr(common, "inject_context", lambda message, **kwargs: captured.append(message))
+        monkeypatch.setattr(broadcast, "get_posttool_context", lambda session_id: None)
+        monkeypatch.setattr(enforcement, "get_posttool_enforcements", lambda session_id, cwd, **kw: None)
+        call = {"session_id": "codex-recycle", "tool_name": "Bash", "tool_input": {"command": "ls"}, "cwd": "/p"}
+        hm.on_pre_tool_use({"hook_event_name": "PreToolUse", **call})
+        hm.on_post_tool_use({"hook_event_name": "PostToolUse", "tool_output": "ok", **call})
+        assert any("agentihooks swarm sw handoff" in text for text in captured)
+
+    def test_a_codex_swarm_agent_over_the_compact_limit_is_denied_work(self, codex, monkeypatch):
+        import hooks.context.context_recycle as recycle
+        import hooks.hook_manager as hm
+
+        monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", "sw-eng-1")
+        monkeypatch.setattr(recycle, "used_tokens", lambda session_id: 900_000)
+        call = {"session_id": "codex-recycle", "tool_name": "Bash", "tool_input": {"command": "git commit -m x"}}
+        with pytest.raises(hm.BlockAction, match="agentihooks swarm sw handoff"):
+            hm.on_pre_tool_use({"hook_event_name": "PreToolUse", "cwd": "/p", **call})
 
 
 class TestSplitGlobal:

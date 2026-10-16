@@ -8,6 +8,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -61,6 +62,7 @@ from hooks.config import (
     BROADCAST_MIN_INTERVAL_SEC,
     BROADCAST_PERSISTENT_THROTTLE,
 )
+from hooks.context import injection_trace, quarantine
 
 _SEVERITY_RANK = {"nuclear": 0, "critical": 1, "alert": 2, "warning": 3, "info": 4, "resolved": 5}
 
@@ -355,6 +357,22 @@ def _message_matches_channel(msg: dict, session_channels: list[str]) -> bool:
     return msg_channel in session_channels
 
 
+def _message_matches_project(msg: dict, session: dict) -> bool:
+    if os.getenv("BRAIN_PROJECT_SCOPE", "strict") != "strict" or not session.get("project"):
+        return True
+    if msg.get("source") != "brain-adapter":
+        return True
+    entry_id = (msg.get("origin") or {}).get("id", "")
+    if entry_id.startswith("hot-arcs") or entry_id == "lessons":
+        return False
+    if entry_id == "operator-intent":
+        import re
+
+        project = session["project"]["project"]
+        return bool(re.search(r"(?<![\w-])" + re.escape(project) + r"(?![\w-])", msg.get("message", ""), re.IGNORECASE))
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Message lifecycle
 # ---------------------------------------------------------------------------
@@ -398,6 +416,9 @@ def _build_broadcast(
     return entry
 
 
+MASTERS_CHANNEL_PREFIX = "masters."
+
+
 def create_broadcast(
     message: str,
     severity: str = "info",
@@ -426,6 +447,11 @@ def create_broadcast(
     Returns:
         The 12-char message ID on success, or ``None`` for empty input.
     """
+    if channel and channel.startswith(MASTERS_CHANNEL_PREFIX):
+        slug = channel.removeprefix(MASTERS_CHANNEL_PREFIX)
+        raise ValueError(
+            f"{channel} is a masters channel: master seats post with agentihooks swarm {slug} masters-channel say"
+        )
     entry = _build_broadcast(message, severity, ttl_seconds, source, persistent, channel)
     if entry is None:
         return None
@@ -454,6 +480,8 @@ def reconcile_channel_broadcasts(channel: str, desired: list[dict]) -> dict:
             channel,
         )
         if entry is not None:
+            if item.get("origin"):
+                entry["origin"] = item["origin"]
             built.append(entry)
 
     path = _broadcast_path()
@@ -479,6 +507,8 @@ def reconcile_channel_broadcasts(channel: str, desired: list[dict]) -> dict:
             )
             if match is not None:
                 kept_ids.add(match["id"])
+                if "origin" in entry:
+                    match = {**match, "origin": entry["origin"]}
                 resolved.append(match)
             else:
                 resolved.append(entry)
@@ -497,6 +527,35 @@ def reconcile_channel_broadcasts(channel: str, desired: list[dict]) -> dict:
         "removed": len(existing) - len(kept_ids),
         "active": len(resolved),
     }
+
+
+def cache_fleet_broadcasts(entries: list[dict]) -> int:
+    """Cache fleet revisions claimed for one session each, keeping only the newest revision per session; entries
+    without a ``fleet`` tag are local broadcasts and stay untouched. Returns how many new entries the file kept."""
+
+    def name(m: dict) -> tuple[str, str, str]:
+        return m["fleet"]["swarm"], m["fleet"]["broadcast_id"], m["fleet"]["session"]
+
+    with _file_lock(_broadcast_path()):
+        msgs = _read_broadcasts()
+        held = {m["id"] for m in msgs}
+        tagged = sorted((m for m in [*msgs, *entries] if "fleet" in m), key=lambda m: m["fleet"]["revision"])
+        newest = {name(m): m["fleet"]["revision"] for m in tagged}
+        kept = [m for m in msgs if "fleet" not in m or m["fleet"]["revision"] == newest[name(m)]]
+        added = [
+            {**entry, "content_hash": _msg_hash(entry)}
+            for entry in entries
+            if entry["id"] not in held and entry["fleet"]["revision"] == newest[name(entry)]
+        ]
+        if not added and len(kept) == len(msgs):
+            return 0
+        saved = kept + added
+        fleet_ids = [m["id"] for m in saved if "fleet" in m]
+        evicted = set(fleet_ids[: max(len(saved) - BROADCAST_MAX_MESSAGES, 0)])
+        saved = [m for m in saved if m["id"] not in evicted][-BROADCAST_MAX_MESSAGES:]
+        _save_broadcasts(saved)
+        fresh = {m["id"] for m in added}
+        return sum(1 for m in saved if m["id"] in fresh)
 
 
 def find_broadcast_by_content_hash(content_hash: str, channel: str | None = None) -> dict | None:
@@ -544,6 +603,17 @@ def clear_broadcasts(message_id: str | None = None, channel: str | None = None) 
 # ---------------------------------------------------------------------------
 
 
+def _admitted(session_id: str, msgs: list[dict]) -> list[dict]:
+    msgs = [m for m in msgs if "fleet" not in m or m["fleet"]["session"] == session_id]
+    return quarantine.keep(
+        session_id,
+        "broadcast",
+        msgs,
+        lambda m: [m.get("id"), (m.get("origin") or {}).get("id")],
+        lambda m: m.get("message"),
+    )
+
+
 def get_pending_broadcasts(session_id: str) -> list[dict]:
     """Return broadcasts the session has not yet seen.
 
@@ -555,11 +625,12 @@ def get_pending_broadcasts(session_id: str) -> list[dict]:
     """
     msgs = _load_broadcasts(cleanup=True)
     channels = _get_session_channels(session_id)
+    session = _load_sessions().get(session_id, {})
     pending = []
     for m in msgs:
         if _is_expired(m):
             continue
-        if not _message_matches_channel(m, channels):
+        if not _message_matches_channel(m, channels) or not _message_matches_project(m, session):
             continue
         if session_id in m.get("acknowledged_by", []):
             continue
@@ -567,7 +638,7 @@ def get_pending_broadcasts(session_id: str) -> list[dict]:
             pending.append(m)
         elif session_id not in m.get("delivered_to", []):
             pending.append(m)
-    return pending
+    return _admitted(session_id, pending)
 
 
 def get_critical_broadcasts(session_id: str) -> list[dict]:
@@ -579,7 +650,7 @@ def get_critical_broadcasts(session_id: str) -> list[dict]:
     """
     msgs = _load_broadcasts(cleanup=True)
     channels = _get_session_channels(session_id)
-    return [
+    critical = [
         m
         for m in msgs
         if m.get("severity") == "critical"
@@ -588,19 +659,23 @@ def get_critical_broadcasts(session_id: str) -> list[dict]:
         and _message_matches_channel(m, channels)
         and session_id not in m.get("acknowledged_by", [])
     ]
+    return _admitted(session_id, critical)
 
 
 def get_unseen_broadcasts(session_id: str, *, claim: bool = False) -> list[dict]:
     def select(msgs: list[dict]) -> list[dict]:
         channels = _get_session_channels(session_id)
-        return [
+        session = _load_sessions().get(session_id, {})
+        unseen = [
             msg
             for msg in msgs
             if not _is_expired(msg)
             and _message_matches_channel(msg, channels)
+            and _message_matches_project(msg, session)
             and session_id not in msg.get("acknowledged_by", [])
             and session_id not in msg.get("delivered_to", [])
         ]
+        return _admitted(session_id, unseen)
 
     if not claim:
         return select(_load_broadcasts(cleanup=True))
@@ -627,6 +702,7 @@ def get_pretool_broadcasts(session_id: str) -> list[dict]:
     min_rank = _SEVERITY_RANK.get(BROADCAST_PRETOOL_MIN_SEVERITY, 2)
     msgs = _load_broadcasts(cleanup=True)
     channels = _get_session_channels(session_id)
+    session = _load_sessions().get(session_id, {})
     out = {msg["id"]: msg for msg in get_unseen_broadcasts(session_id)}
     for m in msgs:
         if (
@@ -634,11 +710,12 @@ def get_pretool_broadcasts(session_id: str) -> list[dict]:
             or _is_expired(m)
             or session_id in m.get("acknowledged_by", [])
             or not _message_matches_channel(m, channels)
+            or not _message_matches_project(m, session)
         ):
             continue
         if BROADCAST_CRITICAL_ON_PRETOOL and _SEVERITY_RANK.get(m.get("severity", "info"), 9) <= min_rank:
             out[m["id"]] = m
-    return list(out.values())
+    return _admitted(session_id, list(out.values()))
 
 
 def claim_delivery(session_id: str, message_id: str) -> bool:
@@ -685,6 +762,7 @@ def acknowledge_broadcast(session_id: str, message_id: str) -> bool:
 
 
 SESSION_MAX_AGE_SECONDS = 86400  # 24h retention for crash recovery
+SESSION_SUSPECT_SECONDS = 300
 
 
 def _now_iso() -> str:
@@ -711,7 +789,14 @@ def register_session(
     model: str,
     account: str = "",
     supersede: bool = True,
+    name: str = "",
 ) -> None:
+    from hooks.context.project_identity import resolve_project
+    from hooks.context.project_sessions import record_session
+    from hooks.targets import is_codex_memory_thread
+
+    identity = resolve_project(cwd)
+    record_session(session_id, identity)
     with _file_lock(_sessions_path()):
         sessions = _load_sessions()
         now = _now_iso()
@@ -720,7 +805,7 @@ def register_session(
         # previously-alive entries for that pid (they're from an earlier
         # session lifecycle — /resume or /clear). Subagents share their
         # parent's pid and pass supersede=False.
-        if pid and supersede:
+        if pid and supersede and not is_codex_memory_thread(cwd):
             for existing_sid, existing_info in sessions.items():
                 if existing_sid == session_id:
                     continue
@@ -733,7 +818,10 @@ def register_session(
         # age to reflect the true session start, not the last event).
         existing = sessions.get(session_id)
         started_at = existing.get("started_at", now) if existing else now
+        name = (existing or {}).get("name") or name
+        named = {"name": name} if name else {}
         sessions[session_id] = {
+            **named,
             "started_at": started_at,
             "last_seen": now,
             "status": "alive",
@@ -741,6 +829,8 @@ def register_session(
             "cwd": cwd,
             "model": model,
             "account": account,
+            "project": identity.attributes() if identity else None,
+            "process_namespace": _local_namespace(),
         }
         _save_sessions(sessions)
 
@@ -751,6 +841,49 @@ def deregister_session(session_id: str) -> None:
         sessions = _load_sessions()
         sessions.pop(session_id, None)
         _save_sessions(sessions)
+
+
+def _mark_session(pid: int, key: str, value: str) -> int:
+    with _file_lock(_sessions_path()):
+        sessions = _load_sessions()
+        live = [info for info in sessions.values() if info.get("pid") == pid and info.get("status") == "alive"]
+        for info in live:
+            info[key] = value
+        if live:
+            _save_sessions(sessions)
+    return len(live)
+
+
+def _session_mark(pid: int, key: str) -> str:
+    return next(
+        (
+            str(info[key])
+            for info in _load_sessions().values()
+            if info.get("pid") == pid and info.get("status") == "alive" and info.get(key)
+        ),
+        "",
+    )
+
+
+def name_session(pid: int, name: str) -> int:
+    """Give every live session of ``pid`` an agent name; returns how many records carry it."""
+    return _mark_session(pid, "name", name)
+
+
+def session_name(pid: int) -> str:
+    return _session_mark(pid, "name")
+
+
+def pin_session(pid: int, swarm: str) -> int:
+    return _mark_session(pid, "swarm", swarm)
+
+
+def session_swarm(pid: int) -> str:
+    return _session_mark(pid, "swarm")
+
+
+def live_session_ids(pid: int) -> list[str]:
+    return [sid for sid, info in _load_sessions().items() if info.get("pid") == pid and info.get("status") == "alive"]
 
 
 def mark_handed_off(pid: int, target_account: str) -> list[str]:
@@ -773,18 +906,44 @@ def session_status(session_id: str) -> dict:
     return dict(_load_sessions().get(session_id) or {})
 
 
-def mark_session_closed(session_id: str) -> None:
+def mark_session_closed(session_id: str, pid: int | None = None) -> None:
     """Flip a session to status=closed on clean SessionEnd. Keeps the entry
     for the 24h crash-recovery retention window (see SESSION_MAX_AGE_SECONDS)
     instead of deleting it outright."""
     with _file_lock(_sessions_path()):
         sessions = _load_sessions()
         entry = sessions.get(session_id)
-        if entry is None:
+        # A resumed conversation keeps its id under a new process; only that process closes it.
+        if entry is None or (pid is not None and entry.get("pid") not in (None, pid)):
             return
         entry["status"] = "closed"
         entry["last_seen"] = _now_iso()
         _save_sessions(sessions)
+
+
+def _local_namespace() -> str:
+    from scripts.swarm_v2.runtime.process import local_namespace
+
+    return local_namespace()
+
+
+def foreign_session(info: dict, namespace: str) -> bool:
+    """A stamped record this process table cannot judge: another namespace, or an unreadable local one."""
+    recorded = info.get("process_namespace") or ""
+    return bool(recorded) and recorded != namespace
+
+
+def _silent(info: dict, now_dt: datetime) -> bool:
+    if info.get("status", "alive") not in ("alive", "handed_off"):
+        return False
+    stamp = info.get("last_seen") or info.get("started_at")
+    if not stamp:
+        return False
+    try:
+        seen = _parse_iso(stamp)
+    except ValueError:
+        return False
+    return (now_dt - seen).total_seconds() > SESSION_SUSPECT_SECONDS
 
 
 def heartbeat_sessions() -> dict:
@@ -793,18 +952,37 @@ def heartbeat_sessions() -> dict:
         return _heartbeat_locked()
 
 
+def _pid_alive(pid: object) -> bool:
+    try:
+        os.kill(int(pid), 0)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _probe(info: dict, now_iso: str) -> str:
+    """The status a local liveness probe leaves on the record; empty when the record is not probed."""
+    status = info.get("status", "alive")
+    if status not in ("alive", "handed_off", "suspect"):
+        return ""
+    if info.get("pid") and _pid_alive(info["pid"]):
+        info["last_seen"] = now_iso
+        info["status"] = "alive" if status == "suspect" else status
+    else:
+        info["status"] = "dead"
+    return info["status"]
+
+
 def _heartbeat_locked() -> dict:
     sessions = _load_sessions()
     now_dt = datetime.now(timezone.utc)
     now_iso = now_dt.isoformat().replace("+00:00", "Z")
-    summary = {"alive": 0, "flipped_dead": 0, "pruned": 0, "total": 0}
+    summary = {"alive": 0, "flipped_dead": 0, "pruned": 0, "suspect": 0}
     prune: list[str] = []
     changed = False
+    here = _local_namespace()
 
     for sid, info in list(sessions.items()):
-        status = info.get("status", "alive")
-        pid = info.get("pid", 0)
-
         ts_str = info.get("last_seen") or info.get("started_at")
         if ts_str:
             try:
@@ -815,22 +993,16 @@ def _heartbeat_locked() -> dict:
             except ValueError:
                 pass
 
-        if status in ("alive", "handed_off"):
-            alive = False
-            try:
-                if pid:
-                    os.kill(int(pid), 0)
-                    alive = True
-            except (OSError, ValueError):
-                alive = False
-            if alive:
-                info["last_seen"] = now_iso
-                summary["alive"] += status == "alive"
+        if foreign_session(info, here):
+            if _silent(info, now_dt):
+                info["status"] = "suspect"
+                summary["suspect"] += 1
                 changed = True
-            else:
-                info["status"] = "dead"
-                summary["flipped_dead"] += 1
-                changed = True
+            continue
+        probed = _probe(info, now_iso)
+        summary["alive"] += probed == "alive"
+        summary["flipped_dead"] += probed == "dead"
+        changed = changed or bool(probed)
 
     for sid in prune:
         del sessions[sid]
@@ -847,7 +1019,7 @@ def get_active_sessions(cleanup: bool = False, include_all: bool = False) -> dic
     """Return session entries from the registry.
 
     By default returns only entries with status="alive" — this matches the
-    semantic of "active" (one per live PID, after the supersede fix).
+    semantic of "active".
     Pass include_all=True to get the full registry including superseded,
     closed, and dead entries.
 
@@ -860,9 +1032,12 @@ def get_active_sessions(cleanup: bool = False, include_all: bool = False) -> dic
         with _file_lock(_sessions_path()):
             sessions = _load_sessions()
             changed = False
+            here = _local_namespace()
             for sid, info in sessions.items():
                 pid = info.get("pid")
                 if not pid or info.get("status") in ("dead", "closed", "superseded"):
+                    continue
+                if foreign_session(info, here):
                     continue
                 try:
                     os.kill(pid, 0)
@@ -898,7 +1073,7 @@ def format_broadcast_banner(msg: dict) -> str:
     return "\n".join(lines)
 
 
-def format_critical_context(msgs: list[dict]) -> str:
+def format_critical_context(msgs: list[dict], session_id: str = "") -> str:
     if not msgs:
         return ""
     # Drop empty-body messages — `[ALERT] No active signals.` is a #34713
@@ -924,6 +1099,7 @@ def format_critical_context(msgs: list[dict]) -> str:
             msg_id = m.get("id", "")
             sev = _display_label(m.get("severity", "alert"))
             lines.append(f"  - [{sev}] (id:{msg_id}) {m.get('message', '')}")
+            injection_trace.record_broadcast(session_id, m)
     else:
         budget = max(0, BROADCAST_MAX_BYTES_PRETOOL - len(header.encode("utf-8")) - 1)
         for m in deduped:
@@ -935,6 +1111,7 @@ def format_critical_context(msgs: list[dict]) -> str:
             if line_bytes > budget:
                 break
             lines.append(line)
+            injection_trace.record_broadcast(session_id, m)
             budget -= line_bytes
     if len(lines) == 1:
         return ""
@@ -990,12 +1167,21 @@ def check_and_inject_broadcasts(session_id: str) -> None:
                 continue
 
             banner = format_broadcast_banner(msg)
-            inject_banner("BROADCAST", banner)
+            inject_banner(
+                "BROADCAST", banner, kind="alert" if msg.get("severity") in ("critical", "nuclear") else "brain"
+            )
+            injection_trace.record_broadcast(session_id, msg)
             emit_span("brain.delivery", span_attrs)
             _record_delivery(session_id, msg, now_ts)
             injected += 1
     except Exception:
         pass
+
+
+def context_kind(context: str) -> str:
+    """Budget kind of a formatted broadcast block: an alert only when it carries a critical or nuclear message."""
+    labels = "|".join(_SEVERITY_DISPLAY_LABEL[s] for s in ("nuclear", "critical"))
+    return "alert" if re.search(rf"^  - \[(?:{labels})\] \(id:", context, re.MULTILINE) else "brain"
 
 
 def get_pretool_context(session_id: str, *, claim_unseen: bool = True) -> str | None:
@@ -1013,7 +1199,7 @@ def get_pretool_context(session_id: str, *, claim_unseen: bool = True) -> str | 
         msgs = list(msgs.values())
         if not msgs:
             return None
-        return format_critical_context(msgs)
+        return format_critical_context(msgs, session_id if claim_unseen else "")
     except Exception:
         return None
 
@@ -1036,5 +1222,6 @@ def get_broadcast_context(session_id: str, message_ids: list[str]) -> str | None
         if not claim_delivery(session_id, message["id"]):
             continue
         banners.append(format_broadcast_banner(message))
+        injection_trace.record_broadcast(session_id, message)
         _record_delivery(session_id, message, now_ts)
     return "\n\n".join(banners) or None

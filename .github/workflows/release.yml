@@ -1,12 +1,5 @@
 name: Release
 
-# Inlined (was: The-Cloud-Clockwork/.github release-reusable.yml) because the
-# reusable workflow hardcodes `runs-on: anton`. agentihooks is a PUBLIC repo and
-# must not execute on the self-hosted fleet runner; this job runs on
-# GitHub-hosted ubuntu-latest, matching the ci/test/pages move. Behaviour mirrors
-# the reusable workflow: compute next version, bump the version file, commit +
-# tag + push to the release branch, cut a GitHub release, then dispatch
-# publish-pypi.yml at the new tag.
 on:
   workflow_dispatch:
     inputs:
@@ -15,75 +8,75 @@ on:
         required: true
         type: choice
         options: [patch, minor, major]
+      dry_run:
+        description: "Tag and build in the CI checkout without pushing or creating a release"
+        type: boolean
+        default: false
       publish_pypi:
-        description: "Publish to PyPI from the new tag right away. The release dance leaves this off and publishes from main after the dev->main PR merges"
+        description: "Publish from the new tag. The release dance leaves this off and publishes from main after its pull request merges"
         type: boolean
         default: false
 
+concurrency:
+  group: release-version
+  cancel-in-progress: false
+
 permissions:
-  contents: write
-  actions: write
+  contents: read
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment: release
+    permissions:
+      contents: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: dev
           fetch-depth: 0
-          token: ${{ secrets.ORG_GITHUB_TOKEN || github.token }}
+
+      - name: Require the integration branch for a real release
+        if: ${{ !inputs.dry_run }}
+        run: test "$GITHUB_REF" = refs/heads/dev
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - name: Compute next version
         id: version
-        run: |
-          CURRENT=$(python3 - <<'EOF'
-          import tomllib
-          with open("pyproject.toml", "rb") as f:
-              print(tomllib.load(f)["project"]["version"])
-          EOF
-          )
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-          case "${{ inputs.bump }}" in
-            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
-            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
-            patch) PATCH=$((PATCH + 1)) ;;
-          esac
-          NEXT="${MAJOR}.${MINOR}.${PATCH}"
-          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
-          echo "next=$NEXT" >> "$GITHUB_OUTPUT"
-          echo "Releasing $CURRENT -> $NEXT"
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: bash scripts/ci_release.sh version
 
-      - name: Bump version in pyproject.toml
-        run: |
-          sed -i 's/^version = ".*"/version = "${{ steps.version.outputs.next }}"/' pyproject.toml
+      - name: Tag the release
+        env:
+          NEXT: ${{ steps.version.outputs.next }}
+        run: bash scripts/ci_release.sh tag "$GITHUB_SHA" "$NEXT"
 
-      - name: Commit, tag, and push
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add pyproject.toml
-          git commit -m "chore: release v${{ steps.version.outputs.next }}"
-          git tag "v${{ steps.version.outputs.next }}"
-          git push origin dev
-          git push origin "v${{ steps.version.outputs.next }}"
+      - name: Verify the tagged package version
+        env:
+          NEXT: ${{ steps.version.outputs.next }}
+        run: bash scripts/ci_release.sh verify "$GITHUB_SHA" "$NEXT"
+
+      - name: Push the tag
+        if: ${{ !inputs.dry_run }}
+        env:
+          NEXT: ${{ steps.version.outputs.next }}
+        run: git push origin "refs/tags/v$NEXT"
 
       - name: Create GitHub Release
+        if: ${{ !inputs.dry_run }}
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "v${{ steps.version.outputs.next }}" \
-            --repo "${{ github.repository }}" \
-            --title "v${{ steps.version.outputs.next }}" \
-            --generate-notes \
-            --latest
+          NEXT: ${{ steps.version.outputs.next }}
+        run: gh release create "v$NEXT" --repo "$GITHUB_REPOSITORY" --title "v$NEXT" --generate-notes --latest
 
       - name: Dispatch publish-pypi at the new tag
-        if: inputs.publish_pypi
+        if: ${{ !inputs.dry_run && inputs.publish_pypi }}
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          TAG="v${{ steps.version.outputs.next }}"
-          gh workflow run publish-pypi.yml --repo "${{ github.repository }}" --ref "$TAG"
-          echo "Dispatched publish-pypi.yml at $TAG"
+          NEXT: ${{ steps.version.outputs.next }}
+        run: gh workflow run publish-pypi.yml --repo "$GITHUB_REPOSITORY" --ref "v$NEXT"

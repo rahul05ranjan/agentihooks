@@ -4,6 +4,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +17,7 @@ def test_native_rate_limits_render_requested_banner(monkeypatch, tmp_path):
     import hooks.context.quota_usage as quota_usage
 
     monkeypatch.setattr(quota_usage, "AGENTIHOOKS_HOME", tmp_path)
+    monkeypatch.setattr(quota_usage, "QUOTA_USAGE_TOOL_CALLS", 5)
     now = time.time()
     quota_usage.record_rate_limits(
         "session-1",
@@ -32,6 +34,28 @@ def test_native_rate_limits_render_requested_banner(monkeypatch, tmp_path):
     assert "7D REMAINING: 28%" in banner
     assert "Shown every 5 tool calls" in banner
     assert "used" not in banner
+
+
+def test_banner_renders_requested_cadence_after_injection_tests_patch_it(tmp_path):
+    leaker = "tests/context/test_injection_kinds.py::test_tool_call_blocks_rank_by_kind"
+    banner_test = f"tests/test_quota_usage.py::{test_native_rate_limits_render_requested_banner.__name__}"
+    script = (
+        "import sys, pytest\n"
+        "args = ['-q', '-p', 'no:xdist', '-p', 'no:cacheprovider']\n"
+        "codes = [int(pytest.main([*args, node])) for node in sys.argv[1:]]\n"
+        "print('CODES', codes)\n"
+    )
+    env = {k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"} | {"AGENTIHOOKS_HOME": str(tmp_path)}
+    result = subprocess.run(
+        [sys.executable, "-c", script, leaker, banner_test],
+        cwd=_PROJECT_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert "CODES [0, 0]" in result.stdout, result.stdout[-3000:] + result.stderr[-2000:]
 
 
 def test_stale_native_snapshot_is_not_injected(monkeypatch, tmp_path):
@@ -57,6 +81,9 @@ def test_router_cache_supplies_first_prompt(monkeypatch, tmp_path):
     import hooks.context.quota_usage as quota_usage
 
     monkeypatch.setattr(quota_usage, "AGENTIHOOKS_HOME", tmp_path)
+    monkeypatch.setattr(quota_usage, "QUOTA_USAGE_STALE_SEC", 300)
+    for name in [name for name in os.environ if name.startswith("AH_CC_TOKEN_")]:
+        monkeypatch.delenv(name)
     monkeypatch.setenv("AH_CC_TOKEN_ALPHA", "secret")
     cache = {
         "modes": {
@@ -104,6 +131,42 @@ def _run_hook(payload, env):
         cwd=_PROJECT_ROOT,
         env=env,
     )
+
+
+_REPEAT_HOOK = """
+import io, json, os, sys
+from hooks.hook_manager import main
+
+class Exit(BaseException):
+    pass
+
+def fake_exit(code):
+    raise Exit(code)
+
+os._exit = fake_exit
+raw, times = sys.stdin.read(), int(sys.argv[1])
+out, results = sys.stdout, []
+for _ in range(times):
+    sys.stdin, sys.stdout = io.StringIO(raw), io.StringIO()
+    try:
+        main()
+    except Exit as done:
+        results.append({"returncode": done.args[0], "stdout": sys.stdout.getvalue()})
+out.write(json.dumps(results))
+"""
+
+
+def _run_hook_times(payload, env, times):
+    proc = subprocess.run(
+        [sys.executable, "-c", _REPEAT_HOOK, str(times)],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        cwd=_PROJECT_ROOT,
+        env=env,
+        check=True,
+    )
+    return [SimpleNamespace(**result) for result in json.loads(proc.stdout)]
 
 
 def test_statusline_snapshot_reaches_user_prompt_hook(tmp_path):
@@ -169,7 +232,9 @@ def test_pretool_banner_fires_on_every_fifth_tool_call(tmp_path):
         "cwd": str(_PROJECT_ROOT),
     }
 
-    results = [_run_hook(payload, env) for _ in range(5)]
+    results = _run_hook_times(payload, env, 5)
+
+    assert len(results) == 5
 
     assert all(result.returncode == 0 for result in results)
     assert all("ATTENTION TO QOUTA USAGE" not in result.stdout for result in results[:4])

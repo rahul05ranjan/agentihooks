@@ -14,6 +14,30 @@ import install  # noqa: I001
 
 
 class TestClaudeRouting:
+    def test_cmd_claude_prints_the_selection_with_the_fable_window_it_routed_on(self, monkeypatch, capsys):
+        from scripts import claude_quota_balancer as balancer
+
+        decision = argparse.Namespace(account="WINNER")
+        seen = []
+        monkeypatch.setattr(install, "_load_claude_runtime_env", lambda: None)
+        monkeypatch.setattr(install.shutil, "which", lambda name: "/usr/bin/claude")
+        monkeypatch.setattr(balancer, "select_credential", lambda *args, **kwargs: decision)
+        monkeypatch.setattr(balancer, "route_requires_fable", lambda *args, **kwargs: True)
+        monkeypatch.setattr(balancer, "launch_environment", lambda chosen, environ: {})
+        monkeypatch.setattr(install, "_write_route_report", lambda *args, **kwargs: None)
+        monkeypatch.setattr(
+            balancer, "format_selection", lambda chosen, fable: seen.append((chosen, fable)) or "picked"
+        )
+
+        def execvpe(executable, command, environ):
+            raise RuntimeError("exec intercepted")
+
+        monkeypatch.setattr(install.os, "execvpe", execvpe)
+        with pytest.raises(RuntimeError, match="exec intercepted"):
+            install.cmd_claude([])
+        assert seen == [(decision, True)]
+        assert capsys.readouterr().out == "picked\n"
+
     def test_cmd_claude_exports_winner_for_process_tree(self, monkeypatch):
         from scripts import claude_quota_balancer as balancer
 
@@ -64,6 +88,40 @@ class TestClaudeRouting:
         assert "AH_CC_TOKEN_PEER" not in observed["environ"]
         assert "ANTHROPIC_API_KEY" not in observed["environ"]
 
+    def test_a_routed_launch_drops_every_api_credential(self, monkeypatch, capsys):
+        from scripts import claude_quota_balancer as balancer
+
+        observed = {}
+        monkeypatch.setattr(install, "_load_claude_runtime_env", lambda: None)
+        monkeypatch.setattr(install.shutil, "which", lambda name: "/usr/bin/claude")
+        monkeypatch.setattr(balancer, "route_requires_fable", lambda *args, **kwargs: False)
+        monkeypatch.setenv("AH_CC_TOKEN_WINNER", "winner-token")
+        api = {
+            "ANTHROPIC_AUTH_TOKEN": "gateway-token",
+            "ANTHROPIC_BASE_URL": "https://gateway.example",
+            "CLAUDE_CODE_USE_BEDROCK": "1",
+            "ANTHROPIC_VERTEX_PROJECT_ID": "project",
+            "AH_ROUTE_API": "1",
+        }
+        for name, value in api.items():
+            monkeypatch.setenv(name, value)
+
+        def execvpe(executable, command, environ):
+            observed.update(environ=dict(environ))
+            raise RuntimeError("exec intercepted")
+
+        monkeypatch.setattr(install.os, "execvpe", execvpe)
+
+        with pytest.raises(RuntimeError, match="exec intercepted"):
+            install.cmd_claude(["--route", "WINNER"])
+
+        assert observed["environ"]["CLAUDE_CODE_OAUTH_TOKEN"] == "winner-token"
+        assert observed["environ"]["AGENTIHOOKS_ROUTE_ACCOUNT"] == "WINNER"
+        assert not set(api) & set(observed["environ"])
+        assert observed["environ"]["HOME"] == install.os.environ["HOME"]
+        captured = capsys.readouterr()
+        assert "gateway-token" not in captured.out + captured.err
+
     def test_cmd_claude_fails_closed_without_capacity(self, monkeypatch, capsys):
         from scripts import claude_quota_balancer as balancer
 
@@ -82,7 +140,7 @@ class TestClaudeRouting:
         assert exc.value.code == 3
         assert "no capacity" in capsys.readouterr().err
 
-    def test_cmd_claude_route_selects_exact_slug_without_probing(self, monkeypatch, capsys):
+    def test_cmd_claude_route_selects_exact_slug_without_probing(self, monkeypatch, capsys, tmp_path):
         from scripts import claude_quota_balancer as balancer
 
         observed = {}
@@ -102,15 +160,102 @@ class TestClaudeRouting:
 
         monkeypatch.setattr(install.os, "execvpe", execvpe)
 
+        report = tmp_path / "route.report"
         with pytest.raises(RuntimeError, match="exec intercepted"):
-            install.cmd_claude(["--route", "0", "--model", "sonnet"])
+            install.cmd_claude(["--route", "0", "--agentihooks-report", str(report), "--model", "sonnet"])
 
+        assert report.read_text() == "status=routed\naccount=0\nplacement=forced\n"
         assert observed["command"] == ["/usr/bin/claude", "--dangerously-skip-permissions", "--model", "sonnet"]
         assert observed["environ"]["CLAUDE_CODE_OAUTH_TOKEN"] == "selected-secret"
         assert observed["environ"]["AGENTIHOOKS_ROUTE_ACCOUNT"] == "0"
         assert observed["environ"]["AH_CC_TOKEN_0"] == "selected-secret"
         assert "AH_CC_TOKEN_3" not in observed["environ"]
         assert capsys.readouterr().out == "[agenti] account=0 route=forced\n"
+
+    @pytest.mark.parametrize(
+        ("extra", "command"),
+        [
+            (["--model", "opus"], ["/c", "--dangerously-skip-permissions", "--model", "opus"]),
+            (
+                ["--model", "opus", "--permission-mode", "plan"],
+                ["/c", "--allow-dangerously-skip-permissions", "--model", "opus", "--permission-mode", "plan"],
+            ),
+            (["--permission-mode=plan"], ["/c", "--allow-dangerously-skip-permissions", "--permission-mode=plan"]),
+            (["--permission-modes"], ["/c", "--dangerously-skip-permissions", "--permission-modes"]),
+        ],
+    )
+    def test_a_named_permission_mode_starts_the_session_in_it_with_bypass_still_allowed(self, extra, command):
+        assert install._claude_command("/c", extra) == command
+
+    def test_a_routed_planner_launch_keeps_its_plan_mode(self, monkeypatch):
+        observed = {}
+        monkeypatch.setattr(install, "_load_claude_runtime_env", lambda: None)
+        monkeypatch.setattr(install.shutil, "which", lambda name: "/usr/bin/claude")
+        monkeypatch.setenv("AH_CC_TOKEN_0", "selected-secret")
+
+        def execvpe(executable, command, environ):
+            observed.update(command=command)
+            raise RuntimeError("exec intercepted")
+
+        monkeypatch.setattr(install.os, "execvpe", execvpe)
+        with pytest.raises(RuntimeError, match="exec intercepted"):
+            install.cmd_claude(["--route", "0", "--permission-mode", "plan"])
+        assert observed["command"] == [
+            "/usr/bin/claude",
+            "--allow-dangerously-skip-permissions",
+            "--permission-mode",
+            "plan",
+        ]
+
+    def _api_launch(self, monkeypatch, argv):
+        observed = {}
+        monkeypatch.setattr(install, "_load_claude_runtime_env", lambda: None)
+        monkeypatch.setattr(install.shutil, "which", lambda name: "/usr/bin/claude")
+        monkeypatch.setenv("AH_CC_TOKEN_0", "token-secret")
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-secret")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "api-secret")
+
+        def execvpe(executable, command, environ):
+            observed.update(command=command, environ=dict(environ))
+            raise RuntimeError("exec intercepted")
+
+        monkeypatch.setattr(install.os, "execvpe", execvpe)
+        with pytest.raises(RuntimeError, match="exec intercepted"):
+            install.cmd_claude(argv)
+        return observed
+
+    def test_an_api_decision_launches_with_the_api_scrubber(self, monkeypatch, capsys, tmp_path):
+        from scripts import claude_quota_balancer as balancer
+
+        decision = balancer.RouteDecision(None, None, "cached", 2, 10**6, kind="api")
+        monkeypatch.setattr(balancer, "select_credential", lambda *args, **kwargs: decision)
+        monkeypatch.setattr(balancer, "route_requires_fable", lambda *args, **kwargs: False)
+        report = tmp_path / "route.report"
+        observed = self._api_launch(monkeypatch, ["--agentihooks-report", str(report), "--model", "opus"])
+        assert observed["command"] == ["/usr/bin/claude", "--dangerously-skip-permissions", "--model", "opus"]
+        assert observed["environ"]["ANTHROPIC_API_KEY"] == "api-secret"
+        assert observed["environ"]["AH_ROUTE_API"] == "1"
+        assert observed["environ"]["AGENTIHOOKS_ROUTE_ACCOUNT"] == "api"
+        assert "CLAUDE_CODE_OAUTH_TOKEN" not in observed["environ"]
+        assert "AH_CC_TOKEN_0" not in observed["environ"]
+        assert report.read_text() == "status=routed\naccount=api\nplacement=open\n"
+        out = capsys.readouterr()
+        assert out.out == "[agenti] account=api kind=api sessions=2/1000000 source=cached\n"
+        assert "secret" not in out.out + out.err
+
+    def test_route_api_forces_the_api_endpoint(self, monkeypatch, capsys):
+        from scripts import claude_quota_balancer as balancer
+
+        monkeypatch.setattr(
+            balancer,
+            "select_credential",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("automatic routing ran")),
+        )
+        observed = self._api_launch(monkeypatch, ["--route", "api"])
+        assert observed["environ"]["AH_ROUTE_API"] == "1"
+        assert observed["environ"]["AGENTIHOOKS_ROUTE_ACCOUNT"] == "api"
+        assert "CLAUDE_CODE_OAUTH_TOKEN" not in observed["environ"]
+        assert capsys.readouterr().out == "[agenti] account=api route=forced\n"
 
     @pytest.mark.parametrize("arguments", [["--route"], ["--route="], ["--route", "0", "--route=3"]])
     def test_cmd_claude_rejects_invalid_route_syntax(self, arguments, capsys):
@@ -153,8 +298,13 @@ class TestClaudeRouting:
         assert "AGENTIHOOKS_ROUTE_ACCOUNT" not in observed["environ"]
         assert "launching bare Claude" in capsys.readouterr().err
 
-    def test_cmd_balance_prints_ranked_capacity(self, monkeypatch, capsys):
+    def test_cmd_balance_prints_ranked_capacity(self, monkeypatch, tmp_path, capsys):
         from scripts import claude_quota_balancer as balancer
+        from scripts.routing.settings import FileSettings
+
+        store = FileSettings(tmp_path / "routing-settings.json")
+        store.set("claude-api-max-sessions", 3, "operator", 1.0)
+        monkeypatch.setenv("AGENTIHOOKS_HOME", str(tmp_path))
 
         credential = balancer.Credential("AH_CC_TOKEN_ALPHA", "secret")
         result = balancer.ProbeResult(
@@ -170,11 +320,220 @@ class TestClaudeRouting:
         monkeypatch.setattr(balancer, "discover_credentials", lambda environ: [credential])
         monkeypatch.setattr(balancer, "collect_results", lambda *args, **kwargs: ([result], "cached"))
 
-        assert install.cmd_balance(include_fable=False, refresh=False, timeout=10) == 0
+        monkeypatch.setattr("hooks.context.account_sessions.sessions_by_account", lambda: {"ALPHA": 2})
+
+        monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://gateway.example")
+        monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "gateway-secret")
+        monkeypatch.setattr("scripts.routing.place._client", lambda environ: None)
+        assert install.cmd_balance(include_fable=True, refresh=False, timeout=10) == 0
         output = capsys.readouterr().out
-        assert "ROUTING LEFT" in output
-        assert "70%" in output
-        assert "source=cached" in output
+        lines = output.splitlines()
+        assert lines[0].split()[-4:] == ["FABLE", "LEFT", "FABLE", "RESET"]
+        assert lines[2].split()[:9] == ["1", "claude", "ALPHA", "subscription", "NORMAL", "2/-", "-", "-", "70%"]
+        assert lines[3].split()[:4] == ["-", "claude", "api", "api"]
+        assert "codex" not in output and "source=" not in output and "?" not in output
+
+    def test_cmd_balance_marks_the_declared_master_on_the_main_and_current_paths(self, monkeypatch, capsys):
+        from scripts import claude_quota_balancer as balancer
+        from scripts.routing import master_account
+        from scripts.routing.master_account import MasterAccount
+
+        credential = balancer.Credential("AH_CC_TOKEN_ALPHA", "secret")
+        result = balancer.ProbeResult(
+            "ALPHA", "allowed", "NORMAL", 70, balancer.QuotaWindow(used=20), balancer.QuotaWindow(used=30)
+        )
+        monkeypatch.setattr(install, "_load_claude_runtime_env", lambda: None)
+        monkeypatch.setattr(install.shutil, "which", lambda name: "/usr/bin/claude")
+        monkeypatch.setattr(balancer, "discover_credentials", lambda environ: [credential])
+        monkeypatch.setattr(balancer, "collect_results", lambda *args, **kwargs: ([result], "cached"))
+        fable_asks = []
+        monkeypatch.setattr(
+            balancer,
+            "cached_observations",
+            lambda include_fable=False: fable_asks.append(include_fable) or [(1.0, result)],
+        )
+        monkeypatch.setattr(
+            balancer, "identify_session_account", lambda *args: balancer.SessionAccount("ALPHA", "token")
+        )
+        monkeypatch.setattr("hooks.context.account_sessions.sessions_by_account", lambda: {})
+        monkeypatch.setattr("hooks.context.account_sessions.codex_sessions_by_account", lambda: {})
+        monkeypatch.setattr("scripts.agents_quota._codex", lambda now: [])
+        monkeypatch.setattr(
+            master_account, "load", lambda environ: {"claude": MasterAccount("claude", "ALPHA", "max", "subscription")}
+        )
+
+        assert install.cmd_balance(include_fable=False, refresh=False, timeout=10) == 0
+        assert capsys.readouterr().out.splitlines()[2].split()[1:5] == ["claude", "ALPHA", "MASTER", "max"]
+        assert install.cmd_balance(include_fable=False, refresh=False, timeout=10, current=True) == 0
+        lines = capsys.readouterr().out.splitlines()
+        assert lines[0] == "current=ALPHA method=token"
+        assert lines[3].split()[1:6] == ["claude", "ALPHA", "(current)", "MASTER", "max"]
+        assert "?" not in "\n".join(lines) and "AGE" not in lines[1]
+        assert fable_asks[-1] is False
+        assert install.cmd_balance(include_fable=True, refresh=False, timeout=10, current=True) == 0
+        assert fable_asks[-1] is True and capsys.readouterr().out.splitlines()[1].endswith("FABLE LEFT  FABLE RESET")
+
+    def test_cmd_balance_lists_every_codex_account_even_without_claude_tokens(self, monkeypatch, capsys):
+        from scripts import agents_quota
+        from scripts import claude_quota_balancer as balancer
+
+        rows = [
+            agents_quota.QuotaRow("codex", "default", "SIGNED_OUT", 0, None, None, None, "no session log"),
+            agents_quota.QuotaRow("codex", "alpha", "NORMAL", 2, None, 60.0, None, "session-log 1m ago", cap=6),
+        ]
+        monkeypatch.setattr(install, "_load_claude_runtime_env", lambda: None)
+        monkeypatch.setattr(balancer, "discover_credentials", lambda environ: [])
+        monkeypatch.setattr(agents_quota, "_codex", lambda now: rows)
+        monkeypatch.setattr("hooks.context.account_sessions.sessions_by_account", lambda: {})
+        monkeypatch.setattr("hooks.context.account_sessions.codex_sessions_by_account", lambda: {})
+
+        assert install.cmd_balance(include_fable=False, refresh=False, timeout=10) == 2
+        lines = capsys.readouterr().out.splitlines()
+        assert lines[2].split()[:6] == ["1", "codex", "default", "subscription", "SIGNED_OUT", "0/-"]
+        assert lines[3].split()[:6] == ["2", "codex", "alpha", "subscription", "NORMAL", "2/6"]
+
+    def test_cmd_balance_without_claude_tokens_still_lists_an_interactive_master(self, monkeypatch, capsys):
+        from scripts import agents_quota
+        from scripts import claude_quota_balancer as balancer
+        from scripts.routing import master_account
+        from scripts.routing.master_account import MasterAccount
+
+        monkeypatch.setattr(install, "_load_claude_runtime_env", lambda: None)
+        monkeypatch.setattr(balancer, "discover_credentials", lambda environ: [])
+        monkeypatch.setattr(agents_quota, "_codex", lambda now: [])
+        monkeypatch.setattr("hooks.context.account_sessions.sessions_by_account", lambda: {"home": 3})
+        monkeypatch.setattr("hooks.context.account_sessions.codex_sessions_by_account", lambda: {})
+        monkeypatch.setattr(
+            master_account, "load", lambda environ: {"claude": MasterAccount("claude", "home", "max", "interactive")}
+        )
+
+        assert install.cmd_balance(include_fable=False, refresh=False, timeout=10) == 2
+        lines = capsys.readouterr().out.splitlines()
+        assert lines[2].split()[:8] == ["-", "claude", "home", "MASTER", "max", "interactive", "MASTERS", "3/-"]
+        assert len(lines) == 3
+
+    def test_cmd_balance_lists_every_account_the_router_knows_from_a_one_token_session(self, monkeypatch, capsys):
+        import os
+
+        from scripts import agents_quota
+        from scripts import claude_quota_balancer as balancer
+        from tests.test_agents_quota import _probe, _router_accounts
+
+        accounts = _router_accounts(monkeypatch, 7)
+        monkeypatch.setattr(install, "_load_claude_runtime_env", lambda: None)
+        monkeypatch.setattr(install.shutil, "which", lambda name: "/usr/bin/claude")
+        monkeypatch.setattr(balancer, "collect_results", _probe)
+        monkeypatch.setattr(agents_quota, "_codex", lambda now: [])
+        monkeypatch.setattr(agents_quota, "api_rows", lambda source, harness, now: [])
+        monkeypatch.setattr(agents_quota, "_masters", lambda harness="": {})
+        monkeypatch.setattr("hooks.context.account_sessions.sessions_by_account", lambda: {"acct1": 1, "acct7": 2})
+
+        assert install.cmd_balance(include_fable=False, refresh=False, timeout=10) == 0
+        lines = capsys.readouterr().out.splitlines()
+        assert sorted(line.split()[2] for line in lines[2:]) == accounts
+        assert len(lines) == 9
+        assert "AH_CC_TOKEN_acct7" not in os.environ
+
+    def test_cmd_balance_lists_the_claude_api_slot_with_kind_weight_and_cap(self, monkeypatch, tmp_path, capsys):
+        from scripts import agents_quota
+        from scripts import claude_quota_balancer as balancer
+        from scripts.routing import place
+        from scripts.routing.settings import FileSettings
+
+        credential = balancer.Credential("AH_CC_TOKEN_ALPHA", "secret")
+        result = balancer.ProbeResult(
+            "ALPHA", "allowed", "NORMAL", 70, balancer.QuotaWindow(20), balancer.QuotaWindow(30)
+        )
+        store = FileSettings(tmp_path / "routing-settings.json")
+        store.set("claude-api-weight", 25, "operator", 1.0)
+        store.set("claude-api-max-sessions", 3, "operator", 1.0)
+        monkeypatch.setenv("AGENTIHOOKS_HOME", str(tmp_path))
+        monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://gateway.example")
+        monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "gateway-secret")
+        monkeypatch.setattr(place, "_client", lambda environ: None)
+        monkeypatch.setattr(install, "_load_claude_runtime_env", lambda: None)
+        monkeypatch.setattr(install.shutil, "which", lambda name: "/usr/bin/claude")
+        monkeypatch.setattr(balancer, "discover_credentials", lambda environ: [credential])
+        monkeypatch.setattr(balancer, "collect_results", lambda *args, **kwargs: ([result], "cached"))
+        monkeypatch.setattr(agents_quota, "_codex", lambda now: [])
+        monkeypatch.setattr("hooks.context.account_sessions.sessions_by_account", lambda: {"ALPHA": 2, "api": 1})
+        monkeypatch.setattr("hooks.context.account_sessions.codex_sessions_by_account", lambda: {"gone": 1})
+        api_side, nows = place.api_side, []
+        monkeypatch.setattr(place, "api_side", lambda *args: nows.append(args[3]) or api_side(*args))
+        monkeypatch.setattr("time.time", lambda: 77.0)
+
+        assert install.cmd_balance(include_fable=False, refresh=False, timeout=10) == 0
+        assert nows == [77.0]
+        lines = capsys.readouterr().out.splitlines()
+        assert lines[0].split() == [
+            "#",
+            "HARNESS",
+            "ACCOUNT",
+            "KIND",
+            "STATE",
+            "SESSIONS",
+            "WEIGHT",
+            "CAP",
+            "ROUTING",
+            "LEFT",
+            "5H",
+            "LEFT",
+            "5H",
+            "RESET",
+            "7D",
+            "LEFT",
+            "7D",
+            "RESET",
+        ]
+        assert lines[2].split() == [
+            "1",
+            "claude",
+            "ALPHA",
+            "subscription",
+            "NORMAL",
+            "2/6",
+            "-",
+            "6",
+            "70%",
+            "80%",
+            "-",
+            "70%",
+            "-",
+        ]
+        assert lines[3].split() == ["-", "claude", "api", "api", "OPEN", "1/3", "25%", "3", *["-"] * 5]
+        assert lines[4:] == ["+1 sessions on unlisted account names"]
+
+    def test_balance_set_and_settings_dispatch_from_the_cli(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(install.balance_cli, "cmd_balance_set", lambda pairs: calls.append(("set", pairs)) or 0)
+        monkeypatch.setattr(install.balance_cli, "cmd_balance_settings", lambda: calls.append(("settings",)) or 0)
+        monkeypatch.setattr(install, "cmd_balance", lambda **kwargs: calls.append(("balance", kwargs)) or 1)
+        argvs = (
+            ["balance", "set", "claude-api-weight=5", "codex-api-weight=6"],
+            ["balance", "settings"],
+            ["balance", "--fable", "--refresh", "--current", "--timeout", "7", "--show-account-metadata", "ALPHA"],
+        )
+        codes = []
+        for argv in argvs:
+            monkeypatch.setattr(install.sys, "argv", ["agentihooks", *argv])
+            with pytest.raises(SystemExit) as exit_info:
+                install.main()
+            codes.append(exit_info.value.code)
+        assert codes == [0, 0, 1]
+        assert calls == [
+            ("set", ["claude-api-weight=5", "codex-api-weight=6"]),
+            ("settings",),
+            (
+                "balance",
+                {
+                    "include_fable": True,
+                    "refresh": True,
+                    "timeout": 7.0,
+                    "show_account_metadata": "ALPHA",
+                    "current": True,
+                },
+            ),
+        ]
 
     def test_cmd_balance_can_print_raw_account_metadata(self, monkeypatch, capsys):
         from scripts import claude_quota_balancer as balancer
@@ -337,14 +696,14 @@ class TestUserEnvManifest:
 
 
 class TestInitTargets:
-    def test_bare_init_installs_all_supported_targets(self, monkeypatch):
+    def test_bare_init_installs_default_targets(self, monkeypatch):
         calls = []
         monkeypatch.setattr(install, "cmd_init_unified", lambda args: calls.append(args))
         monkeypatch.setattr(sys, "argv", ["agentihooks", "init", "--profile", "default"])
 
         install.main()
 
-        assert [args.install_target for args in calls] == list(install.SUPPORTED_TARGETS)
+        assert [args.install_target for args in calls] == ["claude", "codex"]
 
     def test_target_flag_installs_only_that_target(self, monkeypatch):
         calls = []
@@ -359,7 +718,7 @@ class TestInitTargets:
 
         assert [args.install_target for args in calls] == ["codex"]
 
-    def test_target_environment_installs_only_that_target(self, monkeypatch):
+    def test_target_environment_does_not_enable_copilot(self, monkeypatch):
         calls = []
         monkeypatch.setenv("AGENTIHOOKS_TARGET", "copilot")
         monkeypatch.setattr(install, "cmd_init_unified", lambda args: calls.append(args))
@@ -367,7 +726,7 @@ class TestInitTargets:
 
         install.main()
 
-        assert [args.install_target for args in calls] == ["copilot"]
+        assert [args.install_target for args in calls] == ["claude", "codex"]
 
 
 # ---------------------------------------------------------------------------
@@ -1062,6 +1421,7 @@ class TestInitProfileRecall:
         linked = [{"name": "brain", "path": "/home/test/brain", "linked_at": "2026-01-01T00:00:00Z"}]
         store = {"state": {**self._make_state("anton,brain", settings_profile="admin"), "bundle": bundle}}
         store["state"]["linked_profiles"] = linked
+        store["state"]["herdr"] = {"enabled": False, "decided_at": "2026-10-04T00:00:00+00:00"}
 
         def clean():
             store["state"] = {}
@@ -1095,6 +1455,144 @@ class TestInitProfileRecall:
         assert called_args.settings_profile == "admin"
         assert store["state"]["bundle"] == bundle
         assert store["state"]["linked_profiles"] == linked
+        assert store["state"]["herdr"]["enabled"] is False
+
+    def _init_with(self, profile, previous_chain, env_profile=None):
+        import argparse
+        import os
+
+        record = {"path": "/home/test/.claude", "profile": previous_chain, "installed_at": "2026-01-01T00:00:00Z"}
+        state = {
+            "targets": {"global": {"claude": dict(record), "codex": dict(record, path="/home/test/.codex")}},
+            "linked_profiles": [{"name": "brain", "path": "/home/test/brain", "linked_at": "2026-01-01T00:00:00Z"}],
+        }
+        args = argparse.Namespace(
+            profile=profile,
+            init_settings_profile=None,
+            bundle=None,
+            repo=None,
+            query=False,
+            list_profiles=False,
+        )
+        env = {"AGENTIHOOKS_PROFILE": env_profile} if env_profile else {}
+        with (
+            patch.object(install, "_load_state", return_value=state),
+            patch.object(install, "_get_bundle_path", return_value=None),
+            patch.object(install, "install_global") as mock_install,
+            patch.dict("os.environ", env, clear=False),
+        ):
+            if not env_profile:
+                os.environ.pop("AGENTIHOOKS_PROFILE", None)
+            install.cmd_init_unified(args)
+        return mock_install.call_args[0][0].profile
+
+    def test_explicit_profile_keeps_a_linked_profile_from_the_previous_chain(self):
+        assert self._init_with("anton", "anton,brain") == "anton,brain"
+
+    def test_env_profile_cannot_reapply_a_linked_profile_chain(self):
+        with pytest.raises(SystemExit) as exc:
+            self._init_with(None, "anton,brain", env_profile="anton")
+        assert exc.value.code == 1
+
+    def test_switching_the_bundle_profile_still_keeps_the_linked_one(self):
+        assert self._init_with("smith", "anton,brain") == "smith,brain"
+
+    def test_a_chain_that_already_names_the_linked_profile_is_unchanged(self):
+        assert self._init_with("brain,anton", "anton,brain") == "brain,anton"
+
+    def test_a_linked_profile_outside_the_previous_chain_is_not_added(self):
+        assert self._init_with("anton", "anton") == "anton"
+
+    def test_an_unlinked_profile_from_the_previous_chain_is_not_kept(self):
+        import argparse
+        import os
+
+        record = {"path": "/home/test/.claude", "profile": "anton,brain", "installed_at": "2026-01-01T00:00:00Z"}
+        state = {"targets": {"global": {"claude": record}}, "linked_profiles": []}
+        args = argparse.Namespace(
+            profile="anton", init_settings_profile=None, bundle=None, repo=None, query=False, list_profiles=False
+        )
+        with (
+            patch.object(install, "_load_state", return_value=state),
+            patch.object(install, "_get_bundle_path", return_value=None),
+            patch.object(install, "install_global") as mock_install,
+            patch.dict("os.environ", {}, clear=False),
+        ):
+            os.environ.pop("AGENTIHOOKS_PROFILE", None)
+            install.cmd_init_unified(args)
+        assert mock_install.call_args[0][0].profile == "anton"
+
+    def test_a_profile_linked_for_another_target_stays_out_of_this_one(self):
+        import argparse
+        import os
+
+        def record(path, profile):
+            return {"path": path, "profile": profile, "installed_at": "2026-01-01T00:00:00Z"}
+
+        state = {
+            "targets": {
+                "global": {
+                    "claude": record("/home/test/.claude", "anton"),
+                    "codex": record("/home/test/.codex", "smith,brain"),
+                }
+            },
+            "linked_profiles": [{"name": "brain", "path": "/home/test/brain", "linked_at": "2026-01-01T00:00:00Z"}],
+        }
+        args = argparse.Namespace(
+            profile="anton",
+            init_settings_profile=None,
+            bundle=None,
+            repo=None,
+            query=False,
+            list_profiles=False,
+            install_target="claude",
+        )
+        with (
+            patch.object(install, "_load_state", return_value=state),
+            patch.object(install, "_get_bundle_path", return_value=None),
+            patch.object(install, "install_global") as mock_install,
+            patch.dict("os.environ", {}, clear=False),
+        ):
+            os.environ.pop("AGENTIHOOKS_PROFILE", None)
+            install.cmd_init_unified(args)
+        assert mock_install.call_args[0][0].profile == "anton"
+
+    def test_force_with_an_explicit_profile_keeps_the_linked_one(self):
+        import argparse
+        import copy
+        import os
+
+        linked = [{"name": "brain", "path": "/home/test/brain", "linked_at": "2026-01-01T00:00:00Z"}]
+        record = {"path": "/home/test/.claude", "profile": "anton,brain", "installed_at": "2026-01-01T00:00:00Z"}
+        store = {"state": {"targets": {"global": {"claude": record}}, "linked_profiles": linked}}
+
+        def clean():
+            store["state"] = {}
+
+        def save(state):
+            store["state"] = copy.deepcopy(state)
+
+        args = argparse.Namespace(
+            profile="anton",
+            init_settings_profile=None,
+            bundle=None,
+            force=True,
+            repo=None,
+            query=False,
+            list_profiles=False,
+        )
+        with (
+            patch.object(install, "_load_state", side_effect=lambda: copy.deepcopy(store["state"])),
+            patch.object(install, "_save_state", side_effect=save),
+            patch.object(install, "_clean_state_dir", side_effect=clean),
+            patch.object(install, "_get_bundle_path", return_value=None),
+            patch.object(install, "install_global") as mock_install,
+            patch.dict("os.environ", {}, clear=False),
+        ):
+            os.environ.pop("AGENTIHOOKS_PROFILE", None)
+            install.cmd_init_unified(args)
+
+        assert mock_install.call_args[0][0].profile == "anton,brain"
 
     def test_recalls_settings_profile_from_state(self):
         """When no CLI flag or env var, init uses settings_profile from state.json."""
@@ -1145,8 +1643,7 @@ class TestInitProfileRecall:
             called_args = mock_install.call_args[0][0]
             assert called_args.profile == "anton"
 
-    def test_env_var_overrides_state(self):
-        """AGENTIHOOKS_PROFILE env var overrides state.json."""
+    def test_env_profile_cannot_override_the_operator_state(self):
         import argparse
 
         state = self._make_state("default")
@@ -1164,9 +1661,10 @@ class TestInitProfileRecall:
             patch.object(install, "install_global") as mock_install,
             patch.dict("os.environ", {"AGENTIHOOKS_PROFILE": "admin"}, clear=False),
         ):
-            install.cmd_init_unified(args)
-            called_args = mock_install.call_args[0][0]
-            assert called_args.profile == "admin"
+            with pytest.raises(SystemExit) as exc:
+                install.cmd_init_unified(args)
+        assert exc.value.code == 1
+        mock_install.assert_not_called()
 
     def test_prompts_when_no_state(self):
         """When state.json has no profile, falls back to interactive prompt."""
@@ -1554,6 +2052,49 @@ class TestInitLinkProfileFlag:
         ):
             with pytest.raises(SystemExit):
                 install.cmd_init_unified(args)
+
+
+class TestInitInsideRenderedHome:
+    def _args(self):
+        return TestInitLinkProfileFlag()._make_args(profile=None)
+
+    def test_refuses_and_names_the_rendered_home(self, tmp_path, monkeypatch, capsys):
+        home = tmp_path / "profiles" / "engineer" / "claude"
+        home.mkdir(parents=True)
+        monkeypatch.setattr(install, "AGENTIHOOKS_STATE_DIR", tmp_path)
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home))
+        monkeypatch.setenv("AGENTIHOOKS_PROFILE", "engineer")
+        with (
+            patch.object(install, "_load_state", return_value={"targets": {"global": {"profile": "anton"}}}),
+            patch.object(install, "_get_bundle_path", return_value=None),
+            patch.object(install, "install_global") as mock_install,
+            patch.object(install, "_rerender_profile_homes") as mock_rerender,
+            patch.object(install, "_update_bashrc_block") as mock_bashrc,
+        ):
+            with pytest.raises(SystemExit) as exc:
+                install.cmd_init_unified(self._args())
+        assert exc.value.code == 1
+        assert capsys.readouterr().err == (
+            "ERROR: agent sessions cannot change the operator's global profile install.\n"
+            "Run this command from the operator's own shell with AGENTIHOOKS_SWARM, AGENTIHOOKS_PROFILE, "
+            "CLAUDE_CONFIG_DIR, CODEX_HOME and COPILOT_HOME unset.\n"
+        )
+        assert not mock_install.called
+        assert not mock_rerender.called
+        assert not mock_bashrc.called
+
+    def test_config_dir_outside_rendered_root_still_installs(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(install, "AGENTIHOOKS_STATE_DIR", tmp_path / "state")
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "profiles" / "engineer" / "claude"))
+        with (
+            patch.object(install, "_load_state", return_value={"targets": {"global": {"profile": "anton"}}}),
+            patch.object(install, "_get_bundle_path", return_value=None),
+            patch.object(install, "install_global") as mock_install,
+            patch.object(install, "_rerender_profile_homes"),
+            patch.object(install, "_update_bashrc_block"),
+        ):
+            install.cmd_init_unified(self._args())
+        assert mock_install.call_args.args[0].profile == "anton"
 
 
 # ---------------------------------------------------------------------------
@@ -2217,3 +2758,242 @@ class TestInstallGlobalHonoursTarget:
         state = json.loads(install.STATE_JSON.read_text())
         assert state["targets"]["global"]["codex"]["profile"] == "tiny"
         assert "claude" not in state["targets"]["global"]
+
+    def test_the_settings_profile_env_reaches_the_codex_wrapper(self, tmp_path, monkeypatch):
+        profiles = self._tiny_profile(tmp_path)
+        overlay = profiles / "tinyset" / ".codex"
+        overlay.mkdir(parents=True)
+        (overlay / "config.overrides.toml").write_text('[_agentihooks.env]\nSET_FLAG = "on"\n')
+        monkeypatch.setattr(install, "PROFILES_DIR", profiles, raising=False)
+        monkeypatch.setattr(install, "_get_bundle_path", lambda: None)
+        monkeypatch.setattr(install, "_install_cli_tool", lambda *a, **k: None, raising=False)
+        monkeypatch.setattr(install, "_ensure_mcp_daemon", lambda *a, **k: None, raising=False)
+        monkeypatch.setattr(install, "_resolve_hooks_python", lambda *a, **k: Path(sys.executable), raising=False)
+        install.install_global(argparse.Namespace(profile="tiny", settings_profile="tinyset", install_target="codex"))
+        wrapper = (Path.home() / ".codex" / "agentihooks-hook.sh").read_text()
+        assert 'export SET_FLAG="${SET_FLAG:=on}"\n' in wrapper
+
+
+class TestSkillFolderWithoutSkillFile:
+    def _skills(self, tmp_path):
+        skills = tmp_path / "profiles" / "tiny" / ".claude" / "skills"
+        (skills / "kept").mkdir(parents=True)
+        (skills / "kept" / "SKILL.md").write_text("---\nname: kept\ndescription: kept\n---\n")
+        (skills / "moved" / "node_modules" / "pkg").mkdir(parents=True)
+        (skills / "moved" / "node_modules" / "pkg" / "index.js").write_text("")
+        (skills / "README.md").write_text("")
+        return skills
+
+    def test_folder_with_only_ignored_files_is_skipped_and_named_once(self, tmp_path, monkeypatch, capsys):
+        installer = TestInstallGlobalHonoursTarget()
+        installer._tiny_profile(tmp_path)
+        self._skills(tmp_path)
+        monkeypatch.setattr(installer, "_tiny_profile", lambda tmp_path: tmp_path / "profiles")
+        home = installer._run(tmp_path, monkeypatch, "claude")
+        out = capsys.readouterr().out
+        assert (home / ".claude" / "skills" / "kept").is_symlink()
+        assert not (home / ".claude" / "skills" / "moved").exists()
+        assert not (home / ".claude" / "skills" / "README.md").exists()
+        assert "Linked profile skill 'kept'" in out
+        assert out.count("moved") == 1
+        assert "Skipped skill folder with no SKILL.md" in out
+
+    def test_reinstall_drops_the_link_of_a_folder_whose_skill_file_moved(self, tmp_path, monkeypatch, capsys):
+        installer = TestInstallGlobalHonoursTarget()
+        installer._tiny_profile(tmp_path)
+        skills = self._skills(tmp_path)
+        monkeypatch.setattr(installer, "_tiny_profile", lambda tmp_path: tmp_path / "profiles")
+        (skills / "moved" / "SKILL.md").write_text("---\nname: moved\ndescription: moved\n---\n")
+        home = installer._run(tmp_path, monkeypatch, "claude")
+        assert (home / ".claude" / "skills" / "moved").is_symlink()
+        (skills / "moved" / "SKILL.md").unlink()
+        capsys.readouterr()
+        installer._run(tmp_path, monkeypatch, "claude")
+        out = capsys.readouterr().out
+        assert not (home / ".claude" / "skills" / "moved").is_symlink()
+        assert out.count("Skipped skill folder with no SKILL.md") == 1
+
+
+class TestAgentienvMalformedNames:
+    def test_agentienv_warns_with_file_and_line_only(self, tmp_path):
+        import os
+        import subprocess
+
+        fake_name, fake_value = "fake-leaked-name-0000", "fake-value-0000"
+        bashrc = tmp_path / ".bashrc"
+        env_file = tmp_path / ".agentihooks" / ".env"
+        env_file.parent.mkdir()
+        env_file.write_text("GOOD_NAME_0000=ok\n")
+        extra = env_file.parent / "extra.env"
+        extra.write_text(f"# note\n\nexport {fake_name}={fake_value}\n")
+
+        with patch.object(install, "_BASHRC", bashrc), patch.object(install, "_ENV_FILE_DST", env_file):
+            install._update_bashrc_block()
+
+        r = subprocess.run(
+            ["bash", "-c", f'. "{bashrc}"; echo "good=$GOOD_NAME_0000"'],
+            env={"HOME": str(tmp_path), "PATH": os.environ.get("PATH", "")},
+            capture_output=True,
+            text=True,
+        )
+        assert "good=ok" in r.stdout
+        assert f"{extra} line 3" in r.stderr
+        assert str(env_file) not in r.stderr
+        assert fake_name not in r.stdout + r.stderr and fake_value not in r.stdout + r.stderr
+
+
+class TestAgentienvMultilineValues:
+    FAKE_FIRST, FAKE_REST = "fake-first-line-0000", "fake-rest=line-0000"
+
+    def _source(self, tmp_path, extra_text, inherited=None):
+        import os
+        import subprocess
+
+        bashrc = tmp_path / ".bashrc"
+        env_file = tmp_path / ".agentihooks" / ".env"
+        env_file.parent.mkdir()
+        env_file.write_text("GOOD_NAME_0001=ok\n")
+        (env_file.parent / "extra.env").write_text(extra_text)
+
+        with patch.object(install, "_BASHRC", bashrc), patch.object(install, "_ENV_FILE_DST", env_file):
+            install._update_bashrc_block()
+
+        return subprocess.run(
+            ["bash", "-c", f'. "{bashrc}"; echo "good=$GOOD_NAME_0001 single=$SINGLE_0001"'],
+            env={"HOME": str(tmp_path), "PATH": os.environ.get("PATH", ""), **(inherited or {})},
+            capture_output=True,
+            text=True,
+        )
+
+    def test_agentienv_names_a_multiline_file_value_only(self, tmp_path):
+        r = self._source(
+            tmp_path, f"# note\nexport FAKE_MULTI_0001='{self.FAKE_FIRST}\n{self.FAKE_REST}'\nSINGLE_0001=\"a b\"\n"
+        )
+        assert "good=ok single=a b" in r.stdout
+        assert "several lines" in r.stderr and "FAKE_MULTI_0001" in r.stderr
+        assert "SINGLE_0001" not in r.stderr
+        assert "not a valid identifier" not in r.stderr
+        assert self.FAKE_FIRST not in r.stdout + r.stderr and self.FAKE_REST not in r.stdout + r.stderr
+
+    def test_agentienv_names_a_multiline_value_inherited_from_the_shell(self, tmp_path):
+        r = self._source(tmp_path, "SINGLE_0001=x\n", {"FAKE_INHERITED_0001": self.FAKE_FIRST + "\n" + self.FAKE_REST})
+        assert "FAKE_INHERITED_0001" in r.stderr
+        assert self.FAKE_FIRST not in r.stdout + r.stderr and self.FAKE_REST not in r.stdout + r.stderr
+
+    def test_agentienv_is_quiet_without_multiline_values(self, tmp_path):
+        r = self._source(tmp_path, "SINGLE_0001=x\n")
+        assert r.stderr == ""
+
+    def test_one_init_after_the_shell_prints_the_warning_once(self, tmp_path):
+        import os
+        import subprocess
+        import sys
+
+        bashrc = tmp_path / ".bashrc"
+        env_file = tmp_path / ".agentihooks" / ".env"
+        env_file.parent.mkdir()
+        env_file.write_text("GOOD_NAME_0001=ok\n")
+        with patch.object(install, "_BASHRC", bashrc), patch.object(install, "_ENV_FILE_DST", env_file):
+            install._update_bashrc_block()
+        init = tmp_path / "init.py"
+        init.write_text(
+            "import io, sys\n"
+            "from hooks import config\n"
+            "class Tty(io.StringIO):\n"
+            "    def isatty(self):\n"
+            "        return True\n"
+            "sys.stderr = Tty()\n"
+            "config._load_user_env()\n"
+            "sys.__stderr__.write(sys.stderr.getvalue())\n"
+        )
+        r = subprocess.run(
+            ["bash", "-c", f'. "{bashrc}"; agentienv; "{sys.executable}" "{init}"'],
+            env={
+                "HOME": str(tmp_path),
+                "PATH": os.environ.get("PATH", ""),
+                "PYTHONPATH": str(Path(install.__file__).resolve().parents[1]),
+                "FAKE_INHERITED_0001": self.FAKE_FIRST + "\n" + self.FAKE_REST,
+            },
+            capture_output=True,
+            text=True,
+        )
+        assert r.stderr.count("span several lines") == 1, r.stderr
+        assert "[agentienv] WARNING: these values span several lines" in r.stderr
+        assert "[agentihooks]" not in r.stderr
+
+
+@pytest.fixture
+def operator_install(monkeypatch, tmp_path):
+    from scripts import install as installer
+
+    installer._save_state({"targets": {"global": {t: {"profile": "default"} for t in ("claude", "codex", "copilot")}}})
+    external = tmp_path / "external"
+    external.mkdir()
+    monkeypatch.setattr(installer, "_get_bundle_path", lambda: None)
+    monkeypatch.setattr(installer, "_rerender_profile_homes", lambda *args: None)
+    monkeypatch.setattr(installer, "_update_bashrc_block", lambda: None)
+    return installer, external
+
+
+def _call_operator_install(installer, external, caller):
+    if caller == "init":
+        installer.cmd_init_unified(TestInitLinkProfileFlag()._make_args(profile="default"))
+    elif caller == "settings":
+        installer._cmd_settings_profile(argparse.Namespace(sp_name="default", clear=False, for_target=None))
+    elif caller == "clear":
+        installer._cmd_settings_profile(argparse.Namespace(clear=True, for_target=None))
+    elif caller == "link":
+        installer.cmd_link_profile("link", str(external))
+    elif caller == "unlink":
+        installer.cmd_link_profile("unlink", name="external")
+    else:
+        installer.install_global(argparse.Namespace(profile="default", settings_profile="", install_target="claude"))
+
+
+@pytest.mark.parametrize("caller", ["init", "settings", "clear", "link", "unlink", "global"])
+@pytest.mark.parametrize(
+    "signal", ["AGENTIHOOKS_SWARM", "AGENTIHOOKS_PROFILE", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "COPILOT_HOME"]
+)
+def test_agent_session_cannot_change_operator_install(operator_install, monkeypatch, capsys, caller, signal):
+    installer, external = operator_install
+    from scripts.profiles import render
+
+    value = (
+        "engineer"
+        if signal.startswith("AGENTIHOOKS_")
+        else str(render.rendered_root() / "engineer" / "generation" / "codex")
+    )
+    monkeypatch.setenv(signal, value)
+    before = installer.STATE_JSON.read_bytes()
+    with patch.object(installer, "_install_global_inner") as inner:
+        with pytest.raises(SystemExit) as exc:
+            _call_operator_install(installer, external, caller)
+    assert exc.value.code == 1
+    assert capsys.readouterr().err == (
+        "ERROR: agent sessions cannot change the operator's global profile install.\n"
+        "Run this command from the operator's own shell with AGENTIHOOKS_SWARM, AGENTIHOOKS_PROFILE, "
+        "CLAUDE_CONFIG_DIR, CODEX_HOME and COPILOT_HOME unset.\n"
+    )
+    inner.assert_not_called()
+    assert installer.STATE_JSON.read_bytes() == before
+
+
+@pytest.mark.parametrize("caller", ["init", "settings", "clear", "link", "global"])
+def test_operator_shell_can_install_profiles(operator_install, monkeypatch, caller):
+    installer, external = operator_install
+    for name in ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "COPILOT_HOME"):
+        monkeypatch.setenv(name, str(Path.home() / "custom" / name))
+    home = Path.home() / "custom" / "CLAUDE_CONFIG_DIR"
+    home.mkdir(parents=True)
+    (home / "CLAUDE.md").write_text("<!-- profile: previous -->\n")
+    with patch.object(installer, "_install_global_inner") as inner:
+        _call_operator_install(installer, external, caller)
+    assert inner.called
+
+
+def test_global_install_refuses_before_taking_the_lock(operator_install, monkeypatch):
+    installer, external = operator_install
+    monkeypatch.setenv("AGENTIHOOKS_SWARM", "example")
+    with patch.object(installer, "_sync_lock") as lock, pytest.raises(SystemExit):
+        _call_operator_install(installer, external, "global")
+    lock.assert_not_called()

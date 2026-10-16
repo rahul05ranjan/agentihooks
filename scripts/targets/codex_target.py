@@ -10,7 +10,7 @@ Writes the Codex-shaped install surface (docs/reference/CODEX-COMPAT.md §5):
 - ``~/.codex/AGENTS.md`` — persona: bundle CLAUDE.md ⊕ profile-chain
   CLAUDE.mds ⊕ compiled rules (codex has no rules dir) ⊕ CI manifesto.
 - ``~/.agents/skills/`` — skills symlinks (open agent-skills standard dir).
-- ``~/.codex/prompts/`` — commands translated to custom prompts.
+- ``~/.codex/prompts/`` — never written; prompts an earlier install translated are removed.
 - ``[mcp_servers.*]`` — MCP registration (stdio + http url; SSE entries are
   skipped with a warning until the server side exposes streamable HTTP).
 
@@ -20,11 +20,14 @@ Codex facts this file encodes were verified against codex-cli 0.147.0 on
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import re
 import shlex
 import shutil
 import sys
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -47,6 +50,7 @@ from scripts.targets._common import (
     strip_persona,
     write_persona,
 )
+from scripts.targets.codex_hook_trust import trusted_state
 
 _MANAGED_HEADER = "<!-- managed-by: agentihooks — regenerate with: agentihooks init --target codex -->"
 _MANAGED_FOOTER = "<!-- agentihooks:managed-end -->"
@@ -71,10 +75,238 @@ CODEX_HOOK_EVENTS = (
 _NO_CONTEXT_EVENTS = frozenset({"Stop", "SubagentStop", "SessionEnd", "PreCompact", "PermissionRequest"})
 
 
-def codex_home() -> Path:
+_REFERENCE_NAME = re.compile(r"\$\{?(\w+)")
+
+
+def _forward_env_references(entry: dict) -> None:
+    """Codex passes env values literally: resolve ${VAR} in a bash wrapper fed by env_vars."""
+    env = entry.get("env") or {}
+    refs = {k: str(v) for k, v in env.items() if has_env_reference(str(v))}
+    if not refs:
+        return
+    assigns = " ".join(f'{k}="{v.replace(chr(34), chr(92) + chr(34))}"' for k, v in refs.items())
+    entry["args"] = ["-c", f'{assigns} exec "$0" "$@"', entry["command"], *entry.get("args", [])]
+    entry["command"] = "bash"
+    entry["env_vars"] = sorted({n for v in refs.values() for n in _REFERENCE_NAME.findall(v)})
+    literal = {k: v for k, v in env.items() if k not in refs}
+    if literal:
+        entry["env"] = literal
+    else:
+        entry.pop("env", None)
+
+
+def codex_home(environ: Mapping[str, str] | None = None) -> Path:
     """Resolve CODEX_HOME (first entry when the env var is a comma list)."""
-    raw = os.environ.get("CODEX_HOME", "").split(",")[0].strip()
-    return Path(raw).expanduser() if raw else Path.home() / ".codex"
+    env = os.environ if environ is None else environ
+    raw = env.get("CODEX_HOME", "").split(",")[0].strip()
+    return Path(raw).expanduser() if raw else Path(env.get("HOME") or Path.home()) / ".codex"
+
+
+def _stale_catalog_files() -> tuple[Path, Path]:
+    from hooks.config import AGENTIHOOKS_HOME
+
+    return AGENTIHOOKS_HOME / "codex_model_catalog.json", AGENTIHOOKS_HOME / "codex_context_highwater.json"
+
+
+def wrapper_text(profile_env: dict[str, str], python_bin: str) -> str:
+    return (
+        "#!/usr/bin/env bash\n"
+        "# managed-by: agentihooks — regenerate with: agentihooks init --target codex\n"
+        "set -euo pipefail\n"
+        f"cd {shlex.quote(str(_install_module().AGENTIHOOKS_ROOT))}\n"
+        + "".join(f'export {key}="${{{key}:={shlex.quote(value)}}}"\n' for key, value in profile_env.items())
+        + f"AGENTIHOOKS_TARGET=codex exec {shlex.quote(python_bin)} -m hooks\n"
+    )
+
+
+def _silent(_line: str) -> None:
+    pass
+
+
+def _wrapper_python(text: str) -> str | None:
+    lines = text.splitlines()
+    words = shlex.split(lines[-1]) if lines else []
+    return words[2] if words[:2] == ["AGENTIHOOKS_TARGET=codex", "exec"] and len(words) == 5 else None
+
+
+def refresh_wrapper() -> bool:
+    from scripts.native_settings import native_settings
+    from scripts.profiles.render import operator_codex_home
+
+    _i = _install_module()
+    record = _i._global_record(_i._load_state(), "codex")
+    wrapper = operator_codex_home() / "agentihooks-hook.sh"
+    if not record.get("profile") or not wrapper.is_file():
+        return False
+    if _i.AGENTIHOOKS_ROOT.resolve() != _i.install_root().resolve():
+        return False
+    name = record.get("settings_profile")
+    overlay = _i._resolve_profile_dir(name) if name else None
+    chain = _i._resolve_profile_chain(record["profile"])
+    if not chain or (name and overlay is None):
+        return False
+    native = native_settings("codex", chain, (name, overlay) if overlay else None, say=_silent)
+    current = wrapper.read_text()
+    python_bin = _wrapper_python(current)
+    if python_bin is None:
+        return False
+    text = wrapper_text(native["_agentihooks"]["env"], python_bin)
+    if current == text:
+        return False
+    staged = wrapper.with_name(f".{wrapper.name}.tmp-{os.getpid()}")
+    try:
+        staged.write_text(text)
+        staged.chmod(0o755)
+        os.replace(staged, wrapper)
+    finally:
+        staged.unlink(missing_ok=True)
+    return True
+
+
+def _is_ours(group: object, wrapper: Path) -> bool:
+    hooks = group.get("hooks") if isinstance(group, dict) else None
+    return isinstance(hooks, list) and any(
+        isinstance(h, dict) and _command_is_wrapper(str(h.get("command")), wrapper) for h in hooks
+    )
+
+
+def restore_hook_order(home: Path) -> list[str]:
+    """Events whose agentihooks group drifted behind a foreign one; the hooks file is rewritten only when one did.
+
+    Codex keys hook trust by group position, so this restores the order `init` writes and trusts the new positions.
+    """
+    path = (home / "hooks.json").resolve()
+    try:
+        doc = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return []
+    hooks = doc.get("hooks") if isinstance(doc, dict) else None
+    if not isinstance(hooks, dict):
+        return []
+    wrapper = path.parent / "agentihooks-hook.sh"
+    moved = []
+    for event, groups in hooks.items():
+        if not isinstance(groups, list):
+            continue
+        ordered = sorted(groups, key=lambda g: not _is_ours(g, wrapper))
+        if ordered != groups:
+            hooks[event] = ordered
+            moved.append(event)
+    if moved:
+        _atomic_write(path, json.dumps(doc, indent=2))
+        trust_hooks(home)
+        if path.parent != home.resolve():
+            trust_hooks(path.parent)
+    return moved
+
+
+def trust_hooks(home: Path) -> int:
+    import tomlkit
+
+    path = home / "config.toml"
+    doc = CodexAdapter._load_toml(path)
+    if "hooks" not in doc:
+        doc["hooks"] = tomlkit.table()
+    if "state" not in doc["hooks"]:
+        doc["hooks"]["state"] = tomlkit.table()
+    state = doc["hooks"]["state"]
+    changed = 0
+    for key, value in trusted_state(home / "hooks.json", home / "hooks.json").items():
+        if state.get(key, {}).get("trusted_hash") != value["trusted_hash"]:
+            state[key] = {**state.get(key, {}), **value}
+            changed += 1
+    if changed:
+        CodexAdapter._dump_toml(path, doc)
+    return changed
+
+
+_TOOL_FILTERS = ("enabled_tools", "disabled_tools")
+_WHOLE_REFERENCE = re.compile(r"\$\{(\w+)\}|\$(\w+)")
+
+
+def _codex_stdio(name: str, spec: dict) -> dict:
+    from hooks.secrets import scan as _scan_secrets
+
+    _i = _install_module()
+    entry: dict = {"command": spec["command"]}
+    if spec.get("args"):
+        entry["args"] = list(spec["args"])
+    clean_env: dict = {}
+    for ek, ev in dict(spec.get("env") or {}).items():
+        ev_s = scannable(str(ev))
+        hits = _scan_secrets(ev_s, mode="strict") if ev_s else []
+        if hits:
+            _i._cprint(
+                f"  [!!] MCP '{name}' env var '{ek}' looks like a credential "
+                f"({', '.join(hits)}) — dropped from config.toml. Export it in "
+                "the shell environment instead of writing it to disk."
+            )
+            continue
+        clean_env[ek] = ev
+    if clean_env:
+        entry["env"] = clean_env
+        _forward_env_references(entry)
+    return entry
+
+
+def _codex_http(name: str, spec: dict) -> dict:
+    # Claude expands ${VAR} in header values; codex sends them literally (gateway 401 on the raw placeholder).
+    from hooks.secrets import scan as _scan_secrets
+
+    _i = _install_module()
+    entry: dict = {"url": spec["url"]}
+    clean_headers: dict = {}
+    env_headers: dict = {}
+    for hk, hv in dict(spec.get("headers") or {}).items():
+        hv_s = str(hv)
+        bearer = re.fullmatch(r"Bearer\s+\$\{?(\w+)\}?", hv_s)
+        whole = _WHOLE_REFERENCE.fullmatch(hv_s)
+        if hk.lower() == "authorization" and bearer:
+            entry["bearer_token_env_var"] = bearer.group(1)
+        elif whole:
+            env_headers[hk] = whole.group(1) or whole.group(2)
+        elif has_env_reference(hv_s):
+            _i._cprint(
+                f"  [!!] MCP '{name}' header '{hk}' uses a ${{VAR}}/$VAR reference inside a longer value — "
+                "codex does not expand these; header dropped. Make the whole value one ${VAR} "
+                "(mapped to env_http_headers) or an Authorization Bearer ${VAR} (mapped to bearer_token_env_var)."
+            )
+        elif hits := _scan_secrets(hv_s, mode="strict"):
+            _i._cprint(
+                f"  [!!] MCP '{name}' header '{hk}' looks like a credential "
+                f"({', '.join(hits)}) — dropped from config.toml. Reference it via "
+                "Authorization Bearer ${VAR} (mapped to bearer_token_env_var) "
+                "instead of a literal value."
+            )
+        else:
+            clean_headers[hk] = hv
+    if clean_headers:
+        entry["http_headers"] = clean_headers
+    if env_headers:
+        entry["env_http_headers"] = env_headers
+    return entry
+
+
+def codex_mcp_entry(name: str, spec: dict) -> tuple[dict | None, str]:
+    """A declared (Claude-shaped) MCP server as its codex entry, or None and why it cannot mount."""
+    if drop_if_credentialed(name, spec, "config.toml"):
+        return None, "credential-shaped literal in url, command or args"
+    if spec.get("type") == "sse":
+        _install_module()._cprint(
+            f"  [!!] MCP '{name}' uses SSE — codex has no SSE transport; skipped. "
+            "Expose a streamable-HTTP endpoint and re-run init."
+        )
+        return None, "codex has no SSE transport"
+    if spec.get("command"):
+        entry = _codex_stdio(name, spec)
+    elif spec.get("url"):
+        entry = _codex_http(name, spec)
+    else:
+        return None, "no command or url"
+    entry.update({key: list(spec[key]) for key in _TOOL_FILTERS if spec.get(key)})
+    if spec.get("default_tools_approval_mode"):
+        entry["default_tools_approval_mode"] = spec["default_tools_approval_mode"]
+    return entry, ""
 
 
 class CodexAdapter:
@@ -92,12 +324,18 @@ class CodexAdapter:
     # settings: config.toml managed keys + hooks.json + wrapper
     # ------------------------------------------------------------------
 
+    def summary_counts(self) -> dict[str, int]:
+        from scripts.init_reporter import installed_counts
+
+        config = self._load_toml(self.home() / "config.toml")
+        return installed_counts(config.get("mcp_servers", {}), agents_skills_home(), {})
+
     @staticmethod
     def _apply_managed(target: dict, recorded: dict, key: str, value, label: str) -> None:
         """Write *value* unless the operator hand-edited that key since our last write."""
         _i = _install_module()
         current = target.get(key)
-        if current is None or current == recorded.get(key):
+        if current is None or current == value or current == recorded.get(key):
             target[key] = value
             recorded[key] = list(value) if isinstance(value, list) else value
         else:
@@ -106,6 +344,23 @@ class CodexAdapter:
                 f"{value!r}) — leaving operator value in place"
             )
 
+    @staticmethod
+    def _managed_sidecar(home: Path) -> Path:
+        return home / ".agentihooks-managed.json"
+
+    @classmethod
+    def _take_managed(cls, home: Path, doc) -> dict:
+        """Pop the in-file record earlier releases kept in *doc*; the sidecar record wins over it."""
+        legacy = doc.pop("agentihooks", None)
+        sidecar = cls._managed_sidecar(home)
+        if sidecar.exists():
+            with contextlib.suppress(ValueError):
+                recorded = json.loads(sidecar.read_text())
+                if isinstance(recorded, dict):
+                    return recorded
+        managed = legacy.get("managed") if isinstance(legacy, dict) else None
+        return managed.unwrap() if isinstance(managed, dict) else {}
+
     def write_settings(self, native: dict) -> Path:
         _i = self._i = _install_module()
         home = self.home()
@@ -113,9 +368,9 @@ class CodexAdapter:
 
         config_path = home / "config.toml"
         doc = self._load_toml(config_path)
-        from hooks.context.codex_context_pin import catalog_path
-
-        if doc.get("model_catalog_json") == str(catalog_path()):
+        # A pinned catalog limits codex to the models it lists.
+        stale = _stale_catalog_files()
+        if doc.get("model_catalog_json") == str(stale[0]):
             del doc["model_catalog_json"]
 
         # Native settings arrive already merged (base + bundle + profile chain).
@@ -127,7 +382,7 @@ class CodexAdapter:
         # Nested tables (tui, features, …) merge key-by-key rather than being
         # replaced wholesale: config.toml is a shared operator file, and
         # replacing a table would silently drop settings we never wrote.
-        managed = doc.setdefault("agentihooks", {}).setdefault("managed", {})
+        managed = self._take_managed(home, doc)
         for key, value in (native or {}).items():
             if key in ("agentihooks", "mcp_servers") or key.startswith("_"):
                 continue
@@ -151,22 +406,20 @@ class CodexAdapter:
         doc.setdefault("notify", [python_bin, "-m", "hooks.targets.notify_shim"])
 
         self._dump_toml(config_path, doc)
+        for path in stale:
+            path.unlink(missing_ok=True)
+        _atomic_write(self._managed_sidecar(home), json.dumps(managed, indent=2) + "\n")
         _i._cprint(f"[OK] Wrote managed keys into {config_path}")
 
-        self._write_hooks_json(home)
+        self._write_hooks_json(home, native.get("_agentihooks", {}).get("env", {}))
+        if trusted := trust_hooks(home):
+            _i._cprint(f"[OK] Trusted {trusted} Codex hook entries in {config_path}")
         return config_path
 
-    def _write_hooks_json(self, home: Path) -> None:
+    def _write_hooks_json(self, home: Path, profile_env: dict[str, str] | None = None) -> None:
         _i = _install_module()
         wrapper = home / "agentihooks-hook.sh"
-        python_bin = str(_i._detect_venv() or sys.executable)
-        wrapper.write_text(
-            "#!/usr/bin/env bash\n"
-            "# managed-by: agentihooks — regenerate with: agentihooks init --target codex\n"
-            "set -euo pipefail\n"
-            f"cd {shlex.quote(str(_i.AGENTIHOOKS_ROOT))}\n"
-            f"AGENTIHOOKS_TARGET=codex exec {shlex.quote(python_bin)} -m hooks\n"
-        )
+        wrapper.write_text(wrapper_text(profile_env or {}, str(_i._detect_venv() or sys.executable)))
         wrapper.chmod(0o755)
 
         hooks_path = home / "hooks.json"
@@ -202,7 +455,8 @@ class CodexAdapter:
                 for g in prior
                 if not any(_command_is_wrapper(h.get("command", ""), wrapper) for h in g.get("hooks", []))
             ]
-            merged[event] = foreign + groups
+            # Ours first: codex keys hook trust by group position and herdr appends its group.
+            merged[event] = groups + foreign
         # Reap our own entries under events we no longer wire (e.g. a stale
         # PostCompact from an earlier install) — foreign groups there survive.
         for event in [e for e in merged if e not in desired]:
@@ -215,13 +469,12 @@ class CodexAdapter:
                 merged[event] = foreign
             else:
                 del merged[event]
-        _atomic_write(hooks_path, json.dumps({"hooks": merged}, indent=2))
+        text = json.dumps({"hooks": merged}, indent=2)
+        if existing and hooks_path.read_text() == text:
+            _i._cprint(f"[OK] {hooks_path} unchanged; existing Codex hook trust holds")
+            return
+        _atomic_write(hooks_path, text)
         _i._cprint(f"[OK] Wrote {hooks_path} ({len(CODEX_HOOK_EVENTS)} events)")
-        _i._cprint(
-            "  [!!] Codex trusts hooks by content hash: run /hooks inside codex once to "
-            "trust these (or launch automation with --dangerously-bypass-hook-trust). "
-            "Until trusted, codex SILENTLY skips them."
-        )
 
     # ------------------------------------------------------------------
     # features: skills / agents / commands / rules
@@ -239,7 +492,7 @@ class CodexAdapter:
             for label, src in layers:
                 _i._symlink_dir_contents(src, dst, label=f"codex {label}", filter_fn=filter_fn)
         elif subdir == "commands":
-            self._translate_prompts(layers, filter_fn)
+            self._reap_prompts()
         elif subdir == "rules":
             # Codex has no auto-loaded rules dir — compile into AGENTS.md.
             collected: dict[str, tuple[str, str, str]] = {}
@@ -259,72 +512,19 @@ class CodexAdapter:
                 "  [--] Codex has no custom-subagent registry — agents skipped (docs/reference/CODEX-COMPAT.md §3 row 16)."
             )
 
-    def _translate_prompts(self, layers: list[tuple[str, Path]], filter_fn) -> None:
-        """commands/*.md → ~/.codex/prompts/*.md (flat, frontmatter rewritten).
-
-        Real files, not symlinks — the frontmatter differs from the source.
-        Later layers override earlier ones by filename, mirroring the claude
-        symlink semantics. Files we wrote previously but that no source layer
-        provides anymore are removed (tracked via a manifest sidecar).
-        """
-        import yaml
-
+    def _reap_prompts(self) -> None:
+        """Remove the prompts an earlier install translated; Codex 0.160 no longer reads ~/.codex/prompts."""
         _i = _install_module()
-        dst_dir = self.home() / "prompts"
-        dst_dir.mkdir(parents=True, exist_ok=True)
-        manifest_path = dst_dir / ".agentihooks-manifest.json"
-        previous: list[str] = []
+        prompts_dir = self.home() / "prompts"
+        manifest_path = prompts_dir / ".agentihooks-manifest.json"
         if manifest_path.exists():
             try:
-                previous = json.loads(manifest_path.read_text())
+                for name in json.loads(manifest_path.read_text()):
+                    (prompts_dir / name).unlink(missing_ok=True)
             except (json.JSONDecodeError, OSError):
-                previous = []
-
-        sources: dict[str, Path] = {}
-        for _label, src in layers:
-            if not src.is_dir():
-                continue
-            for f in sorted(src.iterdir()):
-                if filter_fn(f):
-                    sources[f.name] = f
-
-        written: list[str] = []
-        for name, src in sources.items():
-            dst_file = dst_dir / name
-            if dst_file.exists() and name not in previous:
-                _i._cprint(f"  [!!] {dst_file} exists and is not agentihooks-managed — skipping (operator file wins)")
-                continue
-            try:
-                text = src.read_text()
-            except OSError:
-                continue
-            front: dict = {}
-            body = text
-            if text.startswith("---"):
-                parts = text.split("---", 2)
-                if len(parts) == 3:
-                    try:
-                        front = yaml.safe_load(parts[1]) or {}
-                    except yaml.YAMLError:
-                        front = {}
-                    body = parts[2].lstrip("\n")
-            out_front: dict = {}
-            if isinstance(front, dict):
-                if front.get("description"):
-                    out_front["description"] = front["description"]
-                if front.get("argument-hint") or front.get("argument_hint"):
-                    out_front["argument-hint"] = front.get("argument-hint") or front.get("argument_hint")
-            out = ""
-            if out_front:
-                out += "---\n" + yaml.safe_dump(out_front, sort_keys=False).strip() + "\n---\n\n"
-            out += body
-            dst_file.write_text(out)
-            written.append(name)
-
-        for stale in set(previous) - set(written):
-            (dst_dir / stale).unlink(missing_ok=True)
-        _atomic_write(manifest_path, json.dumps(sorted(written)))
-        _i._cprint(f"  [OK] {len(written)} command(s) translated → {dst_dir} (invoke with /prompts:<name>)")
+                pass
+            manifest_path.unlink()
+            _i._cprint(f"  [RM] Removed translated prompts from {prompts_dir}")
 
     # ------------------------------------------------------------------
     # persona: AGENTS.md
@@ -405,79 +605,8 @@ class CodexAdapter:
         table = doc.setdefault("mcp_servers", {})
         added: list[str] = []
         for name, spec in servers.items():
-            spec = dict(spec)
-            if drop_if_credentialed(name, spec, "config.toml"):
-                continue
-            stype = spec.get("type", "stdio" if spec.get("command") else "http")
-            if stype == "sse":
-                _i._cprint(
-                    f"  [!!] MCP '{name}' uses SSE — codex has no SSE transport; skipped. "
-                    "Expose a streamable-HTTP endpoint and re-run init."
-                )
-                continue
-            from hooks.secrets import scan as _scan_secrets
-
-            entry: dict = {}
-            if spec.get("command"):
-                entry["command"] = spec["command"]
-                if spec.get("args"):
-                    entry["args"] = list(spec["args"])
-                if spec.get("env"):
-                    clean_env: dict = {}
-                    for ek, ev in dict(spec["env"]).items():
-                        ev_s = scannable(str(ev))
-                        if not ev_s:
-                            # Nothing but ${VAR} references — no literal to scan.
-                            clean_env[ek] = ev
-                            continue
-                        hits = _scan_secrets(ev_s, mode="strict")
-                        if hits:
-                            _i._cprint(
-                                f"  [!!] MCP '{name}' env var '{ek}' looks like a credential "
-                                f"({', '.join(hits)}) — dropped from config.toml. Export it in "
-                                "the shell environment instead of writing it to disk."
-                            )
-                            continue
-                        clean_env[ek] = ev
-                    if clean_env:
-                        entry["env"] = clean_env
-            elif spec.get("url"):
-                entry["url"] = spec["url"]
-                # Claude Code expands ${VAR} placeholders in header values at
-                # connect time; codex sends them LITERALLY (verified: gateway
-                # 401 on the raw placeholder). Authorization Bearer ${VAR}
-                # maps to codex's native bearer_token_env_var; any other
-                # placeholder-bearing header is dropped with a warning.
-                import re as _re
-
-                clean_headers: dict = {}
-                for hk, hv in dict(spec.get("headers") or {}).items():
-                    hv_s = str(hv)
-                    # Braced or unbraced — codex expands neither, so both map
-                    # to its native env indirection or get dropped.
-                    bearer = _re.fullmatch(r"Bearer\s+\$\{?(\w+)\}?", hv_s)
-                    if hk.lower() == "authorization" and bearer:
-                        entry["bearer_token_env_var"] = bearer.group(1)
-                    elif has_env_reference(hv_s):
-                        _i._cprint(
-                            f"  [!!] MCP '{name}' header '{hk}' uses a ${{VAR}}/$VAR reference — "
-                            "codex does not expand these; header dropped. Use a literal value "
-                            "or an Authorization Bearer ${VAR} (mapped to bearer_token_env_var)."
-                        )
-                    else:
-                        hits = _scan_secrets(hv_s, mode="strict")
-                        if hits:
-                            _i._cprint(
-                                f"  [!!] MCP '{name}' header '{hk}' looks like a credential "
-                                f"({', '.join(hits)}) — dropped from config.toml. Reference it via "
-                                "Authorization Bearer ${VAR} (mapped to bearer_token_env_var) "
-                                "instead of a literal value."
-                            )
-                        else:
-                            clean_headers[hk] = hv
-                if clean_headers:
-                    entry["http_headers"] = clean_headers
-            else:
+            entry, _ = codex_mcp_entry(name, dict(spec))
+            if entry is None:
                 continue
             table[name] = entry
             added.append(name)
@@ -529,10 +658,9 @@ class CodexAdapter:
         config_path = home / "config.toml"
         if config_path.exists():
             doc = self._load_toml(config_path)
-            agentihooks_tbl = doc.get("agentihooks")
-            managed = agentihooks_tbl.get("managed", {}) if isinstance(agentihooks_tbl, dict) else {}
+            managed = self._take_managed(home, doc)
             removed_keys = []
-            for key in list(managed.keys() if hasattr(managed, "keys") else []):
+            for key in list(managed):
                 if doc.get(key) == managed.get(key):
                     doc.pop(key, None)
                     removed_keys.append(key)
@@ -542,12 +670,11 @@ class CodexAdapter:
                 # revert a deliberate operator choice — warn instead, loudly:
                 # danger-full-access left behind is worth the operator's look.
                 _i._cprint(
-                    "  [!!] no [agentihooks].managed record — approval_policy/sandbox_mode "
+                    "  [!!] no managed-key record — approval_policy/sandbox_mode "
                     "left as-is; review them (a torn-down bypass install would have set "
                     '"never"/"danger-full-access").'
                 )
-            if "agentihooks" in doc:
-                doc.pop("agentihooks", None)
+            self._managed_sidecar(home).unlink(missing_ok=True)
             notify = doc.get("notify")
             if isinstance(notify, list) and any("notify_shim" in str(part) for part in notify):
                 doc.pop("notify", None)
@@ -590,24 +717,10 @@ class CodexAdapter:
 
         strip_persona(home / "AGENTS.md", _MANAGED_HEADER, _MANAGED_FOOTER)
 
-        # Translated prompts: reap everything the manifest owns.
-        prompts_dir = home / "prompts"
-        manifest_path = prompts_dir / ".agentihooks-manifest.json"
-        if manifest_path.exists():
-            try:
-                for name in json.loads(manifest_path.read_text()):
-                    (prompts_dir / name).unlink(missing_ok=True)
-            except (json.JSONDecodeError, OSError):
-                pass
-            manifest_path.unlink(missing_ok=True)
-            _i._cprint(f"  [RM] Removed translated prompts from {prompts_dir}")
+        self._reap_prompts()
 
     def post_install_reconcile(self, profile_chain: list[str], persisted_profile: str) -> None:
-        _i = _install_module()
-        _i._cprint(
-            "  [--] Codex install complete. First run: open codex and run /hooks to trust "
-            "the agentihooks hooks (they are silently skipped until trusted)."
-        )
+        return None
 
     # ------------------------------------------------------------------
     # doctor

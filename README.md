@@ -2,7 +2,7 @@
 
 [![Standalone](https://img.shields.io/badge/runs-standalone-brightgreen)](https://the-cloud-clockwork.github.io/agentihooks/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/The-Cloud-Clockwork/agentihooks/blob/main/LICENSE)
-[![CI](https://github.com/The-Cloud-Clockwork/agentihooks/actions/workflows/ci.yml/badge.svg)](https://github.com/The-Cloud-Clockwork/agentihooks/actions/workflows/ci.yml)
+[![Tests](https://github.com/The-Cloud-Clockwork/agentihooks/actions/workflows/test.yml/badge.svg)](https://github.com/The-Cloud-Clockwork/agentihooks/actions/workflows/test.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://python.org)
 [![Docs](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://the-cloud-clockwork.github.io/agentihooks/)
 
@@ -46,9 +46,9 @@ agentihooks settings-profile admin          # swap permissions without touching 
 | Guardrail | What it does |
 |-----------|-------------|
 | **Secrets — two-tier** | Hard-block on Write/Edit/Bash-to-file containing secrets; inline Bash args scan + log + note only (operator-managed transcript) |
-| **Branch + PR guard** | Default-deny branch creation and `gh pr create`; unlocked per-turn (branch) or per-session (PR) by operator signal phrases |
-| **Prod lockdown** | Default-deny `gh pr merge main`, `release.yml`, `:latest`/`:prod`/`:stable` image tags; session-scoped unlock via release/hotfix signals |
-| **Controls toggle (bypass mode)** | Operator phrase `disable controls` flips a session-wide bypass that lifts branch/PR/release-merge/hotfix/non-main-force-push gates at once; subagents inherit; HARD FLOOR (push-to-main, commit-on-main, secrets-in-files) stays enforced; restored by `enable controls` or SessionEnd |
+| **Branch + PR guard** | Branch creation requires an operator signal; pull requests into `dev` are open; agents cannot create promotion pull requests into `main`/`master`/`v1` |
+| **Prod lockdown** | CI alone creates releases and merges protected promotion pull requests; `release dance` authorizes only PyPI publication; production image operations retain their hotfix gate |
+| **Controls toggle (bypass mode)** | Operator phrase `disable controls` lifts branch, non-protected PR, hotfix and non-main force-push gates; subagents inherit; protected promotion, publication authorization and HARD FLOOR remain enforced; restored by `enable controls` or SessionEnd |
 | **Retry breaker** | Soft directive at N=5 (launch error-researcher agents) → hard block at N=10 on repeated identical failures |
 | **Dependency banner** | Visible banner on every pip/npm/cargo/uv/poetry/apt/brew install — supply chain audit surface |
 | **Version guard** | Blocks AI from editing version fields in manifests |
@@ -170,8 +170,8 @@ agenti                                       # alias (after source ~/.bashrc)
 agenti --route 0                             # force AH_CC_TOKEN_0 (ignores the session cap)
 agentihooks balance                          # rank every AH_CC_TOKEN_* by quota left + live SESSIONS n/cap
 agentihooks balance --current                # account this session runs on + quota table
-agentihooks claude-terminal --handoff --prompt-file handoff.md   # quota handoff to another account
-# agenti skips accounts running AGENTIHOOKS_MAX_SESSIONS_PER_ACCOUNT (default 2) live sessions;
+agentihooks init-agent --handoff --prompt-file handoff.md   # quota handoff to another account
+# agenti skips an account past its live session cap (from its five-hour window: 6 at 60%+ left, 4 at 40-60%, 3 at 10-40%, 2 at 5-10%, none below 5%);
 # the quota policy hands a session off at 98% weekly / 99% 5-hour use, waits for the 5h reset
 # or stops — see docs/pillars/load-balancing.md
 
@@ -332,7 +332,7 @@ agentihooks doctor --target copilot                 # per-target health check
 | Persona | `CLAUDE.md` | `AGENTS.md` | `copilot-instructions.md` |
 | Skills | `~/.claude/skills` | `~/.agents/skills` | `~/.agents/skills` |
 | Agents | native | not supported | `~/.copilot/agents` |
-| Commands | native | `~/.codex/prompts` | translated to skills |
+| Commands | native | profile homes, as hardlinked skills | translated to skills |
 | MCP | `.mcp.json` | `[mcp_servers.*]` | `mcp-config.json` |
 | MCP over SSE | yes | no | yes |
 | Status line | command | built-in items only | command |

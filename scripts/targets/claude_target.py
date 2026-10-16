@@ -15,6 +15,8 @@ process is actually running, or the test suite's home-isolation patches on
 
 from __future__ import annotations
 
+import json
+import re
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -27,44 +29,189 @@ def _install_module():
     return mod
 
 
+HOOK_RECORD_KEY = "claude_hook_commands"
+
+
+def _hook_commands(hooks: dict) -> set[str]:
+    return {
+        h.get("command", "")
+        for groups in hooks.values()
+        if isinstance(groups, list)
+        for g in groups
+        if isinstance(g, dict)
+        for h in g.get("hooks", [])
+        if isinstance(h, dict) and h.get("command")
+    }
+
+
+def _keep_foreign_hooks(settings_path: Path, rendered: dict) -> dict:
+    """Rendered hooks plus every existing hook group agentihooks did not write."""
+    _i = _install_module()
+    try:
+        existing = json.loads(settings_path.read_text()).get("hooks") or {}
+    except (OSError, ValueError, AttributeError):
+        existing = {}
+    state = _i._load_state()
+    owned = _hook_commands(rendered) | set(state.get(HOOK_RECORD_KEY, []))
+    roots = [re.compile(re.escape(str(r)) + r"(?=[/\s'\"]|$)") for r in _i._managed_roots()]
+
+    def ours(command: str) -> bool:
+        return command in owned or any(r.search(command) for r in roots)
+
+    merged = deepcopy(rendered)
+    if not isinstance(existing, dict):
+        existing = {}
+    for event, groups in existing.items():
+        if not isinstance(groups, list):
+            continue
+        foreign = [
+            g
+            for g in groups
+            if isinstance(g, dict)
+            and not any(ours(h.get("command", "")) for h in g.get("hooks", []) if isinstance(h, dict))
+        ]
+        if foreign:
+            merged[event] = merged.get(event, []) + foreign
+    state[HOOK_RECORD_KEY] = sorted(_hook_commands(rendered))
+    _i._save_state(state)
+    return merged
+
+
+def settings_document(rendered: dict) -> dict:
+    _i = _install_module()
+    rendered = deepcopy(rendered)
+    profile_env = rendered.pop("_agentihooks", {}).get("env", {})
+    if profile_env:
+        rendered["env"] = {**profile_env, **rendered.get("env", {})}
+
+    # rendered["env"] can carry connector-injected literal values, and this
+    # is the one adapter that copies the whole dict into settings verbatim
+    # — codex and copilot read only permissions.defaultMode. Scan each env
+    # value and drop credential-shaped literals before they reach disk;
+    # ${VAR}/$VAR references pass through untouched (claude expands them).
+    env_block = rendered.get("env")
+    if isinstance(env_block, dict) and env_block:
+        from hooks.secrets import scan as _scan_secrets
+        from scripts.targets._common import scannable
+
+        clean_env: dict = {}
+        for ek, ev in env_block.items():
+            hits = _scan_secrets(scannable(str(ev)), mode="strict")
+            if hits:
+                _i._cprint(
+                    f"  [!!] settings env var '{ek}' looks like a credential "
+                    f"({', '.join(hits)}) — dropped from settings.json. Export it in "
+                    "the shell environment instead of writing it to disk."
+                )
+                continue
+            clean_env[ek] = ev
+        rendered = {**rendered, "env": clean_env} if clean_env else {k: v for k, v in rendered.items() if k != "env"}
+    return rendered
+
+
+def enabled_plugins(operator: dict, layered: dict, bundle: Path | None) -> dict:
+    from scripts.deps_preflight import fleet_plugins
+
+    return {**operator, **dict.fromkeys(fleet_plugins(bundle), True), **layered}
+
+
+def _install_rule_files(dst: Path, sources: list[Path], filter_fn) -> None:
+    from scripts.targets._common import _atomic_write
+
+    _i = _install_module()
+    items = {}
+    for src in sources:
+        if src.is_dir():
+            items.update(
+                {item.name: item for item in src.iterdir() if filter_fn(item) and not item.name.startswith(".")}
+            )
+    ledger = _i._state_links()
+    kept = frozenset(
+        name for name in items if str(dst / name) in ledger and (dst / name).is_file() and not (dst / name).is_symlink()
+    )
+    _i._remove_agentihooks_symlinks(dst, "rule", keep=kept)
+    dst.mkdir(exist_ok=True)
+    records = []
+    for name, src in sorted(items.items()):
+        path = dst / name
+        text = src.read_text()
+        if name in kept:
+            if path.read_text() != text:
+                _atomic_write(path, text)
+        elif path.exists() or path.is_symlink():
+            continue
+        else:
+            _atomic_write(path, text)
+        records.append((path, src, "rules"))
+    if not records:
+        return
+    _i._state_record_links(records)
+    state = _i._load_state()
+    copied = {str(path) for path, _, _ in records}
+    for entry in state["managed_links"]:
+        if entry["link"] in copied:
+            entry["rule_sources"] = [str(src) for src in sources]
+    _i._save_state(state)
+
+
+def refresh_rules(rules_dir: Path, claude_md: Path, local_md: Path, dry_run: bool) -> str:
+    from hooks.context.rules_refresh import collect_profile_rules
+    from scripts.profiles.render import owner, render_claude, split_key
+
+    if not dry_run:
+        name = owner(rules_dir.parent)
+        if name:
+            profile, overlays = split_key(name)
+            claude_md = render_claude(profile, force=True, overlays=overlays) / "CLAUDE.md"
+        else:
+            _i = _install_module()
+            layers = next(
+                (
+                    entry["rule_sources"]
+                    for link, entry in _i._state_links().items()
+                    if Path(link).parent == rules_dir and not Path(link).is_symlink() and "rule_sources" in entry
+                ),
+                None,
+            )
+            if layers:
+                _install_rule_files(
+                    rules_dir,
+                    [Path(src) for src in layers],
+                    lambda path: path.suffix == ".md" and path.name != "README.md",
+                )
+    return collect_profile_rules(rules_dir, claude_md, local_md)
+
+
 class ClaudeAdapter:
     name = "claude"
 
     def home(self) -> Path:
         return _install_module().CLAUDE_HOME
 
+    def summary_counts(self) -> dict[str, int]:
+        from scripts.init_reporter import installed_counts
+
+        installer = _install_module()
+        settings_path = self.home() / "settings.json"
+        settings = installer.load_json(settings_path) if settings_path.exists() else {}
+        mcp = installer.load_json(installer._CLAUDE_JSON) if installer._CLAUDE_JSON.exists() else {}
+        return installed_counts(mcp.get("mcpServers", {}), self.home() / "skills", settings.get("enabledPlugins", {}))
+
     def write_settings(self, rendered: dict) -> Path:
         _i = _install_module()
-
-        # rendered["env"] can carry connector-injected literal values, and this
-        # is the one adapter that copies the whole dict into settings verbatim
-        # — codex and copilot read only permissions.defaultMode. Scan each env
-        # value and drop credential-shaped literals before they reach disk;
-        # ${VAR}/$VAR references pass through untouched (claude expands them).
-        env_block = rendered.get("env")
-        if isinstance(env_block, dict) and env_block:
-            from hooks.secrets import scan as _scan_secrets
-            from scripts.targets._common import scannable
-
-            clean_env: dict = {}
-            for ek, ev in env_block.items():
-                hits = _scan_secrets(scannable(str(ev)), mode="strict")
-                if hits:
-                    _i._cprint(
-                        f"  [!!] settings env var '{ek}' looks like a credential "
-                        f"({', '.join(hits)}) — dropped from settings.json. Export it in "
-                        "the shell environment instead of writing it to disk."
-                    )
-                    continue
-                clean_env[ek] = ev
-            rendered = (
-                {**rendered, "env": clean_env} if clean_env else {k: v for k, v in rendered.items() if k != "env"}
-            )
+        rendered = settings_document(rendered)
 
         existing_settings_path = _i.CLAUDE_HOME / "settings.json"
         personal = _i._preserve_personal_keys(existing_settings_path)
         merged: dict = deepcopy(personal)
         merged.update(rendered)
+        existing = _i.load_json(existing_settings_path) if existing_settings_path.exists() else {}
+        merged["enabledPlugins"] = enabled_plugins(
+            existing.get("enabledPlugins") or {}, rendered.get("enabledPlugins") or {}, _i._get_bundle_path()
+        )
+        merged["hooks"] = _keep_foreign_hooks(existing_settings_path, rendered.get("hooks") or {})
+        if not merged["hooks"]:
+            del merged["hooks"]
         merged[_i.MANAGED_BY_KEY] = _i.MANAGED_BY_VALUE
 
         _i._backup_settings(existing_settings_path)
@@ -76,6 +223,9 @@ class ClaudeAdapter:
     def install_features(self, subdir: str, layers: list[tuple[str, Path]], filter_fn) -> None:
         _i = _install_module()
         dst = _i.CLAUDE_HOME / subdir
+        if subdir == "rules":
+            _install_rule_files(dst, [src for _, src in layers], filter_fn)
+            return
         for label, src in layers:
             _i._symlink_dir_contents(src, dst, label=label, filter_fn=filter_fn)
 
@@ -106,7 +256,8 @@ class ClaudeAdapter:
         # run — a transiently-missing profile source would otherwise shrink the
         # managed set and falsely delete that profile's servers.
         intended_chain = [p.strip() for p in persisted_profile.split(",") if p.strip()]
-        if len(profile_chain) == len(intended_chain):
+        missing = [name for name in intended_chain if name not in profile_chain]
+        if not missing:
             current_managed = set(_i._collect_all_managed_mcp_servers().keys())
             removed_mcp = _i._reconcile_managed_mcp_ledger(current_managed)
             if removed_mcp:
@@ -116,8 +267,8 @@ class ClaudeAdapter:
                 )
         else:
             _i._cprint(
-                "  [--] Skipping MCP ledger reconcile — not every profile in the chain "
-                "resolved this run (transient source loss); ledger left unchanged."
+                f"  [--] Skipping MCP ledger reconcile — profile(s) {', '.join(missing)} did not "
+                "resolve this run (transient source loss); ledger left unchanged."
             )
 
         _i._snapshot_claude_json()

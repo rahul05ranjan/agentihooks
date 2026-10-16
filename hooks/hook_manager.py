@@ -30,6 +30,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from hooks.classifier.child import skip_classifier_child
 from hooks.observability import otel
 
 # Add parent directory to path for direct execution
@@ -306,13 +307,44 @@ def notify_on_error(transcript_path: str) -> None:
 # =============================================================================
 
 
+def _run_start_conditions(payload: dict) -> None:
+    try:
+        from hooks.context import conditions
+        from hooks.targets.capabilities import can_inject_context
+
+        if not can_inject_context("SessionStart"):
+            return
+        effect = conditions.start_effect(payload)
+        if not effect:
+            return
+        from hooks.common import inject_context
+
+        for ctx in effect.contexts:
+            inject_context(ctx)
+    except Exception as e:
+        log("conditions session_start failed", {"error": str(e)})
+
+
 def on_session_start(payload: dict) -> None:
     """Handle SessionStart event."""
     session_id = payload.get("session_id", "")
     log("Session started", {"session_id": session_id})
+    if payload.get("source") == "compact":
+        _inject_refocus(session_id, "compact")
     from hooks.lifecycle.guard import session_event
 
     session_event()
+    _run_start_conditions(payload)
+    try:
+        from hooks.lifecycle.deps_kick import kick as deps_kick
+
+        deps_kick()
+    except Exception as e:
+        log("deps kick failed", {"error": str(e)})
+    from hooks.lifecycle.codex_refresh_kick import kick as codex_refresh_kick
+
+    codex_refresh_kick()
+    _swarm_ledger(payload)
     otel.emit_event(
         "agentihooks.session.started",
         {
@@ -320,6 +352,11 @@ def on_session_start(payload: dict) -> None:
             "agent.name": os.environ.get("AGENT_NAME", "unknown"),
         },
     )
+
+    _request_trace_flush(payload, "start")
+    from hooks.context import documentation_session
+
+    documentation_session.start(payload)
 
     # Emit a trace span for session start (visible in Langfuse)
     tracer = otel.get_tracer()
@@ -389,9 +426,17 @@ def on_session_start(payload: dict) -> None:
 
         enforcement_context = get_session_start_enforcements(session_id, payload.get("cwd", ""))
         if enforcement_context:
-            _inject_enforcements(enforcement_context, also_log=False, skip_compression=True)
+            _inject_enforcements(enforcement_context, also_log=False, skip_compression=True, kind="enforcement")
     except Exception as e:
         log("enforcement session start failed", {"error": str(e)})
+
+    try:
+        from hooks.context.injection_trace import record_session_start
+        from hooks.targets import current_target as _trace_target
+
+        record_session_start(session_id, os.environ, _trace_target())
+    except Exception as e:
+        log("injection trace session start failed", {"error": str(e)})
 
     from hooks.config import MCP_HYGIENE_ENABLED
 
@@ -429,9 +474,9 @@ def on_session_start(payload: dict) -> None:
 
     # --- Auto dev-switch: if on main/master, switch to dev (create if missing) ---
     try:
-        from hooks.config import AUTO_DEV_SWITCH_ENABLED
+        from hooks.config import AGENTIHOOKS_FORCE_DEV_BRANCH
 
-        if AUTO_DEV_SWITCH_ENABLED:
+        if AGENTIHOOKS_FORCE_DEV_BRANCH:
             from hooks.context.auto_dev_switch import (
                 inject_on_session_start as _auto_dev,
             )
@@ -461,7 +506,7 @@ def on_session_start(payload: dict) -> None:
         if BRAIN_ENABLED:
             from hooks.context.brain_adapter import inject_on_session_start
 
-            inject_on_session_start()
+            inject_on_session_start(session_id, payload.get("cwd", ""))
     except Exception as e:
         log("brain_adapter session_start failed", {"error": str(e)})
 
@@ -483,6 +528,7 @@ def on_session_start(payload: dict) -> None:
                 cwd=payload.get("cwd", ""),
                 model=payload.get("model", ""),
                 account=session_account(_agent_pid),
+                name=os.environ.get("AGENTIHOOKS_AGENT_NAME", ""),
             )
             check_and_inject_broadcasts(session_id)
         except Exception as e:
@@ -542,6 +588,10 @@ def on_session_end(payload: dict) -> None:
             "duration_ms": metrics.get("duration_ms"),
         },
     )
+    _request_trace_flush(payload, "end")
+    from hooks.context import documentation_session
+
+    documentation_session.end(payload)
 
     # Log transcript entries to hooks.log (for debugging)
     if session_id and transcript_path:
@@ -663,12 +713,29 @@ def on_session_end(payload: dict) -> None:
 
     if BROADCAST_ENABLED:
         try:
+            from hooks.context.account_sessions import agent_pid
             from hooks.context.broadcast import heartbeat_sessions, mark_session_closed
 
-            mark_session_closed(session_id)
+            mark_session_closed(session_id, agent_pid())
             heartbeat_sessions()
         except Exception as e:
             log("broadcast session_end failed", {"error": str(e)})
+
+
+def _prompt_broadcasts(session_id: str) -> None:
+    try:
+        from hooks.context.broadcast import _get_session_channels
+        from scripts.swarm_v2 import broadcast_bridge
+
+        broadcast_bridge.claim(session_id, _get_session_channels(session_id), os.environ)
+    except Exception as e:
+        log("fleet broadcast claim failed", {"error": str(e)})
+    try:
+        from hooks.context.broadcast import check_and_inject_broadcasts
+
+        check_and_inject_broadcasts(session_id)
+    except Exception as e:
+        log("broadcast user_prompt failed", {"error": str(e)})
 
 
 def on_user_prompt_submit(payload: dict) -> None:
@@ -677,6 +744,13 @@ def on_user_prompt_submit(payload: dict) -> None:
 
     session_id = payload.get("session_id", "")
     log("User prompt submitted", {"session_id": session_id})
+    _confirm_inbox(session_id)
+    _swarm_heartbeat("working", payload.get("prompt", ""))
+    _swarm_ledger(payload)
+    typed = _operator_words(payload)
+    _operator_mode(payload, typed)
+    _master_coding(payload, typed)
+    _request_trace_flush(payload, "prompt")
 
     try:
         from hooks.config import QUOTA_USAGE_INJECTION_ENABLED
@@ -702,7 +776,7 @@ def on_user_prompt_submit(payload: dict) -> None:
                 log("quota policy: operator push-to-100 signal", {"session_id": session_id})
             _policy_text = prompt_context(session_id, payload.get("cwd", ""))
             if _policy_text:
-                _inject_quota_policy(_policy_text, also_log=False, skip_compression=True)
+                _inject_quota_policy(_policy_text, also_log=False, skip_compression=True, kind="alert")
     except Exception as e:
         log("quota policy user prompt failed", {"error": str(e)})
 
@@ -719,7 +793,8 @@ def on_user_prompt_submit(payload: dict) -> None:
                 inject_context(
                     f"WARNING: Possible secret(s) detected in prompt ({names}). "
                     "Do not process, echo, or store credential values. "
-                    "Ask the user to use environment variables instead."
+                    "Ask the user to use environment variables instead.",
+                    kind="alert",
                 )
     else:
         log("Secrets scanning skipped (mode=off)")
@@ -746,7 +821,7 @@ def on_user_prompt_submit(payload: dict) -> None:
 
         enforcement_context = get_user_prompt_enforcements(session_id, payload.get("cwd", ""))
         if enforcement_context:
-            _inject_enforcements(enforcement_context, also_log=False, skip_compression=True)
+            _inject_enforcements(enforcement_context, also_log=False, skip_compression=True, kind="enforcement")
     except Exception as e:
         log("enforcement user prompt failed", {"error": str(e)})
     # --- CI Manifesto: counter-gated re-injection of doctrine ---
@@ -802,12 +877,11 @@ def on_user_prompt_submit(payload: dict) -> None:
         from hooks.context.prod_lockdown import set_hotfix_signal, set_release_signal
 
         prompt = payload.get("prompt", "")
-        if prompt:
+        if prompt and typed:
             from hooks.context.conditions import arm_gate, contains_condition_signal
 
-            if contains_condition_signal(prompt):
+            if typed and contains_condition_signal(prompt):
                 arm_gate(session_id)
-                log("conditions: operator gate armed this turn", {"session_id": session_id})
             if session_id not in _KNOWN_SUBAGENT_IDS and contains_release_signal(prompt):
                 set_release_signal(session_id)
                 log(
@@ -835,6 +909,9 @@ def on_user_prompt_submit(payload: dict) -> None:
     except Exception as e:
         log("ci_manifesto signal detection failed", {"error": str(e)})
 
+    if typed:
+        _arm_gate_lifts(payload)
+
     # --- Voice output: detect enable/disable voice signals ---
     try:
         from hooks.config import VOICE_ENABLED
@@ -848,7 +925,7 @@ def on_user_prompt_submit(payload: dict) -> None:
             )
 
             prompt = payload.get("prompt", "")
-            if prompt:
+            if prompt and typed:
                 if contains_enable_signal(prompt):
                     set_voice_enabled(session_id)
                     log(
@@ -905,7 +982,7 @@ def on_user_prompt_submit(payload: dict) -> None:
             if prompt:
                 from hooks.common import inject_banner
 
-                if _ctl_disable(prompt):
+                if typed and _ctl_disable(prompt):
                     set_controls_disabled(session_id)
                     log(
                         "controls_toggle: bypass mode ACTIVE",
@@ -917,7 +994,7 @@ def on_user_prompt_submit(payload: dict) -> None:
                         "for this session and all spawned subagents. Direct push to main and "
                         "commit-on-main remain blocked. Say 'enable controls' to restore.",
                     )
-                elif _ctl_enable(prompt):
+                elif typed and _ctl_enable(prompt):
                     clear_controls_disabled(session_id, force=True)
                     log(
                         "controls_toggle: bypass mode CLEARED",
@@ -940,12 +1017,285 @@ def on_user_prompt_submit(payload: dict) -> None:
     from hooks.config import BROADCAST_ENABLED
 
     if BROADCAST_ENABLED:
-        try:
-            from hooks.context.broadcast import check_and_inject_broadcasts
+        _prompt_broadcasts(session_id)
 
-            check_and_inject_broadcasts(session_id)
-        except Exception as e:
-            log("broadcast user_prompt failed", {"error": str(e)})
+    _inject_refocus(session_id, "prompt")
+    _inject_ledger_decision(payload)
+
+
+def _inject_ledger_decision(payload: dict) -> None:
+    try:
+        from hooks.common import inject_context
+        from hooks.context.ledger_decision import directive
+
+        context = directive(payload)
+        if context:
+            inject_context(context, also_log=False, skip_compression=True, kind="alert")
+    except Exception as e:
+        log("ledger decision failed", {"error": str(e)})
+
+
+def _inbox_blocks(session_id: str, cwd: str = "") -> list[str]:
+    try:
+        from hooks.context.inbox_delivery import pending_context
+
+        context = pending_context(session_id, cwd=cwd)
+    except Exception as e:
+        log("inbox delivery failed", {"error": str(e)})
+        return []
+    return [context] if context else []
+
+
+def _inject_inbox(session_id: str, cwd: str = "") -> None:
+    from hooks.common import inject_context
+
+    for context in _inbox_blocks(session_id, cwd):
+        inject_context(context, also_log=False, skip_compression=True, kind="inbox")
+
+
+def _confirm_inbox(session_id: str) -> None:
+    try:
+        from hooks.context.inbox_delivery import confirm_shown
+
+        confirm_shown(session_id)
+    except Exception as e:
+        log("inbox confirmation failed", {"error": str(e)})
+
+
+def _inject_after_tool(payload: dict) -> None:
+    from hooks.common import inject_context
+    from hooks.context.quota_policy import posttool_context
+
+    session_id, cwd = payload.get("session_id", ""), payload.get("cwd", "")
+    _inject_inbox(session_id, cwd)
+    _inject_refocus(session_id, "tool")
+    quota = posttool_context(session_id, payload.get("tool_name"), cwd)
+    if quota:
+        inject_context(quota, also_log=False, skip_compression=True, kind="alert")
+
+
+def _swarm_heartbeat(state: str, prompt: str | None = None, payload: dict | None = None) -> None:
+    try:
+        from hooks.context.swarm_heartbeat import beat, heard, report
+
+        beat(state)
+        if prompt is not None:
+            heard(prompt)
+        if payload is not None:
+            report(payload.get("model", ""))
+    except Exception as e:
+        log("swarm heartbeat failed", {"error": str(e)})
+
+
+def _swarm_outcome(payload: dict) -> None:
+    try:
+        from hooks.context.swarm_heartbeat import outcome
+
+        outcome(payload)
+    except Exception as e:
+        log("swarm outcome record failed", {"error": str(e)})
+
+
+def _swarm_ledger(payload: dict) -> None:
+    try:
+        from hooks.context.swarm_ledger import run
+
+        contexts, block = run(payload)
+    except Exception as e:
+        log("swarm ledger hook failed", {"error": str(e)})
+        return
+    from hooks.common import inject_context
+
+    for context in contexts:
+        inject_context(context, also_log=False, skip_compression=True, kind="refocus")
+    if block:
+        raise BlockAction(block)
+
+
+def _swarm_after_tool(payload: dict) -> None:
+    _swarm_outcome(payload)
+    _swarm_ledger(payload)
+
+
+def _operator_words(payload: dict) -> bool:
+    try:
+        from hooks.context.operator_words import typed
+
+        return typed(payload)
+    except Exception as e:
+        log("operator words record failed", {"error": str(e)})
+        return False
+
+
+def _operator_mode(payload: dict, typed: bool) -> None:
+    try:
+        from hooks.common import inject_context
+        from hooks.context.operator_mode import notice
+
+        text = notice(payload, typed)
+        if text:
+            inject_context(text, also_log=False, skip_compression=True, kind="alert")
+    except Exception as e:
+        log("operator mode failed", {"error": str(e)})
+
+
+def _master_coding(payload: dict, typed: bool) -> None:
+    try:
+        from hooks.common import inject_context
+        from hooks.context import master_coding
+
+        state = master_coding.observe(payload.get("session_id"), payload.get("prompt"), typed)
+        if state:
+            inject_context(master_coding.NOTICES[state], also_log=False, skip_compression=True, kind="alert")
+    except Exception as e:
+        log("master coding window failed", {"error": str(e)})
+
+
+def _operator_question(payload: dict) -> str:
+    try:
+        from hooks.context import operator_mode
+
+        return operator_mode.question_block(payload.get("tool_name"), payload.get("session_id"))
+    except Exception as e:
+        log("operator question check failed", {"error": str(e)})
+        return ""
+
+
+def _operator_reminder(payload: dict) -> None:
+    try:
+        from hooks.common import inject_context
+        from hooks.context import operator_mode
+
+        text = operator_mode.reminder(payload.get("session_id"))
+        if text:
+            inject_context(text, also_log=False, skip_compression=True, kind="alert")
+    except Exception as e:
+        log("operator reminder failed", {"error": str(e)})
+
+
+def _arm_gate_lifts(payload: dict) -> None:
+    try:
+        from scripts.gates.base import Who
+        from scripts.gates.entry import GATES
+        from scripts.gates.lift import arm_from_prompt
+
+        armed = arm_from_prompt(payload["prompt"], payload.get("session_id"), Who.from_env(), GATES)
+    except Exception as e:
+        log("gate lift: arming or its ledger record failed", {"error": str(e)})
+        return
+    if armed:
+        log("gates: operator lift armed", {"session_id": payload.get("session_id"), "gates": armed})
+
+
+def _refocus_blocks(session_id: str, event: str) -> list[str]:
+    try:
+        from hooks.context.swarm_refocus import refocus_context
+
+        context = refocus_context(session_id, event)
+    except Exception as e:
+        log("swarm refocus failed", {"error": str(e)})
+        return []
+    return [context] if context else []
+
+
+def _inject_refocus(session_id: str, event: str) -> None:
+    from hooks.common import inject_context
+
+    for context in _refocus_blocks(session_id, event):
+        inject_context(context, also_log=False, skip_compression=True, kind="refocus")
+
+
+def _wait_nudge_blocks(payload: dict) -> list[str]:
+    try:
+        from hooks.context.swarm_wait_nudge import nudge
+
+        context = nudge(payload)
+    except Exception as e:
+        log("swarm wait nudge failed", {"error": str(e)})
+        return []
+    return [context] if context else []
+
+
+def _credential_guard(payload: dict, tool_name: str) -> tuple[dict, str] | None:
+    _credential_rewrite: tuple[dict, str] | None = None
+    try:
+        from hooks.config import CREDENTIAL_GUARD_ENABLED
+
+        if CREDENTIAL_GUARD_ENABLED:
+            from hooks.context.credential_guard import evaluate as _credential_evaluate
+            from hooks.targets import current_target as _current_target
+
+            _verdict = _credential_evaluate(
+                payload,
+                allow_rewrite=_current_target() == "claude" and payload.get("permission_mode") == "bypassPermissions",
+            )
+            if _verdict.block:
+                otel.emit_event(
+                    "agentihooks.guardrail.credential_read_blocked",
+                    {"session.id": payload.get("session_id", ""), "tool_name": tool_name},
+                )
+                raise BlockAction(_verdict.block)
+            if _verdict.rewrite:
+                _credential_rewrite = (_verdict.rewrite, _verdict.note or "")
+    except BlockAction:
+        raise
+    except Exception as e:  # NOSONAR — a guard that crashes must not crash the hook, unless a credential is in play
+        if _near_credential(payload.get("tool_input") or {}):
+            raise BlockAction(
+                f"BLOCKED: credential guard internal error near a credential path — refusing ({e})."
+            ) from e
+        log("credential_guard failed", {"error": str(e)})
+        print(f"WARNING: credential_guard check failed ({e}) — guard bypassed", file=sys.stderr)
+    return _credential_rewrite
+
+
+def _plan_read_guard(payload: dict, tool_name: str) -> None:
+    try:
+        from hooks.context.plan_read_guard import check as _plan_read_check
+
+        _plan_refusal = _plan_read_check(payload)
+        if _plan_refusal:
+            otel.emit_event(
+                "agentihooks.guardrail.plan_read_blocked",
+                {"session.id": payload.get("session_id", ""), "tool_name": tool_name},
+            )
+            raise BlockAction(_plan_refusal)
+    except BlockAction:
+        raise
+    except Exception as e:
+        log("plan_read_guard failed", {"error": str(e)})
+
+
+def _check_shell_guards(payload: dict) -> None:
+    from hooks.context.local_test_guard import check_local_tests
+    from hooks.context.swarm_wait_nudge import check_github_watch
+
+    check_local_tests(payload)
+    check_github_watch(payload)
+    if payload.get("tool_name") != "Bash":
+        return
+    try:
+        from hooks.context.branch_guard import check_branch_guard, check_commit_on_main
+        from hooks.context.master_coding import protection_refusal
+
+        check_branch_guard(payload)
+        check_commit_on_main(payload)
+        if refusal := protection_refusal(payload):
+            raise BlockAction(refusal)
+    except BlockAction:
+        raise
+    except Exception as e:
+        log("branch_guard check failed", {"error": str(e)})
+        print(f"WARNING: branch_guard check failed ({e}) — guard bypassed", file=sys.stderr, flush=True)
+
+
+def _fit_pretool(blocks: list[tuple[str, str]]) -> str:
+    from hooks.context.injection_budget import budget_chars, fit
+    from hooks.targets import emitter
+
+    if emitter.forced():
+        blocks = emitter.drain_blocks() + blocks
+    return fit(blocks, budget_chars(), sep="\n\n")
 
 
 def on_pre_tool_use(payload: dict) -> None:
@@ -959,7 +1309,7 @@ def on_pre_tool_use(payload: dict) -> None:
     try:
         from hooks.context.conditions import write_guard
 
-        _gate_block = write_guard(tool_name, tool_input, payload.get("session_id", ""))
+        _gate_block = write_guard(tool_name, tool_input, payload.get("session_id", ""), payload.get("cwd"))
     except Exception as e:
         log("conditions write guard failed", {"error": str(e)})
     if _gate_block:
@@ -977,7 +1327,7 @@ def on_pre_tool_use(payload: dict) -> None:
         from hooks.common import inject_context
 
         for _ctx in _conditions.contexts:
-            inject_context(_ctx, also_log=False, skip_compression=True)
+            inject_context(_ctx, also_log=False, skip_compression=True, kind="condition")
         if _conditions.block:
             raise BlockAction(_conditions.block)
         if _conditions.rewrite is not None:
@@ -1000,6 +1350,29 @@ def on_pre_tool_use(payload: dict) -> None:
     if _quota_policy_block:
         raise BlockAction(_quota_policy_block)
 
+    _question_block = _operator_question(payload)
+    if _question_block:
+        raise BlockAction(_question_block)
+    _operator_reminder(payload)
+
+    try:
+        from scripts.swarm.health.activity import record as _record_swarm_activity
+
+        _record_swarm_activity(tool_name, tool_input)
+    except Exception as e:
+        log("swarm activity record failed", {"error": str(e)})
+    _swarm_heartbeat("working", payload=payload)
+
+    _recycle_block = None
+    try:
+        from hooks.context.context_recycle import gate as _recycle_gate
+
+        _recycle_block = _recycle_gate(tool_name, tool_input, payload.get("session_id", ""))
+    except Exception as e:
+        log("context recycle gate failed", {"error": str(e)})
+    if _recycle_block:
+        raise BlockAction(_recycle_block)
+
     from hooks.lifecycle.guard import pretool as _lifecycle_pretool
 
     _lifecycle_block = _lifecycle_pretool(payload)
@@ -1012,7 +1385,7 @@ def on_pre_tool_use(payload: dict) -> None:
             {"tool": tool_name, "session_id": payload.get("session_id", "")},
         )
     else:
-        from hooks.secrets import redact, scan
+        from hooks.secrets import iter_strings, redact, scan
 
         # Bypass mode lifts the secrets-in-files block (operator decides when to allow it).
         # Detection still runs — we log and emit telemetry so the operator can audit.
@@ -1079,8 +1452,11 @@ def on_pre_tool_use(payload: dict) -> None:
                     "Logged and noted — transcript secrecy is operator-managed. "
                     "Do not echo values back or persist them."
                 )
-        elif tool_name in ("Write", "Edit"):
-            content = tool_input.get("content", "") or tool_input.get("new_string", "")
+        elif tool_name in ("Write", "Edit") or tool_name.startswith("mcp__"):
+            if tool_name.startswith("mcp__"):
+                content = "\n".join(iter_strings(tool_input))
+            else:
+                content = tool_input.get("content", "") or tool_input.get("new_string", "")
             log(f"Pre tool use: {tool_name}", {"tool": tool_name, "session_id": payload.get("session_id", "")})
             hits = scan(content, mode=SECRETS_MODE)
             if hits:
@@ -1141,25 +1517,7 @@ def on_pre_tool_use(payload: dict) -> None:
         except Exception as e:
             log("version_guard check failed", {"error": str(e)})
 
-    # --- Branch guard: block git operations targeting main/master ---
-    if tool_name == "Bash":
-        try:
-            from hooks.context.branch_guard import (
-                check_branch_guard,
-                check_commit_on_main,
-            )
-
-            check_branch_guard(payload)
-            check_commit_on_main(payload)
-        except BlockAction:
-            raise
-        except Exception as e:
-            log("branch_guard check failed", {"error": str(e)})
-            print(
-                f"WARNING: branch_guard check failed ({e}) — guard bypassed",
-                file=sys.stderr,
-                flush=True,
-            )
+    _check_shell_guards(payload)
 
     # --- kubectl mutation guard: HARD FLOOR — block live-system state mutation ---
     if tool_name == "Bash":
@@ -1176,6 +1534,22 @@ def on_pre_tool_use(payload: dict) -> None:
             log("kubectl_mutation_guard check failed", {"error": str(e)})
             print(
                 f"WARNING: kubectl_mutation_guard check failed ({e}) — guard bypassed",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    # --- Serena edit guard: Python in a worktree is edited by symbol ---
+    if tool_name in ("Bash", "Edit", "MultiEdit", "Write"):
+        try:
+            from hooks.context.serena_edit_guard import check as check_serena_edit
+
+            check_serena_edit(payload)
+        except BlockAction:
+            raise
+        except Exception as e:
+            log("serena_edit_guard check failed", {"error": str(e)})
+            print(
+                f"WARNING: serena_edit_guard check failed ({e}) — guard bypassed",
                 file=sys.stderr,
                 flush=True,
             )
@@ -1220,35 +1594,8 @@ def on_pre_tool_use(payload: dict) -> None:
     # protection at all. Reading is the exposure — a value reaching the
     # transcript has to be rotated, not deleted — so this blocks rather than
     # redacts, and bypass mode does not lift it.
-    _credential_rewrite: tuple[dict, str] | None = None
-    try:
-        from hooks.config import CREDENTIAL_GUARD_ENABLED
-
-        if CREDENTIAL_GUARD_ENABLED:
-            from hooks.context.credential_guard import evaluate as _credential_evaluate
-            from hooks.targets import current_target as _current_target
-
-            _verdict = _credential_evaluate(
-                payload,
-                allow_rewrite=_current_target() == "claude" and payload.get("permission_mode") == "bypassPermissions",
-            )
-            if _verdict.block:
-                otel.emit_event(
-                    "agentihooks.guardrail.credential_read_blocked",
-                    {"session.id": payload.get("session_id", ""), "tool_name": tool_name},
-                )
-                raise BlockAction(_verdict.block)
-            if _verdict.rewrite:
-                _credential_rewrite = (_verdict.rewrite, _verdict.note or "")
-    except BlockAction:
-        raise
-    except Exception as e:  # NOSONAR — a guard that crashes must not crash the hook, unless a credential is in play
-        if _near_credential(payload.get("tool_input") or {}):
-            raise BlockAction(
-                f"BLOCKED: credential guard internal error near a credential path — refusing ({e})."
-            ) from e
-        log("credential_guard failed", {"error": str(e)})
-        print(f"WARNING: credential_guard check failed ({e}) — guard bypassed", file=sys.stderr)
+    _credential_rewrite = _credential_guard(payload, tool_name)
+    _plan_read_guard(payload, tool_name)
 
     # File read deduplication
     if tool_name == "Read":
@@ -1341,8 +1688,16 @@ def on_pre_tool_use(payload: dict) -> None:
     )
     from hooks.targets.capabilities import can_inject_context
 
-    _pretool_blocks: list[str] = []
+    _pretool_blocks: list[tuple[str, str]] = []
     _can_inject_pretool = can_inject_context("PreToolUse")
+    _recycle_ctx = None
+    try:
+        from hooks.context.context_recycle import directive as _recycle_directive
+
+        if _can_inject_pretool:
+            _recycle_ctx = _recycle_directive(payload.get("session_id", ""))
+    except Exception as e:
+        log("context recycle pre-tool failed", {"error": str(e)})
     _tool_call_count = 0
     if BRAIN_ENABLED or ENFORCEMENT_INJECTION_ENABLED or QUOTA_USAGE_INJECTION_ENABLED:
         try:
@@ -1352,15 +1707,17 @@ def on_pre_tool_use(payload: dict) -> None:
         except Exception as e:
             log("tool-call counter failed", {"error": str(e)})
 
+    if _recycle_ctx:
+        _pretool_blocks.append(("alert", _recycle_ctx))
     if _quota_policy_ctx:
-        _pretool_blocks.append(_quota_policy_ctx)
+        _pretool_blocks.append(("alert", _quota_policy_ctx))
     elif QUOTA_USAGE_INJECTION_ENABLED and _tool_call_count % max(1, QUOTA_USAGE_TOOL_CALLS) == 0:
         try:
             from hooks.context.quota_usage import quota_banner
 
             _quota_banner = quota_banner(session_id)
             if _quota_banner:
-                _pretool_blocks.append(_quota_banner)
+                _pretool_blocks.append(("other", _quota_banner))
         except Exception as e:
             log("quota usage pretool failed", {"error": str(e)})
 
@@ -1374,7 +1731,7 @@ def on_pre_tool_use(payload: dict) -> None:
                 claim_delivery=_can_inject_pretool,
             )
             if _brain_ctx:
-                _pretool_blocks.append(_brain_ctx)
+                _pretool_blocks.append(("brain", _brain_ctx))
         except Exception as e:
             log("brain_adapter tool-call refresh failed", {"error": str(e)})
 
@@ -1382,13 +1739,18 @@ def on_pre_tool_use(payload: dict) -> None:
     # internally; this call site only checks whether broadcasts are enabled.
     if BROADCAST_ENABLED:
         try:
-            from hooks.context.broadcast import get_pretool_context
+            from hooks.context.broadcast import context_kind, get_pretool_context
 
             _broadcast_ctx = get_pretool_context(session_id, claim_unseen=_can_inject_pretool)
             if _broadcast_ctx:
-                _pretool_blocks.append(_broadcast_ctx)
+                _pretool_blocks.append((context_kind(_broadcast_ctx), _broadcast_ctx))
         except Exception as e:
             log("broadcast pretool failed", {"error": str(e)})
+
+    if _can_inject_pretool:
+        _pretool_blocks.extend(("inbox", b) for b in _inbox_blocks(session_id, payload.get("cwd", "")))
+        _pretool_blocks.extend(("refocus", b) for b in _refocus_blocks(session_id, "tool"))
+        _pretool_blocks.extend(("refocus", b) for b in _wait_nudge_blocks(payload))
 
     if ENFORCEMENT_INJECTION_ENABLED:
         try:
@@ -1403,16 +1765,13 @@ def on_pre_tool_use(payload: dict) -> None:
                 tool_input=payload.get("tool_input") or {},
             )
             if _enf_ctx:
-                _pretool_blocks.append(_enf_ctx)
+                _pretool_blocks.append(("enforcement", _enf_ctx))
         except Exception as e:
             log("enforcement pretool failed", {"error": str(e)})
 
     from hooks.targets import emitter as _emitter
 
-    if _emitter.forced():
-        _drained = _emitter.drain()
-        if _drained:
-            _pretool_blocks.insert(0, _drained)
+    _pretool_context = _fit_pretool(_pretool_blocks)
 
     _cond_decision = _conditions.decision if _conditions is not None else None
     if _credential_rewrite or _cond_decision in ("allow", "ask"):
@@ -1423,12 +1782,12 @@ def on_pre_tool_use(payload: dict) -> None:
             "ask" if _cond_decision == "ask" else "allow",
             "\n".join(r for r in (_note, _conditions.reason if _conditions is not None else "") if r),
             updated_input={**(payload.get("tool_input") or {}), **_updated} if _rewritten else None,
-            additional_context="\n\n".join(_pretool_blocks) or None,
+            additional_context=_pretool_context or None,
         )
-    elif _pretool_blocks:
+    elif _pretool_context:
         if _can_inject_pretool and not _emitter.forced():
             # Copilot parses one JSON object: the blocks join the end-of-process flush.
-            _emitter.buffer_context("\n\n".join(_pretool_blocks))
+            _emitter.buffer_context(_pretool_context)
         elif _can_inject_pretool:
             import json as _json
 
@@ -1437,7 +1796,7 @@ def on_pre_tool_use(payload: dict) -> None:
                     {
                         "hookSpecificOutput": {
                             "hookEventName": "PreToolUse",
-                            "additionalContext": "\n\n".join(_pretool_blocks),
+                            "additionalContext": _pretool_context,
                         }
                     }
                 )
@@ -1524,7 +1883,8 @@ def on_post_tool_use(payload: dict) -> None:
     tool_name = payload.get("tool_name", "unknown")
     log(f"Post tool use: {tool_name}", {"tool": tool_name})
     _trace_session_id = payload.get("session_id", "")
-
+    _operator_words(payload)
+    _swarm_after_tool(payload)
     _conditions = None
     try:
         from hooks.context.conditions import post_effect
@@ -1535,7 +1895,7 @@ def on_post_tool_use(payload: dict) -> None:
             from hooks.targets import emitter
 
             for _ctx in _conditions.contexts:
-                inject_context(_ctx, also_log=False, skip_compression=True)
+                inject_context(_ctx, also_log=False, skip_compression=True, kind="condition")
             emitter.set_fields(_conditions.hook_fields, _conditions.top_fields)
     except Exception as e:
         log("conditions post-tool failed", {"error": str(e)})
@@ -1547,7 +1907,16 @@ def on_post_tool_use(payload: dict) -> None:
         if not can_inject_context("PreToolUse"):
             from hooks.common import inject_context
             from hooks.config import BROADCAST_ENABLED
+            from hooks.context.context_recycle import directive as _recycle_directive
 
+            recycle_context = _recycle_directive(_trace_session_id)
+            if recycle_context:
+                inject_context(recycle_context, also_log=False, skip_compression=True)
+            from hooks.context.project_cache import take_project_context
+
+            project_context = take_project_context(_trace_session_id)
+            if project_context:
+                inject_context(project_context, also_log=False, skip_compression=True)
             if BROADCAST_ENABLED:
                 from hooks.context.broadcast import get_posttool_context
 
@@ -1565,8 +1934,11 @@ def on_post_tool_use(payload: dict) -> None:
                 )
                 if enforcement_context:
                     inject_context(enforcement_context, also_log=False, skip_compression=True)
+            _inject_after_tool(payload)
     except Exception as e:
         log("enforcement posttool fallback failed", {"error": str(e)})
+
+    _inject_ledger_decision(payload)
 
     # --- AskUserQuestion answers feed signal detection (CI Manifesto §9, §14, §15) ---
     if tool_name == "AskUserQuestion":
@@ -1659,6 +2031,12 @@ def on_post_tool_use(payload: dict) -> None:
                 "ci_manifesto AskUserQuestion signal detection failed",
                 {"error": str(e)},
             )
+        try:
+            from scripts.gates.placement import heard as placement_heard
+
+            placement_heard(payload)
+        except Exception as e:
+            log("placement answer record failed", {"error": str(e)})
 
     # Log transcript entries to hooks.log (for debugging)
     session_id = payload.get("session_id", "")
@@ -1806,13 +2184,39 @@ def on_post_tool_use(payload: dict) -> None:
     _trace_mark("post_tool_use_done", tool_name, _trace_session_id)
 
 
+def _link_codex_rollout(transcript_path: str) -> None:
+    from hooks.targets import is_codex
+
+    if not is_codex():
+        return
+    try:
+        from scripts import codex_rollouts
+
+        codex_rollouts.link_current(transcript_path)
+    except Exception as e:
+        log("codex rollout link failed", {"error": str(e)})
+
+
 def on_stop(payload: dict) -> None:
     """Handle Stop event."""
+    _stop_block = None
+    try:
+        from hooks.context import conditions
+
+        _stop_block = conditions.stop_block(payload)
+    except Exception as e:
+        log("conditions stop failed", {"error": str(e)})
+    if _stop_block is not None:
+        raise BlockAction(_stop_block)
+
     session_id = payload.get("session_id", "")
     transcript_path = payload.get("transcript_path", "")
+    _confirm_inbox(session_id)
+    _link_codex_rollout(transcript_path)
 
     # Parse transcript to get metrics (Claude Code doesn't include these in hook payload)
     metrics = parse_transcript_metrics(transcript_path) if transcript_path else {}
+    _swarm_heartbeat("idle", payload=payload)
     log(
         "Claude stopped",
         {
@@ -1850,6 +2254,8 @@ def on_stop(payload: dict) -> None:
             )
     except Exception as e:
         log("brain_writer_hook dispatch failed", {"error": str(e)})
+
+    _request_trace_flush(payload, "stop")
 
     # Emit a trace span for session end (visible in Langfuse)
     tracer = otel.get_tracer()
@@ -1966,6 +2372,23 @@ def on_stop(payload: dict) -> None:
             maybe_speak(session_id, payload.get("last_assistant_message", ""))
     except Exception as e:
         log("voice_output stop hook failed", {"error": str(e)})
+    _swarm_ledger(payload)
+
+    try:
+        from hooks.lifecycle.refresh import on_stop as refresh_on_stop
+
+        if refresh_on_stop(payload):
+            log("session refresh scheduled", {"session_id": session_id})
+    except Exception as e:
+        log("session refresh failed", {"error": str(e)})
+
+    try:
+        from hooks.lifecycle.handoff_close import on_stop as handoff_close_on_stop
+
+        if handoff_close_on_stop(payload):
+            log("handed-off session close scheduled", {"session_id": session_id})
+    except Exception as e:
+        log("handed-off session close failed", {"error": str(e)})
 
 
 def on_subagent_start(payload: dict) -> None:
@@ -2012,7 +2435,7 @@ def on_subagent_start(payload: dict) -> None:
         if BRAIN_ENABLED:
             from hooks.context.brain_adapter import inject_on_session_start
 
-            inject_on_session_start()
+            inject_on_session_start(agent_id, payload.get("cwd", ""))
     except Exception as e:
         log("brain_adapter subagent_start failed", {"error": str(e)})
 
@@ -2147,12 +2570,41 @@ def on_pre_compact(payload: dict) -> None:
     """Handle PreCompact event."""
     session_id = payload.get("session_id", "")
     log("Pre compact", {"session_id": session_id})
+    try:
+        from hooks.context.swarm_refocus import mark_compacted
+
+        mark_compacted(session_id)
+    except Exception as e:
+        log("swarm refocus compact mark failed", {"error": str(e)})
+    _request_trace_flush(payload, "compact")
+
+
+def _request_trace_flush(payload: dict, reason: str) -> None:
+    try:
+        from hooks.observability import trace_flush
+
+        trace_flush.request(payload.get("session_id", ""), payload.get("transcript_path", ""), reason)
+    except Exception as e:
+        log("trace flush request failed", {"error": str(e)})
 
 
 def on_permission_request(payload: dict) -> None:
     """Handle PermissionRequest event."""
     tool_name = payload.get("tool_name", "unknown")
     log(f"Permission requested: {tool_name}", {"tool": tool_name})
+    from hooks.context import master_coding, planner_plan
+
+    if planner_plan.accepts(tool_name):
+        print(json.dumps(planner_plan.grant(payload.get("tool_input") or {})))
+    elif master_coding.asks_operator(tool_name, payload.get("session_id")):
+        return
+    elif os.environ.get("AGENTIHOOKS_SWARM"):
+        emit_permission_decision(
+            "PermissionRequest",
+            "deny",
+            f"Denied {tool_name}: swarm sessions and subagents cannot wait for permission. "
+            "Use an allowed tool or report the missing capability through the swarm inbox.",
+        )
 
 
 def emit_permission_decision(
@@ -2213,6 +2665,19 @@ def emit_permission_decision(
         print(json.dumps(output))
         return
 
+    if target == "claude" and event_name == "PermissionRequest":
+        print(
+            json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": event_name,
+                        "decision": {"behavior": decision, "message": reason},
+                    }
+                }
+            )
+        )
+        return
+
     output = {
         "hookSpecificOutput": {
             "hookEventName": event_name,
@@ -2250,6 +2715,7 @@ EVENT_HANDLERS = {
 }
 
 
+@skip_classifier_child
 def main() -> None:
     """Main entry point - routes events to handlers.
 
@@ -2279,9 +2745,17 @@ def main() -> None:
 
         payload = normalize_payload(payload)
 
+        from hooks.observability.token_monitor import record_lifecycle_context
+
+        record_lifecycle_context(payload)
+
         # Get event name from payload
         event_name = payload.get("hook_event_name", "Unknown")
         _blocked_event = event_name
+
+        from hooks.context.swarm_pin import unpin
+
+        unpin()
 
         # Route to handler
         handler = EVENT_HANDLERS.get(event_name)
@@ -2289,8 +2763,8 @@ def main() -> None:
         from hooks.targets import buffers_single_envelope, emitter
         from hooks.targets.capabilities import supports_output_rewrite
 
-        if event_name == "PreToolUse" and not buffers_single_envelope():
-            emitter.force_buffer()
+        if event_name in ("PreToolUse", "SessionStart", "UserPromptSubmit") and not buffers_single_envelope():
+            emitter.force_buffer(plain=event_name != "PreToolUse")
         elif event_name == "PostToolUse" and supports_output_rewrite():
             # updatedToolOutput / decision only parse when the envelope is all of stdout.
             emitter.force_buffer()
@@ -2311,7 +2785,7 @@ def main() -> None:
 
             # Codex and Copilot parse hook stdout as ONE JSON object —
             # everything the handlers injected was buffered and is flushed here
-            # as a single envelope. No-op on claude (nothing buffers there).
+            # as a single envelope. Claude flushes its budgeted context here too.
             emitter.flush(event_name)
 
         except BlockAction as e:
@@ -2320,12 +2794,11 @@ def main() -> None:
             # buffered ahead of branch_guard's raise) would otherwise be
             # silently lost — stdout carries nothing on the block path.
             # Fold it into the stderr message instead, which is freeform and
-            # still reaches the model with the deny. Claude never buffers
-            # (every call site there prints immediately), so this is a no-op
-            # on that target and the message is unchanged.
+            # still reaches the model with the deny. Plain stdout context
+            # (Claude SessionStart, UserPromptSubmit) is dropped instead.
             reason = str(e)
             if buffers_single_envelope() or emitter.forced():
-                drained = emitter.drain()
+                drained = emitter.drain_for_block()
                 if drained:
                     reason = f"{reason}\n\n{drained}"
             raise BlockAction(reason) from e
@@ -2347,6 +2820,7 @@ def main() -> None:
         except Exception:  # NOSONAR — a block must never be weakened by this
             pass
         print(str(e), file=sys.stderr, flush=True)  # Claude Code reads stderr for hook messages
+        otel.flush()
         sys.stdout.flush()
         sys.stderr.flush()
         os._exit(2)  # blocks the action — skip Python shutdown (OTEL threads)
@@ -2390,10 +2864,12 @@ def main() -> None:
         os._exit(130)  # standard SIGINT exit code
     except Exception as e:
         log(f"Hook manager error: {str(e)}")
+        otel.flush()
         sys.stdout.flush()
         sys.stderr.flush()
         os._exit(1)
 
+    otel.flush()
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(0)

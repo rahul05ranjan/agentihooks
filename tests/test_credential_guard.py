@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-from hooks.context.credential_guard import GREP_EXCLUDES, RG_EXCLUDES, decide, evaluate
+from hooks.context.credential_guard import ENV_NAMES_SAFE, GREP_EXCLUDES, RG_EXCLUDES, decide, evaluate
 
 pytestmark = pytest.mark.unit
 
@@ -21,6 +21,22 @@ CASES = [
     ("read bashrc", {"tool_name": "Read", "tool_input": {"file_path": "~/.bashrc"}}, True),
     ("read netrc", {"tool_name": "Read", "tool_input": {"file_path": "/home/x/.netrc"}}, True),
     ("read aws creds", {"tool_name": "Read", "tool_input": {"file_path": "~/.aws/credentials"}}, True),
+    (
+        "read worker grant",
+        {"tool_name": "Read", "tool_input": {"file_path": "/home/worker/attempts/exe-1/run/launch-grant"}},
+        True,
+    ),
+    ("grep in worker grant", {"tool_name": "Grep", "tool_input": {"pattern": "v2", "path": "run/launch-grant"}}, True),
+    ("cat worker grant", {"tool_name": "Bash", "tool_input": {"command": "cat run/launch-grant"}}, True),
+    ("grep worker grant", {"tool_name": "Bash", "tool_input": {"command": "grep v2 ./launch-grant"}}, True),
+    (
+        "python reads worker grant",
+        {"tool_name": "Bash", "tool_input": {"command": "python3 -c \"print(open('run/launch-grant').read())\""}},
+        True,
+    ),
+    ("cat glob of worker grant", {"tool_name": "Bash", "tool_input": {"command": "cat run/launch-*"}}, True),
+    ("ls worker grant", {"tool_name": "Bash", "tool_input": {"command": "ls -la run/launch-grant"}}, False),
+    ("read launch module", {"tool_name": "Read", "tool_input": {"file_path": "scripts/swarm_v2/launch.py"}}, False),
     ("read source file", {"tool_name": "Read", "tool_input": {"file_path": "hooks/secrets.py"}}, False),
     ("grep in dotenv", {"tool_name": "Grep", "tool_input": {"pattern": "URL", "path": ".env"}}, True),
     ("grep in src", {"tool_name": "Grep", "tool_input": {"pattern": "URL", "path": "src/"}}, False),
@@ -38,11 +54,57 @@ CASES = [
     ("bare env", {"tool_name": "Bash", "tool_input": {"command": "env"}}, True),
     ("bare printenv", {"tool_name": "Bash", "tool_input": {"command": "printenv"}}, True),
     ("export -p", {"tool_name": "Bash", "tool_input": {"command": "export -p"}}, True),
-    ("env names", {"tool_name": "Bash", "tool_input": {"command": "env | cut -d= -f1"}}, False),
+    ("env names", {"tool_name": "Bash", "tool_input": {"command": "env | cut -d= -f1"}}, True),
     ("env count", {"tool_name": "Bash", "tool_input": {"command": "env | wc -l"}}, False),
     ("env grep value", {"tool_name": "Bash", "tool_input": {"command": "env | grep REDIS"}}, True),
-    ("env names then head", {"tool_name": "Bash", "tool_input": {"command": "env | cut -d= -f1 | head -3"}}, False),
-    ("env sorted names", {"tool_name": "Bash", "tool_input": {"command": "env | sort | cut -d= -f1"}}, False),
+    ("env grep count", {"tool_name": "Bash", "tool_input": {"command": "env | grep -c REDIS"}}, False),
+    ("env grep color", {"tool_name": "Bash", "tool_input": {"command": "env | grep --color=never ."}}, True),
+    ("env grep long option", {"tool_name": "Bash", "tool_input": {"command": "env | grep --line-buffered ."}}, True),
+    ("env grep pattern c", {"tool_name": "Bash", "tool_input": {"command": "env | grep -ec ."}}, True),
+    ("env grep list", {"tool_name": "Bash", "tool_input": {"command": "env | grep -l ."}}, True),
+    ("env wc names from input", {"tool_name": "Bash", "tool_input": {"command": "env | wc --files0-from=-"}}, True),
+    ("env names then head", {"tool_name": "Bash", "tool_input": {"command": "env | cut -d= -f1 | head -3"}}, True),
+    ("env sorted names", {"tool_name": "Bash", "tool_input": {"command": "env | sort | cut -d= -f1"}}, True),
+    ("env awk names", {"tool_name": "Bash", "tool_input": {"command": "env | awk -F= '{print $1}'"}}, True),
+    ("printenv names", {"tool_name": "Bash", "tool_input": {"command": "printenv | sed 's/=.*//'"}}, True),
+    ("set names", {"tool_name": "Bash", "tool_input": {"command": "set | cut -d= -f1"}}, True),
+    ("export -p names", {"tool_name": "Bash", "tool_input": {"command": "export -p | cut -d= -f1"}}, True),
+    ("declare -x names", {"tool_name": "Bash", "tool_input": {"command": "declare -x | cut -d= -f1"}}, True),
+    (
+        "env names filtered to identifiers",
+        {"tool_name": "Bash", "tool_input": {"command": "env | cut -d= -f1 | grep -xE '[A-Za-z_][A-Za-z0-9_]*'"}},
+        True,
+    ),
+    (
+        "env names filtered anchored",
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": "env | sort | cut -d= -f1 | grep -E '^[A-Za-z_][A-Za-z0-9_]*$' | head -3"},
+        },
+        True,
+    ),
+    (
+        "env malformed names printed",
+        {"tool_name": "Bash", "tool_input": {"command": "env | cut -d= -f1 | grep -vxE '[A-Za-z_][A-Za-z0-9_]*'"}},
+        True,
+    ),
+    (
+        "env malformed names counted",
+        {"tool_name": "Bash", "tool_input": {"command": "env | cut -d= -f1 | grep -cvxE '[A-Za-z_][A-Za-z0-9_]*'"}},
+        False,
+    ),
+    (
+        "env identifier lines without name stage",
+        {"tool_name": "Bash", "tool_input": {"command": "env | grep -xE '[A-Za-z_][A-Za-z0-9_]*'"}},
+        True,
+    ),
+    (
+        "env names loose filter",
+        {"tool_name": "Bash", "tool_input": {"command": "env | cut -d= -f1 | grep -E '[A-Za-z_]+'"}},
+        True,
+    ),
+    ("compgen exported names", {"tool_name": "Bash", "tool_input": {"command": "compgen -e"}}, False),
+    ("safe env names form", {"tool_name": "Bash", "tool_input": {"command": ENV_NAMES_SAFE}}, False),
     ("env head raw", {"tool_name": "Bash", "tool_input": {"command": "env | head -3"}}, True),
     ("printenv PATH", {"tool_name": "Bash", "tool_input": {"command": "printenv PATH"}}, False),
     ("printenv secret", {"tool_name": "Bash", "tool_input": {"command": "printenv DB_PASSWORD"}}, True),
@@ -176,6 +238,117 @@ def _bash(command, cwd=""):
     return {"tool_name": "Bash", "tool_input": {"command": command}, "cwd": cwd}
 
 
+class TestEnvironmentNames:
+    """A malformed variable name can hold a secret, so a name listing must drop it."""
+
+    FAKE_NAME = "fake-leaked-name-0000"
+    FAKE_VALUE = "fake-value-0000"
+
+    def _run_safe_form(self):
+        import os
+        import subprocess
+
+        env = {"PATH": os.environ.get("PATH", ""), "VALID_NAME": "x", self.FAKE_NAME: self.FAKE_VALUE}
+        return subprocess.run(["bash", "-c", ENV_NAMES_SAFE], env=env, capture_output=True, text=True)
+
+    def test_block_message_gives_the_safe_form(self):
+        reason = decide(_bash("env | cut -d= -f1"))
+        assert ENV_NAMES_SAFE in reason
+        assert "env | cut -d= -f1  " not in reason
+
+    def test_safe_form_lists_valid_names_and_counts_malformed(self):
+        r = self._run_safe_form()
+        lines = r.stdout.splitlines()
+        assert r.returncode == 0
+        assert "VALID_NAME" in lines
+        assert "malformed names: 1" in lines
+
+    def test_safe_form_never_prints_the_malformed_name_or_value(self):
+        r = self._run_safe_form()
+        assert self.FAKE_NAME not in r.stdout + r.stderr
+        assert self.FAKE_VALUE not in r.stdout + r.stderr
+
+
+class TestMultilineEnvValues:
+    """A value spanning two lines turns its second line into a fake name in line based listings."""
+
+    FAKE_FIRST = "fake-first-line-0000"
+    FAKE_REST = "fake-rest-line-0000"
+    LISTING = "env | cut -d= -f1"
+
+    def _run(self, command):
+        import os
+        import subprocess
+
+        env = {"PATH": os.environ.get("PATH", ""), "FAKE_MULTI_0001": self.FAKE_FIRST + "\n" + self.FAKE_REST}
+        return subprocess.run(["bash", "-c", command], env=env, capture_output=True, text=True)
+
+    def test_unguarded_listing_would_print_the_second_line(self):
+        assert self.FAKE_REST in self._run(self.LISTING).stdout.splitlines()
+
+    def test_guard_blocks_the_listing(self):
+        assert decide(_bash(self.LISTING))
+
+    def test_block_message_names_multiline_values(self):
+        assert "several lines" in decide(_bash(self.LISTING))
+
+    def test_safe_form_never_prints_either_line(self):
+        r = self._run(ENV_NAMES_SAFE)
+        assert "FAKE_MULTI_0001" in r.stdout.splitlines()
+        assert self.FAKE_FIRST not in r.stdout + r.stderr
+        assert self.FAKE_REST not in r.stdout + r.stderr
+
+
+class TestIdentifierShapedSecondLine:
+    """A value's later line can look like a name, so no identifier filter makes a listing safe."""
+
+    FAKE_FIRST = "fake-first-line-0000"
+    FAKE_REST = "FAKE_REST_LINE_0000"
+    FILTERED = "env | cut -d= -f1 | grep -xE '[A-Za-z_][A-Za-z0-9_]*'"
+
+    def _run(self, command):
+        import os
+        import subprocess
+
+        env = {"PATH": os.environ.get("PATH", ""), "FAKE_MULTI_0002": self.FAKE_FIRST + "\n" + self.FAKE_REST}
+        return subprocess.run(["bash", "-c", command], env=env, capture_output=True, text=True)
+
+    def test_unguarded_filtered_listing_would_print_the_second_line(self):
+        assert self.FAKE_REST in self._run(self.FILTERED).stdout.splitlines()
+
+    def test_guard_blocks_the_filtered_listing(self):
+        assert decide(_bash(self.FILTERED))
+
+    def test_safe_form_never_prints_the_second_line(self):
+        r = self._run(ENV_NAMES_SAFE)
+        assert "FAKE_MULTI_0002" in r.stdout.splitlines()
+        assert self.FAKE_REST not in r.stdout + r.stderr
+
+    def test_block_message_offers_only_the_awk_form_and_counts(self):
+        reason = decide(_bash(self.FILTERED))
+        assert ENV_NAMES_SAFE in reason
+        assert "grep -c" in reason
+        assert "grep -x" not in reason
+
+
+class TestGrepLongOptionIsNotACount:
+    """A long grep option holding c, l or q once passed as a count and printed values."""
+
+    FAKE_VALUE = "fake-value-long-option-0000"
+    COMMAND = "env | grep --color=never ."
+
+    def test_unguarded_command_would_print_the_value(self):
+        import os
+        import subprocess
+
+        env = {"PATH": os.environ.get("PATH", ""), "FAKE_TOKEN_0003": self.FAKE_VALUE}
+        r = subprocess.run(["bash", "-c", self.COMMAND], env=env, capture_output=True, text=True)
+        assert "FAKE_TOKEN_0003=" + self.FAKE_VALUE in r.stdout.splitlines()
+
+    def test_guard_blocks_it(self):
+        assert decide(_bash(self.COMMAND))
+
+
 class TestRecursiveRewrite:
     """Under bypass on claude the search keeps running; credential files leave it."""
 
@@ -204,6 +377,25 @@ class TestRecursiveRewrite:
         for rc in SHELL_RC:
             assert rc not in GREP_EXCLUDES, rc
             assert rc not in RG_EXCLUDES, rc
+
+    def test_the_grant_file_the_worker_home_writes_is_a_credential(self, tmp_path):
+        from hooks.context.credential_guard import KIND_CREDENTIAL, sensitive_kind
+        from scripts.swarm_v2.broadcast_bridge import grant_path
+
+        assert sensitive_kind(str(grant_path(tmp_path / "exe-1"))) == KIND_CREDENTIAL
+
+    def test_a_tool_input_naming_the_grant_file_is_near_a_credential(self):
+        from hooks.context.credential_guard import near_credential
+        from scripts.swarm_v2.broadcast_bridge import GRANT_NAME
+
+        assert near_credential({"command": f"python3 -c \"open('run/{GRANT_NAME}')\""})
+        assert not near_credential({"command": "python3 -c \"open('run/launch')\""})
+
+    def test_recursive_search_leaves_the_worker_grant_out(self):
+        from scripts.swarm_v2.broadcast_bridge import GRANT_NAME
+
+        assert "--exclude=" + GRANT_NAME in GREP_EXCLUDES.split()
+        assert "'!" + GRANT_NAME + "'" in RG_EXCLUDES.split()
 
     def test_quoted_delimiters_are_data(self):
         cmd = 'echo "a && grep -r x ." && git commit -m "b | rg y ."'

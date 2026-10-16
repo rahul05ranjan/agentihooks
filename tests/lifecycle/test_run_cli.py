@@ -23,6 +23,19 @@ def test_sweep_writes_report_and_state_and_scopes(repo, tmp_path):
     assert [item["path"] for item in scoped["findings"]] == [str(keep)]
 
 
+def test_sweep_runs_server_cleanup_with_the_same_snapshot_scope_and_action(tmp_path, monkeypatch):
+    from unittest.mock import Mock
+
+    from hooks.lifecycle import run
+
+    snapshot = snap()
+    cleanup = Mock(return_value=[{"pid": 42, "action": "stopped"}])
+    monkeypatch.setattr(run, "sweep_servers", cleanup)
+    report = sweep([], snapshot, tmp_path, scope="/run", act=True)
+    cleanup.assert_called_once_with(snapshot.table, tmp_path, "/run", True)
+    assert report["ledger_servers"] == [{"pid": 42, "action": "stopped"}]
+
+
 def test_sweep_refuses_to_run_twice_at_once(tmp_path):
     home = tmp_path / "state"
     home.mkdir()
@@ -32,6 +45,8 @@ def test_sweep_refuses_to_run_twice_at_once(tmp_path):
 
 
 def test_scratch_new_creates_a_leased_dir(monkeypatch, tmp_path, capsys):
+    for key in ("AGENTIHOOKS_AGENT_NAME", "AGENTIHOOKS_SWARM", "AGENTIHOOKS_SWARM_TASK", "CLAUDE_CODE_SESSION_ID"):
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(gc_cli, "take_snapshot", lambda: snap())
     monkeypatch.setattr(gc_cli, "owner_holder", lambda _snap: Holder("s-1", 9, 9, "boot-1"))
     assert gc_cli.main(["scratch", "new", "repo/task"]) == 0

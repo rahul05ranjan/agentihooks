@@ -51,7 +51,7 @@ SHELL_RC = {
     ".zsh_history",
 }
 
-CREDENTIAL_FILES = {".netrc", ".npmrc", ".pypirc", ".git-credentials", ".pgpass"}
+CREDENTIAL_FILES = {".netrc", ".npmrc", ".pypirc", ".git-credentials", ".pgpass", "launch-grant"}
 
 KIND_DOTENV = "dotenv"
 KIND_SHELLRC = "shellrc"
@@ -176,18 +176,17 @@ SENSITIVE_FRAGMENT = re.compile(
     r"|[\w-]+\.env"
     r"|\.bashrc|\.bash_profile|\.bash_login|\.profile"
     r"|\.zshrc|\.zprofile|\.zshenv|\.bash_history|\.zsh_history"
-    r"|\.netrc|\.npmrc|\.pypirc|\.git-credentials|\.pgpass"
+    r"|\.netrc|\.npmrc|\.pypirc|\.git-credentials|\.pgpass|launch-grant"
     r"|\.aws/credentials"
     r")"
 )
 
-STRIPPER_STAGE = (
-    re.compile(r"^\s*wc(\s|$)"),
-    re.compile(r"^\s*grep\s+.*-[A-Za-z]*[clLq]"),
+GREP_VERBS = ("grep", "egrep", "fgrep")
+GREP_ARG_FLAGS = set("efABCmdD")
+NAME_STAGE = (
     re.compile(r"^\s*cut\s+.*-f\s*1(\s|$)"),
     re.compile(r"^\s*sed\s+.*s/=\.\*//"),
     re.compile(r"^\s*awk\s+.*-F.*print\s+\$1"),
-    re.compile(r"^\s*compgen\b"),
 )
 NEUTRAL_STAGE = re.compile(r"^\s*(sort|uniq|column|tr)\b")
 
@@ -295,6 +294,11 @@ EXCLUDE_BASENAMES = [".env", ".env.*", "*.env"] + sorted(CREDENTIAL_FILES)
 GREP_EXCLUDES = " ".join("--exclude=" + shlex.quote(b) for b in EXCLUDE_BASENAMES)
 RG_EXCLUDES = " ".join("-g " + shlex.quote("!" + b) for b in EXCLUDE_BASENAMES)
 
+ENV_NAMES_SAFE = (
+    "awk 'BEGIN{for(k in ENVIRON) if(k ~ /^[A-Za-z_][A-Za-z0-9_]*$/) print k; else n++; "
+    'print "malformed names: " n+0}\''
+)
+
 ALTERNATIVE = {
     KIND_DOTENV: (
         "To learn what a project configures, read its .env.example / .env.sample.\n"
@@ -309,7 +313,11 @@ ALTERNATIVE = {
         "variable or its secret store; never open the file."
     ),
     KIND_ENVIRONMENT: (
-        "Name-only views carry no values:  env | cut -d= -f1  ·  env | wc -l\n"
+        "A variable name that is not a valid identifier can hold a secret, and a value that "
+        "spans several lines prints its later lines as if they were names, even through an "
+        "identifier filter. Only two listings pass. Valid names and only a count of malformed "
+        "ones:\n  " + ENV_NAMES_SAFE + "\n"
+        "A count (wc, or grep -c):  env | wc -l\n"
         'To test one variable:  test -n "${VAR:-}" && echo set || echo unset\n'
         'To use a value, reference the variable ("$VAR") so the shell expands it at '
         "execution instead of printing it."
@@ -386,6 +394,35 @@ def decide_grep(tool_input, ctx=None):
     return ALLOW
 
 
+def counts_only(stage):
+    toks = tokens_of(stage)
+    verb = verb_of(toks)
+    if verb == "wc":
+        return not any(t.startswith("--files0-from") for t in toks)
+    if verb not in GREP_VERBS:
+        return False
+    skip = False
+    for tok in toks[verb_index(toks) + 1 :]:
+        if skip:
+            skip = False
+            continue
+        if tok == "--":
+            return False
+        if tok.startswith("--"):
+            # A long option may take the next word as its argument.
+            skip = "=" not in tok
+            continue
+        if not tok.startswith("-"):
+            continue
+        for i, ch in enumerate(tok[1:]):
+            if ch == "c":
+                return True
+            if ch in GREP_ARG_FLAGS:
+                skip = i == len(tok) - 2
+                break
+    return False
+
+
 def env_dump_verdict(command):
     stages = split_stages(command)
     if not stages:
@@ -413,12 +450,10 @@ def env_dump_verdict(command):
     if not dump:
         return None
 
-    # Walk the pipeline in order: once a stage strips values, everything after it
-    # only ever sees key names, so the rest of the pipeline is harmless.
     for stage in stages[1:]:
-        if any(p.search(stage) for p in STRIPPER_STAGE):
+        if counts_only(stage):
             return None
-        if not NEUTRAL_STAGE.search(stage):
+        if not any(p.search(stage) for p in NAME_STAGE) and not NEUTRAL_STAGE.search(stage):
             break
     return block(
         "dumping the whole environment ({})".format(verb),

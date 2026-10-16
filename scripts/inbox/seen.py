@@ -1,0 +1,113 @@
+"""Which operator ledger writes each agent has been shown, shared by the ledger hook, the ledger watch and the inbox.
+
+Whichever path shows a write first marks it; the others skip it, so each write reaches each agent once.
+"""
+
+import os
+
+from scripts.inbox.store import MOVE_ATTEMPTS, InboxError, now_ms, owner_key, redelivery_ms
+from scripts.swarm.keyspace import ROOT
+from scripts.swarm.naming import NameRegistry
+
+PREFIX = f"{ROOT}:inbox:seen"
+TTL_S = 30 * 24 * 3600
+SEEN_ON_LEDGER = "already shown through the ledger"
+UNSETTLED = "returned to pending: its seen mark kept changing"
+
+
+def write_ref(slug, event):
+    return f"{slug}:{event['rev']}:{event.get('id') or event['kind'] + ' ' + event.get('target', '')}"
+
+
+class SeenMarks:
+    def __init__(self, redis):
+        self.redis = redis
+
+    @staticmethod
+    def key(name):
+        return f"{PREFIX}:{name}"
+
+    def mark(self, name, ref):
+        """True when this call is the first to show the write to name; False while a delivery owner holds name."""
+        from redis.exceptions import WatchError
+
+        for _ in range(MOVE_ATTEMPTS):
+            with self.redis.pipeline() as pipe:
+                try:
+                    pipe.watch(NameRegistry.key("alias", name))
+                    resolved = NameRegistry(pipe).resolve(name)
+                    pipe.watch(owner_key(resolved))
+                    if pipe.get(owner_key(resolved)) is not None:
+                        return False
+                    pipe.multi()
+                    pipe.sadd(self.key(resolved), ref)
+                    pipe.expire(self.key(resolved), TTL_S)
+                    added, _ = pipe.execute()
+                    return added == 1
+                except WatchError:
+                    continue
+        raise InboxError(f"the delivery owner of {name} changed meanwhile; run it again")
+
+    def seen(self, name, ref):
+        return bool(self.redis.sismember(self.key(NameRegistry(self.redis).resolve(name)), ref))
+
+
+def marks_for(slug, environ=None):
+    """The marks store for a session working this swarm ledger, None for any other session or without Redis."""
+    env = os.environ if environ is None else environ
+    if not slug or env.get("AGENTIHOOKS_SWARM") != slug:
+        return None
+    try:
+        from scripts.swarm.store import redis_client
+
+        return SeenMarks(redis_client(env))
+    except Exception:
+        return None
+
+
+def first_showing(marks, name, slug, events):
+    """The events not yet shown to name, now marked shown; every event when the marks are unreachable."""
+    if marks is None:
+        return list(events)
+    try:
+        return [event for event in events if marks.mark(name, write_ref(slug, event))]
+    except Exception:
+        return list(events)
+
+
+def claim(store, me):
+    """Deliver at most five oldest pending items across me, my seat and aliases; close ledger writes already shown."""
+    store.redeliver(now_ms(), redelivery_ms())
+    marks = SeenMarks(store.redis)
+    shown = []
+    for item in filter(None, (store.deliver(item.id, me) for item in store.pending_mail(me)[:5])):
+        try:
+            elsewhere = item.ref and _shown_elsewhere(marks, store, item, me)
+        except InboxError:
+            store.requeue(item.id, me, UNSETTLED)
+            continue
+        if elsewhere:
+            store.close(item.id, me, "done", SEEN_ON_LEDGER)
+        else:
+            shown.append(item)
+    return shown
+
+
+def _shown_elsewhere(marks, store, item, me):
+    return not marks.mark(me, item.ref) and not _delivered_before(store, item.id, me)
+
+
+def _delivered_before(store, item_id, me):
+    return sum(e.get("state") == "delivered" and e.get("by") == me for e in store.history(item_id)) > 1
+
+
+def receiving_session(environ=None):
+    from hooks.context.account_sessions import agent_pid
+    from hooks.context.broadcast import get_active_sessions
+
+    env = os.environ if environ is None else environ
+    session_id = env.get("CLAUDE_CODE_SESSION_ID", "") or env.get("CODEX_THREAD_ID", "")
+    if session_id:
+        return session_id
+    pid = agent_pid()
+    return next((sid for sid, row in get_active_sessions().items() if row.get("pid") == pid), "")

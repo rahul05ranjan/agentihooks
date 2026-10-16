@@ -7,11 +7,11 @@ Supports tiered pattern sets controlled by ``AGENTIHOOKS_SECRETS_MODE``:
   off      → no scanning
   warn     → standard patterns (7), scan only (caller decides action)
   standard → standard patterns (7), scan + block
-  strict   → standard + extended patterns (Slack/Stripe/JWT), scan + block
+  strict   → standard + extended patterns (Slack/Stripe/JWT/Bearer), scan + block
 """
 
 import re
-from typing import Callable, NamedTuple
+from typing import Callable, Iterator, NamedTuple
 
 
 class _Pattern(NamedTuple):
@@ -50,7 +50,10 @@ _STANDARD_PATTERNS: list[_Pattern] = [
     ),
     _Pattern(
         "private_key",
-        re.compile(r"-----BEGIN\s+(RSA|EC|OPENSSH|PGP)\s+PRIVATE KEY-----"),
+        re.compile(
+            r"-----BEGIN\s+((?:[A-Z0-9]+\s+)?)PRIVATE KEY-----(?:.*?-----END\s+\1PRIVATE KEY-----|.*)",
+            re.DOTALL,
+        ),
     ),
     _Pattern(
         "bearer_token",
@@ -58,15 +61,15 @@ _STANDARD_PATTERNS: list[_Pattern] = [
     ),
     _Pattern(
         "db_url_creds",
-        re.compile(r"(postgres|mysql|mongodb)://[^:]+:[^@]{4,}@", re.IGNORECASE),
+        re.compile(r"(postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?)://[^/\s:@]*:[^@\s]+@", re.IGNORECASE),
     ),
     _Pattern(
         "generic_secret",
         # Match KEY = VALUE but skip env var references ($VAR), placeholders (<...> or {...}),
         # comparisons (==, ===), and quoted values under 8 chars such as Terraform time units
         re.compile(
-            r"(?:PASSWORD|SECRET|API_KEY|PRIVATE_KEY|ACCESS_TOKEN)\s*(?:=(?!=)|:)\s*"
-            r"""(?:["'](?P<quoted>[^\s"'$<{]{8,})|(?P<bare>[^\s"'$<{]{8,}))""",
+            r"(?:PASSWORD|(?<!/)PASSWD|SECRET|API_KEY|PRIVATE_KEY|ACCESS_TOKEN)(?:\s*(?:=(?!=)|:)\s*"
+            r"""(?:["'](?P<quoted>[^\s"'$<{]{8,})|(?P<bare>[^\s"'$<{]{8,}))|["']\s*:\s*["'][^\s"'$<{]{8,})""",
             re.IGNORECASE,
         ),
         _is_literal_secret,
@@ -74,6 +77,14 @@ _STANDARD_PATTERNS: list[_Pattern] = [
 ]
 
 _STRICT_PATTERNS: list[_Pattern] = [
+    _Pattern(
+        "nested_secret",
+        re.compile(
+            r"""(?:PASSWORD|PASSWD|SECRET|API_KEY|PRIVATE_KEY|ACCESS_TOKEN)["']\s*:\s*\{[^{}]*"""
+            r"""["'](?:VALUE|PASSWORD|PASSWD|TOKEN|SECRET)["']\s*:\s*["'][^\s"'$<{]{8,}""",
+            re.IGNORECASE,
+        ),
+    ),
     _Pattern(
         "slack_token",
         re.compile(r"xox[bpors]-[A-Za-z0-9\-]{10,}"),
@@ -86,6 +97,22 @@ _STRICT_PATTERNS: list[_Pattern] = [
         "jwt_token",
         re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
     ),
+    _Pattern(
+        "bearer_value",
+        re.compile(r"\bBearer\s+[A-Za-z0-9._\-+/]{20,}", re.IGNORECASE),
+    ),
+]
+
+
+_MEMORY_PATTERNS: list[_Pattern] = [
+    _Pattern(
+        "secret_assignment",
+        re.compile(
+            r"(?:PASSWORD|PASSWD|SECRET|TOKEN|API_KEY|PRIVATE_KEY|ACCESS_KEY)(?:[^\S\r\n]*(?:=(?!=)|:)[^\S\r\n]*"
+            r"""(?:["']?[^\s"'$<{]+)|["'][^\S\r\n]*:[^\S\r\n]*["'][^\s"'$<{]+)""",
+            re.IGNORECASE,
+        ),
+    ),
 ]
 
 
@@ -93,6 +120,12 @@ def _get_patterns(mode: str) -> list[_Pattern]:
     """Return the pattern list for the given secrets mode."""
     if mode == "off":
         return []
+    if mode == "memory":
+        return (
+            [pattern for pattern in _STANDARD_PATTERNS if pattern.name != "generic_secret"]
+            + _STRICT_PATTERNS
+            + _MEMORY_PATTERNS
+        )
     if mode == "strict":
         return _STANDARD_PATTERNS + _STRICT_PATTERNS
     # "warn" and "standard" both use the standard set
@@ -127,6 +160,17 @@ def scan(text: str, *, mode: str | None = None) -> list[str]:
     return hits
 
 
+def iter_strings(obj: object) -> Iterator[str]:
+    if isinstance(obj, str):
+        yield obj
+    elif isinstance(obj, dict):
+        for value in obj.values():
+            yield from iter_strings(value)
+    elif isinstance(obj, (list, tuple)):
+        for value in obj:
+            yield from iter_strings(value)
+
+
 def redact(text: str, *, mode: str | None = None) -> str:
     """Replace detected secrets with [REDACTED:<name>].
 
@@ -144,3 +188,7 @@ def redact(text: str, *, mode: str | None = None) -> str:
         for m in reversed(pattern.matches(text)):
             text = f"{text[: m.start()]}[REDACTED:{pattern.name}]{text[m.end() :]}"
     return text
+
+
+def contains_generic_secret(text: str) -> bool:
+    return any(pattern.matches(text) for pattern in _STANDARD_PATTERNS if pattern.name == "generic_secret")

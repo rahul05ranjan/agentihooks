@@ -3,6 +3,7 @@
 import json
 import shlex
 import subprocess
+from pathlib import Path
 
 import install  # binds the installer identity conftest patches; also used directly below
 import pytest
@@ -16,25 +17,40 @@ def adapter(monkeypatch, tmp_path):
     return CodexAdapter()
 
 
+def _codex_base() -> dict:
+    return install._load_native_layer(install.PROFILES_DIR / "_base" / install._NATIVE_BASE_NAME["codex"])
+
+
+def assert_unambiguous(line: list[str]) -> None:
+    context = line.index("context-used")
+    assert line[context + 1] == "context-window-size"
+    assert not {"context-usage", "used-tokens"} & set(line)
+
+
 class TestConfigToml:
     @pytest.mark.parametrize("existing", [None, "managed", "custom"])
-    def test_init_withdraws_only_automatic_model_catalog(self, adapter, existing):
-        from hooks.context.codex_context_pin import catalog_path, live_cache_path
+    def test_init_writes_no_model_catalog(self, adapter, existing):
+        from hooks import config
 
+        catalog = config.AGENTIHOOKS_HOME / "codex_model_catalog.json"
+        highwater = config.AGENTIHOOKS_HOME / "codex_context_highwater.json"
+        config.AGENTIHOOKS_HOME.mkdir(parents=True, exist_ok=True)
+        catalog.write_text(json.dumps({"models": [{"slug": "example", "max_context_window": 872000}]}))
+        highwater.write_text(json.dumps({"example": 872000}))
         home = codex_home()
         home.mkdir(parents=True, exist_ok=True)
-        live_cache_path().write_text(json.dumps({"models": [{"slug": "example", "max_context_window": 272000}]}))
-        config = home / "config.toml"
-        value = str(catalog_path()) if existing == "managed" else str(home / "custom.json")
+        config_toml = home / "config.toml"
+        value = str(catalog) if existing == "managed" else str(home / "custom.json")
         if existing:
-            config.write_text(f'model_catalog_json = "{value}"\n')
+            config_toml.write_text(f'model_catalog_json = "{value}"\n')
 
         adapter.write_settings({})
         adapter.write_settings({})
 
-        doc = adapter._load_toml(config)
+        doc = adapter._load_toml(config_toml)
         assert doc.get("model_catalog_json") == (value if existing == "custom" else None)
-        assert not catalog_path().exists()
+        assert not catalog.exists()
+        assert not highwater.exists()
 
     def test_list_value_is_managed_and_withdrawn(self, adapter):
         home = codex_home()
@@ -42,7 +58,10 @@ class TestConfigToml:
         adapter.write_settings({"project_doc_fallback_filenames": ["CLAUDE.md"]})
         text = (home / "config.toml").read_text()
         assert 'project_doc_fallback_filenames = ["CLAUDE.md"]' in text
-        assert text.count("CLAUDE.md") == 2  # the key and its managed record
+        assert text.count("CLAUDE.md") == 1
+        assert json.loads((home / ".agentihooks-managed.json").read_text()) == {
+            "project_doc_fallback_filenames": ["CLAUDE.md"]
+        }
         adapter.teardown()
         assert "project_doc_fallback_filenames" not in (home / "config.toml").read_text()
 
@@ -82,6 +101,47 @@ class TestConfigToml:
         assert 'approval_policy = "never"' in text
         assert 'sandbox_mode = "danger-full-access"' in text
 
+    @pytest.mark.parametrize("recorded", [None, "older"])
+    def test_matching_posture_is_recorded_without_warning(self, adapter, capsys, recorded):
+        import tomlkit
+
+        home = codex_home()
+        home.mkdir(parents=True, exist_ok=True)
+        settings = {"approval_policy": "never", "sandbox_mode": "danger-full-access"}
+        (home / "config.toml").write_text(tomlkit.dumps(settings))
+        if recorded:
+            (home / ".agentihooks-managed.json").write_text(
+                json.dumps({"approval_policy": "on-request", "sandbox_mode": "workspace-write"})
+            )
+
+        adapter.write_settings(settings)
+
+        assert "hand-set" not in capsys.readouterr().out
+        assert json.loads((home / ".agentihooks-managed.json").read_text()) == settings
+        doc = tomlkit.parse((home / "config.toml").read_text())
+        assert {key: doc[key] for key in settings} == settings
+
+    def test_different_unrecorded_posture_warns_and_survives(self, adapter, said):
+        import tomlkit
+
+        home = codex_home()
+        home.mkdir(parents=True, exist_ok=True)
+        settings = {"approval_policy": "on-request", "sandbox_mode": "workspace-write"}
+        (home / "config.toml").write_text(tomlkit.dumps(settings))
+
+        adapter.write_settings({"approval_policy": "never", "sandbox_mode": "danger-full-access"})
+
+        warnings = [line for line in said if "hand-set" in line]
+        assert warnings == [
+            "  [!!] config.toml 'approval_policy' hand-set to 'on-request' (managed value would be "
+            "'never') — leaving operator value in place",
+            "  [!!] config.toml 'sandbox_mode' hand-set to 'workspace-write' (managed value would be "
+            "'danger-full-access') — leaving operator value in place",
+        ]
+        doc = tomlkit.parse((home / "config.toml").read_text())
+        assert {key: doc[key] for key in settings} == settings
+        assert json.loads((home / ".agentihooks-managed.json").read_text()) == {}
+
     def test_default_translation_does_not_override_operator_choice(self, adapter):
         home = codex_home()
         home.mkdir(parents=True, exist_ok=True)
@@ -102,9 +162,7 @@ class TestConfigToml:
     def test_operator_hand_set_approval_policy_survives_reinit(self, adapter, capsys):
         adapter.write_settings({"approval_policy": "on-request", "sandbox_mode": "workspace-write"})
         home = codex_home()
-        # Operator hand-edits the live key only — not our internal [agentihooks.managed]
-        # record, which they don't know exists. count=1 hits the first (top-level)
-        # occurrence; the managed-table copy is left as our own record.
+        # Operator hand-edits the live key only — not our sidecar record.
         text = (
             (home / "config.toml")
             .read_text()
@@ -115,6 +173,63 @@ class TestConfigToml:
         text = (home / "config.toml").read_text()
         assert 'approval_policy = "untrusted"' in text
         assert "hand-set" in capsys.readouterr().out
+
+    def test_config_carries_no_table_codex_ignores(self, adapter):
+        adapter.write_settings({"approval_policy": "never", "tui": {"status_line": ["model"]}})
+        home = codex_home()
+        assert "agentihooks" not in adapter._load_toml(home / "config.toml")
+        record = {"approval_policy": "never", "tui": {"status_line": ["model"]}}
+        assert (home / ".agentihooks-managed.json").read_text() == json.dumps(record, indent=2) + "\n"
+
+    def test_unreadable_sidecar_falls_back_to_the_legacy_table(self, adapter, capsys):
+        home = codex_home()
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "config.toml").write_text(
+            'approval_policy = "untrusted"\n\n[agentihooks.managed]\napproval_policy = "on-request"\n'
+        )
+        (home / ".agentihooks-managed.json").write_text("{not json")
+        adapter.write_settings({"approval_policy": "never"})
+        assert adapter._load_toml(home / "config.toml")["approval_policy"] == "untrusted"
+        assert "hand-set" in capsys.readouterr().out
+
+    def test_legacy_managed_table_moves_to_the_sidecar(self, adapter, capsys):
+        home = codex_home()
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "config.toml").write_text(
+            'approval_policy = "untrusted"\n\n[agentihooks.managed]\napproval_policy = "on-request"\n'
+        )
+        adapter.write_settings({"approval_policy": "never"})
+        doc = adapter._load_toml(home / "config.toml")
+        assert "agentihooks" not in doc
+        assert doc["approval_policy"] == "untrusted"
+        assert "hand-set" in capsys.readouterr().out
+        assert json.loads((home / ".agentihooks-managed.json").read_text()) == {"approval_policy": "on-request"}
+
+    def test_status_line_keeps_context_apart_from_cumulative_tokens(self, adapter):
+        old = ["model-with-reasoning", "current-dir", "context-usage", "used-tokens", "five-hour-limit"]
+        adapter.write_settings({"tui": {"status_line": old}})
+        adapter.write_settings(_codex_base())
+        assert_unambiguous(adapter._load_toml(codex_home() / "config.toml")["tui"]["status_line"])
+
+    @pytest.mark.parametrize("reinstall", [False, True])
+    def test_installed_config_suppresses_quota_model_switch_prompt(self, adapter, reinstall):
+        if reinstall:
+            adapter.write_settings({"notice": {"hide_rate_limit_model_nudge": False}})
+        adapter.write_settings({"model": "gpt-6.1-sol"})
+        adapter.write_settings(_codex_base())
+        config = adapter._load_toml(codex_home() / "config.toml")
+        prompt = (Path(__file__).parent / "fixtures" / "codex_rate_limit_switch_prompt.snap").read_text()
+        assert config.get("notice", {}).get("hide_rate_limit_model_nudge") is True, prompt
+        assert config["model"] == "gpt-6.1-sol"
+
+    def test_operator_status_line_survives_reinit(self, adapter):
+        adapter.write_settings(_codex_base())
+        config = codex_home() / "config.toml"
+        doc = adapter._load_toml(config)
+        doc["tui"]["status_line"] = ["model", "used-tokens"]
+        adapter._dump_toml(config, doc)
+        adapter.write_settings(_codex_base())
+        assert adapter._load_toml(config)["tui"]["status_line"] == ["model", "used-tokens"]
 
 
 class TestHooksJson:
@@ -160,6 +275,101 @@ class TestHooksJson:
             h for g in doc["hooks"]["SessionStart"] for h in g["hooks"] if h["command"].endswith("agentihooks-hook.sh")
         ]
         assert len(own) == 1
+
+    def test_rerun_over_unchanged_hooks_prints_no_trust_advice(self, adapter, capsys):
+        adapter.write_settings({})
+        before = (codex_home() / "hooks.json").stat().st_mtime_ns
+        capsys.readouterr()
+        adapter.write_settings({})
+        adapter.post_install_reconcile([], "")
+        out = capsys.readouterr().out
+        assert "run /hooks" not in out
+        assert "hooks.json unchanged; existing Codex hook trust holds" in out
+        assert (codex_home() / "hooks.json").stat().st_mtime_ns == before
+
+    def test_changed_hooks_file_keeps_trust_without_advice(self, adapter, capsys):
+        import tomllib
+
+        adapter.write_settings({})
+        config = codex_home() / "config.toml"
+        trusted = tomllib.loads(config.read_text())["hooks"]["state"]
+        path = codex_home() / "hooks.json"
+        doc = json.loads(path.read_text())
+        del doc["hooks"]["SessionStart"]
+        path.write_text(json.dumps(doc))
+        capsys.readouterr()
+        adapter.write_settings({})
+        adapter.post_install_reconcile([], "")
+        out = capsys.readouterr().out
+        assert "run /hooks inside codex" not in out
+        assert "Trusted" not in out
+        assert "SessionStart" in json.loads(path.read_text())["hooks"]
+        assert tomllib.loads(config.read_text())["hooks"]["state"] == trusted
+        assert len(trusted) == len(CODEX_HOOK_EVENTS)
+
+    def test_install_trusts_every_entry_including_foreign_groups(self, adapter):
+        import tomllib
+
+        from tests.codex_hook_fixtures import CODEX_HOOK_HASHES, CODEX_HOOKS
+
+        home = codex_home()
+        home.mkdir(parents=True, exist_ok=True)
+        hooks = home / "hooks.json"
+        foreign = {"Interrupt": CODEX_HOOKS["hooks"]["Interrupt"], "Stop": CODEX_HOOKS["hooks"]["Stop"][1:]}
+        hooks.write_text(json.dumps({"hooks": foreign}))
+        (home / "config.toml").write_text(f'[hooks.state."{hooks}:interrupt:0:0"]\nenabled = false\n')
+
+        adapter.write_settings({})
+
+        doc = json.loads(hooks.read_text())["hooks"]
+        label = {
+            "SessionStart": "session_start",
+            "SessionEnd": "session_end",
+            "UserPromptSubmit": "user_prompt_submit",
+            "PreToolUse": "pre_tool_use",
+            "PostToolUse": "post_tool_use",
+            "Stop": "stop",
+            "SubagentStart": "subagent_start",
+            "SubagentStop": "subagent_stop",
+            "PreCompact": "pre_compact",
+            "PermissionRequest": "permission_request",
+            "Interrupt": "interrupt",
+        }
+        entries = {
+            f"{hooks}:{label[event]}:{g}:{h}"
+            for event, groups in doc.items()
+            for g, group in enumerate(groups)
+            for h, _ in enumerate(group["hooks"])
+        }
+        state = tomllib.loads((home / "config.toml").read_text())["hooks"]["state"]
+        assert set(state) == entries
+        assert state[f"{hooks}:interrupt:0:0"] == {"enabled": False, "trusted_hash": CODEX_HOOK_HASHES["interrupt:0:0"]}
+        assert state[f"{hooks}:interrupt:1:0"] == {"trusted_hash": CODEX_HOOK_HASHES["interrupt:1:0"]}
+        assert state[f"{hooks}:stop:1:0"] == {"trusted_hash": CODEX_HOOK_HASHES["stop:1:0"]}
+
+    def test_reinstall_over_trusted_hooks_leaves_config_untouched(self, adapter, capsys):
+        adapter.write_settings({})
+        config = codex_home() / "config.toml"
+        assert f"[OK] Trusted {len(CODEX_HOOK_EVENTS)} Codex hook entries in {config}" in capsys.readouterr().out
+        text = config.read_text()
+        adapter.write_settings({})
+        assert "Trusted" not in capsys.readouterr().out
+        assert config.read_text() == text
+
+    @pytest.mark.parametrize("ours_first", [True, False])
+    def test_reinstall_keeps_own_group_first_so_codex_trust_positions_hold(self, adapter, ours_first):
+        """Codex keys hook trust by `hooks.json:<event>:<group>:<hook>`; moving a group voids its approval."""
+        home = codex_home()
+        home.mkdir(parents=True, exist_ok=True)
+        ours = {"hooks": [{"type": "command", "command": str(home / "agentihooks-hook.sh")}]}
+        herdr = {"hooks": [{"type": "command", "command": "bash herdr-agent-state.sh session", "timeout": 10}]}
+        groups = [ours, herdr] if ours_first else [herdr, ours]
+        (home / "hooks.json").write_text(json.dumps({"hooks": {"SessionStart": groups}}))
+        adapter.write_settings({})
+        commands = [
+            g["hooks"][0]["command"] for g in json.loads((home / "hooks.json").read_text())["hooks"]["SessionStart"]
+        ]
+        assert commands == [str(home / "agentihooks-hook.sh"), "bash herdr-agent-state.sh session"]
 
     def test_disabled_foreign_hook_with_wrapper_suffix_preserved(self, adapter):
         """A substring match would misclassify `<wrapper>.disabled-by-operator` as ours."""
@@ -327,50 +537,24 @@ class TestPersona:
 
 
 class TestPrompts:
-    def _layer(self, tmp_path, name, text):
+    def _commands(self, tmp_path):
         d = tmp_path / "commands"
         d.mkdir(exist_ok=True)
-        (d / name).write_text(text)
-        return d
+        (d / "deploy.md").write_text("---\ndescription: Deploy\n---\n\nDeploy now.\n")
+        return [("command", d)]
 
-    def test_frontmatter_rewritten(self, adapter, tmp_path):
-        src = self._layer(
-            tmp_path,
-            "deploy.md",
-            "---\ndescription: Deploy the stack\nallowed-tools: Bash\n---\n\nDeploy $ARGUMENTS now.\n",
-        )
-        adapter.install_features("commands", [("command", src)], lambda p: p.suffix == ".md")
-        out = (codex_home() / "prompts" / "deploy.md").read_text()
-        assert "description: Deploy the stack" in out
-        assert "allowed-tools" not in out
-        assert "Deploy $ARGUMENTS now." in out
+    def test_commands_write_no_prompts_folder(self, adapter, tmp_path):
+        adapter.install_features("commands", self._commands(tmp_path), lambda p: p.suffix == ".md")
+        assert not (codex_home() / "prompts").exists()
 
-    def test_stale_prompts_removed_on_rerun(self, adapter, tmp_path):
-        src = self._layer(tmp_path, "old.md", "body")
-        adapter.install_features("commands", [("command", src)], lambda p: p.suffix == ".md")
-        assert (codex_home() / "prompts" / "old.md").exists()
-        (src / "old.md").unlink()
-        (src / "new.md").write_text("body2")
-        adapter.install_features("commands", [("command", src)], lambda p: p.suffix == ".md")
-        assert not (codex_home() / "prompts" / "old.md").exists()
-        assert (codex_home() / "prompts" / "new.md").exists()
-
-    def test_operator_file_not_overwritten_on_first_init(self, adapter, tmp_path):
-        """A file the manifest has never claimed is an operator file — it wins."""
+    def test_prompts_an_earlier_install_wrote_are_removed(self, adapter, tmp_path):
         dst_dir = codex_home() / "prompts"
         dst_dir.mkdir(parents=True)
-        (dst_dir / "deploy.md").write_text("# operator's own prompt\n")
-        src = self._layer(tmp_path, "deploy.md", "body from agentihooks")
-        adapter.install_features("commands", [("command", src)], lambda p: p.suffix == ".md")
-        assert (dst_dir / "deploy.md").read_text() == "# operator's own prompt\n"
-
-    def test_manifest_owned_prompt_still_overwritten_on_rerun(self, adapter, tmp_path):
-        src = self._layer(tmp_path, "deploy.md", "body v1")
-        adapter.install_features("commands", [("command", src)], lambda p: p.suffix == ".md")
-        assert "body v1" in (codex_home() / "prompts" / "deploy.md").read_text()
-        (src / "deploy.md").write_text("body v2")
-        adapter.install_features("commands", [("command", src)], lambda p: p.suffix == ".md")
-        assert "body v2" in (codex_home() / "prompts" / "deploy.md").read_text()
+        (dst_dir / "deploy.md").write_text("translated by an earlier install\n")
+        (dst_dir / "mine.md").write_text("# operator's own prompt\n")
+        (dst_dir / ".agentihooks-manifest.json").write_text('["gone.md", "deploy.md"]')
+        adapter.install_features("commands", self._commands(tmp_path), lambda p: p.suffix == ".md")
+        assert sorted(p.name for p in dst_dir.iterdir()) == ["mine.md"]
 
 
 class TestMcp:
@@ -402,7 +586,7 @@ class TestMcp:
         assert 'bearer_token_env_var = "MCP_GATEWAY_KEY"' in text
         assert "${MCP_GATEWAY_KEY}" not in text, "placeholder must never land literally"
         assert "${OTHER}" not in text
-        assert "reference" in capsys.readouterr().out
+        assert 'X-Env = "OTHER"' in text
 
     def test_unbraced_bearer_maps_to_env_var(self, adapter):
         adapter.register_mcp(
@@ -411,12 +595,35 @@ class TestMcp:
         text = (codex_home() / "config.toml").read_text()
         assert 'bearer_token_env_var = "GW_TOKEN"' in text
 
-    def test_unbraced_non_bearer_reference_dropped(self, adapter, capsys):
-        adapter.register_mcp(
-            {"gw": {"type": "http", "url": "https://gw.example/mcp", "headers": {"X-Tok": "$MY_TOKEN"}}}
-        )
-        assert "$MY_TOKEN" not in (codex_home() / "config.toml").read_text()
-        assert "reference" in capsys.readouterr().out
+    def test_whole_header_reference_maps_to_env_http_headers(self, adapter, capsys):
+        import tomllib
+
+        headers = {"X-Env": "${OTHER}", "X-Tok": "$MY_TOKEN", "X-Mix": "pre-${MIX}", "X-Def": "${D:-x}"}
+        adapter.register_mcp({"gw": {"type": "http", "url": "https://gw.example/mcp", "headers": headers}})
+        entry = tomllib.loads((codex_home() / "config.toml").read_text())["mcp_servers"]["gw"]
+        assert entry == {"url": "https://gw.example/mcp", "env_http_headers": {"X-Env": "OTHER", "X-Tok": "MY_TOKEN"}}
+        printed = " ".join(capsys.readouterr().out.split())
+        for header in ("X-Mix", "X-Def"):
+            assert f"MCP 'gw' header '{header}' uses a ${{VAR}}/$VAR reference" in printed
+
+    def test_tool_allowlist_and_denylist_survive(self, adapter):
+        import tomllib
+
+        tools = ["lf-swarm_traces_by_tag", "lf-swarm_session_timeline"]
+        spec = {"type": "http", "url": "https://gw.example/mcp", "enabled_tools": tools, "disabled_tools": ["lf-x"]}
+        adapter.register_mcp({"gw": spec})
+        entry = tomllib.loads((codex_home() / "config.toml").read_text())["mcp_servers"]["gw"]
+        assert entry == {"url": "https://gw.example/mcp", "enabled_tools": tools, "disabled_tools": ["lf-x"]}
+
+    def test_entry_names_why_a_server_cannot_mount(self):
+        from scripts.targets.codex_target import codex_mcp_entry
+
+        tok = "ghp_" + "h" * 36
+        assert codex_mcp_entry("s", {"type": "sse", "url": "http://x/sse"}) == (None, "codex has no SSE transport")
+        assert codex_mcp_entry("n", {"type": "http"}) == (None, "no command or url")
+        credentialed = codex_mcp_entry("c", {"type": "http", "url": f"https://u:{tok}@g.example/mcp"})
+        assert credentialed == (None, "credential-shaped literal in url, command or args")
+        assert codex_mcp_entry("ok", {"command": "/bin/a"}) == ({"command": "/bin/a"}, "")
 
     def test_credential_in_url_drops_the_whole_server(self, adapter, capsys):
         tok = "ghp_" + "h" * 36
@@ -460,6 +667,18 @@ class TestMcp:
         adapter.register_mcp({"local": {"command": "/py", "env": {"UPSTREAM_KEY": "${MY_TOKEN}"}}})
         assert "${MY_TOKEN}" in (codex_home() / "config.toml").read_text()
 
+    def test_env_reference_resolved_by_bash_wrapper(self, adapter):
+        import tomllib
+
+        adapter.register_mcp(
+            {"pw": {"command": "cmd.exe", "args": ["/c", "npx"], "env": {"TOKEN": "${SRC_TOKEN}", "WSLENV": "TOKEN"}}}
+        )
+        entry = tomllib.loads((codex_home() / "config.toml").read_text())["mcp_servers"]["pw"]
+        assert entry["command"] == "bash"
+        assert entry["args"] == ["-c", 'TOKEN="${SRC_TOKEN}" exec "$0" "$@"', "cmd.exe", "/c", "npx"]
+        assert entry["env_vars"] == ["SRC_TOKEN"]
+        assert entry["env"] == {"WSLENV": "TOKEN"}
+
     def test_credential_shaped_env_var_dropped(self, adapter, capsys):
         dummy_key = "AKIA" + "TESTDUMMY0000000"
         adapter.register_mcp(
@@ -485,6 +704,138 @@ class TestMcp:
         from scripts.targets.codex_target import agents_skills_home
 
         assert (agents_skills_home() / "my-skill").exists()
+
+
+@pytest.fixture
+def said(monkeypatch):
+    from scripts.targets._common import _install_module
+
+    lines: list[str] = []
+    monkeypatch.setattr(_install_module(), "_cprint", lambda msg, **kwargs: lines.append(msg))
+    return lines
+
+
+class TestCodexEntry:
+    def test_stdio_keeps_command_args_and_forwards_references(self, said):
+        from scripts.targets.codex_target import codex_mcp_entry
+
+        dummy = "AKIA" + "TESTDUMMY0000000"
+        spec = {"command": "/py", "args": ["-m", "s"], "env": {"KEY": dummy, "REF": "${SRC}", "LIT": "1"}}
+        assert codex_mcp_entry("loc", spec) == (
+            {
+                "command": "bash",
+                "args": ["-c", 'REF="${SRC}" exec "$0" "$@"', "/py", "-m", "s"],
+                "env": {"LIT": "1"},
+                "env_vars": ["SRC"],
+            },
+            "",
+        )
+        assert said == [
+            "  [!!] MCP 'loc' env var 'KEY' looks like a credential (aws_access_key) — dropped from config.toml. "
+            "Export it in the shell environment instead of writing it to disk."
+        ]
+
+    def test_strict_secrets_are_dropped_and_every_finding_named(self, said):
+        from scripts.targets.codex_target import codex_mcp_entry
+
+        both = "AKIA" + "TESTDUMMY0000000 " + "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefghijklmnop"
+        assert codex_mcp_entry("loc", {"command": "/py", "env": {"KEY": both}}) == ({"command": "/py"}, "")
+        assert codex_mcp_entry("gw", {"url": "https://g.example", "headers": {"K": both}}) == (
+            {"url": "https://g.example"},
+            "",
+        )
+        assert said == [
+            "  [!!] MCP 'loc' env var 'KEY' looks like a credential (aws_access_key, jwt_token) — dropped from "
+            "config.toml. Export it in the shell environment instead of writing it to disk.",
+            "  [!!] MCP 'gw' header 'K' looks like a credential (aws_access_key, jwt_token) — dropped from config.toml. "
+            "Reference it via Authorization Bearer ${VAR} (mapped to bearer_token_env_var) instead of a literal value.",
+        ]
+
+    def test_credential_in_args_names_the_server_and_file(self, said):
+        from scripts.targets.codex_target import codex_mcp_entry
+
+        tok = "ghp_" + "h" * 36
+        assert codex_mcp_entry("leak", {"command": "/a", "args": ["--t", tok]}) == (
+            None,
+            "credential-shaped literal in url, command or args",
+        )
+        assert said == [
+            "  [!!] MCP 'leak' carries credential-shaped literals in args[1] (github_token) — server NOT written to "
+            "config.toml. Reference secrets via environment variables instead of embedding the value."
+        ]
+
+    def test_stdio_without_args_or_env_is_only_its_command(self, said):
+        from scripts.targets.codex_target import codex_mcp_entry
+
+        assert codex_mcp_entry("a", {"command": "/a", "args": [], "env": {}}) == ({"command": "/a"}, "")
+        assert said == []
+
+    def test_http_headers_split_by_how_codex_can_send_them(self, said):
+        from scripts.targets.codex_target import codex_mcp_entry
+
+        dummy = "AKIA" + "TESTDUMMY0000000"
+        headers = {
+            "authorization": "Bearer ${GW}",
+            "Host": "h.example",
+            "X-Env": "${E}",
+            "X-Bare": "$B",
+            "X-Mix": "a-${M}",
+            "X-Key": dummy,
+        }
+        entry, reason = codex_mcp_entry("gw", {"url": "https://g.example/mcp", "headers": headers})
+        assert reason == ""
+        assert entry == {
+            "url": "https://g.example/mcp",
+            "bearer_token_env_var": "GW",
+            "http_headers": {"Host": "h.example"},
+            "env_http_headers": {"X-Env": "E", "X-Bare": "B"},
+        }
+        assert said == [
+            "  [!!] MCP 'gw' header 'X-Mix' uses a ${VAR}/$VAR reference inside a longer value — codex does not "
+            "expand these; header dropped. Make the whole value one ${VAR} (mapped to env_http_headers) or an "
+            "Authorization Bearer ${VAR} (mapped to bearer_token_env_var).",
+            "  [!!] MCP 'gw' header 'X-Key' looks like a credential (aws_access_key) — dropped from config.toml. "
+            "Reference it via Authorization Bearer ${VAR} (mapped to bearer_token_env_var) instead of a literal value.",
+        ]
+
+    def test_a_non_authorization_bearer_header_is_an_env_header_only_when_whole(self, said):
+        from scripts.targets.codex_target import codex_mcp_entry
+
+        entry, _ = codex_mcp_entry("gw", {"url": "https://g.example/mcp", "headers": {"X-Proxy": "Bearer ${P}"}})
+        assert entry == {"url": "https://g.example/mcp"}
+
+    def test_filters_copy_and_empty_filters_stay_out(self, said):
+        from scripts.targets.codex_target import codex_mcp_entry
+
+        spec = {"url": "https://g.example/mcp", "enabled_tools": ("a", "b"), "disabled_tools": []}
+        assert codex_mcp_entry("gw", spec) == ({"url": "https://g.example/mcp", "enabled_tools": ["a", "b"]}, "")
+
+    def test_declared_approval_mode_reaches_codex(self, said):
+        from scripts.targets.codex_target import codex_mcp_entry
+
+        spec = {"url": "https://g.example/mcp", "default_tools_approval_mode": "approve"}
+        assert codex_mcp_entry("gw", spec) == (
+            {"url": "https://g.example/mcp", "default_tools_approval_mode": "approve"},
+            "",
+        )
+        assert codex_mcp_entry("gw", {**spec, "default_tools_approval_mode": ""}) == (
+            {"url": "https://g.example/mcp"},
+            "",
+        )
+
+    def test_unmountable_servers_say_why(self, said):
+        from scripts.targets.codex_target import codex_mcp_entry
+
+        assert codex_mcp_entry("old", {"type": "sse", "url": "http://x/sse"}) == (None, "codex has no SSE transport")
+        assert codex_mcp_entry("cmd-sse", {"type": "sse", "command": "/a"}) == (None, "codex has no SSE transport")
+        assert codex_mcp_entry("typed", {"type": "http", "command": "/a"}) == ({"command": "/a"}, "")
+        assert codex_mcp_entry("none", {}) == (None, "no command or url")
+        assert said == [
+            "  [!!] MCP 'old' uses SSE — codex has no SSE transport; skipped. "
+            "Expose a streamable-HTTP endpoint and re-run init.",
+            "  [!!] MCP 'cmd-sse' uses SSE — codex has no SSE transport; skipped. "
+            "Expose a streamable-HTTP endpoint and re-run init.",
+        ]
 
 
 class TestPersonaIdentityNaming:
@@ -623,7 +974,28 @@ class TestTeardown:
         assert "agentihooks" not in text
         assert "notify" not in text
         assert "project_doc_max_bytes" not in text
+        assert not (home / ".agentihooks-managed.json").exists()
         assert install._global_record(install._load_state(), "codex").get("managed_mcp") is None
+
+    def test_legacy_install_without_sidecar_tears_down(self, adapter):
+        home = codex_home()
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "config.toml").write_text(
+            'approval_policy = "never"\n\n[agentihooks.managed]\napproval_policy = "never"\n'
+        )
+        adapter.teardown()
+        assert "approval_policy" not in adapter._load_toml(home / "config.toml")
+
+    def test_unrecorded_approval_policy_stays_with_a_warning(self, adapter, capsys):
+        home = codex_home()
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "config.toml").write_text('approval_policy = "never"\n')
+        adapter.teardown()
+        assert adapter._load_toml(home / "config.toml")["approval_policy"] == "never"
+        assert (
+            "  [!!] no managed-key record — approval_policy/sandbox_mode left as-is; review them "
+            '(a torn-down bypass install would have set "never"/"danger-full-access").'
+        ) in capsys.readouterr().out
 
     def test_preserves_operator_content(self, adapter, tmp_path):
         import tomlkit
@@ -708,3 +1080,139 @@ class TestTeardownDestructiveEdges:
         assert not (home / "hooks.json").exists()
         baks = list(home.glob("hooks*.bak*"))
         assert baks and any("operator_hook_i_care_about" in b.read_text() for b in baks)
+
+
+def _hooks_file(home, session_start):
+    home.mkdir(parents=True, exist_ok=True)
+    doc = {"hooks": {"Notes": "kept", "SessionStart": session_start, "Stop": [_own_group(home), _HERDR]}}
+    (home / "hooks.json").write_text(json.dumps(doc, indent=2))
+    return home / "hooks.json"
+
+
+def _own_group(home):
+    return {"hooks": [{"type": "command", "command": str(home / "agentihooks-hook.sh")}]}
+
+
+_HERDR = {"hooks": [{"command": "bash herdr-agent-state.sh session", "timeout": 10, "type": "command"}]}
+
+
+class TestRestoreHookOrder:
+    def test_a_drifted_file_gets_the_agentihooks_group_back_first(self, adapter):
+        from scripts.targets.codex_target import restore_hook_order
+
+        home = codex_home()
+        path = _hooks_file(home, [_HERDR, _own_group(home)])
+
+        assert restore_hook_order(home) == ["SessionStart"]
+        assert json.loads(path.read_text())["hooks"] == {
+            "Notes": "kept",
+            "SessionStart": [_own_group(home), _HERDR],
+            "Stop": [_own_group(home), _HERDR],
+        }
+
+    def test_every_drifted_event_is_restored(self, adapter):
+        from scripts.targets.codex_target import restore_hook_order
+
+        home = codex_home()
+        path = _hooks_file(home, [_HERDR, _own_group(home)])
+        doc = json.loads(path.read_text())
+        doc["hooks"]["Stop"].reverse()
+        path.write_text(json.dumps(doc))
+
+        assert restore_hook_order(home) == ["SessionStart", "Stop"]
+        assert json.loads(path.read_text())["hooks"]["Stop"] == [_own_group(home), _HERDR]
+
+    def test_a_restored_order_is_trusted_at_its_new_positions(self, adapter):
+        import tomllib
+
+        from scripts.targets.codex_hook_trust import hook_hash
+        from scripts.targets.codex_target import restore_hook_order
+
+        home = codex_home()
+        path = _hooks_file(home, [_HERDR, _own_group(home)])
+        (home / "config.toml").write_text(f'[hooks.state."{path}:session_start:0:0"]\nenabled = true\n')
+
+        assert restore_hook_order(home) == ["SessionStart"]
+        state = tomllib.loads((home / "config.toml").read_text())["hooks"]["state"]
+        ours, herdr = _own_group(home)["hooks"][0], _HERDR["hooks"][0]
+        assert state == {
+            f"{path}:session_start:0:0": {"enabled": True, "trusted_hash": hook_hash("SessionStart", None, ours)},
+            f"{path}:session_start:1:0": {"trusted_hash": hook_hash("SessionStart", None, herdr)},
+            f"{path}:stop:0:0": {"trusted_hash": hook_hash("Stop", None, ours)},
+            f"{path}:stop:1:0": {"trusted_hash": hook_hash("Stop", None, herdr)},
+        }
+
+    def test_an_approved_order_writes_no_trust(self, adapter):
+        from scripts.targets.codex_target import restore_hook_order
+
+        home = codex_home()
+        _hooks_file(home, [_own_group(home), _HERDR])
+
+        assert restore_hook_order(home) == []
+        assert "hooks" not in CodexAdapter._load_toml(home / "config.toml")
+
+    @pytest.mark.parametrize(
+        ("environ", "expected"),
+        [
+            ({"CODEX_HOME": " ~/cx , /other", "HOME": "/h"}, "~/cx"),
+            ({"HOME": "/h"}, "/h/.codex"),
+            ({}, "~/.codex"),
+        ],
+    )
+    def test_the_codex_home_comes_from_the_given_environment(self, environ, expected):
+        assert codex_home(environ) == Path(expected).expanduser()
+
+    def test_an_approved_file_is_left_untouched(self, adapter):
+        from scripts.targets.codex_target import restore_hook_order
+
+        home = codex_home()
+        path = _hooks_file(home, [_own_group(home), _HERDR])
+        before = (path.read_text(), path.stat().st_mtime_ns)
+
+        assert restore_hook_order(home) == []
+        assert (path.read_text(), path.stat().st_mtime_ns) == before
+
+    def test_a_rendered_home_restores_the_operator_file_through_its_link(self, adapter, tmp_path):
+        from scripts.targets.codex_target import restore_hook_order
+
+        operator = codex_home()
+        path = _hooks_file(operator, [_HERDR, _own_group(operator)])
+        rendered = tmp_path / "profiles" / "engineer" / "codex"
+        rendered.mkdir(parents=True)
+        (rendered / "hooks.json").symlink_to(path)
+
+        assert restore_hook_order(rendered) == ["SessionStart"]
+        assert (rendered / "hooks.json").is_symlink()
+        assert json.loads(path.read_text())["hooks"]["SessionStart"] == [_own_group(operator), _HERDR]
+        for home, hooks in ((rendered, rendered / "hooks.json"), (path.parent, path)):
+            state = CodexAdapter._load_toml(home / "config.toml")["hooks"]["state"]
+            assert sorted(state) == sorted(
+                f"{hooks}:{event}:{group}:0" for event in ("session_start", "stop") for group in (0, 1)
+            )
+
+    @pytest.mark.parametrize("text", [None, "{not json", '{"hooks": []}'])
+    def test_a_missing_or_unreadable_file_is_left_alone(self, adapter, text):
+        from scripts.targets.codex_target import restore_hook_order
+
+        home = codex_home()
+        home.mkdir(parents=True, exist_ok=True)
+        if text is not None:
+            (home / "hooks.json").write_text(text)
+
+        assert restore_hook_order(home) == []
+        assert (home / "hooks.json").exists() is (text is not None)
+
+    def test_the_restored_file_matches_what_init_writes(self, adapter):
+        from scripts.targets.codex_target import restore_hook_order
+
+        home = codex_home()
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "hooks.json").write_text(json.dumps({"hooks": {"SessionStart": [_HERDR]}}))
+        adapter.write_settings({})
+        installed = (home / "hooks.json").read_text()
+        doc = json.loads(installed)
+        doc["hooks"]["SessionStart"].reverse()
+        (home / "hooks.json").write_text(json.dumps(doc, indent=2))
+
+        assert restore_hook_order(home) == ["SessionStart"]
+        assert (home / "hooks.json").read_text() == installed

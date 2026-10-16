@@ -1,0 +1,96 @@
+name: Test leaks
+
+# Shard placement shifts whenever a test is added, so a test that leaks state into a
+# later one turns unrelated pull requests red at random; one process shows it on dev.
+on:
+  # GitHub fires a schedule only from the default branch, main; the job tests dev.
+  schedule:
+    - cron: "23 */6 * * *"
+  # A change to the sweep is proven by dispatching it on its branch; a pull request
+  # run would spend an hour outside Gate Required.
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.event_name == 'workflow_dispatch' && format('hosted-lane-{0}', ((endsWith(github.run_id, '0') || endsWith(github.run_id, '1') || endsWith(github.run_id, '2')) && 'a') || ((endsWith(github.run_id, '3') || endsWith(github.run_id, '4') || endsWith(github.run_id, '5')) && 'b') || 'c') || format('test-leaks-{0}', github.ref) }}
+  queue: ${{ github.event_name == 'workflow_dispatch' && 'max' || 'single' }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+
+permissions:
+  contents: read
+
+jobs:
+  one-process:
+    runs-on: ${{ (github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.actor) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.triggering_actor) || (github.event_name == 'merge_group' || github.event_name == 'push' && github.ref == 'refs/heads/dev') && github.actor == 'github-merge-queue[bot]' && (github.triggering_actor == 'github-merge-queue[bot]' || contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.triggering_actor))) && 'anton-oss-batch' || 'ubuntu-latest' }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        order: [fixed, random]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'dev' || '' }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          version: "0.12.23"
+          enable-cache: false
+
+      - name: Install dependencies
+        run: uv pip install --system --excludes .github/test-excludes.txt -e ".[dev,all]"
+
+      - name: Run the whole suite in one process
+        id: suite
+        env:
+          SEED: ${{ matrix.order == 'random' && github.run_id || '' }}
+          PYTHONUNBUFFERED: "1"
+        run: python -m pytest tests/ -n 0 -q -rfE --tb=short --report-log=run.jsonl ${SEED:+--random-order-seed=$SEED}
+
+      - name: Name each leaking pair
+        id: pairs
+        if: failure() && steps.suite.outcome == 'failure'
+        env:
+          ORDER: ${{ matrix.order }}
+        run: python -m tests.leaks pairs run.jsonl "leaks-$ORDER.json" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the findings for the follow up job
+        id: keep
+        if: failure() && steps.suite.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: leaks-${{ matrix.order }}
+          path: leaks-${{ matrix.order }}.json
+          retention-days: 14
+
+  # One job opens every follow up, so a pair both orders find gets one issue.
+  followup:
+    needs: one-process
+    if: ${{ failure() && (github.event_name == 'schedule' || github.ref == 'refs/heads/dev') }}
+    runs-on: ${{ (github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.actor) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.triggering_actor) || (github.event_name == 'merge_group' || github.event_name == 'push' && github.ref == 'refs/heads/dev') && github.actor == 'github-merge-queue[bot]' && (github.triggering_actor == 'github-merge-queue[bot]' || contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.triggering_actor))) && 'anton-oss-light' || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'dev' || '' }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: leaks-*
+          merge-multiple: true
+
+      - name: Open a follow up per finding
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m tests.leaks followup "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" leaks-*.json

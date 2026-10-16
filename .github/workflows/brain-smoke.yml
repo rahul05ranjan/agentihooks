@@ -1,46 +1,43 @@
 name: brain-smoke
 
 on:
-  pull_request:
-    paths:
-      - 'hooks/telemetry.py'
-      - 'hooks/common.py'
-      - 'hooks/context/brain_adapter.py'
-      - 'hooks/context/brain_writer_hook.py'
-      - 'hooks/context/broadcast.py'
-      - 'scripts/brain-smoke'
-      - 'pyproject.toml'
-      - '.github/workflows/brain-smoke.yml'
+  workflow_call:
   workflow_dispatch:
-
-concurrency:
-  group: brain-smoke-${{ github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow == 'brain-smoke' && format('hosted-lane-{0}', ((endsWith(github.run_id, '0') || endsWith(github.run_id, '1') || endsWith(github.run_id, '2')) && 'a') || ((endsWith(github.run_id, '3') || endsWith(github.run_id, '4') || endsWith(github.run_id, '5')) && 'b') || 'c') || format('brain-smoke-{0}', github.run_id) }}
+  queue: ${{ github.workflow == 'brain-smoke' && 'max' || 'single' }}
+
 jobs:
   smoke:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name != 'pull_request_target' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.actor) && contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.triggering_actor) || (github.event_name == 'merge_group' || github.event_name == 'push' && github.ref == 'refs/heads/dev') && github.actor == 'github-merge-queue[bot]' && (github.triggering_actor == 'github-merge-queue[bot]' || contains(fromJSON('["nestorcolt","agenticore-app[bot]","tcc-main-ci[bot]"]'), github.triggering_actor))) && (github.event_name == 'merge_group' && 'anton-oss-queue' || 'anton-oss') || 'ubuntu-latest' }}
+    timeout-minutes: 5
     services:
       otel-collector:
-        image: otel/opentelemetry-collector-contrib:0.96.0
+        image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.96.0
         ports:
           - 4318:4318
           - 4317:4317
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          version: "0.12.23"
+          # Published sha256 of uv-x86_64-unknown-linux-gnu.tar.gz; this setup-uv release knows checksums only up to 0.12.17.
+          checksum: "9167d72b3319674b6303c4cbe071854bba13ebdf3d76b1a7cbdc175471fb66d6"
+          enable-cache: false
 
       - name: Create venv and install
         run: |

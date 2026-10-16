@@ -203,6 +203,7 @@ class TestCheckMcp:
         with (
             patch("scripts.status_checker.Path.home", return_value=tmp_path),
             patch("scripts.status_checker.CLAUDE_HOME", tmp_path / ".claude"),
+            patch("scripts.status_checker._query_mcp_tools", return_value=None),
         ):
             (tmp_path / ".claude").mkdir()
             result = check_mcp()
@@ -212,6 +213,29 @@ class TestCheckMcp:
             assert result["servers"]["test-server"]["type"] == "stdio"
             assert result["servers"]["test-http"]["type"] == "http"
             assert result["ok"] is True
+
+    @pytest.mark.parametrize(
+        ("cached_at", "expected"),
+        [
+            ("2026-01-01T12:00:00+00:00", {"fixture": 8}),
+            ("2026-01-01T11:00:00+00:00", {}),
+        ],
+    )
+    def test_cache_lifetime(self, tmp_path, monkeypatch, cached_at, expected):
+        from datetime import datetime, timezone
+
+        from scripts import status_checker
+
+        cache = tmp_path / "counts.json"
+        cache.write_text(json.dumps({"_cached_at": cached_at, "servers": {"fixture": 8}}))
+        monkeypatch.setattr(status_checker, "_MCP_CACHE_FILE", cache)
+        monkeypatch.setattr(status_checker, "_MCP_CACHE_TTL", 600)
+        now = datetime(2026, 1, 1, 12, 5, tzinfo=timezone.utc)
+        parse = datetime.fromisoformat
+        with patch("datetime.datetime") as clock:
+            clock.now.return_value = now
+            clock.fromisoformat.side_effect = parse
+            assert status_checker._load_tool_cache() == expected
 
 
 class TestCheckOtel:
@@ -394,6 +418,30 @@ class TestHookInjectionProbe:
                 "PostToolUse",
                 "Stop",
             }
+
+    def test_check_hook_injection_starts_the_five_events_side_by_side(self):
+        import subprocess
+        import threading
+
+        from scripts.status_checker import check_hook_injection
+
+        barrier = threading.Barrier(5, timeout=5)
+
+        def fake_run(cmd, **kwargs):
+            barrier.wait()
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with patch("subprocess.run", side_effect=fake_run):
+            result = check_hook_injection()
+
+        assert [ev["event"] for ev in result["events"]] == [
+            "SessionStart",
+            "UserPromptSubmit",
+            "PreToolUse",
+            "PostToolUse",
+            "Stop",
+        ]
+        assert result["ok"] is True
 
 
 class TestFormatterTargetLines:

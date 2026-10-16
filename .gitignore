@@ -51,3 +51,10 @@ profiles/*/.claude/settings.json
 # Built-in installable features live under profiles/package/ instead.
 # Root-anchored so profiles/*/.claude/ (profile sources) stay tracked.
 /.claude/
+.mutation-gate/
+
+# Impeccable live mode runtime state; only the config is tracked
+.impeccable/live/*
+!.impeccable/live/config.json
+docs/swarm-v2/.*.lock
+collected.json

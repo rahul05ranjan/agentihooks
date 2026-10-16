@@ -225,9 +225,9 @@ Line 2 -- token counts, burn rate, lines changed, cache ratio, git branch:
 ctx: 540K/1M | burn: 23K/turn | +12-3 | cache: 67% | main
 ```
 
-Line 3 -- active agentihooks profile, settings-profile overlay, channel subscription list (read from `AGENTIHOOKS_BASE_CHANNELS` env via `hooks.config.BASE_CHANNELS`):
+Line 3 -- active agentihooks profile, settings-profile overlay, the overlays rendered into the session's home (the `overlays` its render stamp records, else `none`), channel subscription list (read from `AGENTIHOOKS_BASE_CHANNELS` env via `hooks.config.BASE_CHANNELS`). A profile launch through `select-profile` subscribes to the brain channel when the brain overlay is rendered into its home, for Claude and Codex alike:
 ```
-agentihooks: anton,brain  settings:anton,brain  channels:brain,amygdala
+agentihooks: engineer  settings:engineer  overlay:brain  channels:brain,amygdala
 ```
 
 Line 4 (conditional) -- threshold warning if fill % crosses `TOKEN_WARN_PCT` or `TOKEN_CRITICAL_PCT` or native rate limits:

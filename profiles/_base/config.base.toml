@@ -19,16 +19,21 @@ model_context_window = 1050000
 # is what makes a repo's own instructions reach codex at all.
 project_doc_fallback_filenames = ["CLAUDE.md"]
 
+[notice]
+hide_rate_limit_model_nudge = true
+
 [features]
 # The whole hook layer is dead weight without this.
 hooks = true
 
 [tui]
+# No label override exists: used-tokens renders "<N> used" (cumulative), which
+# reads as current context beside "Context <N>% used".
 status_line = [
   "model-with-reasoning",
   "current-dir",
-  "context-usage",
-  "used-tokens",
+  "context-used",
+  "context-window-size",
   "five-hour-limit",
   "weekly-limit",
 ]

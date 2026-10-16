@@ -10,9 +10,10 @@ permalink: /docs/hooks/conditions/
 
 A condition is a script in a bundle or profile that runs on every tool call it
 matches. It can add context for the agent, rewrite the tool input before the tool
-runs, replace the tool output the agent sees, or deny the call. The filename is the
-whole configuration: `pre-bash.git-guard.sh` runs before every Bash call that runs
-`git`.
+runs, replace the tool output the agent sees, or deny the call. A `stop` condition
+runs when the agent stops and can keep it working. A `start` condition runs at
+SessionStart and can only add context. The filename is the whole configuration:
+`pre-bash.git-guard.sh` runs before every Bash call that runs `git`.
 
 1. TOC
 {:toc}
@@ -95,19 +96,45 @@ Files written into the bundle or a repository are ordinary working-tree changes:
 commit them the usual way to keep them.
 
 **The gate.** Agents never create, change or remove conditions on their own.
-The `UserPromptSubmit` hook arms a per-session gate only when the `prompt` field —
-the text you typed — contains one of the phrases above, not negated (*don't add a
-condition* does not arm it). Tool output, files, broadcasts and injected context
-never arm it. The gate closes at the end of the turn (`Stop`) and after an hour at
-most. While it is closed:
+A per-session gate opens on your request from one of three sources, each checked
+in code, and the hook log records which one opened it (`typed`, `ledger` or
+`relay`, with the ledger comment id):
+
+- **Typed**: the `UserPromptSubmit` hook arms it when the prompt you typed in that
+  session contains one of the phrases above, not negated (*don't add a condition*
+  does not arm it). The phrase may name the condition: *set the no code edits
+  conditions*. Background task notifications (a ledger watch event), inbox wakes,
+  idle nudges and a swarm agent's launch or handoff prompt never arm it.
+- **Ledger comment**: in a swarm agent's session, your comment holding such a
+  phrase on that agent's own task on the ledger page. Agent comments never count.
+- **Master relay**: the master's `agentihooks ledger relay tasks/<id> "<text>"
+  --quote "<your words>"` onto that task. The ledger accepts it only while the
+  master session holds your words, typed in its pane, and the gate counts it only
+  when those stored words hold such a phrase; the relay's own text never counts.
+
+Either one holds for that task, and every agent that takes it over, until the
+task is done or cancelled; it never opens the gate for another task.
+
+The last two are checked at the gated tool call. Tool output, files, broadcasts
+and injected context never open the gate. It closes at the end of the turn
+(`Stop`) and after an hour at most. While it is closed:
 
 - `condition_set` / `condition_clear` are denied in PreToolUse and refused by the
   MCP server itself;
-- `Write`, `Edit`, `MultiEdit` and `NotebookEdit` on any path under
+- `Write`, `Edit`, `MultiEdit` and `NotebookEdit` on a live path under
   `.claude/conditions/` or `.agentihooks/conditions/` are denied;
-- `Bash` commands that touch those folders are denied unless every program in
-  them only reads (`ls`, `cat`, `grep`, `find` without `-delete`/`-exec`, `git
-  add/commit/status/diff/log/push`, …) and nothing is redirected into a file.
+- `Bash` commands that touch a live conditions folder are denied unless every
+  program in them only reads (`ls`, `cat`, `grep`, `find` without
+  `-delete`/`-exec`, `git add/commit/status/diff/log/push`, …) and every redirect
+  target is an ordinary file or a staged condition path.
+
+A conditions path is **staged**, and passes without your request, when it lies
+outside the bundle, profile and runtime layers hooks read now and sits in a git
+checkout on a branch other than `main`, `master`, `dev`, `WT_BASE_BRANCH` or
+origin's HEAD: a worktree file reaches `dev` only through a reviewed pull request
+and goes live only after `agentihooks init`. Every other conditions path is live.
+A relative path counts as staged only when it resolves against the session's
+directory and each `cd` target; a path behind a shell variable counts as live.
 
 The Bash check is a pattern match and cannot see every indirect write; the MCP
 gate and the file-tool gate are exact.
@@ -120,7 +147,7 @@ gate and the file-tool gate are exact.
 
 | Part | Rule |
 |---|---|
-| `step` | `pre` (PreToolUse) or `post` (PostToolUse) |
+| `step` | `pre` (PreToolUse), `post` (PostToolUse), `stop` (Stop) or `start` (SessionStart) |
 | `matcher` | everything between the first and the last `-`; see [Matcher grammar](#matcher-grammar) |
 | `name` | the last `-` segment; use `_`, never `-` (`ls_formatter`) |
 | `.async` | optional; run detached, output ignored |
@@ -136,6 +163,10 @@ work as-is:
 ```
 pre-mcp__gateway-tools__github-create_pull_request-audit.py
 ```
+
+Stop and SessionStart have no tool, so a `stop` or `start` condition has no
+matcher: `stop-<name>[.async].<ext>` (`stop-idle.sh`), `start-<name>[.async].<ext>`
+(`start-greeting.sh`). `stop-bash-idle.sh` does not parse.
 
 ## Matcher grammar
 
@@ -178,8 +209,8 @@ matcher, where the same string matches no tool.
 
 | Variable | Value |
 |---|---|
-| `AH_STEP` | `pre` or `post` |
-| `AH_EVENT` | `PreToolUse` or `PostToolUse` |
+| `AH_STEP` | `pre`, `post`, `stop` or `start` |
+| `AH_EVENT` | `PreToolUse`, `PostToolUse`, `Stop` or `SessionStart` |
 | `AH_TOOL_NAME` | normalized tool name |
 | `AH_TOOL_USE_ID` | the call's id, for keying concurrent runs |
 | `AH_SESSION_ID`, `AH_CWD`, `AH_TRANSCRIPT_PATH`, `AH_PERMISSION_MODE` | from the payload |
@@ -218,8 +249,30 @@ the full object.
 | Code | Effect |
 |---|---|
 | `0` | stdout is applied |
-| `2` | pre: deny the call; post: block with a reason. stderr is the reason |
+| `2` | pre: deny the call; post: block with a reason; stop: keep the agent working. stderr is the reason |
 | other, or timeout | the condition is skipped, logged, and named in a one-line context note |
+
+## Stop step
+
+A `stop` condition runs on every Stop, before any other Stop work. Its stdin is the
+Stop payload: `session_id`, `cwd`, `transcript_path`, `stop_hook_active` (true when
+the agent is already continuing because a stop hook blocked) and
+`last_assistant_message`. Exit 2, or `{"decision": "deny", "reason": ...}`, blocks
+the stop: the agent keeps working with the reason in front of it, and the rest of
+the Stop handler (swarm idle heartbeat, session-end work) does not run. Anything
+else lets the stop through; context printed by a stop condition is not delivered.
+A condition that errors or times out fails open, as on the tool steps. A stop
+condition that blocks on every Stop keeps the agent working forever: read
+`stop_hook_active` or count its own blocks.
+
+## Start step
+
+A `start` condition runs at SessionStart. Its stdin is the SessionStart
+payload: `session_id`, `cwd`, `source` (`startup`, `resume`, `clear`,
+`compact`), `transcript_path`. A `start` condition can only add context —
+`tool_input`, `tool_output` and `decision` are never read from it, so it can
+never deny, rewrite or block the session. A condition that errors or times
+out fails open, as on the other steps.
 
 ## Execution
 
@@ -262,10 +315,12 @@ rules in settings still apply to the rewritten input.
 |---|---|---|---|
 | Context (pre) | yes | no (no PreToolUse context channel) | yes |
 | Context (post) | yes | yes | yes |
+| Context (start) | yes | yes | yes |
 | Deny (pre) | yes | yes | yes |
 | `ask` | yes | treated as deny | treated as deny |
 | Input rewrite | yes | dropped with a note | dropped with a note |
 | Output rewrite / post block | yes | dropped / becomes context | dropped / becomes context |
+| Stop block | yes | yes (exit 2) | not settled live |
 
 PostToolUse does not fire for tools that fail, so a `post` condition never sees
 failed calls.
@@ -356,27 +411,25 @@ The MCP tool `enforcement_set` takes the same `matcher` argument.
 
 ## Extending to other hook events
 
-The step table in `hooks/context/conditions.py` holds only `pre` and `post` today.
-Adding an event takes one table row and a `run_step` call in that event's handler.
-These tokens are reserved for that:
+The step table in `hooks/context/conditions.py` holds `pre`, `post`, `stop` and
+`start` today. Adding an event takes one table row and a `run_step` call in
+that event's handler. These tokens are reserved for that:
 
 | Step | Event | Matched field |
 |---|---|---|
 | `fail` | PostToolUseFailure | tool name (the event must also be wired in `settings.base.json`) |
 | `permission` | PermissionRequest | tool name |
-| `start` | SessionStart | `source` (`startup`, `resume`, `clear`, `compact`) |
 | `end` | SessionEnd | `reason` |
 | `substart` / `substop` | SubagentStart / SubagentStop | `agent_type` |
 | `compact` | PreCompact | `trigger` (`manual`, `auto`) |
 | `notify` | Notification | `notification_type` |
 | `prompt` | UserPromptSubmit | none: `prompt-<name>.<ext>` |
-| `stop` | Stop | none: `stop-<name>.<ext>` |
 
 ## Configuration
 
 | Variable | Default | Description |
 |---|---|---|
-| `CONDITIONS_ENABLED` | `true` | Run conditions on PreToolUse and PostToolUse |
+| `CONDITIONS_ENABLED` | `true` | Run conditions on PreToolUse, PostToolUse, Stop and SessionStart |
 | `CONDITIONS_TIMEOUT_SEC` | `10` | Per-condition timeout; the process group is killed on expiry |
 | `CONDITIONS_MAX_PARALLEL` | `8` | Synchronous conditions run at once for one call |
 | `CONDITIONS_TRUSTED_OWNERS` | `""` | Extra git remote owners whose repositories' directory layer may run (`*` = all). The linked bundle's owner is always trusted |

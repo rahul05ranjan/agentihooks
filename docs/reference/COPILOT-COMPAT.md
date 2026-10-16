@@ -268,7 +268,7 @@ raised.
 | | codex | copilot | why |
 |---|---|---|---|
 | Agents | skipped | installed | Copilot has a real custom-agent registry |
-| Commands | `~/.codex/prompts/` | skills in `~/.agents/skills/` | Copilot has no prompt-file mechanism |
+| Commands | profile homes only, as hardlinked skills | skills in `~/.agents/skills/` | Copilot has no prompt-file mechanism |
 | SSE MCP | dropped with a warning | supported | Copilot ships an SSE client |
 | Header `${VAR}` | mapped to `bearer_token_env_var` | dropped with a warning | Copilot has no env-indirection field and sends header values literally |
 | Status line | static `tui.status_line` items | command-backed | Copilot supports a command status line |
@@ -309,6 +309,15 @@ key(s)" on every launch for any key it does not recognize. Legacy in-file
 **Auth portability.** Credentials ride in `~/.copilot/config.json`: copying
 that file into a scratch `COPILOT_HOME` authenticates it (proven live; the
 smoke script's live tier uses exactly this, never reading the file).
+
+**Role homes.** `agentihooks profile render <role> --target copilot` renders a
+`copilot` home beside the role's Claude home. Its `mcp-config.json` holds the
+built-in agentihooks entry and the role chain's declared servers, translated by
+the adapter, so a role's `gateway-tools` entry names its `/toolset/<role>/mcp`
+address rather than the whole gateway catalogue. Header references resolve at
+render, so the file is written owner-only and re-renders when a value changes. `copilot-instructions.md` links the role's
+`CLAUDE.md`; auth, settings, hooks and session state link to the operator's
+`~/.copilot`.
 
 ## §6 Transcript format
 

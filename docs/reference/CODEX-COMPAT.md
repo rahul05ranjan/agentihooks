@@ -22,11 +22,26 @@ target-specific path or schema goes through the adapter from `get_adapter()`.
 
 ### §2.1 Events
 
-Wired in `CODEX_HOOK_EVENTS` — the ten supported by both `codex` `hooks.json`
+Wired in `CODEX_HOOK_EVENTS` — the ten events handled by both `codex` `hooks.json`
 and `hook_manager.EVENT_HANDLERS`:
 
 `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
 `Stop`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PermissionRequest`.
+
+Codex 0.160.0 fires `PreCompact`, then `PostCompact`, then `SessionStart`
+with `source: "compact"` during automatic compaction. AgentiHooks uses the
+registered `PreCompact` to mark refocus pending and compact `SessionStart` to
+restore current swarm intent immediately. A master receives the ledger overview,
+active phases, priorities and its coordination obligations without a task claim;
+a worker retains its phase and task intent. The session refocus state consumes
+that pending refresh once. Ordinary startup keeps refocus on the first prompt.
+
+`PostCompact` is deliberately unregistered: compact `SessionStart` covers the
+observed delivery contract, so the overlapping event adds no second refresh.
+Under exactly the `CODEX_HOOK_EVENTS` registration, with `PostCompact` only
+observed, a worker's three compactions each showed `PostCompact` firing and the
+following compact `SessionStart` carrying one refocus block; the run held four
+blocks in total, the first prompt's and one per compaction (§10).
 
 `Notification` has no codex hook event. Codex instead has a fixed `notify`
 program invoked with `agent-turn-complete` JSON as `argv[1]` and stdin closed;
@@ -40,9 +55,12 @@ that flag the whole hook layer is dead weight. Events map to groups of command
 hooks pointing at `~/.codex/agentihooks-hook.sh`, which sets
 `AGENTIHOOKS_TARGET=codex` and execs `python -m hooks`.
 
-Codex trusts hooks **by content hash**. Until trusted, it SILENTLY skips them —
-run `/hooks` once inside a codex session, or launch automation with
-`--dangerously-bypass-hook-trust`.
+Codex trusts hooks **by content hash**. Until trusted, it SILENTLY skips them,
+and a TUI session stops at its hook review prompt. `init`, the herdr step of
+`init` and every rendered Codex profile home write `hooks.state` trust for each
+command entry in `hooks.json`, foreign groups such as herdr's included, with the
+hash Codex computes (`scripts.targets.codex_hook_trust`). A rendered home
+re-renders when the operator `hooks.json` changes.
 
 ### §2.3 stdout contract
 
@@ -84,6 +102,16 @@ aliases the body into `content`/`new_string` and lifts the target path out of
 translating, along with a list-shaped `command` (0.147) and a code-mode freeform
 `input` program.
 
+The question tool arrives as `request_user_input` with a Claude-shaped
+`{"questions": [...]}` input and is mapped to `AskUserQuestion`, so the
+operator-away refusal covers Codex. 0.160.0 offers it in Plan mode, and in
+Default mode only with the `default_mode_request_user_input` feature on; the
+hook sees it and an exit 2 block refuses it in both (verified live, 2026-10-06).
+Its `tool_response` is a JSON string, `{"answers": {<id>: {"answers": [...]}}}`;
+`normalize_payload` turns it into Claude's `{"answers": {<id>: "a, b"}}`, so the
+operator words recorder and the release, branch and PR signal detection read a
+Codex answer like a Claude one.
+
 0.154.0 also sends `transcript_path`, so `codex_rollout_path()` is now a
 fallback rather than the only source.
 
@@ -98,7 +126,7 @@ for the transcript-driven events (`SessionEnd`, `Stop`, `SubagentStop`,
 | row | Bundle kind | Codex behaviour |
 |---|---|---|
 | 14 | `skills` | global: symlinked into `~/.agents/skills` (open agent-skills standard dir, not under `.codex`). Repo scope is `<repo>/.agents/skills`, which the project bridge points at `.claude/skills` |
-| 15 | `commands` | translated into `~/.codex/prompts/*.md`, invoked as `/prompts:<name>` |
+| 15 | `commands` | global: not installed; codex-cli 0.160.0 no longer reads `~/.codex/prompts` (live probe: `Unrecognized command '/prompts:<name>'`), and prompts an earlier install wrote are removed. Profile homes: hardlinked as skills (below) |
 | 16 | `agents` | **skipped** — codex has no custom-subagent registry |
 | 17 | `rules` (global) | no auto-loaded rules dir; compiled into `AGENTS.md` |
 | 18 | `rules` (repo) | no loader at all; `hooks/context/project_bridge.py` injects every `<repo>/.claude/rules/*.md` body plus the project `MEMORY.md` at SessionStart |
@@ -128,9 +156,34 @@ between targets.
 | Persona | `~/.codex/AGENTS.md` |
 | Skills | `~/.agents/skills/` (repo scope: `<repo>/.agents/skills`) |
 | Project doc | `<repo>/AGENTS.md`, or `<repo>/CLAUDE.md` via `project_doc_fallback_filenames` |
-| Commands | `~/.codex/prompts/` |
 | MCP | `[mcp_servers.*]` tables in `config.toml` |
 | Transcript | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` |
+
+### Profile homes
+
+`agentihooks select-profile NAME --agent codex` renders
+`~/.agentihooks/profiles/NAME/codex/` and sets `CODEX_HOME` to it. The rendered
+Claude profile is the source; the Codex home is links into it and back to the
+operator home:
+
+| Entry | Points at |
+|---|---|
+| `AGENTS.md` | `../claude/CLAUDE.md` (persona and rules) |
+| `skills/<name>` | `../claude/skills/<name>` |
+| `skills/<replacement>` | the Codex replacement of a Claude plugin the chain enables: the installed plugin's own skills, a skill fetched into `~/.agentihooks/codex-skills/`, or a chain layer's `.codex/skills/<name>`. A Claude skill of the same name wins over a plugin or fetched skill; a chain layer skill wins over both |
+| `skills/<command>/SKILL.md` | hardlink to each Claude command with frontmatter, invoked as `$<command>`; a skill of the same name wins |
+| `auth.json`, `sessions`, `history.jsonl`, `session_index.jsonl`, `hooks.json` | the operator `~/.codex` |
+| `config.toml` | generated: the profile's native settings, `sqlite_home` = operator home, the operator's hook trust rekeyed to this home's `hooks.json`, the operator's `[mcp_servers]` limited to the profile's servers, and `~/.agents/skills` switched off |
+
+Codex keys hook trust by the hooks file path and a content hash; the hash does
+not depend on the path (codex-cli 0.160.0, live probe), so rekeyed trust holds.
+The key also carries each hook's position (`hooks.json:session_start:0:0`), so a
+moved group loses its trust and Codex stops at the hooks review screen before its
+first turn. `init` writes the agentihooks group first in every event; tools that
+append their own group, such as herdr, keep the positions the operator trusted.
+A command reaches Codex as a hardlinked `SKILL.md`: codex-cli 0.160.0 skips a
+symlinked `SKILL.md` and refuses one without `---` frontmatter (live probe). The old `~/.codex/NAME.config.toml` files
+are removed when their profile renders.
 
 `config.toml` is written through a **tomlkit round-trip** so operator hand-edits
 outside the managed key set survive every re-init — the TOML analogue of
@@ -142,9 +195,26 @@ is left alone with a warning.
 `approval_policy = "never"`, `sandbox_mode = "danger-full-access"`; anything else
 → `"on-request"` / `"workspace-write"`.
 
+**Plugins.** Codex has no Claude plugins. A profile whose own chain layers enable
+a plugin with no Codex replacement is Claude only, and the swarm never spawns it
+on Codex; each replacement and the swarm rule are listed in
+[the swarm pillar](../pillars/swarm.md#templates). The replacement paths are part
+of the render stamp, so a fetch that adds one re-renders the home.
+
+**Planner sandbox.** A swarm planner on Codex launches with
+`-c permissions.planner={extends=":read-only", network={enabled=true}, filesystem={…}}`
+and `-c default_permissions="planner"`. The filesystem grants write the ledger
+folder, `~/.agentihooks/swarm` and `~/scratchpad` only, so the repository stays read
+only while `agentihooks ledger` (which locks a file in the ledger folder) and
+Redis calls succeed. This overrides the role's `sandbox_mode = "danger-full-access"`
+for that launch only; every other role keeps it.
+
 **Degrades.** Codex has no command-backed statusline (upstream openai/codex
 #20140), so `tui.status_line` gets the closest built-in items and the `ah:`
 profile line is emitted as a SessionStart banner instead.
+Status items carry fixed labels: `used-tokens` renders `<N> used`, the session's
+cumulative total, so the line pairs `context-used` with `context-window-size` and
+leaves the cumulative item out (codex-cli 0.160.0, `StatusLineItem`).
 
 **Project bridge.** `hooks/context/project_bridge.py` runs at SessionStart
 (flag `PROJECT_BRIDGE_ENABLED`, budget `PROJECT_BRIDGE_MAX_BYTES`, 0 = whole).
@@ -208,8 +278,10 @@ written to disk — a HARD FLOOR path.
 - **Hook trust** cannot be verified from outside codex — `doctor()` says so
   rather than implying a green check covers it.
 - **Agents** have no codex equivalent (§3 row 16).
-- **`Interrupt` and `PostCompact`** exist in codex's `HooksToml` schema and are
-  not in `CODEX_HOOK_EVENTS`; neither has a `hook_manager` handler today.
+- **`Interrupt`** exists in codex's `HooksToml` schema and is not in
+  `CODEX_HOOK_EVENTS`; it has no `hook_manager` handler today.
+- **`PostCompact`** fires in codex-cli 0.160.0. It remains unregistered because
+  the subsequent compact `SessionStart` restores swarm intent (§2.1).
 
 ## §9 Verification
 
@@ -224,6 +296,8 @@ uv run python -m pytest tests/test_codex_target.py tests/test_codex_e2e.py tests
 
 | Claim | Established by |
 |---|---|
+| Automatic compaction events and master refocus | codex-cli 0.160.0, lowered `model_auto_compact_token_limit` scratch run; captured PreCompact → PostCompact → SessionStart compact; QA payload replay controls in `tests/context/test_swarm_refocus.py` |
+| `PostCompact` unregistered, refocus once per compaction | codex-cli 0.160.0, 2026-10-07, dev 0a2fb970; Codex home registering exactly `CODEX_HOOK_EVENTS` through `python -m hooks` plus an observe-only `PostCompact` logger; worker on a swarm task, three native `compacted` records, three `PostCompact` firings with no handler, one refocus block on each compact `SessionStart` and four in the run |
 | Hook events, `hooks.json` shape, content-hash trust | codex-cli 0.147.0, 2026-08-10; encoded in `CODEX_HOOK_EVENTS` and asserted by `tests/test_codex_target.py::TestHooksJson` |
 | One-JSON-object stdout contract | reproduced pre-fix as a two-line stdout; regression-guarded by `tests/test_codex_e2e.py` |
 | PreToolUse deny-only, no context channel | codex-cli 0.147.0; encoded in `hooks/targets/capabilities.py` |

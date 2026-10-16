@@ -112,10 +112,14 @@ def _normalize_severity_for_empty(title: str, body: str, severity: str) -> str:
 
 
 def _load_persisted_hash() -> str:
-    """Read last-published content hash from disk. Empty on miss."""
+    """Read last-published content hash from disk. Empty on miss or another brain's hash."""
     try:
+        from hooks.context.project_cache import namespace
+        from scripts.swarm_v2.keyspace import admits
+
         if _HASH_CACHE_FILE.exists():
-            return json.loads(_HASH_CACHE_FILE.read_text()).get("hash", "")
+            document = json.loads(_HASH_CACHE_FILE.read_text())
+            return document["hash"] if admits(document, namespace(), "publish-hash") else ""
     except Exception:
         pass
     return ""
@@ -124,8 +128,11 @@ def _load_persisted_hash() -> str:
 def _save_persisted_hash(hash_val: str) -> None:
     """Persist last-published content hash so next hook process can dedup."""
     try:
+        from hooks.context.project_cache import namespace
+        from scripts.swarm_v2.keyspace import stamp
+
         _HASH_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _HASH_CACHE_FILE.write_text(json.dumps({"hash": hash_val}))
+        _HASH_CACHE_FILE.write_text(json.dumps(stamp(namespace(), "publish-hash", {"hash": hash_val})))
     except Exception:
         pass
 
@@ -139,6 +146,7 @@ class BrainEntry:
     ttl: int = 3600
     severity: str = "info"
     metadata: dict = field(default_factory=dict)
+    file: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +191,7 @@ class FileBrainSource(BrainSource):
                         ttl=int(fm.get("ttl", 3600)),
                         severity=fm.get("severity", "info"),
                         metadata=fm,
+                        file=str(md_file),
                     )
                 )
             except Exception as e:
@@ -206,6 +215,7 @@ class HttpBrainSource(BrainSource):
 
     def fetch(self) -> list[BrainEntry]:
         from hooks._brain_http import get
+        from hooks.config import BRAIN_URL
 
         payload = get("/feed")
         if not isinstance(payload, dict) or not any(key in payload for key in ("hot_arcs", "inject_blocks", "entries")):
@@ -246,6 +256,7 @@ class HttpBrainSource(BrainSource):
                         ttl=ttl,
                         severity=str(item.get("severity") or "info"),
                         metadata=item.get("metadata") or {},
+                        file=f"{BRAIN_URL}/feed",
                     )
                 )
         entries.sort(key=lambda e: e.priority, reverse=True)
@@ -296,6 +307,19 @@ def _get_source() -> BrainSource | None:
     if BRAIN_SOURCE_TYPE == "file":
         return FileBrainSource(BRAIN_SOURCE_PATH)
     return None
+
+
+def brain_id() -> str:
+    from hooks._brain_http import brain_http_enabled
+    from hooks.config import BRAIN_SOURCE_PATH, BRAIN_SOURCE_TYPE, BRAIN_URL
+    from scripts.swarm_v2.keyspace import brain_identity
+
+    try:
+        if brain_http_enabled():
+            return brain_identity(url=BRAIN_URL)
+    except ValueError:
+        return "invalid"
+    return brain_identity(path=BRAIN_SOURCE_PATH) if BRAIN_SOURCE_TYPE == "file" else "none"
 
 
 # ---------------------------------------------------------------------------
@@ -398,6 +422,7 @@ def _publish_entries(entries: list[BrainEntry]) -> dict:
                     "ttl_seconds": entry.ttl,
                     "source": "brain-adapter",
                     "persistent": True,
+                    "origin": {"id": entry.id, "file": entry.file},
                 }
                 for entry in new_hashes.values()
             ],
@@ -432,6 +457,7 @@ def _compute_hash(entries: list[BrainEntry]) -> str:
                     "ttl": e.ttl,
                     "severity": e.severity,
                     "metadata": e.metadata,
+                    "file": e.file,
                 }
                 for e in entries
             ],
@@ -465,17 +491,21 @@ def maybe_refresh_on_tool_call(
         from hooks.config import BRAIN_ENABLED, BRAIN_REFRESH_TOOL_CALLS
     except ImportError:
         return None
-
     if not BRAIN_ENABLED or tool_call_count <= 0:
         return None
     if tool_call_count % max(1, BRAIN_REFRESH_TOOL_CALLS) != 0:
         return None
     result = _refresh()
-    if not result or not claim_delivery:
-        return None
     from hooks.context.broadcast import get_broadcast_context
+    from hooks.context.project_cache import defer_project_context, project_context
 
-    return get_broadcast_context(session_id, result["created_ids"])
+    project = project_context(session_id)
+    if not claim_delivery:
+        if project:
+            defer_project_context(session_id, project)
+        return None
+    fleet = get_broadcast_context(session_id, result["created_ids"]) if result else None
+    return "\n\n".join(part for part in (project, fleet) if part) or None
 
 
 def _refresh() -> dict | None:
@@ -500,6 +530,9 @@ def _refresh() -> dict | None:
         log("brain_adapter: source fetch failed", {"error": str(e)})
         return None
 
+    from hooks.context.project_cache import store_feed
+
+    store_feed(entries)
     new_hash = _compute_hash(entries)
     result = _publish_entries(entries)
     _content_hash = new_hash
@@ -522,17 +555,25 @@ def force_refresh() -> bool:
     return bool(result and result["changed"])
 
 
-def inject_on_session_start() -> bool:
-    """One-shot injection at session start. Publishes brain content immediately."""
+def inject_on_session_start(session_id: str = "", cwd: str = "") -> bool:
     try:
         from hooks.config import BRAIN_ENABLED
     except ImportError:
         return False
-
     if not BRAIN_ENABLED:
         return False
+    refreshed = force_refresh()
+    if session_id:
+        from hooks.common import inject_context
+        from hooks.context.project_cache import project_context
+        from hooks.context.project_identity import resolve_project
+        from hooks.context.project_sessions import record_session
 
-    return force_refresh()
+        record_session(session_id, resolve_project(cwd))
+        context = project_context(session_id, cwd)
+        if context:
+            inject_context(context, skip_compression=True, kind="brain")
+    return refreshed
 
 
 def get_status() -> dict:
@@ -563,6 +604,7 @@ def get_status() -> dict:
         )
     except ImportError:
         return {"enabled": False, "error": "config not loaded"}
+    from hooks.context.project_cache import cache_scope_mismatch_total
 
     source = _get_source()
     entry_count = 0
@@ -617,5 +659,6 @@ def get_status() -> dict:
         "entry_count": entry_count,
         "active_broadcasts": active_broadcasts,
         "content_hash": _content_hash or _load_persisted_hash(),
+        "cache_scope_mismatch_total": cache_scope_mismatch_total(),
         "warnings": warnings,
     }

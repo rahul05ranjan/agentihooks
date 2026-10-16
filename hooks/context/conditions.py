@@ -9,23 +9,30 @@ Reference: docs/hooks/conditions.md.
 
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from hooks.context import profile_chain, tool_matcher
+from hooks.context import injection_trace, profile_chain, quarantine, tool_matcher
 
-STEPS = {"pre": "PreToolUse", "post": "PostToolUse"}
+STEPS = {"pre": "PreToolUse", "post": "PostToolUse", "stop": "Stop", "start": "SessionStart"}
+_NO_MATCHER_STEPS = frozenset({"stop", "start"})
+TOOL_STEPS = ("pre", "post")
 _RUNNERS = {".sh": ["bash"], ".bash": ["bash"], ".py": [sys.executable]}
-_INDEX_VERSION = 1
+FILTER_SUFFIX = ".filter.yaml"
+JUDGE, LEDGER_WRITE, INBOX_SEND = "judge", "ledger_write", "inbox_send"
+SYNTHETIC_TOOLS = (JUDGE, LEDGER_WRITE, INBOX_SEND)
+_INDEX_VERSION = 2
 _FRESH_NS = 2_000_000_000
 _CODE_ROOT = Path(__file__).resolve().parents[2]
 _UNSET = object()
@@ -49,6 +56,11 @@ def parse_filename(filename: str) -> dict:
     if is_async:
         stem = stem[: -len(".async")]
     parts = stem.split("-")
+    if parts[0].lower() in _NO_MATCHER_STEPS:
+        if len(parts) != 2:
+            event = STEPS[parts[0].lower()]
+            raise ValueError(f"expected {parts[0].lower()}-<name>.<ext>: {event} has no tool to match")
+        parts.insert(1, "any")
     if len(parts) < 3:
         raise ValueError("expected <step>-<matcher>-<name>.<ext>")
     step, name = parts[0].lower(), parts[-1]
@@ -76,7 +88,8 @@ def _cache_path(repo: Path | None = None) -> Path:
     from hooks.config import AGENTIHOOKS_HOME
     from hooks.targets import current_target
 
-    key = f"{zlib.crc32('|'.join((str(_CODE_ROOT), str(repo or ''))).encode()):08x}"
+    profile = profile_chain.active_profile(profile_chain.read_state()) or ""
+    key = f"{zlib.crc32('|'.join((str(_CODE_ROOT), str(repo or ''), profile)).encode()):08x}"
     return AGENTIHOOKS_HOME / "cache" / f"conditions-index.{current_target()}.{key}.json"
 
 
@@ -102,7 +115,7 @@ def layer_dirs(state: dict, cwd: str | Path | None = None) -> tuple[list[tuple[s
     bundle = profile_chain.bundle_path(state)
     profile_csv = profile_chain.active_profile(state)
     linked = profile_chain.linked_profiles(state)
-    layers: list[tuple[str, Path]] = []
+    layers: list[tuple[str, Path]] = [("package", profile_chain.BUILT_IN_PROFILES / "package" / "conditions")]
     if bundle is not None:
         layers.append(("bundle", bundle / ".claude" / "conditions"))
     for name, profile_dir in profile_chain.profile_dirs(bundle, profile_csv, linked):
@@ -330,8 +343,27 @@ def _kill_group(proc: subprocess.Popen) -> None:
         pass
 
 
+def _run_filter(entry: dict, step: str, payload: dict, timeout: float) -> dict:
+    from hooks.filters import runner
+
+    box: dict = {}
+
+    def work() -> None:
+        try:
+            box["run"] = runner.run(entry, step, payload)
+        except Exception as error:
+            box["run"] = {"error": f"filter crashed: {error}"}
+
+    thread = threading.Thread(target=work, daemon=True)
+    thread.start()
+    thread.join(timeout)
+    return box.get("run") or {"error": f"timed out after {timeout:g}s"}
+
+
 def execute(entry: dict, step: str, payload: dict, timeout: float) -> dict:
     """Run one condition; never raises."""
+    if entry["file"].lower().endswith(FILTER_SUFFIX):
+        return _run_filter(entry, step, payload, timeout)
     cmd = _command(entry)
     if cmd is None:
         return {"error": "no runner for the extension and the file is not executable"}
@@ -448,8 +480,13 @@ def merge(step: str, payload: dict, runs: list[tuple[dict, dict]]) -> StepResult
             result.reasons.append(f"[condition {label}] {(run.get('stderr') or '').strip() or 'blocked'}")
             continue
         out = _parse_stdout(run.get("stdout", ""))
-        if out.get("context"):
+        session = str(payload.get("session_id") or "")
+        if out.get("context") and quarantine.keep(
+            session, "condition", [label], lambda f: [f], lambda f: out["context"]
+        ):
             result.contexts.append(f"[condition {label}]\n{out['context']}")
+            locator = {"layer": entry.get("source", ""), "file": entry.get("path", "")}
+            injection_trace.record(session, "condition", label, out["context"], locator)
         if step == "pre" and isinstance(out.get("tool_input"), dict):
             result.input_patch.update(out["tool_input"])
             result.input_writers.append(label)
@@ -581,16 +618,45 @@ def post_effect(payload: dict) -> PostEffect | None:
     return effect
 
 
+def stop_block(payload: dict) -> str | None:
+    """The reason a stop condition gives for keeping the agent working; None lets the stop through."""
+    result = run_step("stop", payload)
+    if result is None or result.decision != "deny":
+        return None
+    return "\n".join(result.reasons) or "blocked by a condition"
+
+
+@dataclass
+class StartEffect:
+    contexts: list[str]
+
+
+def start_effect(payload: dict) -> StartEffect | None:
+    """Context a start condition adds at SessionStart; it can never deny or rewrite."""
+    result = run_step("start", payload)
+    if result is None:
+        return None
+    return StartEffect(contexts=list(result.contexts))
+
+
 # ---------------------------------------------------------------------------
-# Operator gate — conditions are created or removed only when the operator's
-# own prompt this turn asks for it
+# Operator gate — conditions are created or removed only when the operator
+# asks: his prompt this turn, his ledger comment or the master's relay of it
 # ---------------------------------------------------------------------------
 
+_ARTICLE = r"a|an|the|this|that|these|those|my"
+_DETERMINER = rf"(?:{_ARTICLE}|new|another|one)"
+_NOT_A_NAME = (
+    r"(?:about|after|and|are|at|before|by|for|from|how|if|in|into|is|of|on|or|to|what|when|where|which|who|why|with)"
+)
+_NAMED = rf"\s+(?:up\s+)?(?:{_DETERMINER}\s+)*(?:(?!(?:{_ARTICLE}|{_NOT_A_NAME})\b)[\w'\"`./-]+\s+){{0,4}}"
 _SIGNAL = re.compile(
-    r"\b(?:set|add|create|make|write|put|install|remove|clear|delete|drop|update|change|edit|replace|fix)"
-    r"\s+(?:up\s+)?(?:(?:a|an|the|this|that|these|those|new|another|one|my)\s+)*conditions?\b",
+    r"\b(?:(?:set|add|create|make|write|put|install|remove|clear|delete|drop|update|change|edit|replace|fix)"
+    rf"{_NAMED}conditions?|(?:set|add|create|update|remove){_NAMED}(?:filters?|classifiers?))\b",
     re.IGNORECASE,
 )
+_CODE_NOUN = re.compile(r"\b(?:endpoints?|quer(?:y|ies)|tables?|lists?|columns?)\b", re.IGNORECASE)
+_BESIDE_WORDS = 4
 _CONDITION_TOOL = re.compile(r"(?:agentihooks|hooks[-_]utils).*condition_(?:set|clear)$", re.IGNORECASE)
 _EDIT_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 _NEAR_CONDITIONS = re.compile(
@@ -615,14 +681,64 @@ _READ_ONLY_HEADS = frozenset(
         "cd",
         "echo",
         "agentihooks",
+        "sed",
+        "nl",
+        "cut",
+        "tr",
+        "printf",
+        "printenv",
+        "date",
+        "basename",
+        "dirname",
+        "realpath",
+        "readlink",
+        "sha256sum",
+        "md5sum",
+        "true",
+        "test",
+        "for",
+        "done",
+        "fi",
     }
 )
-_READ_ONLY_GIT = frozenset({"add", "commit", "status", "log", "diff", "show", "push", "ls-files", "blame", "fetch"})
+_READ_ONLY_GIT = frozenset(
+    {
+        "add",
+        "commit",
+        "status",
+        "log",
+        "diff",
+        "show",
+        "push",
+        "ls-files",
+        "blame",
+        "fetch",
+        "branch",
+        "rev-parse",
+        "ls-tree",
+        "cat-file",
+        "grep",
+    }
+)
+_SED_WRITE = re.compile(r"\bsed\b[^|;&\n]*?(?:\s-[a-zA-Z]*i|\s--in-place|[\s'\"/;}0-9$][wW]\s)")
 _HARMLESS_REDIRECT = re.compile(r"\d*>&\d+|&?\d*>\s*/dev/null")
+_WORD = r"""(?:[^\s;&|<>()'"`\\]|\\.|"[^"]*"|'[^']*')+"""
+_REDIRECT = re.compile(rf">>?\|?\s*({_WORD})")
+_PATH_TOKEN = re.compile(_WORD)
+_UNQUOTE = re.compile(r"""\\(.)|["']""")
+_CD_TARGET = re.compile(rf"(?:^|[;&|(\n])\s*(?:cd|pushd)\s+({_WORD})")
+_CAT_HEREDOC = re.compile(
+    r"((?:^|[;&|(])[ \t]*(?:cat|tee)\b[^\n;&|]*?)<<-?[ \t]*(['\"]?)(\w+)\2([^\n]*)\n.*?^[ \t]*\3[ \t]*$",
+    re.DOTALL | re.MULTILINE,
+)
+_DEFAULT_BRANCHES = frozenset({"main", "master", "dev"})
 _GATE_TTL_SEC = 3600
 GATE_MESSAGE = (
-    "BLOCKED: conditions are created, changed or removed only when the operator's own prompt this turn "
-    "asks for it (e.g. 'set a condition ...'). Never create one on your own initiative."
+    "BLOCKED: conditions are created, changed or removed only when the operator asks: the operator's own prompt "
+    "this turn (e.g. 'set a condition ...'), his comment on this agent's ledger task, or the master's "
+    "'agentihooks ledger relay' onto that task of words he typed in the master pane; either holds until that "
+    "task is done or cancelled. "
+    "Never create one on your own initiative."
 )
 
 
@@ -635,6 +751,9 @@ def contains_condition_signal(prompt: str) -> bool:
 
     for match in _SIGNAL.finditer(prompt or ""):
         prefix = prompt[max(0, match.start() - 20) : match.start()].lower().strip()
+        after = " ".join(prompt[match.end() :].split()[:_BESIDE_WORDS])
+        if _CODE_NOUN.search(match.group(0)) or _CODE_NOUN.search(after):
+            continue
         if not any(prefix.endswith(neg.strip()) for neg in _NEGATION_PREFIXES):
             return True
     return False
@@ -645,12 +764,15 @@ def _gate_path(session_id: str) -> Path:
     return runtime_dir() / ".gate" / safe
 
 
-def arm_gate(session_id: str) -> None:
+def arm_gate(session_id: str, source: str = "typed", ref: str = "") -> None:
     if not session_id:
         return
+    from hooks.common import log
+
     path = _gate_path(session_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(str(int(time.time())))
+    path.write_text(json.dumps({"source": source, "ref": ref}))
+    log("conditions: operator gate opened", {"session_id": session_id, "source": source, "ref": ref})
 
 
 def disarm_gate(session_id: str) -> None:
@@ -667,14 +789,110 @@ def is_armed(session_id: str) -> bool:
         return False
 
 
+def gate_source(session_id: str) -> dict:
+    if not is_armed(session_id):
+        return {}
+    try:
+        record = json.loads(_gate_path(session_id).read_text())
+    except (OSError, ValueError):
+        return {}
+    return record if isinstance(record, dict) else {}
+
+
 def _touches_conditions(text: str) -> bool:
     return any(fragment in text for fragment in (".claude/conditions", ".agentihooks/conditions", str(runtime_dir())))
 
 
-def _read_only_shell(command: str) -> bool:
-    if ">" in _HARMLESS_REDIRECT.sub("", command):
+def _git_out(directory: Path, *args: str) -> str:
+    try:
+        out = subprocess.run(["git", "-C", str(directory), *args], capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return out.stdout.strip()
+
+
+def _feature_branch(path: Path) -> bool:
+    """Whether *path* sits in a git checkout on a branch other than main, master, dev or origin's HEAD."""
+    directory = next(p for p in (path, *path.parents) if p.is_dir())
+    branch = _git_out(directory, "symbolic-ref", "--short", "HEAD")
+    origin_head = _git_out(directory, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+    defaults = _DEFAULT_BRANCHES | {os.environ.get("WT_BASE_BRANCH"), origin_head.removeprefix("origin/")}
+    return bool(branch) and branch not in defaults
+
+
+def _live_dirs() -> list[Path]:
+    """Condition folders hooks read now: bundle, profile and runtime layers, plus unresolved profile candidates."""
+    layers, probed = layer_dirs(profile_chain.read_state())
+    return [d.resolve() for d in (*(d for _, d in layers), *(p / ".claude" / "conditions" for p in probed))]
+
+
+def _staged(paths: list[Path]) -> bool:
+    """No path overlaps a live layer, and each condition path sits in a checkout on a feature branch."""
+    live = _live_dirs()
+    real = [p.resolve() for p in paths]
+    if any(p.is_relative_to(d) or d.is_relative_to(p) for p in real for d in live):
         return False
-    if re.search(r"\s-(?:delete|exec)\b", command):
+    return all(_feature_branch(p) for p in real if "conditions" in p.parts)
+
+
+def _expand(token: str, base: str | None) -> Path | None:
+    """*token* as an absolute path, or None when a variable or an unknown directory hides it."""
+    token = re.sub(r"^\$\{?HOME\}?(?=/|$)", "~", _UNQUOTE.sub(lambda m: m.group(1) or "", token))
+    if "$" in token:
+        return None
+    token = os.path.expanduser(token)
+    if not os.path.isabs(token):
+        if base is None:
+            return None
+        token = os.path.join(base, token)
+    return Path(os.path.normpath(token))
+
+
+def _bases(command: str, cwd: str | None) -> list[str | None]:
+    """Every directory a relative path in *command* may resolve against: the session cwd and each cd target."""
+    bases = [cwd]
+    for target in _CD_TARGET.findall(command):
+        path = None if target == "-" else _expand(target, cwd)
+        bases.append(str(path) if path else None)
+    return bases
+
+
+def _resolve(token: str, bases: list[str | None]) -> list[Path] | None:
+    paths = [_expand(token, base) for base in bases]
+    return None if None in paths else paths
+
+
+def _ordinary_target(token: str, bases: list[str | None]) -> bool:
+    """A redirect target outside every conditions folder, or one a pull request review covers."""
+    paths = _resolve(token, bases)
+    if paths is None:
+        return False
+    conditional = [p for p in paths if "conditions" in p.resolve().parts]
+    return not conditional or _staged(conditional)
+
+
+def _staged_command(command: str, cwd: str | None) -> bool:
+    """Every word of *command* resolves to a path, one is a condition path, and all of them are staged."""
+    bases = _bases(command, cwd)
+    paths: list[Path] = []
+    for word in _PATH_TOKEN.findall(command):
+        for token in filter(None, word.split("=")):
+            resolved = _resolve(token, bases)
+            if resolved is None:
+                return False
+            paths += resolved
+    return any("conditions" in p.resolve().parts for p in paths) and _staged(paths)
+
+
+def _read_only_shell(command: str, cwd: str | None = None) -> bool:
+    stripped = _HARMLESS_REDIRECT.sub("", command)
+    targets = _REDIRECT.findall(stripped)
+    if stripped.count(">") - stripped.count(">>") != len(targets):
+        return False
+    bases = _bases(command, cwd)
+    if not all(_ordinary_target(target, bases) for target in targets):
+        return False
+    if re.search(r"\s-(?:delete|exec)\b", command) or _SED_WRITE.search(command):
         return False
     heads = tool_matcher.command_heads(command)
     if "git" in heads:
@@ -685,20 +903,45 @@ def _read_only_shell(command: str) -> bool:
     return heads <= (_READ_ONLY_HEADS | {"find"})
 
 
-def write_guard(tool_name: str, tool_input: dict | None, session_id: str) -> str | None:
-    """Block an agent touching condition files or tools unless the operator armed this turn."""
-    name = tool_name or ""
-    tool_input = tool_input or {}
-    touches = bool(_CONDITION_TOOL.search(name))
+def _requested_on_task(session_id: str) -> bool:
+    """Open the gate from the operator's comment or the master's relay on this agent's ledger task."""
+    from hooks.context import ledger_request
+
+    try:
+        opened = ledger_request.find(contains_condition_signal)
+    except Exception:  # the hook lets a raising guard through, so a lookup that fails must refuse
+        return False
+    if opened:
+        arm_gate(session_id, *opened)
+    return bool(opened)
+
+
+def _touches_live(name: str, tool_input: dict, cwd: str | None) -> bool:
+    """Whether a tool call reaches the condition tools or writes a condition folder hooks read now."""
+    if _CONDITION_TOOL.search(name):
+        return True
     if name in _EDIT_TOOLS:
         paths = [str(tool_input[key]) for key in ("file_path", "notebook_path", "path") if tool_input.get(key)]
-        touches = _touches_conditions(" ".join(paths) if paths else json.dumps(tool_input))
-    elif name == "Bash":
-        command = str(tool_input.get("command") or "")
-        touches = bool(_NEAR_CONDITIONS.search(command) or _touches_conditions(command))
-        touches = touches and not _read_only_shell(command)
-    if touches and not is_armed(session_id):
-        return GATE_MESSAGE
+        if not paths:
+            return _touches_conditions(json.dumps(tool_input))
+        if not any(_touches_conditions(path) for path in paths):
+            return False
+        resolved = [_expand(path, cwd) for path in paths]
+        return None in resolved or not _staged(resolved)
+    if name == "Bash":
+        command = _CAT_HEREDOC.sub(lambda m: m.group(1) + m.group(4), str(tool_input.get("command")))
+        plain = _UNQUOTE.sub(lambda m: m.group(1) or "", command)
+        if not any(_NEAR_CONDITIONS.search(text) or _touches_conditions(text) for text in (command, plain)):
+            return False
+        return not _read_only_shell(command, cwd) and not _staged_command(command, cwd)
+    return False
+
+
+def write_guard(tool_name: str, tool_input: dict | None, session_id: str, cwd: str | None = None) -> str | None:
+    """Block an agent touching live condition files or the condition tools unless the operator asked."""
+    if _touches_live(tool_name, tool_input or {}, cwd or None) and not is_armed(session_id):
+        if not _requested_on_task(session_id):
+            return GATE_MESSAGE
     return None
 
 
@@ -706,8 +949,56 @@ def write_guard(tool_name: str, tool_input: dict | None, session_id: str) -> str
 # Inventory, creation and removal (MCP tools and the CLI)
 # ---------------------------------------------------------------------------
 
-_LANGUAGES = {"bash": (".sh", "#!/usr/bin/env bash\n"), "python": (".py", "#!/usr/bin/env python3\n")}
+_LANGUAGES = {
+    "bash": (".sh", "#!/usr/bin/env bash\n", 0o755),
+    "python": (".py", "#!/usr/bin/env python3\n", 0o755),
+    "filter": (FILTER_SUFFIX, "", 0o644),
+}
 _SCOPES = ("global", "profile", "directory")
+
+
+def _check_filter(script: str, run_async: bool) -> None:
+    import yaml
+
+    from hooks.filters import schema
+
+    if run_async:
+        raise ConditionError("a filter runs in process and cannot be async")
+    try:
+        schema.parse(yaml.safe_load(script))
+    except yaml.YAMLError:
+        raise ConditionError("invalid filter: the body is not YAML") from None
+    except schema.FilterSchemaError as error:
+        raise ConditionError(f"invalid filter: {error}") from None
+
+
+def _with_filter_settings(entries: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Each filter entry with its mode, action and max_rounds; filters whose body fails the schema go to invalid."""
+    from hooks.filters import schema
+
+    kept: list[dict] = []
+    invalid: list[dict] = []
+    for entry in entries:
+        if entry["file"].lower().endswith(FILTER_SUFFIX):
+            try:
+                spec = schema.load(entry["path"])
+            except ValueError as error:
+                invalid.append({"path": entry["path"], "source": entry["source"], "error": str(error)})
+                continue
+            entry = {**entry, "filter": {"mode": spec.mode, "action": spec.action, "max_rounds": spec.max_rounds}}
+        kept.append(entry)
+    return kept, invalid
+
+
+def misspelled(entry: dict) -> dict | None:
+    for alt in tool_matcher.parse(entry["matcher"]).alternatives:
+        if alt.kind != "tool" or alt.value in SYNTHETIC_TOOLS:
+            continue
+        close = difflib.get_close_matches(alt.value, SYNTHETIC_TOOLS, cutoff=0.8)
+        if close:
+            error = f"unknown tool {alt.value!r}: did you mean the synthetic tool {close[0]!r}?"
+            return {"path": entry["path"], "source": entry["source"], "error": error}
+    return None
 
 
 def inventory(cwd: str | Path | None = None) -> dict:
@@ -715,6 +1006,8 @@ def inventory(cwd: str | Path | None = None) -> dict:
     layers, _probed = layer_dirs(state, cwd)
     _kept, untrusted = _trusted_layers(layers, state)
     entries, invalid = scan_layers([(s, d) for s, d in layers if str(d) not in untrusted])
+    entries, broken = _with_filter_settings(entries)
+    invalid += broken + [found for found in map(misspelled, entries) if found]
     described = []
     for source, directory in layers:
         described.append(
@@ -726,7 +1019,7 @@ def inventory(cwd: str | Path | None = None) -> dict:
                 "untrusted_owner": untrusted.get(str(directory)),
             }
         )
-    return {"layers": described, "conditions": entries, "invalid": invalid}
+    return {"layers": described, "conditions": entries, "invalid": invalid, "synthetic_tools": list(SYNTHETIC_TOOLS)}
 
 
 def target_dir(scope: str, profile: str = "", cwd: str | Path | None = None) -> tuple[str, Path]:
@@ -774,8 +1067,11 @@ def create_condition(
         raise ConditionError("name may use letters, digits and '_' only")
     if not (script or "").strip():
         raise ConditionError("script is empty")
-    ext, shebang = _LANGUAGES[language]
-    filename = f"{step}-{matcher}-{name}{'.async' if run_async else ''}{ext}"
+    if language == "filter":
+        _check_filter(script, run_async)
+    ext, shebang, mode = _LANGUAGES[language]
+    head = step if step in _NO_MATCHER_STEPS and matcher in ("", "any") else f"{step}-{matcher}"
+    filename = f"{head}-{name}{'.async' if run_async else ''}{ext}"
     try:
         meta = parse_filename(filename)
     except ValueError as e:
@@ -788,7 +1084,7 @@ def create_condition(
     body = script if script.startswith("#!") else shebang + script
     tmp = path.with_name(f".{filename}.{os.getpid()}.tmp")
     tmp.write_text(body if body.endswith("\n") else body + "\n")
-    tmp.chmod(0o755)
+    tmp.chmod(mode)
     os.replace(tmp, path)
     return {"path": str(path), "layer": layer, "file": filename, "step": meta["step"], "matcher": meta["matcher"]}
 

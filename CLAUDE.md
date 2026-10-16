@@ -13,39 +13,42 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 V=~/dev/tcc-ecosystem/.venv/bin
 
 uv pip install --python $V/python -e ".[all]"                  # install/update deps
-$V/python -m pytest                                            # run all tests
-$V/python -m pytest tests/test_hook_manager.py                 # single file
-$V/python -m pytest tests/test_config.py::TestSecretsMode -v   # single test
 $V/ruff check .                                                # lint
 $V/ruff format .                                               # format
+$V/python -m scripts.ci_prepush                                # before every push: lint, format, size
 agentihooks init --profile anton                                       # global install
 ```
 
 `ruff check` and `ruff format --check` fail independently — CI runs both, so run
-both. CI also runs the whole suite, not `-m unit`, which collects under half of it.
+both. Tests and mutation runs execute only in CI: push and open a draft pull
+request to observe red and green there. Local test runs are blocked by default;
+`AGENTIHOOKS_ALLOW_LOCAL_TEST_RUN=true` explicitly opts in and adds touched tests
+to the prepush gate. CI runs the whole suite, not `-m unit`.
 
 ## Release dance
 
-agentihooks is open source; it has releases, not snapshots. "Do the release dance"
-means, in order:
+`dev` integrates worktree pull requests. Green promotion checks let CI promote
+the graded head to `main`, tag a release and publish versioned and `:release`
+images. CI alone opens and merges promotion pull requests; agents never create
+or merge pull requests into `main`, `master` or `v1`. Red promotion checks hold
+the release while `dev` keeps merging.
 
-1. **Release notes** — a `CHANGELOG.md` entry for the new version, PR'd into `dev`.
-2. **Release** — `gh workflow run release.yml --ref dev -f bump=patch|minor|major`
-   bumps `pyproject.toml` on `dev`, tags `vX.Y.Z` and creates the GitHub release
-   with generated notes. `publish_pypi` stays off.
-3. **PR to `main`** — `gh pr create --base main --head dev`, after step 2 so `main`
-   declares the new version.
-4. **Merge the PR** — `gh pr merge --rebase` (`--squash` only when GitHub cannot
-   rebase; then merge `origin/main` back into `dev` at once and check that
-   `git rev-parse HEAD^{tree}` is unchanged, or the next PR replays every file as a
-   phantom conflict).
-5. **Publish to PyPI from `main`** — `gh workflow run publish-pypi.yml --ref main`,
-   then verify `https://pypi.org/pypi/agentihooks/X.Y.Z/json` answers 200 and a
-   clean install reports the version.
+"Do the release dance" authorizes only publication of that release to PyPI:
 
-The phrase "release dance" is itself the operator's PR and release signal, so
-steps 3 and 4 pass the `main` gate. `git fetch` updates `origin/dev`, not your
-local branch: the release commit lands on `dev` from CI, so pull before any merge.
+1. Run `gh workflow run publish-pypi.yml --ref main`. The workflow builds the
+   latest stable tag and refuses unless its tree matches `main`.
+2. Verify the workflow succeeded, the package index serves that version and a
+   clean install reports it. Record the run and observed version.
+
+For pull request, merge queue and promotion check ownership, read
+`docs/reference/delivery-tiers.md`.
+
+## Ledger front end
+
+`DESIGN.md` and `.impeccable/design.json` are the ledger front end's design record; their Named Rules and Don'ts are hard
+constraints. Read both before editing anything under `scripts/swarm_ledger/static/` or `palette.css`, and use the
+impeccable skill to shape and critique the change. `tests/swarm_ledger/test_design_system.py` enforces the record;
+a test there that a change has to rewrite means the change is wrong, not the test.
 
 ## The Four Pillars
 
@@ -56,7 +59,7 @@ AgentiHooks is organized around four pillars. When working on this codebase, und
 | **Identity** | `scripts/install.py`, `profiles/`, `settings.base.json`, `scripts/targets/` | Profile system, chaining, two-axis model, bundle merge, install targets |
 | **Guardrails** | `hooks/secrets.py`, `hooks/context/retry_breaker.py`, `hooks/context/branch_guard.py`, `hooks/context/prod_lockdown.py`, `hooks/context/ci_manifesto.py`, `hooks/context/dep_banner.py`, `hooks/context/_strip.py`, `hooks/context/version_guard.py`, `hooks/context/claude_md_sanity.py` | Two-tier secrets, retry breaker, branch/PR gating, prod lockdown, CI manifesto signal parsing, dep install banner, shared command stripping, version guard, CLAUDE.md bloat guard |
 | **Context Intelligence** | `hooks/context/preprocessor.py`, `hooks/context/brain_adapter.py`, `hooks/context/rules_refresh.py`, `hooks/tool_memory.py`, `hooks/context/conditions.py`, `hooks/context/tool_matcher.py` | Token compression, brain injection, one-shot rule refresh to running sessions, tool memory, bundle conditions and the tool matcher they share with enforcements |
-| **Fleet Command** | `hooks/context/broadcast.py`, `hooks/mcp/channels.py`, broadcast sections in `hook_manager.py`, CLI in `install.py`, `scripts/claude_quota_balancer.py`, `scripts/claude_terminal.py`, `hooks/context/account_sessions.py`, `hooks/context/quota_policy.py` | Real-time messaging with channel-based targeting, brain adapter, Claude account load balancing and the quota handoff policy |
+| **Fleet Command** | `hooks/context/broadcast.py`, `hooks/mcp/channels.py`, broadcast sections in `hook_manager.py`, CLI in `install.py`, `scripts/claude_quota_balancer.py`, `scripts/init_agent.py`, `hooks/context/account_sessions.py`, `hooks/context/quota_policy.py` | Real-time messaging with channel-based targeting, brain adapter, Claude account load balancing and the quota handoff policy |
 
 ## Architecture
 
@@ -131,18 +134,20 @@ File-based pub/sub at `~/.agentihooks/broadcast.json`. Sessions auto-register/de
 
 Each subscription is an `AH_CC_TOKEN_<slug>`; a routed session keeps exactly one,
 so the variable **name** identifies its account (never read the value out).
-`agenti` (`cmd_claude`) picks the most routing left among accounts below
-`AGENTIHOOKS_MAX_SESSIONS_PER_ACCOUNT` live sessions, counted from `/proc` by
+`agenti` (`cmd_claude`) picks the fewest live sessions among accounts below their
+live session cap, computed from each account's five-hour window left (6 at
+60%+, 4 at 40-60%, 3 at 10-40%, 2 at 5-10%, none below 5%; no new session
+below 5% of the week either), counted from `/proc` by
 `hooks/context/account_sessions.py`. `hooks/context/quota_policy.py` is pure code
 deciding HANDOFF / WAIT / STOP / PUSH from the session's statusline quota and the
-router cache; PreToolUse blocks on STOP and WAIT. `claude-terminal --handoff` runs
+router cache; PreToolUse blocks on STOP and WAIT. `init-agent --handoff` runs
 the handoff and marks the old session `handed_off`. Register the real agent PID
 (`agent_pid()`), never `os.getppid()` — that is the hook's short-lived shell.
 Docs: `docs/pillars/load-balancing.md`.
 
 ### Testing patterns
 
-Tests mock Redis via `patch("hooks._redis.get_redis", return_value=None)`. Use `uv run` for all test/lint commands.
+Tests mock Redis via `patch("hooks._redis.get_redis", return_value=None)`. Run tests and lint with the workspace venv binaries as shown under Commands.
 
 `tests/conftest.py::_isolate_real_user_paths` is autouse and refuses to run if
 any target's config home still resolves under the real `$HOME` — add a new
