@@ -76,3 +76,10 @@ def test_combined_admission_cannot_retire_another_required_gate():
     head = combined(base)
     head["test.yml"]["jobs"]["gate-required"]["needs"].remove("lint")
     assert any("base need lint" in problem for problem in grade(base, head))
+
+
+def test_combined_admission_requires_an_existing_selection_job():
+    base = ci_wiring.load(ROOT)
+    head = combined(base)
+    del base["test.yml"]["jobs"]["select"]
+    assert any("existing selection" in problem for problem in grade(base, head))
