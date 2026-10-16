@@ -1,0 +1,12 @@
+name: Plant without lane
+
+on:
+  push:
+    branches: ["ci-323133-0984-tmp-*"]
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - run: sleep 420
