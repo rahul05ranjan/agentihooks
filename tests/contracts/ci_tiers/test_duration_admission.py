@@ -22,7 +22,7 @@ def combined(base):
     for job in jobs.values():
         if isinstance(job.get("needs"), list):
             job["needs"] = list(dict.fromkeys("select" if name == "durations" else name for name in job["needs"]))
-    head = json.loads(json.dumps(head).replace("needs.durations.outputs.", "needs.select.outputs."))
+    head["test.yml"]["jobs"] = json.loads(json.dumps(jobs).replace("needs.durations.outputs.", "needs.select.outputs."))
     step = head["test.yml"]["jobs"]["gate-required"]["steps"][0]
     step["run"] = (
         step["run"]
