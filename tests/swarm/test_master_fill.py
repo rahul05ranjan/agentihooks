@@ -3,7 +3,7 @@ from dataclasses import replace
 import pytest
 
 from scripts.swarm.store import MASTER, AgentRecord, RedisStore, SwarmConfig
-from scripts.swarm.tick import MASTER_DOWN, STARTUP_GRACE_MS, tick
+from scripts.swarm.tick import MASTER_DOWN, STARTUP_GRACE_MS, SpawnError, tick
 from scripts.swarm_v2 import master_fill
 from scripts.swarm_v2.masters import MasterSeats
 from tests.swarm.test_tick import FakeRuntime, masters, tasks
@@ -211,3 +211,59 @@ def test_a_full_host_holds_the_seat_with_the_hold_it_names(store):
         actions = master_fill.run("sw", store.config("sw"), store, FakeRuntime(), {}, 7)
     assert actions == ["holding the master spawn"]
     assert held.call_args.args == ("sw", store, 7, MASTER)
+
+
+class SeatTwoDown(FakeRuntime):
+    def __init__(self):
+        super().__init__()
+        self.down = True
+
+    def spawn(self, config, lane, name, task):
+        if self.down and task["id"] == "master-2":
+            raise SpawnError("profile canary timeout")
+        return super().spawn(config, lane, name, task)
+
+
+def _seat_two_down(store):
+    MasterSeats(store.redis).set_count("sw", 2)
+    ledger, runtime = tasks(), SeatTwoDown()
+    ledger.phases = [{"id": "p1"}, {"id": "p2"}]
+    return ledger, runtime
+
+
+def _seat_notes(ledger):
+    return [note for note in ledger.notes if "master-2@sw" in note]
+
+
+def test_one_failed_seat_two_launch_raises_no_operator_alarm(store):
+    ledger, runtime = _seat_two_down(store)
+    tick("sw", store, ledger, runtime, 1)
+    assert _seat_notes(ledger) == []
+
+
+def test_repeated_failed_seat_two_launches_raise_one_alarm_naming_seat_phases_and_error(store):
+    ledger, runtime = _seat_two_down(store)
+    for now in (1, 2, 3):
+        tick("sw", store, ledger, runtime, now)
+    owners = MasterSeats(store.redis).owners("sw", ledger.state("sw"))
+    owned = sorted(phase for phase, owner in owners.items() if owner == "master-2@sw")
+    (note,) = _seat_notes(ledger)
+    assert owned and all(phase in note for phase in owned)
+    assert "profile canary timeout" in note
+
+
+def test_a_seat_two_master_that_binds_clears_the_alarm(store):
+    ledger, runtime = _seat_two_down(store)
+    tick("sw", store, ledger, runtime, 1)
+    tick("sw", store, ledger, runtime, 2)
+    runtime.down = False
+    tick("sw", store, ledger, runtime, 3)
+    tick("sw", store, ledger, runtime, 4)
+    alarm, back = _seat_notes(ledger)
+    assert "profile canary timeout" in alarm and "live again" in back
+    runtime.down = True
+    (second,) = [a for a in masters(store) if a.seat == "master-2@sw"]
+    store.put_agent("sw", replace(second, state="finished"))
+    runtime.live.discard(second.name)
+    tick("sw", store, ledger, runtime, 5 + STARTUP_GRACE_MS)
+    assert len(_seat_notes(ledger)) == 2
