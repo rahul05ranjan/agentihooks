@@ -29,7 +29,11 @@ def test_probe(tmp_path):
     env = {k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"}
     result = subprocess.run(
         [sys.executable, "-c", SCRIPT, str(ROOT / "tests" / "t296_gw2_files.txt")],
-        cwd=ROOT, env=env, capture_output=True, text=True, timeout=1500,
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=1500,
     )
     lines = [x for x in result.stdout.splitlines() if x.startswith(("START", "CHANGE", "BANNER_RC"))]
     assert False, "\n".join(lines) + "\n" + result.stderr[-1500:]
