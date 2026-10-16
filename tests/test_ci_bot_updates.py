@@ -80,20 +80,18 @@ def test_unit_shards_restore_dev_durations_from_the_cache_the_dev_push_saves():
     assert "restore-keys" not in restore["with"]
     assert restore["with"]["path"] == save["with"]["path"] == "~/dev-durations"
     assert save["with"]["key"] == "durations-merged-${{ github.sha }}"
-    assert restore["with"]["key"] == "${{ needs.durations.outputs.key }}"
-    assert restore["if"] == "needs.durations.outputs.source == '' && needs.durations.outputs.key != ''"
+    assert restore["with"]["key"] == "${{ needs.select.outputs.key }}"
+    assert restore["if"] == "needs.select.outputs.source == '' && needs.select.outputs.key != ''"
     assert restore["with"]["fail-on-cache-miss"] is True
-    assert jobs["split"]["needs"] == ["durations", "select", "reuse", "admission"]
-    lookup = next(s for s in jobs["durations"]["steps"] if s.get("id") == "stored")
-    assert jobs["durations"]["outputs"] == {
+    assert jobs["split"]["needs"] == ["select", "reuse", "admission"]
+    lookup = next(s for s in jobs["select"]["steps"] if s.get("id") == "stored")
+    assert {key: jobs["select"]["outputs"][key] for key in ("key", "queued", "base", "source")} == {
         "key": "${{ steps.stored.outputs.cache-matched-key }}",
         "queued": "${{ steps.republished.outputs.queued }}",
         "base": "${{ steps.base-run.outputs.sha }}",
         "source": "${{ steps.unit-source.outputs.source }}",
     }
-    assert jobs["durations"]["timeout-minutes"] == (
-        "${{ (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch') && 4 || 2 }}"
-    )
+    assert jobs["select"]["timeout-minutes"] == 5
     assert lookup["id"] == "stored"
     assert lookup["uses"] == "actions/cache/restore@v4"
     assert lookup["with"] == {
@@ -103,7 +101,7 @@ def test_unit_shards_restore_dev_durations_from_the_cache_the_dev_push_saves():
         "restore-keys": "durations-merged-",
         "lookup-only": True,
     }
-    assert {"durations", "split"} <= set(jobs["gate-required"]["needs"])
+    assert {"select", "split"} <= set(jobs["gate-required"]["needs"])
     assert "run" not in restore
     assert adopt["run"] == ADOPT
     assert adopt["env"] == ADOPT_ENV

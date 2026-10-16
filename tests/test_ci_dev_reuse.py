@@ -78,14 +78,14 @@ def evidence(tmp_path, *, reused=False, run_id=123):
     return run, record, folder
 
 
-@pytest.mark.parametrize("producer", ["durations", "lint", "unit (3.12, 1)"])
+@pytest.mark.parametrize("producer", ["durations", "select", "lint", "unit (3.12, 1)"])
 @pytest.mark.parametrize("result", ["success", "failure", "skipped"])
 def test_queue_provenance_can_move_only_to_successful_durations(tmp_path, producer, result):
     _, _, folder = evidence(tmp_path)
     jobs = [json.loads(line) for line in (folder / "jobs.jsonl").read_text().splitlines()]
     jobs[0] = {"name": producer, "conclusion": result}
     (folder / "jobs.jsonl").write_text("".join(json.dumps(job) + "\n" for job in jobs))
-    expected = 123 if producer == "durations" and result == "success" else None
+    expected = 123 if producer in {"durations", "select"} and result == "success" else None
     assert ci_dev_reuse.select_source(tmp_path, HEAD, REPOSITORY) == expected
 
 
@@ -212,8 +212,8 @@ def test_workflow_preserves_downstream_artifacts():
     for kind in ("durations", "flakes", "coverage"):
         restored = steps[f"Restore queue shard {kind}"]
         assert restored["with"]["run-id"] == "${{ needs.split.outputs.source }}"
-    assert jobs["split"]["outputs"]["source"] == "${{ needs.durations.outputs.source }}"
-    assert jobs["durations"]["outputs"]["source"] == "${{ steps.unit-source.outputs.source }}"
+    assert jobs["split"]["outputs"]["source"] == "${{ needs.select.outputs.source }}"
+    assert jobs["select"]["outputs"]["source"] == "${{ steps.unit-source.outputs.source }}"
     for job in ("sonar", "coverage-baseline", "refresh-durations", "flake-budget"):
         assert "unit" in jobs[job]["needs"]
 
