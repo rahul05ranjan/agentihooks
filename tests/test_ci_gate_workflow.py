@@ -40,7 +40,9 @@ def test_stored_durations_share_selection_admission_before_both_shard_paths():
     assert "select" in jobs["split"]["needs"]
     assert "select" in jobs["unit-selected"]["needs"]
     assert jobs["split"]["env"]["UNIT_SOURCE"] == "${{ needs.select.outputs.source }}"
-    assert any(step.get("with", {}).get("key") == "${{ needs.select.outputs.key }}" for step in jobs["unit-selected"]["steps"])
+    assert any(
+        step.get("with", {}).get("key") == "${{ needs.select.outputs.key }}" for step in jobs["unit-selected"]["steps"]
+    )
     published = next(step for step in admission["steps"] if step.get("name") == "Republish the dev durations")
     assert published["with"]["name"] == "dev-durations"
     assert published["with"]["if-no-files-found"] == "error"
