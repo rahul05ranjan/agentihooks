@@ -5,7 +5,6 @@ from types import SimpleNamespace
 import pytest
 
 from scripts.swarm import cli, merge_queue
-from scripts.swarm.store import SwarmError
 
 pytestmark = pytest.mark.unit
 URL = "https://github.com/o/r/pull/9"
