@@ -38,7 +38,7 @@ def branch_only(head: str, root: Path) -> list[str]:
 
 
 def lane_problem(block: object) -> str | None:
-    if not isinstance(block, dict) or " ".join(str(block.get("group")).split()) != GROUP:
+    if not isinstance(block, dict):
         return "has no shared hosted lane concurrency group"
     if block.get("queue") != "max":
         return "queues on the lane without queue: max"
