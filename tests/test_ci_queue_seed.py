@@ -20,6 +20,13 @@ def _jobs():
     return yaml.safe_load((_ROOT / ".github/workflows/test.yml").read_text())["jobs"]
 
 
+def _duration_steps():
+    jobs = _jobs()
+    steps = jobs.get("durations", jobs["select"])["steps"]
+    end = next(index for index, step in enumerate(steps) if step.get("id") == "republished")
+    return steps[: end + 1]
+
+
 def _step(steps, name):
     return next(s for s in steps if s.get("name") == name)
 
@@ -231,7 +238,7 @@ def _runs_on(step, event):
 
 
 def test_dispatch_runs_restore_durations_and_the_base_baseline_on_the_app_token():
-    steps = _jobs()["select"]["steps"]
+    steps = _duration_steps()
     restored = [s for s in steps if _runs_on(s, "workflow_dispatch")]
     names = [s.get("name") for s in restored]
     assert "Look up the base revision's dev durations" not in names
@@ -289,7 +296,7 @@ _REUSE = [
     ],
 )
 def test_pull_request_and_push_runs_keep_the_dev_cache_lookup(event, expected):
-    steps = _jobs()["select"]["steps"]
+    steps = _duration_steps()
     assert [s.get("name") for s in steps if _runs_on(s, event)] == expected
 
 
