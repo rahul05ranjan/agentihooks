@@ -1062,7 +1062,7 @@ def test_the_probe_reads_a_running_suite_from_a_later_page(later, resolved):
     [
         ("FAILURE", None, []),
         ("FAILURE", "SUCCESS", [f"ended the wait of {ME}: checks on {URL}, now green"]),
-        ("SUCCESS", "FAILURE", [f"ended the wait of {ME}: checks on {URL}, now red"]),
+        ("SUCCESS", "FAILURE", [f"ended the wait of {ME}: checks on {URL}, now red; failed: unit"]),
     ],
 )
 def test_a_superseded_failure_never_ends_a_checks_wait(tick, older, newer, told):
