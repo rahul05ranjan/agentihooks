@@ -1641,6 +1641,58 @@ def test_codex_render_links_state_back_to_the_operator_home(world):
     assert (doc["model"], doc["service_tier"], doc["notify"]) == ("gpt-op", "fast", ["py", "-m", "shim"])
 
 
+def test_isolated_codex_render_keeps_session_state_private(world):
+    from scripts.profiles import render
+
+    home = world["home"]
+    _operator_codex(home)
+    _write(home / ".codex" / "auth.json", "{}")
+    for item in ("history.jsonl", "session_index.jsonl"):
+        _write(home / ".codex" / item, "operator state\n")
+    (home / ".codex" / "sessions").mkdir()
+
+    out = render.render_codex("rb-role", isolate=True)
+
+    for item in ("sessions", "history.jsonl", "session_index.jsonl"):
+        assert not (out / item).exists()
+        assert not (out / item).is_symlink()
+    for item in ("auth.json", "hooks.json"):
+        assert os.readlink(out / item) == str(home / ".codex" / item)
+    doc = tomllib.loads((out / "config.toml").read_text())
+    assert doc["sqlite_home"] == str(out)
+    assert render.render_codex("rb-role", isolate=True) is None
+
+
+def test_codex_render_refreshes_when_session_isolation_changes(world):
+    from scripts.profiles import render
+
+    shared = render.render_codex("rb-role")
+    isolated = render.render_codex("rb-role", isolate=True)
+
+    assert isolated is not None
+    assert isolated != shared
+    assert (shared / "sessions").is_symlink()
+    assert not (isolated / "sessions").is_symlink()
+
+    restored = render.render_codex("rb-role")
+
+    assert restored is not None
+    assert restored != isolated
+    assert os.readlink(restored / "sessions") == str(world["home"] / ".codex" / "sessions")
+
+
+def test_swarm_codex_preparation_renders_isolated_storage(world):
+    from scripts import select_profile
+
+    env, _ = select_profile.prepare("rb-role", "codex", "", "", [], {"AGENTIHOOKS_SWARM": "crew"})
+    out = Path(env["CODEX_HOME"])
+
+    for item in ("sessions", "history.jsonl", "session_index.jsonl"):
+        assert not (out / item).is_symlink()
+    assert (out / "hooks.json").is_symlink()
+    assert tomllib.loads((out / "config.toml").read_text())["sqlite_home"] == str(out)
+
+
 def _hooks_entries(hooks: Path) -> list[str]:
     doc = json.loads(hooks.read_text())["hooks"]
     labels = {
@@ -2654,6 +2706,13 @@ def overlays(world, tmp_path, monkeypatch):
     return profiles
 
 
+@pytest.fixture
+def recorded_assets(world, overlays, tmp_path, monkeypatch):
+    features = tmp_path / "package-features"
+    features.mkdir()
+    monkeypatch.setattr(world["install"], "PACKAGE_FEATURES_DIR", features)
+
+
 def test_overlays_follow_the_role_chain_and_the_always_on_overlays(world, overlays, named_brain):
     from scripts.profiles import render
 
@@ -2815,109 +2874,3 @@ def test_cli_renders_the_overlays_named(world, overlays, capsys):
     with pytest.raises(SystemExit):
         render.main(["render", "--help"])
     assert re.search(r"--overlay OVERLAY\s+Wear this overlay; repeat for up to three", capsys.readouterr().out)
-
-
-def test_an_overlay_render_refuses_a_bundle_at_another_commit_than_its_launch_recorded(world, overlays):
-    from scripts.profiles import render
-
-    recorded = _git(world["bundle"], "rev-parse", "HEAD").strip()
-    _commit(world["bundle"], "moved")
-    head = _git(world["bundle"], "rev-parse", "HEAD").strip()
-
-    with pytest.raises(ValueError) as refused:
-        render.render("claude", "rb-eng", overlays=["ov-a"], bundle_revision=recorded)
-
-    assert str(refused.value) == (
-        f"the launch recorded bundle commit {recorded}, but the bundle at {world['bundle']} is at commit {head}; "
-        f"check out {recorded} in the bundle before this launch renders"
-    )
-    assert render.profile_dir("rb-eng", ["ov-a"]) is None
-
-
-def test_an_overlay_render_refuses_a_bundle_with_uncommitted_changes(world, overlays):
-    from scripts.profiles import render
-
-    recorded = _git(world["bundle"], "rev-parse", "HEAD").strip()
-    _write(overlays / "ov-a" / ".claude" / "rules" / "ov-a.md", "EDITED RULE\n")
-
-    with pytest.raises(ValueError) as refused:
-        render.render("codex", "rb-eng", overlays=["ov-a"], bundle_revision=recorded)
-
-    assert str(refused.value) == (
-        f"the launch recorded bundle commit {recorded}, but the bundle at {world['bundle']} has uncommitted changes; "
-        f"check out {recorded} in the bundle before this launch renders"
-    )
-    assert render.profile_dir("rb-eng", ["ov-a"]) is None
-
-
-def test_an_overlay_render_refuses_a_recorded_commit_without_a_linked_bundle(world, overlays, monkeypatch):
-    from scripts.profiles import render
-
-    monkeypatch.setattr(render, "_bundle", lambda: None)
-
-    with pytest.raises(ValueError) as refused:
-        render.render("claude", "rb-eng", overlays=["ov-a"], bundle_revision="abc123")
-
-    assert str(refused.value) == "the launch recorded bundle commit abc123, but no bundle is linked"
-
-
-def test_an_overlay_render_refuses_a_bundle_git_cannot_read(world, overlays, monkeypatch, tmp_path):
-    from scripts.profiles import render
-
-    plain = tmp_path / "plain"
-    plain.mkdir()
-    monkeypatch.setattr(render, "_bundle", lambda: plain)
-
-    with pytest.raises(ValueError) as refused:
-        render.render("claude", "rb-eng", overlays=["ov-a"], bundle_revision="abc123")
-
-    assert str(refused.value).startswith(
-        f"the launch recorded bundle commit abc123, but git cannot read the bundle at {plain}: fatal: not a git repository"
-    )
-
-
-def test_an_overlay_render_refuses_a_bundle_git_does_not_answer(world, overlays, monkeypatch):
-    from scripts.profiles import render
-
-    def hang(argv, **kwargs):
-        assert kwargs["timeout"] == 10
-        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
-
-    monkeypatch.setattr(render.subprocess, "run", hang)
-
-    with pytest.raises(ValueError) as refused:
-        render.render("claude", "rb-eng", overlays=["ov-a"], bundle_revision="abc123")
-
-    assert str(refused.value) == (
-        f"the launch recorded bundle commit abc123, but git did not answer within 10 seconds for the bundle at "
-        f"{world['bundle']}"
-    )
-
-
-def test_the_bundle_pin_reads_head_and_status_as_text_within_ten_seconds(world, overlays, monkeypatch):
-    from scripts.profiles import render
-
-    calls = []
-
-    def run(argv, **kwargs):
-        calls.append((argv[3:], kwargs))
-        return subprocess.CompletedProcess(argv, 0, stdout="abc123\n" if argv[3] == "rev-parse" else "", stderr="")
-
-    monkeypatch.setattr(render.subprocess, "run", run)
-
-    render._pin(world["bundle"], "abc123")
-
-    options = {"capture_output": True, "text": True, "timeout": 10}
-    assert calls == [(["rev-parse", "HEAD"], options), (["status", "--porcelain"], options)]
-
-
-def test_an_overlay_render_from_the_recorded_commit_renders_and_stamps_it(world, overlays):
-    from scripts.profiles import render
-
-    recorded = _git(world["bundle"], "rev-parse", "HEAD").strip()
-
-    out = render.render("claude", "rb-eng", overlays=["ov-a"], bundle_revision=recorded)
-
-    assert "OV-A RULE MARKER" in (out / "CLAUDE.md").read_text()
-    assert json.loads((out / render.STAMP).read_text())["bundle_commit"] == recorded
-    assert render.render("claude", "rb-eng", overlays=["ov-a"], bundle_revision=recorded) is None

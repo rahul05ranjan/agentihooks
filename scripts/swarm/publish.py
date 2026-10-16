@@ -69,6 +69,14 @@ def checkout_fields(root: Path) -> dict:
     }
 
 
+def branch_record(fields: dict, repository: Path, task: dict) -> dict:
+    return {
+        "branch": fields["branch"],
+        "branch_repo": fields["branch_repo"],
+        "repository_branches": {**task.get("repository_branches", {}), str(repository): fields["branch"]},
+    }
+
+
 def repository_root(repo: Path) -> Path:
     return Path(git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir")).parent
 
@@ -98,7 +106,7 @@ def publishing_root(repo: str, task: dict, agent: AgentRecord) -> tuple[Path | N
         own = re.fullmatch(rf"{re.escape(naming.plain(agent.name))}(?:-\d+)?", branch)
         if not (own or branch == scoped.get("branch")):
             raise SwarmError(f"current worktree {root} does not belong to this task")
-        return root, primary, scoped
+        return root, primary, {**scoped, "branch": branch}
     repositories = task.get("repositories") or [repo]
     if len(repositories) != 1:
         raise SwarmError("publish from the task worktree to select one of its repositories")
@@ -121,6 +129,9 @@ def prepare(slug: str, agent: AgentRecord, repo: str, ledger: LedgerClient) -> d
             output = execute(command, repository)
             root = Path(output.splitlines()[-1])
         fields.append({**checkout_fields(root), "repository": str(repository)})
+    update = branch_record(fields[-1], Path(fields[-1]["repository"]), task)
+    update["repository_branches"].update({entry["repository"]: entry["branch"] for entry in fields})
+    ledger.update_task(slug, agent.task, update, by=agent.name)
     result = fields[0] if len(fields) == 1 else {"worktrees": fields}
     return {**result, "repository_source": "task" if task.get("repositories") else "swarm default"}
 
@@ -171,6 +182,16 @@ def check_build(root: Path) -> None:
         raise SwarmError(reason.getvalue().strip())
 
 
+def target_branch(root: Path, task: dict, branch: str) -> str:
+    recorded = task.get("branch")
+    if recorded:
+        ref = f"refs/remotes/origin/{recorded}"
+        done = subprocess.run(["git", "merge-base", "--is-ancestor", ref, "HEAD"], cwd=root, capture_output=True)
+        if done.returncode == 0:
+            return recorded
+    return branch
+
+
 def gate_python(repo: Path) -> str:
     venv = repo.parent / ".venv" / "bin" / "python"
     for python in (venv, Path(sys.executable)):
@@ -196,8 +217,7 @@ def publish(slug: str, agent: AgentRecord, repo: str, ledger: LedgerClient, mess
     if root is None:
         raise SwarmError(f"task worktree missing; Next: agentihooks swarm {shlex.quote(slug)} prepare")
     fields = checkout_fields(root)
-    if scoped.get("branch"):
-        fields["branch"] = scoped["branch"]
+    fields["branch"] = target_branch(root, scoped, fields["branch"])
     selected = selected_files(root, files)
     retry = shlex.join(["agentihooks", "swarm", slug, "publish", "--message", message, "--", *files])
     try:
@@ -222,7 +242,6 @@ def publish(slug: str, agent: AgentRecord, repo: str, ledger: LedgerClient, mess
         if fields.get("gate") == "AgentiHooks touched Python fallback":
             detail = f"AgentiHooks touched Python fallback for {root}: {detail}"
         raise SwarmError(f"{detail}; Next: {retry}") from exc
-    update = {key: fields[key] for key in ("branch", "branch_repo")}
-    update["repository_branches"] = {**task.get("repository_branches", {}), str(primary): fields["branch"]}
+    update = branch_record(fields, primary, task)
     ledger.update_task(slug, agent.task, update, by=agent.name)
     return {**fields, "head": head}

@@ -11,7 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from scripts import agent_choice, claude_trust, herdr_host, herdr_panes, operator_env
+from scripts import agent_choice, claude_trust, gh_config, herdr_host, herdr_panes, operator_env
 from scripts.swarm import effort_range
 from scripts.targets.codex_target import codex_home, restore_hook_order
 
@@ -322,6 +322,23 @@ def _app_server_command(
     ]
 
 
+def _viewer_lines(serve: str, launcher: Path, name: str, environ: dict[str, str], inputs: list[str]) -> str:
+    """The supervised server removes its own inputs; closing the pane ends only the viewer."""
+    log = launcher.with_name(f"{launcher.stem}.serve.log")
+    viewer = [
+        sys.executable,
+        "-m",
+        "scripts.codex_session",
+        "attach",
+        "--slug",
+        environ.get("AGENTIHOOKS_SWARM") or "",
+        "--agent",
+        name,
+    ]
+    server = shlex.quote(f"{serve}; rm -f {shlex.join(inputs)}")
+    return f"setsid -f sh -c {server} </dev/null >>{shlex.quote(str(log))} 2>&1\n{shlex.join(viewer)}"
+
+
 def _agent_command(
     spec: AgentSpec,
     report: Path,
@@ -412,6 +429,9 @@ def _write_launcher(
     exit_command = shlex.join([sys.executable, "-m", "scripts.session_exit", str(exit_record)])
     exit_identity = shlex.join([spec.agent, identity])
     command_text = shlex.join(command)
+    inputs = [*([str(prompt_file)] if prompt_file is not None else []), str(_route_report(launcher))]
+    if app_server:
+        command_text = _viewer_lines(command_text, launcher, name, environ, inputs)
     if prompt_file is not None and not app_server:
         opening_prompt = _opening_prompt(prompt, prompt_file)
         prompt_arg = (
@@ -419,11 +439,7 @@ def _write_launcher(
         )
         held = f'set --; [ -n "${{{PROMPT_AFTER_START}:-}}" ] || set -- {prompt_arg}; unset {PROMPT_AFTER_START}; '
         command_text = f'{held}{command_text} "$@"' if spec.agent == "codex" else f"{command_text} -- {prompt_arg}"
-    cleanup = [
-        str(launcher),
-        str(_route_report(launcher)),
-        *([str(prompt_file)] if prompt_file is not None else []),
-    ]
+    cleanup = [str(launcher), *([] if app_server else inputs)]
     shell = environ.get("SHELL") or "/bin/bash"
     launcher.write_text(
         "#!/usr/bin/env bash\n"
@@ -433,6 +449,7 @@ def _write_launcher(
         f": > {shlex.quote(str(_started_marker(launcher)))}\n"
         f"{operator_env.source_line(environ)}"
         f"{_predecessor_export(environ)}"
+        f"{gh_config.SHELL_PIN}"
         f"export AGENTIHOOKS_EXIT_RECORD={shlex.quote(str(exit_record))}\n"
         "export AGENTIHOOKS_TERMINAL_LAUNCH=1\n"
         f"export AGENTIHOOKS_AGENT_NAME={shlex.quote(identity)}\n"
