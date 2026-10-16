@@ -851,9 +851,14 @@ def test_a_wait_on_a_finished_task_still_refuses_the_stop(rig, state):
 
 @pytest.mark.parametrize(
     "on",
-    [None, {"kind": "checks", "target": "https://github.com/o/r/pull/7"}, {"kind": "task", "target": "t9"}],
+    [
+        None,
+        {"kind": "checks", "target": "https://github.com/o/r/pull/7"},
+        {"kind": "task", "target": "t9"},
+        {"kind": "task", "target": "t1"},
+    ],
 )
-def test_a_bare_wait_another_kind_or_a_missing_task_still_refuses_the_stop(rig, on):
+def test_a_bare_wait_another_kind_or_a_missing_or_own_task_still_refuses_the_stop(rig, on):
     refuse_the_push(rig)
     with_task(rig, "claimed")
     wait_on(rig, on)

@@ -199,7 +199,7 @@ class PushStop:
         return count(tree.path, "HEAD", "--not", "--remotes=origin") == 0
 
     def waiting(self, store, who, doc, task):
-        """Whether a live checked wait on another task not yet done holds the stop, so a refused push cannot deadlock."""
+        """Whether a live checked wait on another task not yet done holds the stop, so a refused push never deadlocks."""
         from scripts.swarm import idle, waits
 
         held = idle.wait(store.redis, who.swarm, who.name)
