@@ -503,9 +503,10 @@ def test_the_life_launched_after_a_park_is_recorded_as_after_the_park(parked):
     ledger.rows["a"]["state"] = "done"
     ledger.update_task = type(ledger).update_task.__get__(ledger)
     tick.tick("sw", store, ledger, rt, now_ms=NOW + 1)
-    assert [(row["task"], row["state"], row["after"]) for row in store.launches("sw") if row["task"] == "t1"] == [
-        ("t1", "started", "park")
-    ]
+    lives = sorted(
+        (row["agent"] == AGENT, row["state"], row["after"]) for row in store.launches("sw") if row["task"] == "t1"
+    )
+    assert lives == [(False, "started", "park"), (True, "started", "")]
 
 
 def test_shell_runs_with_captured_text_and_a_timeout(monkeypatch):
