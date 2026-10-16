@@ -10,7 +10,12 @@ from tests.test_ci_hosted_lanes import _resolve
 pytestmark = pytest.mark.unit
 
 ROOT = Path(__file__).parents[3]
-UNIT = {"durations", "split", "unit", "shard-check", "test-count", "gate-required"}
+DURATION_JOB = (
+    "durations"
+    if "durations" in yaml.safe_load((ROOT / ".github/workflows/test.yml").read_text())["jobs"]
+    else "select"
+)
+UNIT = {DURATION_JOB, "split", "unit", "shard-check", "test-count", "gate-required"}
 QUEUE = UNIT | {"queue-fail-fast"}
 PULL_REQUEST = UNIT | {"select", "lint", "semgrep", "sonar", "mutation-plan", "mutation-stats", "mutation"}
 SELECTED = PULL_REQUEST - {"split", "unit", "shard-check"} | {"unit-selected"}
