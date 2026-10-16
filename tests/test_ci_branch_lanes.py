@@ -95,6 +95,14 @@ def test_a_workflow_without_jobs_has_no_problem_and_a_non_mapping_is_refused():
     assert lanes.problems(None) == ["is not a workflow mapping"]
     assert lanes.problems(_workflow(LANED, a=None, b="x")) == []
     assert lanes.problems(_workflow(a=None)) == ["job a has no shared hosted lane concurrency group"]
+    assert lanes.problems({"jobs": ["a"]}) == ["has no jobs mapping"]
+    assert lanes.problems({"jobs": "a"}) == ["has no jobs mapping"]
+
+
+def test_a_file_that_does_not_parse_is_refused():
+    assert lanes.grade("jobs: [unclosed") == ["does not parse as YAML"]
+    assert lanes.grade(yaml.safe_dump(_workflow(LANED))) == []
+    assert lanes.grade(yaml.safe_dump(_workflow())) == ["job replay has no shared hosted lane concurrency group"]
 
 
 def test_only_workflows_absent_on_the_base_are_graded(tmp_path, monkeypatch):
@@ -153,25 +161,29 @@ def _run(number, path, status="in_progress"):
 
 def test_cancel_stops_each_open_run_once_and_waits_until_every_refused_workflow_shows(monkeypatch):
     pages = [
-        [_run(1, "a.yml"), _run(2, "keep.yml"), _run(5, "b.yml", "completed")],
-        [_run(1, "a.yml"), _run(3, "b.yml@refs/heads/x"), _run(4, "a.yml", "completed")],
+        [_run(1, "a.yml"), _run(2, "keep.yml"), _run(5, "b.yml", "completed"), _run(6, "c.yml")],
+        [_run(1, "a.yml"), _run(3, "b.yml@refs/heads/x"), _run(6, "c.yml"), _run(4, "a.yml", "completed")],
     ]
-    calls, sleeps = [], []
-
-    def api(*args, check=True):
-        calls.append((*args, check))
-        return {"workflow_runs": pages.pop(0)} if args[0].endswith("per_page=100") else {}
-
-    monkeypatch.setattr(lanes, "api", api)
+    calls, sleeps, stops = [], [], []
+    monkeypatch.setattr(lanes, "api", lambda *args: calls.append(args) or {"workflow_runs": pages.pop(0)})
+    monkeypatch.setattr(lanes, "stop", lambda repo, run: stops.append((repo, run)) or stops != [(repo, 1), (repo, 6)])
     monkeypatch.setattr(lanes.time, "sleep", sleeps.append)
-    assert lanes.cancel("o/r", "abc", {"a.yml", "b.yml"}, 60) == {1, 3}
+    assert lanes.cancel("o/r", "abc", {"a.yml", "b.yml", "c.yml"}, 60) == {1, 3, 6}
     assert sleeps == [5.0]
-    assert calls == [
-        ("repos/o/r/actions/runs?head_sha=abc&per_page=100", True),
-        ("-X", "POST", "repos/o/r/actions/runs/1/cancel", False),
-        ("repos/o/r/actions/runs?head_sha=abc&per_page=100", True),
-        ("-X", "POST", "repos/o/r/actions/runs/3/cancel", False),
-    ]
+    assert calls == [("repos/o/r/actions/runs?head_sha=abc&per_page=100",)] * 2
+    assert stops == [("o/r", 1), ("o/r", 6), ("o/r", 3), ("o/r", 6)]
+
+
+@pytest.mark.parametrize("code, stopped", [(0, True), (1, False)])
+def test_stop_reports_whether_github_accepted_the_cancel(monkeypatch, code, stopped):
+    seen = []
+    monkeypatch.setattr(
+        lanes.subprocess,
+        "run",
+        lambda argv, **kwargs: seen.append((argv, kwargs)) or subprocess.CompletedProcess(argv, code),
+    )
+    assert lanes.stop("o/r", 7) is stopped
+    assert seen == [(["gh", "api", "-X", "POST", "repos/o/r/actions/runs/7/cancel"], {"capture_output": True})]
 
 
 def test_cancel_gives_up_at_the_deadline_when_a_workflow_never_runs(monkeypatch):
@@ -193,11 +205,9 @@ def test_api_and_git_read_their_commands(monkeypatch):
 
     monkeypatch.setattr(lanes.subprocess, "run", run)
     assert lanes.api("-X", "POST", "x") == {}
-    assert lanes.api("z", check=False) == {}
     assert lanes.git("show", "y") == "out"
     assert seen == [
         (["gh", "api", "-X", "POST", "x"], {"capture_output": True, "check": True}),
-        (["gh", "api", "z"], {"capture_output": True, "check": False}),
         (["git", "show", "y"], {"capture_output": True, "text": True, "check": True}),
     ]
 
