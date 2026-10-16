@@ -499,8 +499,8 @@ def test_failed_launches_do_not_consume_lives_and_preserve_each_error(store, err
         ("", "swarm", ""),
     ],
 )
-def test_a_started_launch_records_why_its_task_was_open(store, runtime, marked, state_by, after):
-    ledger = tasks(("t1", "eng"))
+def test_a_started_launch_records_why_its_task_was_open(store, marked, state_by, after):
+    ledger, runtime = tasks(("t1", "eng")), FakeRuntime()
     ledger.stamps = {"tasks/t1/state": {"by": state_by}}
     if marked:
         store.mark_restart("sw", "t1", marked)
@@ -515,7 +515,7 @@ def test_a_failed_launch_keeps_the_restart_mark_for_the_next_start(store):
     tick("sw", store, ledger, runtime, now_ms=1_000)
     runtime.crash = None
     tick("sw", store, ledger, runtime, now_ms=2_000)
-    assert [row["after"] for row in store.launches("sw") if row["state"] == "started"] == ["park"]
+    assert sorted((row["state"], row["after"]) for row in store.launches("sw")) == [("failed", ""), ("started", "park")]
 
 
 class FailingFor(FakeRuntime):

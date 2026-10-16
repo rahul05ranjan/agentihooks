@@ -215,7 +215,7 @@ def scope_inflation(events, tasks, limits):
 def proof_loops(
     events: list[dict], tasks: dict[str, dict], limits: Limits, reviews: dict[str, dict[str, int]]
 ) -> list[Finding]:
-    claims = Counter(_task_id(e["target"]) for e in events if e.get("kind") == "task started")
+    claims = Counter(_task_id(e["target"]) for e in events if e.get("kind") == "task started" and not e.get("after"))
     rounds = {tid: max(reviews.get(tid, {}).values(), default=0) for tid in tasks}
     found = []
     for tid in tasks:
