@@ -132,12 +132,12 @@ def test_priority_restores_entries_after_a_mutation_fails(failure):
     queue = FakeQueue()
 
     def run(command, **kwargs):
-        if ("enqueuePullRequest" in command[4] and "id=P9" in command and failure == "critical") or (
-            "dequeuePullRequest" in command[4] and "id=P2" in command and failure == "dequeue"
+        if ("enqueuePullRequest" in " ".join(command) and "id=P9" in command and failure == "critical") or (
+            "dequeuePullRequest" in " ".join(command) and "id=P2" in command and failure == "dequeue"
         ):
             return subprocess.CompletedProcess(command, 1, "", "insertion refused")
         done = queue.run(command, **kwargs)
-        if "dequeuePullRequest" in command[4] and "id=P2" in command and failure == "timeout":
+        if "dequeuePullRequest" in " ".join(command) and "id=P2" in command and failure == "timeout":
             raise subprocess.TimeoutExpired(command, 20)
         return done
 
@@ -172,7 +172,7 @@ def test_priority_reenqueues_a_critical_entry_ejected_during_reorder():
 
     def run(command, **kwargs):
         done = queue.run(command, **kwargs)
-        if "dequeuePullRequest" in command[4] and "id=P2" in command:
+        if "dequeuePullRequest" in " ".join(command) and "id=P2" in command:
             queue.entries = [e for e in queue.entries if e["pullRequest"]["id"] != "P9"]
         return done
 
@@ -185,7 +185,7 @@ def test_priority_attempts_every_restoration_after_one_is_refused():
     queue = FakeQueue()
 
     def run(command, **kwargs):
-        if "enqueuePullRequest" in command[4] and "id=P2" in command:
+        if "enqueuePullRequest" in " ".join(command) and "id=P2" in command:
             return subprocess.CompletedProcess(command, 1, "", "restore refused")
         return queue.run(command, **kwargs)
 
