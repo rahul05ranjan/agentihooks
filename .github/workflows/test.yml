@@ -1132,7 +1132,7 @@ jobs:
         env:
           BASE: ${{ github.event_name == 'pull_request' && github.base_ref == 'dev' && 'origin/dev' || github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || inputs.base }}
         run: |
-          BASE="$(git rev-parse HEAD)"
+          BASE="$(git merge-base "$BASE" HEAD)"
           git worktree add --detach "$RUNNER_TEMP/base" "$BASE"
 
       # The base revision's copy grades, so a pull request cannot loosen its own floor.
