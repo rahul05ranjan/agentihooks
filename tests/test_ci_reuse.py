@@ -950,6 +950,8 @@ def _gate(steps, needs, event="merge_group"):
 @pytest.mark.parametrize("promotion", [False, True])
 @pytest.mark.parametrize("admission", ["success", "failure", "skipped", "cancelled", None])
 def test_consolidated_gate_requires_the_shared_admission(event, promotion, admission):
+    from scripts import ci_reuse
+
     required = (
         {"select", "split", "unit", "shard-check", "test-count", "queue-fail-fast"}
         if event == "merge_group"
