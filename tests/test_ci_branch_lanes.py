@@ -373,3 +373,30 @@ def test_a_second_event_key_spelling_cannot_widen_a_trusted_conditional_lane(tmp
     assert lanes.refused(sha, base) == {
         f"{lanes.WORKFLOWS}/replay.yml": ["job replay has no shared hosted lane concurrency group"]
     }
+
+
+@pytest.mark.parametrize(
+    ("job", "stage", "index", "producer", "output"),
+    [("stats", "stats", "part", "plan", "stats_lane"), ("mutation-shard", "shard", "shard", "refine", "shard_lane")],
+)
+def test_trusted_mutation_stages_can_migrate_to_computed_lanes(job, stage, index, producer, output):
+    import copy
+
+    baseline = yaml.safe_load((ROOT / lanes.WORKFLOWS / "mutation-preflight.yml").read_text())
+    updated = copy.deepcopy(baseline)
+    updated["jobs"][job]["concurrency"]["group"] = (
+        "${{ format('{0}-"
+        + stage
+        + "-{1}', github.workflow == 'Mutation preflight' && needs."
+        + producer
+        + ".outputs."
+        + output
+        + " != '' && format('mutation-lane-{0}', needs."
+        + producer
+        + ".outputs."
+        + output
+        + ") || format('mutation-preflight-job-{0}', github.run_id), matrix."
+        + index
+        + ") }}"
+    )
+    assert lanes.problems(updated, baseline) == []
