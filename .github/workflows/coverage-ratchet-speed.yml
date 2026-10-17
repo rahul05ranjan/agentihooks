@@ -1,0 +1,89 @@
+name: Coverage ratchet speed
+
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore: [dev, main, "gh-readonly-queue/**", "wip/**"]
+    paths: [tests/coverage_ratchet.py, .github/workflows/coverage-ratchet-speed.yml]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install coverage
+        run: python -m pip install "coverage>=7.4"
+      - uses: actions/checkout@v4
+        with:
+          ref: 768175723e90908ad02a738ed57791fcabcc296b
+          path: original
+          fetch-depth: 0
+      - name: Restore the identical baseline
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/coverage-baseline
+          key: coverage-baseline-a5c01618f6e08ec0d6b8c1eeab2384b7c4252472
+          fail-on-cache-miss: true
+      - name: Restore the identical shards
+        uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-3.12-*
+          path: head-coverage
+          run-id: 38996268441
+          github-token: ${{ github.token }}
+      - name: Replay original and candidate against identical inputs
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import pstats
+          import subprocess
+          import sys
+          import time
+          from pathlib import Path
+
+          root = Path.cwd()
+          evidence = root / "speed-evidence"
+          evidence.mkdir()
+          baseline = Path.home() / "coverage-baseline/baseline.json"
+          results = {}
+          for name, code in (("original", root / "original"), ("candidate", root)):
+              out = evidence / name
+              command = [sys.executable, "-m", "tests.coverage_ratchet",
+                         "--base", "224f880cc9b4f6b6cfd15a17b5a7d22f72958ea4",
+                         "--head", str(root / "original"), "--shards", "12",
+                         "--head-shards", str(root / "head-coverage"),
+                         "--base-baseline", str(baseline), "--out", str(out)]
+              started = time.perf_counter()
+              result = subprocess.run(command, cwd=code, capture_output=True, text=True)
+              elapsed = time.perf_counter() - started
+              (evidence / f"{name}.log").write_text(result.stdout + result.stderr)
+              results[name] = {"seconds": elapsed, "verdict": result.returncode}
+              print(name, json.dumps(results[name]), flush=True)
+          (evidence / "timings.json").write_text(json.dumps(results, indent=2))
+          assert results["original"]["verdict"] == results["candidate"]["verdict"] == 1
+          assert (evidence / "original/report.txt").read_bytes() == (evidence / "candidate/report.txt").read_bytes()
+          command = [sys.executable, "-m", "cProfile", "-o", str(evidence / "original.prof"), *command[2:]]
+          subprocess.run(command, cwd=root / "original", capture_output=True, text=True)
+          with (evidence / "profile.txt").open("w") as stream:
+              pstats.Stats(str(evidence / "original.prof"), stream=stream).sort_stats("cumulative").print_stats(35)
+          print((evidence / "profile.txt").read_text())
+          print("Identical full reports and failure verdicts on head 768175723e90908ad02a738ed57791fcabcc296b")
+          PY
+      - name: Retain timing and equivalence evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-ratchet-speed
+          path: speed-evidence
+          retention-days: 7
