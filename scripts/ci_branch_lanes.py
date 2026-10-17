@@ -56,6 +56,27 @@ def events(workflow: dict) -> list:
     return [workflow[key] for key in ("on", True) if key in workflow]
 
 
+def computed_mutation_lane(name: str, block: object, jobs: dict, trusted: dict) -> bool:
+    stages = {
+        "stats": ("stats", "part", "plan", "stats_lane"),
+        "mutation-shard": ("shard", "shard", "refine", "shard_lane"),
+    }
+    if trusted.get("name") != "Mutation preflight" or name not in stages:
+        return False
+    baseline = trusted.get("jobs") or {}
+    if name not in baseline or any(jobs.get(producer) != baseline.get(producer) for producer in ("plan", "refine")):
+        return False
+    stage, index, producer, output = stages[name]
+    if (baseline.get(producer, {}).get("outputs") or {}).get(output) != "${{ steps.lanes.outputs.lane }}":
+        return False
+    value = f"needs.{producer}.outputs.{output}"
+    group = (
+        f"${{{{ format('{{0}}-{stage}-{{1}}', github.workflow == 'Mutation preflight' && {value} != '' "
+        f"&& format('mutation-lane-{{0}}', {value}) || format('mutation-preflight-job-{{0}}', github.run_id), matrix.{index}) }}}}"
+    )
+    return block == {"group": group, "queue": "${{ github.workflow == 'Mutation preflight' && 'max' || 'single' }}"}
+
+
 def problems(workflow: object, baseline: object = None) -> list[str]:
     if not isinstance(workflow, dict):
         return ["is not a workflow mapping"]
@@ -76,6 +97,8 @@ def problems(workflow: object, baseline: object = None) -> list[str]:
         base_job = (trusted.get("jobs") or {}).get(name, {})
         base_block = base_job.get("concurrency", trusted.get("concurrency"))
         if trusted and (name in (trusted.get("jobs") or {}) or base_block is not None) and block == base_block:
+            continue
+        if computed_mutation_lane(name, block, jobs, trusted):
             continue
         problem = lane_problem(block)
         if problem:

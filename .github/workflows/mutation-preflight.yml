@@ -32,6 +32,8 @@ jobs:
       changed: ${{ steps.plan.outputs.changed }}
       graded: ${{ steps.plan.conclusion == 'success' }}
       open: ${{ steps.open.outputs.open }}
+      stats_lane: ${{ steps.lanes.outputs.lane }}
+      batch_ceiling: ${{ steps.lanes.outputs.ceiling }}
     steps:
       - name: Skip when the branch already has an open pull request into dev
         id: open
@@ -92,6 +94,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python -m scripts.ci_mutation.plan --base "$BASE"
+
+      - name: Mint the batch capacity read token
+        id: capacity-token
+        if: steps.plan.conclusion == 'success' && steps.plan.outputs.changed != '0' && github.workflow == 'Mutation preflight' && runner.environment == 'self-hosted'
+        uses: actions/create-github-app-token@v3.2.0
+        with:
+          client-id: ${{ secrets.TCC_CI_CLIENT_ID }}
+          private-key: ${{ secrets.TCC_CI_APP_PRIVATE_KEY }}
+          repositories: antoncore
+          permission-contents: read
+
+      - name: Size statistics lanes from the batch ceiling
+        id: lanes
+        if: steps.plan.conclusion == 'success' && steps.plan.outputs.changed != '0' && github.workflow == 'Mutation preflight' && runner.environment == 'self-hosted'
+        env:
+          GH_TOKEN: ${{ steps.capacity-token.outputs.token }}
+          SHARDS: ${{ steps.plan.outputs.stats_parts }}
+        shell: bash
+        run: |
+          gh api 'repos/the-cloud-clockwork/antoncore/contents/k8s/charts/arc-runners-oss/values-oss-batch.yaml?ref=dev' --jq .content | base64 --decode > "$RUNNER_TEMP/batch-values.yaml"
+          python -m scripts.ci_mutation.lanes --values "$RUNNER_TEMP/batch-values.yaml" --shards "$SHARDS" --run-id "$GITHUB_RUN_ID"
 
   # A branch that adds only failing tests has no mutants and may reuse a green report, so its touched tests run here.
   touched-tests:
@@ -251,6 +274,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       shards: ${{ steps.refine.outputs.shards }}
+      shard_lane: ${{ steps.lanes.outputs.lane }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -281,6 +305,14 @@ jobs:
         env:
           BASES: ${{ needs.plan.outputs.bases }}
         run: python -m scripts.ci_mutation.measured --bases "$BASES" --stats .mutation-stats
+
+      - name: Size mutation lanes from the refined shard count
+        id: lanes
+        if: needs.plan.outputs.batch_ceiling != ''
+        env:
+          CEILING: ${{ needs.plan.outputs.batch_ceiling }}
+          SHARDS: ${{ steps.refine.outputs.shards }}
+        run: python -m scripts.ci_mutation.lanes --ceiling "$CEILING" --shards "$SHARDS" --run-id "$GITHUB_RUN_ID"
 
       - name: Upload the measured mutation plan
         uses: actions/upload-artifact@v4

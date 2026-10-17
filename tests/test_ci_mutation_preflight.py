@@ -82,7 +82,7 @@ def test_preflight_reuses_a_green_report_before_the_plan_installs_anything():
         if step.get("id") in {"capacity-token", "lanes"}:
             assert (
                 step["if"]
-                == "steps.plan.outputs.changed != '0' && github.workflow == 'Mutation preflight' && runner.environment == 'self-hosted'"
+                == "steps.plan.conclusion == 'success' && steps.plan.outputs.changed != '0' && github.workflow == 'Mutation preflight' && runner.environment == 'self-hosted'"
             )
         else:
             assert step["if"] == gated, step

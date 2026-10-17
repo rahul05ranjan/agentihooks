@@ -400,3 +400,29 @@ def test_trusted_mutation_stages_can_migrate_to_computed_lanes(job, stage, index
         + ") }}"
     )
     assert lanes.problems(updated, baseline) == []
+
+
+@pytest.mark.parametrize("change", ["plan", "refine", "queue", "cancel", "group", "output", "untrusted"])
+def test_computed_mutation_lane_migration_keeps_trusted_producers_and_queue_policy(change):
+    import copy
+
+    baseline = yaml.safe_load((ROOT / lanes.WORKFLOWS / "mutation-preflight.yml").read_text())
+    updated = copy.deepcopy(baseline)
+    block = updated["jobs"]["stats"]["concurrency"]
+    block["group"] = (
+        "${{ format('{0}-stats-{1}', github.workflow == 'Mutation preflight' && needs.plan.outputs.stats_lane != '' && format('mutation-lane-{0}', needs.plan.outputs.stats_lane) || format('mutation-preflight-job-{0}', github.run_id), matrix.part) }}"
+    )
+    if change in {"plan", "refine"}:
+        updated["jobs"][change]["steps"].append({"run": "echo changed producer"})
+    elif change == "queue":
+        block["queue"] = "single"
+    elif change == "cancel":
+        block["cancel-in-progress"] = True
+    elif change == "group":
+        block["group"] = "${{ github.run_id }}"
+    elif change == "output":
+        baseline["jobs"]["plan"]["outputs"].pop("stats_lane")
+        updated["jobs"]["plan"] = copy.deepcopy(baseline["jobs"]["plan"])
+    else:
+        baseline = None
+    assert any("job stats " in problem for problem in lanes.problems(updated, baseline))
