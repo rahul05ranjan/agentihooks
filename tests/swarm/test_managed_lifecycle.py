@@ -308,19 +308,25 @@ def test_managed_retirement_closes_every_recorded_viewer_and_removes_the_runtime
     path = supervisor.socket_path(tmp_path / supervisor.RUNTIME_SUBDIR, rig.agent.execution_id)
     (path.parent / "codex").mkdir()
     _endpoint(rig, f"unix://{path}")
-    rig.bindings.add_viewer(SLUG, rig.agent.execution_id, "w2:p9")
-    rig.bindings.add_viewer(SLUG, rig.agent.execution_id, "viewer")
-    rig.bindings.add_viewer(SLUG, rig.agent.execution_id, "w2:p5")
-    rig.bindings.add_viewer(SLUG, "exe-other", "w2:p6")
+    rig.bindings.add_viewer(SLUG, rig.agent.execution_id, "w2:p9", "t9")
+    rig.bindings.add_viewer(SLUG, rig.agent.execution_id, "viewer", "tv")
+    rig.bindings.add_viewer(SLUG, rig.agent.execution_id, "w2:p5", "t5")
+    rig.bindings.add_viewer(SLUG, rig.agent.execution_id, "w2:p7", "t7")
+    rig.bindings.add_viewer(SLUG, rig.agent.execution_id, "w2:p8", "")
+    rig.bindings.add_viewer(SLUG, "exe-other", "w2:p6", "t6")
+    listed = [("viewer", "tv"), ("w2:p5", "t5"), ("w2:p6", "t6"), ("w2:p7", "reused"), ("w2:p8", ""), ("w2:p9", "t9")]
+    panes = {"panes": [{"pane_id": pane, "terminal_id": terminal} for pane, terminal in listed]}
+    rig.herdr.side_effect = lambda args: panes if args == ["pane", "list"] else _close_only(args)
     rig.runner.end = Mock(return_value=reaper.Outcome((123,)))
     assert rig.runner.retire(rig.agent)
     assert [call.args[0] for call in rig.herdr.call_args_list] == [
+        ["pane", "list"],
         ["pane", "close", "viewer"],
         ["pane", "close", "w2:p5"],
         ["pane", "close", "w2:p9"],
     ]
-    assert rig.bindings.viewers(SLUG, rig.agent.execution_id) == []
-    assert rig.bindings.viewers(SLUG, "exe-other") == ["w2:p6"]
+    assert rig.bindings.viewers(SLUG, rig.agent.execution_id) == {}
+    assert rig.bindings.viewers(SLUG, "exe-other") == {"w2:p6": "t6"}
     assert not path.parent.exists()
     assert tmp_path.exists()
 
@@ -353,7 +359,8 @@ def test_a_runtime_home_that_will_not_go_refuses_the_retirement(rig, tmp_path, m
 
     path = supervisor.socket_path(tmp_path / supervisor.RUNTIME_SUBDIR, rig.agent.execution_id)
     _endpoint(rig, f"unix://{path}")
-    rig.bindings.add_viewer(SLUG, rig.agent.execution_id, "w2:p5")
+    rig.bindings.add_viewer(SLUG, rig.agent.execution_id, "w2:p5", "t5")
+    rig.herdr.side_effect = lambda args: {"panes": []} if args == ["pane", "list"] else _close_only(args)
 
     def busy(directory):
         raise OSError("busy")
@@ -363,7 +370,7 @@ def test_a_runtime_home_that_will_not_go_refuses_the_retirement(rig, tmp_path, m
     assert not rig.runner.retire(rig.agent)
     assert rig.runner.refusal(rig.agent) == {"process": 123, "refusal": "runtime home: busy"}
     assert rig.bindings.get(SLUG, rig.agent.execution_id).state == CONNECTED
-    assert rig.bindings.viewers(SLUG, rig.agent.execution_id) == ["w2:p5"]
+    assert rig.bindings.viewers(SLUG, rig.agent.execution_id) == {"w2:p5": "t5"}
 
 
 def test_a_viewer_pane_already_gone_does_not_refuse_the_retirement(rig):

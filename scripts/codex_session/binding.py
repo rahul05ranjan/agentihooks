@@ -121,12 +121,12 @@ class BindingStore:
     def claim_opening(self, slug: str, execution_id: str, at: int) -> bool:
         return bool(self.redis.hsetnx(self.store.key(slug, OPENINGS), execution_id, at))
 
-    def add_viewer(self, slug: str, execution_id: str, pane_id: str) -> None:
-        self.redis.hset(self.store.key(slug, VIEWERS), pane_id, execution_id)
+    def add_viewer(self, slug: str, execution_id: str, pane_id: str, terminal_id: str) -> None:
+        self.redis.hset(self.store.key(slug, VIEWERS), pane_id, json.dumps([execution_id, terminal_id]))
 
-    def viewers(self, slug: str, execution_id: str) -> list[str]:
-        rows = self.redis.hgetall(self.store.key(slug, VIEWERS))
-        return sorted(pane for pane, owner in rows.items() if owner == execution_id)
+    def viewers(self, slug: str, execution_id: str) -> dict[str, str]:
+        rows = {pane: json.loads(raw) for pane, raw in self.redis.hgetall(self.store.key(slug, VIEWERS)).items()}
+        return {pane: terminal for pane, (owner, terminal) in sorted(rows.items()) if owner == execution_id}
 
     def forget_viewers(self, slug: str, panes: list[str]) -> None:
         if panes:

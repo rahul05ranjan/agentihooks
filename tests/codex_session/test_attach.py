@@ -312,7 +312,7 @@ def test_the_local_terminal_opens_the_viewer_in_the_swarm_workspace(monkeypatch,
     monkeypatch.setattr(
         herdr_host,
         "open_command",
-        lambda *call: opened.append(call) or herdr_host.Placement("w1", "w1:t1", "w1:p1"),
+        lambda *call: opened.append(call) or herdr_host.Placement("w1", "w1:t1", "w1:p1", "term-1"),
     )
     environ = {"HERDR_SOCKET": "/run/herdr.sock"}
     assert attach.local_terminal(store, slug, "exe-1", environ) == {
@@ -329,7 +329,7 @@ def test_the_local_terminal_opens_the_viewer_in_the_swarm_workspace(monkeypatch,
             environ,
         )
     ]
-    store.redis.hset.assert_called_once_with(f"{slug}:codex-viewers", "w1:p1", "exe-1")
+    store.redis.hset.assert_called_once_with(f"{slug}:codex-viewers", "w1:p1", '["exe-1", "term-1"]')
 
 
 def test_the_local_terminal_leaves_other_executions_to_the_worker_terminal(monkeypatch):

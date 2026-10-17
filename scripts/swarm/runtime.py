@@ -929,10 +929,8 @@ class HerdrRuntime:
             return False
         bindings = BindingStore(store)
         slug = store.names.slug_of(agent.name)
-        viewers = [
-            pane for pane in dict.fromkeys((agent.pane_id, *bindings.viewers(slug, record.execution_id))) if pane
-        ]
-        for pane in viewers:
+        recorded = bindings.viewers(slug, record.execution_id)
+        for pane in self._viewer_panes(agent.pane_id, recorded):
             try:
                 self.close_pane(pane)
             except Exception as exc:
@@ -947,9 +945,18 @@ class HerdrRuntime:
                 return False
         bindings.put(slug, replace(record, state=EXITED, active_turn_id=""))
         bindings.release(slug, record)
-        bindings.forget_viewers(slug, viewers)
+        bindings.forget_viewers(slug, list(recorded))
         self.refusals.pop(agent.name, None)
         return True
+
+    def _viewer_panes(self, launch_pane, recorded):
+        """A recorded viewer is closed only while herdr still lists its pane on the terminal it was opened with,
+        because herdr reuses a closed pane's id."""
+        listed = {}
+        if recorded:
+            listed = {p["pane_id"]: p.get("terminal_id") for p in self.herdr(["pane", "list"])["panes"]}
+        live = [pane for pane, terminal in recorded.items() if terminal and listed.get(pane) == terminal]
+        return [pane for pane in dict.fromkeys((launch_pane, *live)) if pane]
 
     def retire_process(self, agent, pid, homes=(), start=0):
         if live_binding.managed(agent):
