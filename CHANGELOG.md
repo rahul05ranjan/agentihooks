@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+New entries go in one fragment per pull request under `changelog.d/`; each
+release assembles them into its release notes. See `changelog.d/README.md`.
+
 ## [Unreleased]
 
 ### Added
@@ -45,6 +48,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- The quota usage banner test passes in any test order: tests that change the
+  banner cadence restore it, and a regression test runs them before it.
+- Launch checks report unavailable process observations without inventing profile,
+  settings, base role or overlay mismatches; observed mismatches and join failures
+  remain visible.
 - Judged bottleneck stage findings return only when current stage load grows,
   instead of when the cumulative fired count increases.
 - Ledger task set accepts split pull request addresses as comma or JSON lists.

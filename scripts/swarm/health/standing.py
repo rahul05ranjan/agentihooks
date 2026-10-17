@@ -16,6 +16,7 @@ KIND = "bottleneck stage"
 STALE_MS = 6 * 3_600_000
 EPISODES = 20
 DETECTOR_UNIT = "task hours"
+SAME_MEASURE = {"task hours in the window": DETECTOR_UNIT}
 
 
 @dataclass(frozen=True)
@@ -68,11 +69,18 @@ def _fire(old, stage, reading, now_ms):
     }
 
 
+def _owned(unit):
+    return SAME_MEASURE.get(unit, unit) == DETECTOR_UNIT
+
+
 def _detector(old, reading, now_ms, threshold):
     if old.get("detector") == reading and (old.get("unit") != DETECTOR_UNIT or old.get("threshold") == threshold):
         return old
     known = {*old.get("episodes", []), *old.get("detector", {}).get("episodes", [])}
     added = [episode for episode in reading["episodes"] if episode not in known]
+    unit = old.get("unit", DETECTOR_UNIT)
+    if not _owned(unit) and now_ms - old["updated_at"] >= STALE_MS:
+        old, unit = {**old, "unit": DETECTOR_UNIT, "detail": ""}, DETECTOR_UNIT
     row = {
         "stage": reading["stage"],
         "unit": DETECTOR_UNIT,
@@ -82,7 +90,7 @@ def _detector(old, reading, now_ms, threshold):
         "fired": old.get("fired", 0) + len(added),
         "episodes": [*old.get("episodes", []), *added][-EPISODES:],
         "detector": reading,
-        "updated_at": now_ms,
+        "updated_at": now_ms if _owned(unit) else old["updated_at"],
     }
     if row["unit"] == DETECTOR_UNIT:
         row["value"] = reading["seconds"] / 3600
@@ -130,6 +138,7 @@ def _finding(row: dict) -> Finding:
         evidence,
         f"{row['threshold']} {row['unit']}",
         row["value"],
+        SAME_MEASURE.get(row["unit"], row["unit"]),
     )
 
 
