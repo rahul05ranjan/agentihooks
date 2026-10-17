@@ -441,6 +441,7 @@ def fixture_inputs(readings: dict) -> ScaleInputs:
 def record(row: Account) -> dict:
     """The stored row; pool rows keep their pre-api fields so decisions without an api stay byte identical."""
     dropped = set() if row.kind == API else {"kind", "weight"}
+    dropped |= {"unreserved_cap"}
     dropped |= set() if row.reserved else {"reserved"}
     dropped |= set() if row.observed_at is not None else {"observed_at"}
     return {key: value for key, value in row.__dict__.items() if key not in dropped}
