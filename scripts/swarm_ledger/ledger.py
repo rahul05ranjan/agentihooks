@@ -764,7 +764,12 @@ def _add_task(args, title, fields):
         **fields,
     )
     if args.scaffold:
-        ledger_workspace.scaffold(args.slug, task, doc)
+        try:
+            ledger_workspace.scaffold(args.slug, task, doc)
+        except OSError as exc:
+            print(f"task {args.id} was added; its work folder was not created: {exc}", file=sys.stderr)
+            return {"workspace_error": str(exc)}
+    return {}
 
 
 def cmd_task(args):
@@ -799,8 +804,7 @@ def cmd_task(args):
             ("plan_slice", args.plan_slice),
         )
         lists.update((key, value) for key, value in options if value)
-        _add_task(args, title, lists)
-        print(json.dumps({"task": args.id, "added": title}))
+        print(json.dumps({"task": args.id, "added": title, **_add_task(args, title, lists)}))
         return
     if args.action in TASK_LISTS:
         kind, field, shown = TASK_LISTS[args.action]
