@@ -16,7 +16,7 @@ def serve(monkeypatch, doc, reply=None):
     sent = []
 
     def call(slug, ops):
-        assert slug == "s"
+        assert slug == "s" and len(ops) == 1
         sent.extend(ops)
         if reply is not None:
             return reply
@@ -39,9 +39,10 @@ def add(*argv, name="master"):
 
 
 def refusal(monkeypatch, doc, *argv, name="master"):
-    serve(monkeypatch, doc)
+    sent = serve(monkeypatch, doc)
     with pytest.raises(SystemExit) as exit_:
         add(*argv, name=name)
+    assert [(op["op"], op["task"], op["by"]) for op in sent] == [("task_add", argv[0], name)]
     return str(exit_.value)
 
 
@@ -63,7 +64,7 @@ def test_a_task_add_missing_its_slice_exits_nonzero_and_says_it_was_not_added(mo
             "master",
             "task t9 is a follow up and names no slice",
         ),
-        (["t9", "Fix", "--phase", "p2", "--depends-on", "ghost"], "master", "task_add on the ledger refused"),
+        (["t9", "Fix", "--phase", "p2", "--depends-on", "ghost"], "master", "task t9 depends on unknown tasks: ghost"),
     ],
 )
 def test_every_refused_task_add_exits_nonzero_and_says_it_was_not_added(monkeypatch, doc, argv, name, reason):
@@ -91,8 +92,9 @@ def test_a_task_add_the_server_applied_prints_its_id_and_returns(monkeypatch, do
 
 def test_other_ops_keep_their_refusal_text_and_need_no_applied_list(monkeypatch):
     args = SimpleNamespace(slug="s", name="master")
-    serve(monkeypatch, {}, {"_meta": {}})
+    sent = serve(monkeypatch, {}, {"_meta": {}})
     assert ledger.send(args, "comment", item="tasks/t1", text="Note") == {"_meta": {}}
+    assert [(op["op"], op["item"], op["text"]) for op in sent] == [("comment", "tasks/t1", "Note")]
     serve(monkeypatch, {}, {"rejected": ["x"], "_meta": {"warnings": ["no such item"]}})
     with pytest.raises(SystemExit) as exit_:
         ledger.send(args, "comment", item="tasks/t1", text="Note")
