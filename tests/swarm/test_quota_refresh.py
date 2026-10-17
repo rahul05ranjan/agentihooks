@@ -162,6 +162,14 @@ def test_answer_all_reports_every_swarm_and_carries_on_past_a_refused_one(store,
     assert capsys.readouterr().out == "sw: the controller lease is stale\ntwo: control quota acknowledged\n"
 
 
+def test_answer_all_flushes_each_line_so_the_service_journal_shows_it_at_once(store, monkeypatch):
+    printed = []
+    monkeypatch.setattr(quota_refresh, "answer", lambda store, slug, execute: ["control quota acknowledged"])
+    monkeypatch.setattr(quota_refresh, "print", lambda *args, **kwargs: printed.append((args, kwargs)), raising=False)
+    quota_refresh.answer_all(store, lambda slug, row: "")
+    assert printed == [(("sw: control quota acknowledged",), {"flush": True})]
+
+
 class Stop(Exception):
     pass
 
