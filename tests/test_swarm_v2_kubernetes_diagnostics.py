@@ -106,3 +106,70 @@ def test_pod_log_requests_are_bounded_and_refusals_raise(status):
     else:
         with pytest.raises(ApiRefused):
             client.pod_logs("refused", "agent")
+
+
+@pytest.mark.parametrize("persist", [True, False])
+def test_terminal_setup_refusal_retains_started_worker_diagnostics_before_removal(ready, persist):
+    import json
+    from functools import partial
+
+    from scripts.swarm_v2.kubernetes.diagnostics import retain
+    from scripts.swarm_v2.kubernetes.grants import PodGrants, Supervision
+    from tests import test_swarm_v2_kubernetes_grants as grants
+
+    world, _, old, _ = ready
+    api = grants.Api(grants.pod())
+    original = api.delete
+
+    class Terminals:
+        def open(self, registration, pod):
+            pod["status"] = {
+                "phase": "Failed",
+                "containerStatuses": [{"name": "agent", "state": {"terminated": {"exitCode": 78, "reason": "Error"}}}],
+            }
+            return "terminal_refused"
+
+    def delete(kind, name, uid):
+        saved = json.loads(
+            world.store.redis.hget(world.store.key(grants.SLUG, "attempt-startup-diagnostics"), grants.EXECUTION)
+        )
+        assert saved["uid"] == "uid-1"
+        assert saved["startup"]["containers"][0]["log"] == "worker startup refused\n"
+        return original(kind, name, uid)
+
+    api.delete = delete
+    api.pod_logs = lambda pod, container: "worker startup refused\n"
+    hand = PodGrants(
+        api,
+        grants.SLUG,
+        grants.verify,
+        Supervision("claude", None, grants.CONTROL),
+        Terminals(),
+        retain=partial(retain, world.store, grants.SLUG) if persist else None,
+    ).hand(grants.agent(), grants.GRANT)
+    assert hand.reason == "terminal_refused"
+    assert hand.removed is persist
+
+
+@pytest.mark.parametrize("section,phase", [("initContainerStatuses", "Failed"), ("containerStatuses", "Running")])
+def test_init_and_nonterminal_container_refusals_keep_their_exit_reason(ready, section, phase):
+    world, controller, old, _ = ready
+    name = refused(world, old)
+    status = world.api.objects[name]["status"]
+    status["phase"] = phase
+    status[section] = status.pop("containerStatuses")
+    world.api.pod_logs = lambda pod, container: "startup refused\n"
+    assert world.cleanup(controller).run(old.execution_id).state == "done"
+    saved = retention.retained(world.store, cases.SLUG, old.execution_id)["removed"]["pods"][0]["startup"]
+    assert saved["containers"][0]["terminated"]["exitCode"] == 78
+
+
+def test_healthy_cleanup_does_not_request_startup_logs(ready):
+    world, controller, old, _ = ready
+
+    def unexpected(pod, container):
+        raise AssertionError("healthy cleanup requested refusal logs")
+
+    world.api.pod_logs = unexpected
+    assert world.cleanup(controller).run(old.execution_id).state == "done"
+    assert "startup" not in retention.retained(world.store, cases.SLUG, old.execution_id)["removed"]["pods"][0]
