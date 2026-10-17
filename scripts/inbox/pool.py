@@ -31,7 +31,7 @@ def number(address: str) -> int:
 
 
 def live_masters(redis, slug: str) -> list[str]:
-    return list(masters.held(redis, slug, RedisStore(redis).agents(slug)))
+    return [seat for seat in masters.held(redis, slug, RedisStore(redis).agents(slug)) if is_seat(seat)]
 
 
 def turn(live: list[str], last: str, skip: str | None) -> str:
