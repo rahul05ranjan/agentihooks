@@ -103,7 +103,7 @@ def test_band_caps_follow_the_claude_five_hour_window_left(monkeypatch, five_use
     monkeypatch.setattr(capacity.codex_router, "accounts", lambda env: [])
     (row,) = capacity.accounts({"AH_CC_TOKEN_a": "fake"}, 100)
     assert (row.cap, row.five_left, row.week_left) == (expected_cap, 100 - five_used, 100)
-    assert row.state == ("CLOSED" if expected_cap == 0 else "OPEN")
+    assert row.state == ("CLOSED" if expected_cap == 0 else "DRAIN" if five_used >= 90 else "OPEN")
 
 
 def test_a_reset_window_raises_the_cap_and_the_effective_caps_on_the_next_tick(monkeypatch):
@@ -186,7 +186,7 @@ def test_accounts_judge_every_window_at_the_given_time_and_pass_the_environment(
         capacity.codex_router, "quotas", lambda p, environ: calls.append(("quotas", [a.name for a in p], environ)) or {}
     )
     assert capacity.accounts(env, now) == [
-        capacity.Account("claude", "a", "OPEN", 0, 5.0, 100.0, 2, five_resets_at=now + 100),
+        capacity.Account("claude", "a", "DRAIN", 0, 5.0, 100.0, 2, five_resets_at=now + 100),
         capacity.Account("codex", "default", "OPEN", 0, 60.0, 100.0, 6, five_resets_at=now + 100),
         capacity.Account("codex", "x", "UNKNOWN", 1, None, None, None),
     ]
