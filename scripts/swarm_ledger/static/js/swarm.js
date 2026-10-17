@@ -370,7 +370,10 @@ function healthRow(f, now) {
   pick.value = earlier.value || "";
   const note = h("input", { class: "hl-note", type: "text", maxlength: "500", placeholder: "—", "aria-label": `Verdict note on ${f.kind} ${f.subject}` });
   note.value = earlier.note || "";
-  return cells(f.kind, idCell(f.subject), (f.evidence || []).join(" · ") || f.summary, f.threshold, f.seen_at ? `${span(now - f.seen_at)} ago` : "—", pick, note);
+  const evidence = h("div", {}, h("div", { text: (f.evidence || []).join(" · ") || f.summary }),
+    ...(f.links || []).filter((link) => /^https?:\/\//.test(link.url || "")).map((link) =>
+      h("div", {}, h("a", { href: link.url, target: "_blank", rel: "noopener", text: link.label }))));
+  return cells(f.kind, idCell(f.subject), evidence, f.threshold, f.seen_at ? `${span(now - f.seen_at)} ago` : "—", pick, note);
 }
 
 function renderHandoffs(rows) {
