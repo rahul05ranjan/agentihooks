@@ -184,7 +184,9 @@ class InboxStore:
             pipe.publish(NOTIFY, address)
             pipe.execute()
         if masters:
-            self.pool.distribute(address.partition("@")[2], masters)
+            from scripts.inbox.pool import slug_of
+
+            self.pool.distribute(slug_of(address))
         return item
 
     def get(self, item_id):
@@ -459,29 +461,26 @@ class InboxStore:
         return back
 
     def return_to_pool(self, item_id, holder):
-        """A pool item still pending at the seat of a master that is gone goes back to the pool; None once it moved."""
+        """A pool item still pending at the seat of a master that is gone goes back to the pool; None when it moved
+        meanwhile, for the next distribution to retry."""
         from redis.exceptions import WatchError
 
         key = self.key("item", item_id)
-        for _ in range(MOVE_ATTEMPTS):
-            with self.redis.pipeline() as pipe:
-                try:
-                    pipe.watch(key)
-                    raw = pipe.hgetall(key)
-                    if not raw or (raw["state"], raw["address"], raw.get(POOL_HOLDER)) != ("pending", holder, holder):
-                        return None
-                    item = _item(raw, item_id)
-                    moved = replace(item, updated_at=now_ms(), reason=RECLAIMED)
-                    pipe.multi()
-                    moved = self._stage_pool_return(pipe, item, moved, holder)
-                    pipe.rpush(
-                        self.key("history", item_id), _entry("pending", REDELIVERER, RECLAIMED, moved.updated_at)
-                    )
-                    pipe.execute()
-                    return moved
-                except WatchError:
-                    continue
-        return None
+        with self.redis.pipeline() as pipe:
+            try:
+                pipe.watch(key)
+                raw = pipe.hgetall(key)
+                if not raw or (raw["state"], raw["address"], raw.get(POOL_HOLDER)) != ("pending", holder, holder):
+                    return None
+                item = _item(raw, item_id)
+                moved = replace(item, updated_at=now_ms(), reason=RECLAIMED)
+                pipe.multi()
+                moved = self._stage_pool_return(pipe, item, moved, holder)
+                pipe.rpush(self.key("history", item_id), _entry("pending", REDELIVERER, RECLAIMED, moved.updated_at))
+                pipe.execute()
+                return moved
+            except WatchError:
+                return None
 
     def reply(self, item_id: str, replier: str, text: str, fyi: bool = False, answer_id: str = "") -> Item:
         from redis.exceptions import WatchError
@@ -643,8 +642,7 @@ class InboxStore:
             raw = pipe.hgetall(key)
             if raw and raw["state"] == "delivered" and before is not None and int(raw["updated_at"]) > before:
                 return None
-            holder = raw.get(POOL_HOLDER, "") if raw else ""
-            pooled = bool(holder) and self.pool.takes_back(holder)
+            pooled = self.pool.takes_back(raw.get(POOL_HOLDER))
             pipe.multi()
             pipe.zrem(self.key("delivered"), item_id)
             if not raw or raw["state"] != "delivered":
@@ -653,7 +651,7 @@ class InboxStore:
             item = _item(raw, item_id)
             moved = replace(item, state="pending", updated_at=now_ms(), reason=reason)
             if pooled:
-                moved = self._stage_pool_return(pipe, item, moved, holder)
+                moved = self._stage_pool_return(pipe, item, moved, raw[POOL_HOLDER])
             else:
                 pipe.hset(key, mapping=_fields(moved))
                 pipe.zadd(self.key("pending", item.address), {item_id: item.created_at})
@@ -778,8 +776,6 @@ class InboxStore:
             if item.state == state:
                 return item
             if state not in CLOSED and self.pool.holds(pipe, item):
-                if state == "delivered":
-                    return None
                 raise InboxError(f"message {item_id} waits in the master pool for the next master")
             if state == "delivered" and (self._owned(pipe, by) or self._reserved(pipe, item_id)):
                 return None

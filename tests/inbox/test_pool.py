@@ -1,3 +1,4 @@
+import itertools
 import json
 import threading
 from collections import Counter
@@ -5,8 +6,9 @@ from collections import Counter
 import pytest
 
 from scripts.inbox import pool
+from scripts.inbox import store as inbox_store
 from scripts.inbox.pool import POOLS, MasterPool, live_masters, turn
-from scripts.inbox.store import InboxError, InboxStore, now_ms
+from scripts.inbox.store import RECLAIMED, InboxError, InboxStore, now_ms
 from scripts.swarm import operator_mail
 from scripts.swarm.store import AgentRecord, RedisStore, SwarmConfig
 from scripts.swarm_v2.masters import MasterSeats
@@ -93,6 +95,7 @@ def test_items_go_round_robin_across_masters_in_arrival_order(swarm, inbox):
     assert [i.id for i in inbox.open_items(FRONT)] == [items[0].id, items[3].id]
     assert [i.id for i in inbox.open_items(SECOND)] == [items[1].id, items[4].id]
     assert swarm.redis.get(f"{POOL}:last") == THIRD
+    assert {FRONT, SECOND, THIRD} <= swarm.redis.smembers(inbox.key("waiting"))
     assert swarm.redis.exists(POOL) == 0
     assert swarm.redis.smembers(POOLS) == {SLUG}
 
@@ -116,11 +119,11 @@ def test_waiting_items_leave_the_pool_oldest_first(swarm, inbox, held):
 
 def test_no_master_takes_an_item_still_in_the_pool(swarm, inbox, held):
     _masters(swarm, 2)
-    item = inbox.send("swarm", FRONT, "who takes this")
-    assert inbox.pending_mail("sw-master-1") == []
+    items = [inbox.send("swarm", FRONT, f"who takes {n}") for n in range(3)]
     assert inbox.pending_items(FRONT) == []
-    assert inbox.deliver(item.id, "sw-master-1") is None
-    assert inbox.get(item.id).state == "pending"
+    assert inbox.pending_mail("sw-master-1") == []
+    assert [inbox.deliver(i.id, "sw-master-1") for i in items] == [None, None, None]
+    assert [inbox.get(i.id).state for i in items] == ["pending"] * 3
 
 
 def test_a_closed_item_drops_out_of_the_pool(swarm, inbox, held):
@@ -181,6 +184,9 @@ def test_only_front_door_items_from_others_are_pooled(swarm, inbox):
     assert inbox.pool.masters_for("swarm", "sw-eng-1") == []
     assert pool.slug_of(FRONT) == SLUG
     assert pool.slug_of(SECOND) == ""
+    assert pool.slug_of("master@a@b") == "a@b"
+    assert (pool.number(FRONT), pool.number("master-2@a@b")) == (1, 2)
+    assert (inbox.pool.takes_back(None), inbox.pool.takes_back("")) == (False, False)
 
 
 def test_an_unconfirmed_item_goes_to_the_next_master_with_the_same_id(swarm, inbox):
@@ -211,6 +217,7 @@ def test_an_item_a_backend_master_left_unconfirmed_returns_to_the_front_door(swa
     assert inbox.deliver(first.id, "sw-master-1").state == "delivered"
     assert inbox.deliver(second.id, "sw-master-2").state == "delivered"
     assert inbox.confirm(first.id, "sw-master-1").state == "confirmed"
+    assert [i.id for i in inbox.open_items(SECOND)] == [second.id]
     assert [i.address for i in inbox.redeliver(now_ms() + 10, 0)] == [FRONT]
     assert inbox.get(second.id).address == FRONT
     assert inbox.open_items(SECOND) == []
@@ -247,7 +254,7 @@ def test_swarm_keys_carry_the_pool(swarm, inbox, held):
     held.undo()
     inbox.pool.distribute(SLUG)
     keys, _ = inbox.keys_for(lambda address: address.endswith("@sw"))
-    assert POOL not in keys and f"{POOL}:last" in keys
+    assert POOL not in keys and f"{POOL}:last" in keys and f"{POOL}:holders" in keys
 
 
 def test_two_concurrent_claimers_take_each_item_exactly_once(swarm, inbox, server, held):
@@ -363,19 +370,38 @@ def test_a_redirect_to_the_same_seat_keeps_its_pool_marks(swarm, inbox):
     assert (inbox.get(item.id).address, inbox.get(item.id).reason) == (FRONT, claimed(FRONT))
 
 
-def test_an_item_a_gone_master_claimed_but_never_took_goes_to_a_live_master(swarm, inbox):
+def test_an_item_a_gone_master_claimed_but_never_took_goes_to_a_live_master(swarm, inbox, monkeypatch):
     _masters(swarm, 3)
-    items = [inbox.send("swarm", FRONT, f"item {n}") for n in range(3)]
-    assert [inbox.get(i.id).address for i in items] == [FRONT, SECOND, THIRD]
+    items = [inbox.send("swarm", FRONT, f"item {n}") for n in range(9)]
+    taken = [i.id for i in items[1::3]]
+    assert [i.id for i in inbox.pending_items(SECOND)] == taken
+    clock = itertools.count(10_000)
+    monkeypatch.setattr(inbox_store, "now_ms", lambda: next(clock))
     swarm.put_agent(SLUG, AgentRecord("sw-master-2", "master", "master", seat=SECOND, state="finished"))
-    inbox.redeliver(now_ms(), 1000)
-    moved = inbox.get(items[1].id)
-    assert (moved.address, moved.state, moved.reason) == (FRONT, "pending", claimed(FRONT))
-    assert [e["reason"] for e in inbox.history(items[1].id)][-2] == "returned to the master pool: its master is gone"
-    assert inbox.pending_mail("sw-master-2") == []
-    assert [inbox.get(i.id).address for i in (items[0], items[2])] == [FRONT, THIRD]
-    assert inbox.return_to_pool(items[1].id, SECOND) is None
+    inbox.pool._reclaim(SLUG, [FRONT, THIRD])
+    back = [inbox.get(item_id) for item_id in taken]
+    assert [(i.address, i.state, i.reason) for i in back] == [(FRONT, "pending", RECLAIMED)] * 3
+    assert [swarm.redis.hmget(inbox.key("item", i.id), "pool_holder", "pool_skip") for i in back] == [
+        [None, SECOND]
+    ] * 3
+    assert [inbox.history(i.id)[-1] for i in back] == [
+        {"state": "pending", "by": "inbox", "reason": RECLAIMED, "at": i.updated_at} for i in back
+    ]
+    assert swarm.redis.zrange(POOL, 0, -1) == taken
+    assert inbox.pending_items(SECOND) == []
     assert swarm.redis.smembers(f"{POOL}:holders") == {FRONT, THIRD}
+    assert inbox.return_to_pool(taken[0], SECOND) is None
+    handed = inbox.pool.distribute(SLUG)
+    assert [(i.id, i.address) for i in handed] == list(zip(taken, [FRONT, THIRD, FRONT]))
+    for before, after in zip(back, (inbox.get(i.id) for i in handed)):
+        assert after.updated_at > before.updated_at
+        assert inbox.history(after.id)[-1] == {
+            "state": "pending",
+            "by": "inbox",
+            "reason": claimed(after.address),
+            "at": after.updated_at,
+        }
+    assert inbox.pending_mail("sw-master-2") == []
 
 
 def test_claims_give_up_after_repeated_contention(swarm, inbox, held, monkeypatch):
@@ -391,9 +417,55 @@ def test_claims_give_up_after_repeated_contention(swarm, inbox, held, monkeypatc
         raise WatchError
 
     monkeypatch.setattr(MasterPool, "_try_claim", contended)
-    assert inbox.pool.distribute(SLUG, [FRONT, SECOND]) == []
+    assert inbox.pool.distribute(SLUG) == []
     assert calls == [SLUG] * pool.CLAIM_ATTEMPTS
     assert swarm.redis.zrange(POOL, 0, -1) == [item.id]
+
+
+def test_a_claim_retries_when_the_rotation_moves_meanwhile(swarm, inbox, held, monkeypatch):
+    _masters(swarm, 2)
+    item = inbox.send("swarm", FRONT, "first")
+    held.undo()
+    real = pool.turn
+
+    def moved(live, last, skip):
+        if last is None:
+            swarm.redis.set(f"{POOL}:last", FRONT)
+        return real(live, last, skip)
+
+    monkeypatch.setattr(pool, "turn", moved)
+    assert [(i.id, i.address) for i in inbox.pool.distribute(SLUG)] == [(item.id, SECOND)]
+
+
+def test_a_claim_retries_when_the_pool_changes_meanwhile(swarm, inbox, held, monkeypatch):
+    _masters(swarm, 2)
+    first, second = (inbox.send("swarm", FRONT, text) for text in ("first", "second"))
+    swarm.redis.zrem(POOL, first.id)
+    held.undo()
+    real, calls = pool.turn, []
+
+    def changed(live, last, skip):
+        if not calls:
+            swarm.redis.zadd(POOL, {first.id: first.sequence})
+        calls.append(last)
+        return real(live, last, skip)
+
+    monkeypatch.setattr(pool, "turn", changed)
+    assert [i.id for i in inbox.pool.distribute(SLUG)] == [first.id, second.id]
+
+
+def test_a_redirect_clears_the_marks_of_an_item_waiting_to_return(swarm, inbox, monkeypatch):
+    _masters(swarm, 2)
+    inbox.send("swarm", FRONT, "first")
+    item = inbox.send("swarm", FRONT, "second")
+    assert inbox.deliver(item.id, "sw-master-2").state == "delivered"
+    monkeypatch.setattr(MasterPool, "distribute", lambda self, slug: [])
+    inbox.redeliver(now_ms() + 10, 0)
+    assert swarm.redis.hmget(inbox.key("item", item.id), "pool_holder", "pool_skip") == [None, SECOND]
+    assert swarm.redis.zrange(POOL, 0, -1) == [item.id]
+    inbox.redirect(item.id, "swarm", "eng-1@sw", "moved to the engineer")
+    assert swarm.redis.hmget(inbox.key("item", item.id), "pool_holder", "pool_skip") == [None, None]
+    assert swarm.redis.exists(POOL) == 0
 
 
 def test_operator_ledger_writes_reach_the_front_door_past_the_pool(swarm, inbox):

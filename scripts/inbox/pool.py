@@ -1,7 +1,7 @@
 """The master inbox pool of a swarm with two or more live masters: items for the front door seat wait here in arrival
 order, and each is claimed by exactly one live master, in round robin seat order. Operator items never enter it."""
 
-from scripts.inbox.seats import is_seat, seat_address
+from scripts.inbox.seats import is_seat, master_of, seat_address
 from scripts.inbox.store import POOL_SKIP
 from scripts.swarm import master_retire
 from scripts.swarm.keyspace import ROOT
@@ -44,7 +44,7 @@ def live_masters(redis, slug: str) -> list[str]:
     return sorted(seats - retired, key=number)
 
 
-def turn(live: list[str], last: str, skip: str) -> str:
+def turn(live: list[str], last: str, skip: str | None) -> str:
     """The live master after last in seat order, passing over skip while another master is live."""
     choices = [seat for seat in live if seat != skip] or live
     later = [seat for seat in choices if last and number(seat) > number(last)]
@@ -92,9 +92,11 @@ class MasterPool:
         pipe.watch(self.key(slug))
         return set(pipe.zrange(self.key(slug), 0, -1))
 
-    def takes_back(self, holder: str) -> bool:
+    def takes_back(self, holder: str | None) -> bool:
         """An unconfirmed item returns to the pool while another master is live or its holder is gone."""
-        live = live_masters(self.redis, holder.partition("@")[2])
+        if not holder:
+            return False
+        live = live_masters(self.redis, slug_of(master_of(holder)))
         return len(live) > 1 or holder not in live
 
     def keys_of(self, address: str) -> list[str]:
@@ -105,13 +107,16 @@ class MasterPool:
     def distribute_all(self) -> list:
         return [item for slug in sorted(self.redis.smembers(POOLS)) for item in self.distribute(slug)]
 
-    def distribute(self, slug: str, live: list[str] | None = None) -> list:
+    def distribute(self, slug: str) -> list:
         """Hand each pool item, oldest first, to the next live master; stop when the pool is empty or another
         process is claiming from it, since that process carries on."""
-        live = live_masters(self.redis, slug) if live is None else live
+        live = live_masters(self.redis, slug)
         self._reclaim(slug, live)
         claimed = []
-        while (item := self._claim_next(slug, live)) is not None:
+        for _ in range(self.redis.zcard(self.key(slug)) + 1):
+            item = self._claim_next(slug, live)
+            if item is None:
+                break
             if item is not DROPPED:
                 claimed.append(item)
         return claimed
@@ -154,7 +159,7 @@ class MasterPool:
                 pipe.execute()
                 return DROPPED
             item = self.inbox.get(head[0])
-            seat = turn(live, pipe.get(last) or "", pipe.hget(item_key, POOL_SKIP) or "")
+            seat = turn(live, pipe.get(last) or "", pipe.hget(item_key, POOL_SKIP))
             pipe.multi()
             pipe.zrem(pool, item.id)
             pipe.set(last, seat)
