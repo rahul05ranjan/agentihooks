@@ -14,7 +14,7 @@ OPERATOR = "operator"
 CLAIMER = "inbox"
 GONE = ("finished", "retiring")
 CLAIM_ATTEMPTS = 3
-DROPPED = "dropped"
+DROPPED = object()
 
 
 def front_door(slug: str) -> str:
@@ -88,6 +88,11 @@ class MasterPool:
         pipe.watch(self.key(slug))
         return set(pipe.zrange(self.key(slug), 0, -1))
 
+    def takes_back(self, holder: str) -> bool:
+        """An unconfirmed item returns to the pool while another master is live or its holder is gone."""
+        live = live_masters(self.redis, holder.partition("@")[2])
+        return len(live) > 1 or holder not in live
+
     def keys_of(self, address: str) -> list[str]:
         slug = slug_of(address)
         return [key for key in (self.key(slug), self.key(slug, "last")) if slug and self.redis.exists(key)]
@@ -100,11 +105,8 @@ class MasterPool:
         process is claiming from it, since that process carries on."""
         live = live_masters(self.redis, slug) if live is None else live
         claimed = []
-        while live:
-            item = self._claim_next(slug, live)
-            if item is None:
-                break
-            if item != DROPPED:
+        while (item := self._claim_next(slug, live)) is not None:
+            if item is not DROPPED:
                 claimed.append(item)
         return claimed
 
@@ -128,9 +130,11 @@ class MasterPool:
                 pipe.srem(POOLS, slug)
                 pipe.execute()
                 return None
+            if not live:
+                return None
             item_key = self.inbox.key("item", head[0])
             pipe.watch(item_key)
-            if pipe.hget(item_key, "state") != "pending":
+            if pipe.hmget(item_key, "state", "address") != ["pending", front_door(slug)]:
                 pipe.multi()
                 pipe.zrem(pool, head[0])
                 pipe.execute()

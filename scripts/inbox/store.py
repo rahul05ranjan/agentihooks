@@ -400,6 +400,8 @@ class InboxStore:
             )
             pipe.multi()
             pipe.hset(key, mapping=_fields(moved))
+            if moved.address != item.address:
+                pipe.hdel(key, POOL_HOLDER, POOL_SKIP)
             if moved.state in CLOSED or moved.address != item.address:
                 pipe.zrem(self.key("open", item.address), item_id)
             pipe.zrem(self.key("delivered"), item_id)
@@ -412,45 +414,42 @@ class InboxStore:
             pipe.execute()
             return moved
 
-    def stage_pending(self, pipe, item, address):
-        """pipe is in MULTI: index item pending at address, moving its address entry and open count there."""
+    def _move_address(self, pipe, item, address):
+        """pipe is in MULTI: move item's address and open entries, and the open counts, to address."""
         pipe.zrem(self.key("address", item.address), item.id)
         pipe.zadd(self.key("address", address), {item.id: item.created_at})
-        pipe.zadd(self.key("pending", address), {item.id: item.created_at})
         pipe.zadd(self.key("open", address), {item.id: item.created_at})
         if address != item.address:
+            pipe.zrem(self.key("open", item.address), item.id)
             pipe.decr(self.key("open-size", item.address))
             pipe.incr(self.key("open-size", address))
+
+    def stage_pending(self, pipe, item, address):
+        """pipe is in MULTI: index item pending at address, moving its address entry and open count there."""
+        self._move_address(pipe, item, address)
+        pipe.zadd(self.key("pending", address), {item.id: item.created_at})
         pipe.sadd(self.key("waiting"), address)
         pipe.publish(NOTIFY, address)
 
     def stage_claim(self, pipe, item, address, by):
         """pipe is in MULTI: hand a pool item to the master seat at address, pending there, its holder recorded."""
-        moved = replace(item, address=address, updated_at=now_ms(), reason=f"claimed from the master pool by {address}")
+        reason = f"claimed from the master pool by {address}"
+        moved = replace(item, address=address, updated_at=now_ms(), reason=reason)
         key = self.key("item", item.id)
         pipe.hset(key, mapping={**_fields(moved), POOL_HOLDER: address})
         pipe.hdel(key, POOL_SKIP)
-        if address != item.address:
-            pipe.zrem(self.key("open", item.address), item.id)
-            pipe.zrem(self.key("pending", item.address), item.id)
         self.stage_pending(pipe, item, address)
-        pipe.rpush(self.key("history", item.id), _entry("pending", by, moved.reason, moved.updated_at))
+        pipe.rpush(self.key("history", item.id), _entry("pending", by, reason, moved.updated_at))
         return moved
 
     def _stage_pool_return(self, pipe, item, moved, holder):
-        """pipe is in MULTI: a pool item its holder never confirmed waits in the pool again, passing that holder over."""
+        """pipe is in MULTI: an item its holder never confirmed waits in the pool again, passing that holder over."""
         front = master_of(item.address)
         back = replace(moved, address=front)
         key = self.key("item", item.id)
         pipe.hset(key, mapping={**_fields(back), POOL_SKIP: holder})
         pipe.hdel(key, POOL_HOLDER)
-        if front != item.address:
-            pipe.zrem(self.key("address", item.address), item.id)
-            pipe.zrem(self.key("open", item.address), item.id)
-            pipe.decr(self.key("open-size", item.address))
-            pipe.zadd(self.key("address", front), {item.id: item.created_at})
-            pipe.zadd(self.key("open", front), {item.id: item.created_at})
-            pipe.incr(self.key("open-size", front))
+        self._move_address(pipe, item, front)
         self.pool.stage_add(pipe, back)
         return back
 
@@ -614,6 +613,8 @@ class InboxStore:
             raw = pipe.hgetall(key)
             if raw and raw["state"] == "delivered" and before is not None and int(raw["updated_at"]) > before:
                 return None
+            holder = raw.get(POOL_HOLDER, "") if raw else ""
+            pooled = bool(holder) and self.pool.takes_back(holder)
             pipe.multi()
             pipe.zrem(self.key("delivered"), item_id)
             if not raw or raw["state"] != "delivered":
@@ -621,8 +622,8 @@ class InboxStore:
                 return None
             item = _item(raw, item_id)
             moved = replace(item, state="pending", updated_at=now_ms(), reason=reason)
-            if raw.get(POOL_HOLDER):
-                moved = self._stage_pool_return(pipe, item, moved, raw[POOL_HOLDER])
+            if pooled:
+                moved = self._stage_pool_return(pipe, item, moved, holder)
             else:
                 pipe.hset(key, mapping=_fields(moved))
                 pipe.zadd(self.key("pending", item.address), {item_id: item.created_at})
@@ -746,9 +747,11 @@ class InboxStore:
                 raise InboxError("done needs an outcome naming where the work went")
             if item.state == state:
                 return item
-            if state == "delivered" and (
-                self._owned(pipe, by) or self._reserved(pipe, item_id) or self.pool.holds(pipe, item)
-            ):
+            if state not in CLOSED and self.pool.holds(pipe, item):
+                if state == "delivered":
+                    return None
+                raise InboxError(f"message {item_id} waits in the master pool for the next master")
+            if state == "delivered" and (self._owned(pipe, by) or self._reserved(pipe, item_id)):
                 return None
             moved = replace(item, state=state, updated_at=now_ms(), reason=reason)
             if state == "delivered":
