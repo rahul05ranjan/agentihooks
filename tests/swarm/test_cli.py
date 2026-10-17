@@ -666,6 +666,87 @@ def test_binning_releases_and_reopens_only_this_swarms_claims(env):
     assert (store.claimant("sw", "t1"), store.claimant("sw", "t2")) == (None, None)
 
 
+def _hold_the_tick_lock(store, held, sender):
+    from scripts.swarm import controller
+
+    sender.send(controller.take_tick_lock(store, "sw", held, 600_000))
+    sender.recv()
+
+
+def _die_holding_the_tick_lock(store):
+    import multiprocessing
+
+    from scripts.swarm import commands, lease
+
+    held = lease.acquire(store, "sw", commands.hive_id())
+    receiver, sender = multiprocessing.Pipe()
+    child = multiprocessing.get_context("fork").Process(target=_hold_the_tick_lock, args=(store, held, sender))
+    child.start()
+    try:
+        assert receiver.poll(10)
+        token = receiver.recv()
+        child.kill()
+        child.join(10)
+        assert child.exitcode == -9
+    finally:
+        if child.is_alive():
+            child.kill()
+        child.join(10)
+        receiver.close()
+        sender.close()
+    store.redis.set(store.key("sw", "tick-lock"), token, px=600_000)
+    return token
+
+
+def test_a_binned_swarm_reopened_by_a_tick_that_died_holding_the_lock_spawns_its_master_at_the_next_tick(
+    env, monkeypatch
+):
+    store, ledger, rt = env
+    run("sw", "create", "--repo", "/repo")
+    run("sw", "start")
+    ledger.bin = {"sw"}
+    assert run("sw", "stop", "--now") == 0
+    store.update("sw", state="running")
+    assert cli.run_tick(store, "sw", ledger, rt, FakeHerdr({})) == ["the ledger is in the bin, stopped"]
+    assert store.redis.get(store.key("sw", "tick-lock")) is None
+    ledger.reopen = lambda slug, by: ledger.bin.discard(slug)
+    real_tick, died = cli.run_tick, []
+    monkeypatch.setattr(cli, "run_tick", lambda store, slug: died.append(_die_holding_the_tick_lock(store)) or [])
+    assert run("sw", "reopen") == 0
+    assert store.config("sw").state == "running" and ledger.bin == set()
+    assert store.redis.get(store.key("sw", "tick-lock")) == died[0]
+    masters = len(rt.masters)
+    actions = real_tick(store, "sw", ledger, rt, FakeHerdr({}))
+    assert "another tick is running" not in actions
+    assert len(rt.masters) == masters + 1
+    assert store.redis.get(store.key("sw", "tick-lock")) is None
+
+
+@pytest.mark.parametrize("gone", [True, False])
+def test_a_tick_that_returns_early_on_its_ledger_releases_its_lock(env, gone):
+    store, ledger, rt = env
+    run("sw", "create", "--repo", "/repo")
+    run("sw", "start")
+    failure = cli.LedgerGone("ledger sw is gone") if gone else RuntimeError("ledger down")
+    state, calls = ledger.state, []
+
+    def fail_once(slug):
+        calls.append(slug)
+        if len(calls) == 1:
+            raise failure
+        return state(slug)
+
+    ledger.state = fail_once
+    if gone:
+        assert cli.run_tick(store, "sw", ledger, rt, FakeHerdr({})) == [
+            "ledger sw is gone; agentihooks swarm remove sw clears this swarm once it has no agents"
+        ]
+    else:
+        with pytest.raises(RuntimeError, match="^ledger down$"):
+            cli.run_tick(store, "sw", ledger, rt, FakeHerdr({}))
+    assert store.redis.get(store.key("sw", "tick-lock")) is None
+
+
 def test_stop_now_prints_its_state_and_who_is_still_running(env, capsys):
     store, ledger, rt = env
     run("sw", "create", "--repo", "/repo")
