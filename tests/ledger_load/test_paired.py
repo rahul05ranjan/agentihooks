@@ -34,8 +34,18 @@ def test_a_base_missing_its_measure_is_named():
     assert paired.regressions({**BASE, "busiest_cores": None}, BASE) == [
         "busiest CPU window was not measured on the base"
     ]
-    assert paired.regressions(None, BASE) == ["the base run printed no load measure"]
-    assert paired.regressions(BASE, None) == ["the head run printed no load measure"]
+    assert paired.regressions(None, BASE) == ["the base runs printed no load measure"]
+    assert paired.regressions(BASE, None) == ["the head runs printed no load measure"]
+
+
+def test_each_side_is_graded_by_its_best_run_and_its_worst_errors():
+    noisy = {**BASE, "errors": 2, "write_p95_s": 3.0, "busiest_cores": 0.4}
+    assert paired.best([BASE, noisy]) == {"errors": 2, "write_p95_s": 1.0, "busiest_cores": 0.4}
+    unmeasured = {**BASE, "busiest_cores": None}
+    assert paired.best([unmeasured, BASE]) == {"errors": 0, "write_p95_s": 1.0, "busiest_cores": 0.5}
+    assert paired.best([unmeasured]) == {"errors": 0, "write_p95_s": 1.0, "busiest_cores": None}
+    assert paired.best([BASE, None]) is None
+    assert paired.best([]) is None
 
 
 def test_the_graded_measure_is_the_repeat_when_the_gate_measured_twice():
@@ -45,10 +55,10 @@ def test_the_graded_measure_is_the_repeat_when_the_gate_measured_twice():
 
 
 def test_the_command_fails_on_a_planted_head_regression(tmp_path, capsys):
-    base, head = tmp_path / "base.log", tmp_path / "head.log"
+    base, head, slow = tmp_path / "base.log", tmp_path / "head.log", tmp_path / "slow.log"
     base.write_text(log(BASE))
     head.write_text(log(BASE))
-    assert paired.main([str(base), str(head)]) == 0
-    head.write_text(log({**BASE, "busiest_cores": 1.0}))
-    assert paired.main([str(base), str(head)]) == 1
+    slow.write_text(log({**BASE, "busiest_cores": 1.0}))
+    assert paired.main(["--base", str(base), str(base), "--head", str(head), str(slow)]) == 0
+    assert paired.main(["--base", str(base), "--head", str(slow), str(slow)]) == 1
     assert "::error::head busiest CPU window 1.0 exceeds base 0.5 by more than 1.1x" in capsys.readouterr().out
