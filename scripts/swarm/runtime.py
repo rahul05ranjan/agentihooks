@@ -236,9 +236,12 @@ class HerdrRuntime:
             if (window := quota_handoff.trigger(row, thresholds))
         }
 
-    def _quota_open(self):
-        warned = self._quota_warned()
-        return [row for row in self._quota_accounts if (row.harness, row.name) not in warned]
+    def _quota_open(self, lane):
+        from scripts.swarm import capacity, quota_handoff
+
+        rows = capacity.unreserved(self._quota_accounts) if lane == MASTER else self._quota_accounts
+        thresholds = quota_handoff.Thresholds.from_env(dict(os.environ))
+        return [row for row in rows if not quota_handoff.trigger(row, thresholds)]
 
     def _quota_refusal(self, agent, harnesses=None):
         from scripts.swarm.capacity import warning
@@ -385,16 +388,18 @@ class HerdrRuntime:
                 room[first] -= 1
         return narrowed
 
-    def _quota_eligible(self, harness):
+    def _quota_eligible(self, harness, lane):
         from scripts.swarm.capacity import free_seats
 
-        return [row for row in self._quota_open() if row.harness == harness and free_seats(row)]
+        return [row for row in self._quota_open(lane) if row.harness == harness and free_seats(row)]
 
     def _quota_choice(self, agent, reason, fixed, lane):
         if not hasattr(self, "_quota_accounts"):
             return agent, reason
         allocation = getattr(self, "_quota_allocations", {}).get(lane)
-        eligible = [h for h in agent_choice.AGENTS if self._quota_eligible(h) and (allocation is None or allocation[h])]
+        eligible = [
+            h for h in agent_choice.AGENTS if self._quota_eligible(h, lane) and (allocation is None or allocation[h])
+        ]
         if agent in eligible:
             return agent, reason
         if not fixed and eligible:
@@ -481,13 +486,14 @@ class HerdrRuntime:
         harness = getattr(self, "_quota_tasks", {}).get(task_id)
         return (harness, getattr(self, "_quota_task_accounts", {}).get(task_id)) if harness else None
 
-    def _quota_account(self, agent, preferred, excluded):
-        from scripts.swarm.capacity import offered, pick
+    def _quota_account(self, agent, preferred, excluded, lane):
+        from scripts.swarm.capacity import offered, pick, unreserved
 
-        eligible = [row for row in self._quota_eligible(agent) if row.name != excluded]
+        eligible = [row for row in self._quota_eligible(agent, lane) if row.name != excluded]
         row = next((row for row in eligible if row.name == preferred), None)
         if row is None:
-            rows = [row for row in self._quota_accounts if row.harness == agent]
+            rows = unreserved(self._quota_accounts) if lane == MASTER else self._quota_accounts
+            rows = [row for row in rows if row.harness == agent]
             seat = pick(offered(rows, {(row.harness, row.name) for row in rows if row not in eligible}))
             if seat is None:
                 raise SpawnError(self._quota_refusal(agent), "unavailable")
@@ -499,7 +505,10 @@ class HerdrRuntime:
             if lane in getattr(self, "_quota_allocations", {}):
                 self._quota_allocations[lane][agent] -= 1
             self._quota_accounts = [
-                replace(row, sessions=row.sessions + 1) if row == account else row for row in self._quota_accounts
+                replace(row, sessions=row.sessions + 1)
+                if (row.harness, row.name) == (account.harness, account.name)
+                else row
+                for row in self._quota_accounts
             ]
 
     def _fallback_choice(self, saved, profile, quota_transfer, environ, requested, avoid):
@@ -606,7 +615,9 @@ class HerdrRuntime:
         rc = remote_control.decision(lane, agent, route_kind, config.slug, login)
         account = None
         if hasattr(self, "_quota_accounts") and route_kind != "interactive":
-            account = self._quota_account(agent, saved.get("account") or self.planned_account(task["id"], agent), None)
+            account = self._quota_account(
+                agent, saved.get("account") or self.planned_account(task["id"], agent), None, lane
+            )
             route = ["--route", account.name]
         placed = timing.call(
             self._launch,

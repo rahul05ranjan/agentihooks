@@ -109,3 +109,20 @@ def test_health_reports_only_master_fallback_and_clears_after_move_back(kind, la
         assert found[0].summary == "master on fallback auth, phone access lost"
     else:
         assert found == []
+
+
+def test_finished_fallback_master_raises_no_finding_and_unseated_master_uses_its_name():
+    from scripts.swarm.health.findings import Limits, findings
+
+    agent = {
+        "name": "master-agent",
+        "lane": "master",
+        "task": "master",
+        "state": "working",
+        "route_kind": "subscription",
+        "desired_route_kind": "interactive",
+    }
+    found = [f for f in findings({}, [agent], {}, Limits()) if f.kind == "master-fallback-auth"]
+    assert [f.id for f in found] == ["master-fallback-auth/master-agent"]
+    agent["state"] = "finished"
+    assert not [f for f in findings({}, [agent], {}, Limits()) if f.kind == "master-fallback-auth"]
