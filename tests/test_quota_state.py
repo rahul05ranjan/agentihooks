@@ -1,4 +1,5 @@
 from scripts import agents_quota, quota_state
+from scripts import claude_quota_balancer as balancer
 from scripts.claude_quota_balancer import ProbeResult, QuotaWindow
 from scripts.swarm import capacity, drain_watch, quota_view
 from scripts.swarm.health.findings import Limits
@@ -43,27 +44,19 @@ def test_every_quota_band_becomes_the_shared_state_and_a_diagnostic_state_stays_
     assert [quota_state.shown(name, 6, 9.0) for name in diagnostic] == list(diagnostic)
 
 
-def test_balance_swarm_status_and_the_drain_watch_agree_on_one_draining_account():
-    now = 1_000.0
-    result = ProbeResult("alpha", "allowed", "DRAIN", 9.0, QuotaWindow(5.0, 20_000), QuotaWindow(91.0, 90_000))
-    [balance] = agents_quota.claude_rows([result], {}, "cached", {"alpha": now}, now)
-    assert balance.cap and balance.cap > 0
-    stored = capacity.record(
-        capacity.Account(
-            "claude",
-            "alpha",
-            capacity._state(balance.cap, "claude", 95.0, 9.0),
-            0,
-            95.0,
-            9.0,
-            balance.cap,
-            90_000,
-            five_resets_at=20_000,
-            observed_at=now,
-        )
-    )
-    assert balance.state == stored["state"] == "DRAIN"
-    assert quota_view.state_text(stored) == "drain"
+def test_balance_swarm_status_and_the_drain_watch_agree_on_one_draining_account(monkeypatch):
+    now = 100
+    result = ProbeResult("a", "allowed", "DRAIN", 9.0, QuotaWindow(used=5.0), QuotaWindow(used=91.0))
+    monkeypatch.setattr(balancer, "cached_observations", lambda **kw: [(now, result)])
+    monkeypatch.setattr(balancer, "collect_results", lambda *args, **kwargs: ([], "cached"))
+    monkeypatch.setattr(capacity.account_sessions, "sessions_by_account", lambda **_: {})
+    monkeypatch.setattr(capacity.account_sessions, "codex_sessions_by_account", lambda: {})
+    monkeypatch.setattr(capacity.codex_router, "accounts", lambda env: [])
+    (row,) = capacity.accounts({"AH_CC_TOKEN_a": "fake"}, now)
+    [balance] = agents_quota.claude_rows([result], {}, "cached", {"a": now}, now)
+    stored = capacity.record(row)
+    assert balance.state == row.state == "DRAIN"
+    assert "  drain  routing 9% left" in quota_view._account_line(stored, [stored], now * 1000)
     assert drain_watch.draining(stored, Limits(), now)
 
 
