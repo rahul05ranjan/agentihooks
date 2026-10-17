@@ -65,3 +65,15 @@ def test_browser_deadlines_compensate_only_mutation_instrumentation(monkeypatch,
     tab = SimpleNamespace(_impl_obj=SimpleNamespace(**{setter: lambda timeout: observed.append(timeout)}))
     getattr(owner, setter)(tab, 1500)
     assert observed == [expected]
+
+
+@pytest.mark.parametrize("owner", [sync_api.Page, sync_api.BrowserContext])
+@pytest.mark.parametrize("setter", ["set_default_timeout", "set_default_navigation_timeout"])
+def test_tracing_browser_deadlines_again_keeps_one_factor(monkeypatch, owner, setter):
+    monkeypatch.setenv("MUTANT_UNDER_TEST", "stats")
+    monkeypatch.setattr(owner, setter, getattr(owner, setter))
+    mutation_trace.trace_browser_deadlines()
+    observed = []
+    tab = SimpleNamespace(_impl_obj=SimpleNamespace(**{setter: lambda timeout: observed.append(timeout)}))
+    getattr(owner, setter)(tab, 1500)
+    assert observed == [1500 * mutation_trace.MUTATION_TRACE_FACTOR]
