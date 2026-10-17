@@ -392,7 +392,11 @@ def test_worker_smoke_reuses_the_candidate_layers_except_in_the_uncached_rebuild
     assert layers["uses"] == "actions/cache/restore@v4"
     assert layers["with"] == candidate["with"]
     assert layers["if"] == "matrix.proof != 'rebuild' && runner.environment == 'self-hosted'"
-    assert "save" not in " ".join(step.get("uses", "") for step in steps if "worker-layers" in str(step))
+    assert all(
+        step["with"]["path"] == "${{ env.WORKER_SCANNER_CACHE }}"
+        for step in steps
+        if step.get("uses") == "actions/cache/save@v4"
+    )
     assert steps.index(layers) < steps.index(proof)
     assert proof["env"]["WORKER_LAYERS"] == (
         "${{ steps.layers.outputs.cache-matched-key && format('{0}/worker-layers', runner.temp) || '' }}"
