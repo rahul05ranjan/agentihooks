@@ -23,7 +23,7 @@ def heard():
 
     class Echo(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
-            seen.append(dict(self.headers))
+            seen.append(self.headers)
             body = json.dumps({"dir": "/srv/ledgers", "data": {}}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
