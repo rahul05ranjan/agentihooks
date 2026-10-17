@@ -8,6 +8,8 @@ import urllib.request
 import uuid
 from urllib.parse import quote, urlencode
 
+from scripts.swarm_ledger import ledger_link
+
 from . import resources, schemas
 
 RETRIES = 5
@@ -24,7 +26,7 @@ class ResourceClient:
         request = urllib.request.Request(
             f"{self.base}/api/v1/ledgers/{quote(slug, safe='')}/{path}",
             data=None if payload is None else json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json", **self.credentials},
+            headers={"Content-Type": "application/json", **ledger_link.access_headers(), **self.credentials},
             method="GET" if payload is None else "POST",
         )
         with urllib.request.urlopen(request, timeout=self.timeout) as response:
