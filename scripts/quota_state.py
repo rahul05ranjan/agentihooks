@@ -2,7 +2,7 @@
 
 OPEN, DRAIN, CLOSED, UNKNOWN = "OPEN", "DRAIN", "CLOSED", "UNKNOWN"
 DRAIN_LEFT = 10
-BANDS = frozenset({"NORMAL", "REDUCE", "DRAIN_SOON", "DRAIN"})
+BANDS = frozenset({"NORMAL", "REDUCE", "DRAIN_SOON", "DRAIN", "BLOCKED"})
 
 
 def routing_left(harness: str, five: float | None, week: float | None) -> float | None:

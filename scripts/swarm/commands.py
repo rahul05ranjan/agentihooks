@@ -65,6 +65,25 @@ def rows(store: RedisStore, slug: str) -> list[dict]:
     ]
 
 
+def claim(store: RedisStore, records: str, key: str, owner: str, epoch: int) -> dict | None:
+    """Accept a pending row once, though the tick and the quota prober read the same queue."""
+    from redis.exceptions import WatchError
+
+    with store.redis.pipeline() as pipe:
+        try:
+            pipe.watch(records)
+            row = json.loads(pipe.hget(records, key))
+            if row["state"] != "pending":
+                return None
+            row.update(owner=owner, epoch=epoch, state="accepted", accepted_at=time.time_ns() // 1_000_000)
+            pipe.multi()
+            pipe.hset(records, key, json.dumps(row))
+            pipe.execute()
+        except WatchError:
+            return None
+    return row
+
+
 def consume(store: RedisStore, slug: str, owner: str, execute: Callable[[dict], str], only: str = "") -> list[str]:
     held = lease.acquire(store, slug, owner)
     if held is None:
@@ -77,11 +96,12 @@ def consume(store: RedisStore, slug: str, owner: str, execute: Callable[[dict], 
         if row["state"] != "pending":
             store.redis.lrem(pending, 1, key)
             continue
-        if row["owner"] and row["owner"] != owner or only and row["command"] != only:
+        if (row["owner"] and row["owner"] != owner) or (only and row["command"] != only):
             continue
         stale = row.get("epoch", 0) not in (0, held.epoch)
-        row.update(owner=owner, epoch=held.epoch, state="accepted", accepted_at=time.time_ns() // 1_000_000)
-        store.redis.hset(records, key, json.dumps(row))
+        row = claim(store, records, key, owner, held.epoch)
+        if row is None:
+            continue
         lease.require(store, slug, held)
         error = "the controller lease is stale" if stale else execute(row)
         row.update(
