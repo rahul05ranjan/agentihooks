@@ -143,15 +143,23 @@ def test_each_new_slow_run_updates_the_same_finding_and_counts_once(swarm):
 
 def test_standing_finding_groups_each_slow_stage_with_count_worst_time_and_run_links(swarm, monkeypatch):
     store, config = swarm
-    monkeypatch.setitem(JOBS, 6, [
-        _job("mutation (1)", "01:00", "15:00", 6),
-        _job("lint", "00:00", "05:00", 6),
-        _job("Gate — Required", "17:30", "17:30", 6),
-    ])
-    monkeypatch.setitem(JOBS, 7, [
-        _job("mutation (1)", "01:00", "16:00", 7),
-        _job("Gate — Required", "18:00", "18:00", 7),
-    ])
+    monkeypatch.setitem(
+        JOBS,
+        6,
+        [
+            _job("mutation (1)", "01:00", "15:00", 6),
+            _job("lint", "00:00", "05:00", 6),
+            _job("Gate — Required", "17:30", "17:30", 6),
+        ],
+    )
+    monkeypatch.setitem(
+        JOBS,
+        7,
+        [
+            _job("mutation (1)", "01:00", "16:00", 7),
+            _job("Gate — Required", "18:00", "18:00", 7),
+        ],
+    )
     runs = [_run(6, "00:00", "17:30"), _run(7, "00:00", "18:00")]
     defects.refresh("sw", config, store, NOW_MS, run=_gh([], runs))
     found = standing.findings(store.redis, "sw", NOW_MS)
