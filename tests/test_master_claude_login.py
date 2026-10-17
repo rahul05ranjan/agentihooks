@@ -399,14 +399,22 @@ def test_prepare_claims_above_the_stored_epoch_builds_restores_and_keeps(ah, ren
     monkeypatch.setattr(openbao_kv, "from_env", lambda environ: "bao" if environ.get("OPENBAO_URL") else None)
     monkeypatch.setattr(login, "stored", lambda bao, slug: {"epoch": "5"} if bao else {})
     monkeypatch.setattr(login, "restore", lambda copy, target: calls.append(("restore", copy, target)))
-    monkeypatch.setattr(login, "keep", lambda bao, slug, target, epoch: calls.append(("keep", bao, slug, epoch)))
-    target, found = login.prepare(_environ(rendered, OPENBAO_URL="u"), tmp_path)
+    monkeypatch.setattr(
+        login, "keep", lambda bao, slug, target, epoch: calls.append(("keep", bao, slug, target, epoch))
+    )
+    monkeypatch.setattr(binding, "rehome", lambda report, home: calls.append(("rehome", report, home)))
+    environ = _environ(rendered, OPENBAO_URL="u", AGENTIHOOKS_PROFILE_REPORT="/run/report")
+    target, found = login.prepare(environ, tmp_path)
     assert (target, found) == (login.home("rig"), "masteratexample_com")
-    assert calls == [("restore", {"epoch": "5"}, target), ("keep", "bao", "rig", 6)]
+    assert calls == [
+        ("rehome", Path("/run/report"), target),
+        ("restore", {"epoch": "5"}, target),
+        ("keep", "bao", "rig", target, 6),
+    ]
     assert json.loads((login.root("rig") / login.OWNER).read_text())["pid"] == os.getpid()
     calls.clear()
     login.prepare(_environ(rendered), tmp_path)
-    assert calls == [("restore", {}, target), ("keep", None, "rig", 7)]
+    assert calls == [("restore", {}, target), ("keep", None, "rig", target, 7)]
 
 
 def test_prepare_refuses_incompatible_settings_before_touching_the_lease_or_home(ah, rendered, tmp_path, monkeypatch):

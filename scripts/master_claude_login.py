@@ -228,7 +228,7 @@ def keep(bao: openbao_kv.OpenBao | None, slug: str, target: Path, epoch: int) ->
 
 
 def checkpoint(environ: Mapping[str, str]) -> bool:
-    slug = environ.get("AGENTIHOOKS_SWARM", "")
+    slug = environ.get("AGENTIHOOKS_SWARM")
     if not slug or environ.get("CLAUDE_CONFIG_DIR") != str(home(slug)):
         return False
     epoch = int(_read(root(slug) / OWNER).get("epoch", 0))
