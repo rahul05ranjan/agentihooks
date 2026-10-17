@@ -87,3 +87,13 @@ def test_a_task_add_the_server_applied_prints_its_id_and_returns(monkeypatch, do
     assert json.loads(capsys.readouterr().out) == {"task": "t9", "added": "Fix"}
     assert [op["op"] for op in sent] == ["task_add"]
     assert [t["id"] for t in doc["tasks"]] == ["t1", "t9"]
+
+
+def test_other_ops_keep_their_refusal_text_and_need_no_applied_list(monkeypatch):
+    args = SimpleNamespace(slug="s", name="master")
+    serve(monkeypatch, {}, {"_meta": {}})
+    assert ledger.send(args, "comment", item="tasks/t1", text="Note") == {"_meta": {}}
+    serve(monkeypatch, {}, {"rejected": ["x"], "_meta": {"warnings": ["no such item"]}})
+    with pytest.raises(SystemExit) as exit_:
+        ledger.send(args, "comment", item="tasks/t1", text="Note")
+    assert str(exit_.value) == "no such item"
