@@ -5,7 +5,7 @@ import re
 from dataclasses import asdict
 from functools import cache
 
-from hooks.config import COMPACT_LIMIT, HANDOFF_MARGIN
+from hooks.config import HANDOFF_MARGIN
 from hooks.context import context_recycle
 from scripts.doctor import (
     ci,
@@ -58,7 +58,7 @@ def _traces(store, ledger, slug, now_ms, env):
 
 
 def _overruns(store, slug):
-    limit = store.config(slug).compact_limit or COMPACT_LIMIT
+    limit = status.compact_limit(store.config(slug))
     return context_overruns.findings(
         [asdict(a) for a in store.agents(slug)],
         lambda session: context_recycle.unmarked_overrun(session, limit),

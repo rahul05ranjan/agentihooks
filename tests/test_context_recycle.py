@@ -298,9 +298,27 @@ def test_the_session_remembers_its_first_identity_in_a_fresh_home(monkeypatch, t
     assert recycle.over_limit("s1", {}) == "sw"
 
 
-def test_the_session_remembers_its_identity_beside_existing_snapshots(monkeypatch, tmp_path):
+def test_the_session_remembers_its_identity_when_the_usage_folder_already_exists(monkeypatch, tmp_path):
     (tmp_path / "context_usage").mkdir()
     monkeypatch.setattr(recycle, "used_tokens", lambda session_id: 100_000)
     assert recycle.directive("s1", MASTER) is None
     monkeypatch.setattr(recycle, "used_tokens", lambda session_id: 650_000)
     assert recycle.over_limit("s1", {}) == "sw"
+
+
+def test_a_session_without_an_id_leaves_no_pin(monkeypatch, tmp_path):
+    monkeypatch.setattr(recycle, "used_tokens", lambda session_id: 900_000)
+    assert recycle.directive("", MASTER) is None
+    assert recycle.over_limit("", MASTER) is None
+    assert not (tmp_path / "context_usage").exists()
+
+
+def test_an_unmarked_overrun_uses_the_compact_limit_the_session_enforces(monkeypatch):
+    monkeypatch.setattr(recycle, "COMPACT_LIMIT", 700)
+    monkeypatch.setattr(recycle, "used_tokens", lambda session_id: 100_000)
+    assert recycle.directive("s1", MASTER) is None
+    monkeypatch.setattr(recycle, "used_tokens", lambda session_id: 700_000)
+    assert recycle.unmarked_overrun("s1", 600) is None
+    monkeypatch.setattr(recycle, "used_tokens", lambda session_id: 750_000)
+    assert recycle.unmarked_overrun("s1", 600) == 750_000
+    assert recycle.unmarked_overrun("other", 600) == 750_000

@@ -87,7 +87,7 @@ def test_the_context_overrun_reader_reads_the_swarm_agents_at_its_compact_limit(
     from scripts.swarm.store import AgentRecord
 
     asked = []
-    monkeypatch.setattr(detect, "COMPACT_LIMIT", 600)
+    monkeypatch.setenv("AGENTIHOOKS_COMPACT_LIMIT", "600")
     monkeypatch.setattr(detect, "HANDOFF_MARGIN", 50)
     monkeypatch.setattr(
         context_recycle, "unmarked_overrun", lambda session, compact: asked.append((session, compact)) or 1

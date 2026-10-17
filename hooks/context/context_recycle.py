@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import shlex
@@ -59,8 +60,8 @@ def _overrun(session_id: str, environ) -> tuple[str, int] | None:
     return slug, used
 
 
-def _gate_limit() -> int:
-    return COMPACT_LIMIT + HANDOFF_MARGIN
+def _gate_limit(compact_limit: int | None = None) -> int:
+    return (COMPACT_LIMIT if compact_limit is None else compact_limit) + HANDOFF_MARGIN
 
 
 def _marker(session_id: str, stage: str) -> Path:
@@ -74,16 +75,24 @@ def _swarm_of(environ, session_id: str = "") -> str:
     slug = (naming.legacy_slug(name) or environ.get("AGENTIHOOKS_SWARM", "")) if naming.lane_of(name) else ""
     if not session_id:
         return slug
-    pin = _marker(session_id, "swarm")
     if not slug:
-        try:
-            return pin.read_text(encoding="utf-8")
-        except OSError:
-            return ""
+        return _pinned_swarm(session_id).get("swarm", "")
+    _pin_swarm(session_id, slug)
+    return slug
+
+
+def _pinned_swarm(session_id: str) -> dict:
+    try:
+        return json.loads(_marker(session_id, "swarm").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _pin_swarm(session_id: str, slug: str) -> None:
+    pin = _marker(session_id, "swarm")
     if not pin.exists():
         pin.parent.mkdir(parents=True, exist_ok=True)
-        pin.write_text(slug, encoding="utf-8")
-    return slug
+        pin.write_text(json.dumps({"swarm": slug, "compact_limit": COMPACT_LIMIT}), encoding="utf-8")
 
 
 def over_limit(session_id: str, environ=None) -> str | None:
@@ -114,7 +123,8 @@ def directive(session_id: str, environ=None, now: datetime | None = None) -> str
 
 def unmarked_overrun(session_id: str, compact_limit: int) -> int | None:
     used = _used(session_id)
-    if used is None or used < (compact_limit + HANDOFF_MARGIN) * 1000:
+    limit = _pinned_swarm(session_id).get("compact_limit", compact_limit)
+    if used is None or used < _gate_limit(limit) * 1000:
         return None
     return None if any(_marker(session_id, stage).exists() for stage in ("prepare", "recycle")) else used
 
