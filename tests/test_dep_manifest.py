@@ -4,6 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 from coverage import CoverageData
 
@@ -280,6 +281,139 @@ def test_the_plan_reuses_every_test_the_change_left_valid_without_its_group_suff
         "tests/test_c.py::test_spawn[x@y]",
     ]
     assert dep_manifest.plan(manifest, [(".github/workflows/test.yml", None, None)], "41")["tests"] == []
+
+
+@pytest.mark.parametrize("path", [".github/workflows/swarm-smoke.yml", ".github/workflows/test.yml"])
+def test_a_workflow_only_plant_reuses_unrelated_tests_and_a_graded_plant_runs_its_tests(path):
+    manifest = {
+        "version": 2,
+        "commit": "c" * 40,
+        "units": ["hooks/sample.py::double", "hooks/sample.py::<module>"],
+        "tests": {
+            "tests/test_workflow.py::test_workflow": {"units": [], "files": [path], "escapes": False},
+            "tests/test_math.py::test_double": {"units": [0, 1], "files": [], "escapes": False},
+            "tests/test_other.py::test_other": {"units": [], "files": [], "escapes": False},
+        },
+    }
+    old = "jobs:\n  unit:\n    steps: []\n  split:\n    steps: []\n  lint:\n    name: before\n"
+    new = old.replace("name: before", "name: after")
+    chosen = dep_manifest.plan(manifest, [(path, old, new)], "41")
+    assert chosen == {
+        "run": "41",
+        "commit": "c" * 40,
+        "global": None,
+        "invalidated": 1,
+        "tests": ["tests/test_math.py::test_double", "tests/test_other.py::test_other"],
+    }
+    graded = [("hooks/sample.py", SOURCE, SOURCE.replace("value * 2", "value * 3"))]
+    assert dep_manifest.plan(manifest, graded, "41")["tests"] == [
+        "tests/test_other.py::test_other",
+        "tests/test_workflow.py::test_workflow",
+    ]
+
+
+@pytest.mark.parametrize("shared_import", [None, "helper", "test_reader", "dynamic"])
+def test_collection_workflow_inputs_belong_only_to_the_module_that_reads_them(tmp_path, shared_import):
+    workflow = tmp_path / ".github" / "workflows" / "smoke.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text("name: smoke\n")
+    (tmp_path / "test_reader.py").write_text(
+        "from pathlib import Path\n"
+        "WORKFLOW = Path('.github/workflows/smoke.yml').read_text()\n"
+        "def test_reads():\n    assert WORKFLOW == 'name: smoke\\n'\n"
+    )
+    consumers = []
+    if shared_import:
+        if shared_import == "helper":
+            (tmp_path / "helper.py").write_text(
+                "from pathlib import Path\nWORKFLOW = Path('.github/workflows/smoke.yml').read_text()\n"
+            )
+            (tmp_path / "test_reader.py").write_text(
+                "from helper import WORKFLOW\ndef test_reads():\n    assert WORKFLOW == 'name: smoke\\n'\n"
+            )
+        imported = (
+            "import importlib\nWORKFLOW = importlib.import_module('test_reader').WORKFLOW\n"
+            if shared_import == "dynamic"
+            else f"from {shared_import} import WORKFLOW\n"
+        )
+        (tmp_path / "test_consumer.py").write_text(
+            imported + "def test_cached():\n    assert WORKFLOW == 'name: smoke\\n'\n"
+        )
+        consumers = ["test_consumer.py"]
+    (tmp_path / "test_unrelated.py").write_text("def test_other():\n    assert 2 + 2 == 4\n")
+    out = tmp_path / "inputs"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "tests.dep_inputs",
+            "-p",
+            "no:cacheprovider",
+            "test_reader.py",
+            *consumers,
+            "test_unrelated.py",
+        ],
+        cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": str(ROOT), "DEP_INPUTS_DIR": str(out), "PYTEST_ADDOPTS": ""},
+        check=True,
+        capture_output=True,
+    )
+    rows = [json.loads(line) for report in out.glob("*.jsonl") for line in report.read_text().splitlines()]
+    expected = (
+        []
+        if not shared_import
+        else [
+            {
+                "test": "test_consumer.py::test_cached",
+                "files": [] if shared_import == "dynamic" else [".github/workflows/smoke.yml"],
+                "escapes": shared_import == "dynamic",
+            }
+        ]
+    )
+    assert sorted(rows, key=lambda row: row["test"]) == expected + [
+        {"test": "test_reader.py::test_reads", "files": [".github/workflows/smoke.yml"], "escapes": False},
+        {"test": "test_unrelated.py::test_other", "files": [], "escapes": False},
+    ]
+
+
+@pytest.mark.parametrize(
+    "new",
+    [
+        None,
+        "jobs: [broken]",
+        "jobs:\n  unit: [broken]\n  split: {}\n",
+        "jobs:\n  unit: {}\n  split: {}\nenv:\n  MODE: changed\n",
+        "jobs:\n  unit: {}\n  split: {}\ndefaults:\n  run:\n    shell: python\n",
+        "jobs:\n  unit:\n    steps: [{run: changed}]\n  split: {}\n",
+        "jobs:\n  unit:\n    needs: select\n  split: {}\n  select:\n    steps: [{run: changed}]\n",
+    ],
+)
+def test_execution_input_plants_still_invalidate_every_test(tmp_path, new):
+    manifest = _measure(tmp_path)
+    old = "jobs:\n  unit:\n    needs: select\n  split: {}\n  select: {}\n"
+    result = dep_manifest.plan(manifest, [(".github/workflows/test.yml", old, new)], "41")
+    assert result["tests"] == []
+    assert result["global"] == ".github/workflows/test.yml"
+
+
+@pytest.mark.parametrize("version", [None, 1])
+def test_legacy_manifests_keep_workflow_changes_global(tmp_path, version):
+    manifest = _measure(tmp_path)
+    manifest["version"] = version
+    result = dep_manifest.plan(manifest, [(".github/workflows/smoke.yml", "name: old", "name: new")], "41")
+    assert result["tests"] == []
+    assert result["global"] == ".github/workflows/smoke.yml"
+
+
+@pytest.mark.parametrize("path", [".github/test-excludes.txt", ".github/actions/retry-download/action.yml"])
+def test_shared_github_execution_inputs_remain_global(tmp_path, path):
+    manifest = _measure(tmp_path)
+    result = dep_manifest.plan(manifest, [(path, "old", "new")], "41")
+    assert result["tests"] == []
+    assert result["global"] == path
 
 
 def test_deselection_keeps_new_tests_and_skips_only_wholly_reused_files(tmp_path):
