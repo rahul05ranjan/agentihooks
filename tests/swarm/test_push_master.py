@@ -116,11 +116,13 @@ def test_the_shared_codex_persona_keeps_the_legacy_wait_loop():
 
 
 def test_a_push_codex_persona_carries_the_push_waiting_line_without_the_loop():
-    text = "Re-arm the Monitor on the ledger.\nMonitor its checks.\n"
+    text = "Re-arm the Monitor on the ledger.\nMonitor its checks.\nStart a `Monitor` on long running work.\n"
     persona = codex_master.persona(text, push=True)
-    assert (
-        persona
-        == "Read agentihooks msg inbox.\nWatch its checks.\n\n" + codex_master.waiting("<slug>", push=True) + "\n"
+    assert persona == (
+        "Read agentihooks msg inbox.\nWatch its checks.\n"
+        "Start a `agentihooks swarm <slug> wait --on` on long running work.\n\n"
+        + codex_master.waiting("<slug>", push=True)
+        + "\n"
     )
     assert "wait --inbox in a foreground tool call" not in persona
     assert codex_master.persona(text) == codex_master.persona(text, push=False)

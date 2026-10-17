@@ -1255,6 +1255,7 @@ def test_a_push_codex_master_renders_its_persona_without_the_wait_inbox_loop(wor
     assert "wait --inbox" not in persona.replace(codex_master.waiting("<slug>", push=True), "")
     assert persona.endswith("\n" + codex_master.waiting("<slug>", push=True) + "\n")
     assert "- Read agentihooks msg inbox.\n" in persona
+    assert "Monitor" not in persona
     assert render.render_codex("master", push=True) is None
     legacy = render.render_codex("master")
     assert legacy is not None
