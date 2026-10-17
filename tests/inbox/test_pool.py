@@ -165,6 +165,7 @@ def test_pool_fence_and_front_door_agree_on_the_seats_mid_handoff(swarm, inbox):
     from scripts.swarm_v2.master_fence import Seats
 
     _masters(swarm, 2)
+    MasterSeats(swarm.redis).set_count(SLUG, 2)
     swarm.put_agent(SLUG, AgentRecord("sw-master-2", "master", "master", seat=SECOND, state="finished"))
     swarm.seats.occupy(SECOND, "sw-master-2b", at=2)
     fence = Seats(SLUG, swarm, {})
