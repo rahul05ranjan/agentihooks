@@ -1,9 +1,10 @@
 import json
 import time
 
+from hooks.lifecycle.gitstate import TreeState
 from hooks.lifecycle.lease import add_holder, admin_dir, lease_path
-from hooks.lifecycle.model import Finding, Holder, Root
-from hooks.lifecycle.worktrees import classify, discover, nested_worktrees
+from hooks.lifecycle.model import Finding, Holder, Lease, Root
+from hooks.lifecycle.worktrees import CLEAN_IDLE, _idle_verdict, classify, discover, nested_worktrees
 
 from .conftest import age, git, process, snap
 
@@ -126,6 +127,13 @@ def test_throwaway_and_snapshot_verdicts_are_never_immediate(repo):
     (dirty / "notes.txt").write_text("unsaved\n")
     age(dirty, 25 * HOUR)
     assert full(dirty) == ("snapshot", "unique work, owner gone: push to wip/ then remove", False)
+
+
+def test_clean_idle_boundary_is_inclusive():
+    clean = TreeState("/w", "/a", "/p", "task", (), False, "", False, 0.0)
+    plant = Lease("ephemeral", 0.0)
+    assert _idle_verdict(clean, plant, CLEAN_IDLE) == ("remove", "throwaway checkout, owner gone", False)
+    assert _idle_verdict(clean, None, CLEAN_IDLE) == ("remove", "clean and on a remote", False)
 
 
 def test_ephemeral_worktree_is_removed_without_rescue(repo):
