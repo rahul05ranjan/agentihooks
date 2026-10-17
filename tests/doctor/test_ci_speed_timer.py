@@ -1,6 +1,5 @@
 import json
 
-import fakeredis
 import pytest
 
 from scripts.doctor import ci_speed_read, cli, loop
@@ -8,13 +7,15 @@ from scripts.inbox.store import InboxStore
 from scripts.swarm.store import RedisStore, SwarmConfig
 from tests.doctor.test_ci_speed import NOW, job, record
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.xdist_group("fakeredis")]
 DOCTOR = "speed-doctor"
 WATCHED = "speed-watched"
 
 
 @pytest.fixture
 def store(monkeypatch):
+    import fakeredis
+
     store = RedisStore(fakeredis.FakeRedis(decode_responses=True))
     store.create(SwarmConfig(DOCTOR, "/repo", 1, 0, state="drained", template="doctor"))
     store.set_peer(DOCTOR, WATCHED)
