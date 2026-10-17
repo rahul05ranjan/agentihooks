@@ -460,7 +460,10 @@ def test_master_move_from_the_command_line_replaces_an_earlier_order(store, caps
     assert printed == master_move.pending(store, "sw")
     assert (printed["to"], printed["master"]) == ("spare", name)
     inbox = InboxStore(store.redis)
-    assert inbox.get(first["item"]).state == "cancelled"
+    assert (inbox.get(first["item"]).state, inbox.get(first["item"]).reason) == (
+        "cancelled",
+        "cancelled: the master move was replaced",
+    )
     assert inbox.get(printed["item"]).text == master_move.ORDER.format(to="spare", current="this machine", slug="sw")
 
 
