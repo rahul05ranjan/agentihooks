@@ -2,7 +2,7 @@
 order, and each is claimed by exactly one live master, in round robin seat order. Operator items never enter it."""
 
 from scripts.inbox import intent
-from scripts.inbox.seats import is_seat, master_of, seat_address
+from scripts.inbox.seats import is_seat, master_of
 from scripts.inbox.store import POOL_SKIP
 from scripts.swarm.keyspace import ROOT
 from scripts.swarm.store import MASTER, RedisStore
@@ -14,10 +14,6 @@ OPERATOR = "operator"
 CLAIMER = "inbox"
 CLAIM_ATTEMPTS = 3
 DROPPED = object()
-
-
-def front_door(slug: str) -> str:
-    return seat_address(slug, MASTER)
 
 
 def slug_of(address: str) -> str:

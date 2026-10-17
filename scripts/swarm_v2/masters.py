@@ -3,8 +3,8 @@
 import json
 from collections.abc import Callable
 
-from scripts.inbox.seats import seat_address
-from scripts.swarm.store import MASTER, PREFIX, SwarmError
+from scripts.inbox.seats import SeatRegistry, seat_address
+from scripts.swarm.store import MASTER, PREFIX, RedisStore, SwarmError
 
 DEFAULT_COUNT = 1
 SAVE_ATTEMPTS = 5
@@ -69,11 +69,8 @@ def _number(slug: str, address: str) -> int:
 def held(redis, slug: str, agents: list) -> dict[str, str]:
     """Each live master seat, lead first then by number, with the name holding it. The seat registry decides every
     seat it has an occupant for: live while that occupant has neither left nor finished nor retired nor been asked to
-    retire. A master record whose seat the registry does not hold yet counts by its record. The pool, the fence and
-    the front door all read this, so they agree while a seat changes hands."""
-    from scripts.inbox.seats import SeatRegistry
+    retire. A master record whose seat the registry does not hold yet counts by its record."""
     from scripts.swarm import master_retire
-    from scripts.swarm.store import RedisStore
 
     registry, table, store = SeatRegistry(redis), MasterSeats(redis), RedisStore(redis)
     gone = {a.name for a in agents if a.state in GONE}
