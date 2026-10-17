@@ -69,7 +69,7 @@ def test_tags_asks_origin_for_tag_refs_with_a_bounded_wait(monkeypatch):
 
     def run(args, **kwargs):
         calls.append((args, kwargs))
-        return subprocess.CompletedProcess(args, 0, "abc\trefs/tags/v1.0.0\ndef\trefs/tags/v1.0.1\n", "")
+        return subprocess.CompletedProcess(args, 0, "abc 1\trefs/tags/v1.0.0\ndef 2\trefs/tags/v1.0.1\n", "")
 
     monkeypatch.setattr(release_wait.subprocess, "run", run)
     assert release_wait.tags("/repo") == ["v1.0.0", "v1.0.1"]
