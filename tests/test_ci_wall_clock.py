@@ -402,3 +402,15 @@ def test_keeps_indexed_helper_origins_and_nested_unittest_receivers(tmp_path, bo
     directory.mkdir()
     (directory / "test_budget.py").write_text("import time\n" + body)
     assert main(["--root", str(tmp_path)]) == expected
+
+
+def test_keeps_clock_and_numeric_arguments_distinct_inside_one_helper(tmp_path):
+    from scripts.ci_wall_clock import main
+
+    directory = tmp_path / "tests"
+    directory.mkdir()
+    (directory / "test_stamp.py").write_text(
+        "import time\ndef stamp(clock_origin, offset):\n    return time.monotonic() - offset\n"
+        "def test_stamp():\n    assert stamp(time.monotonic(), 0) > 0\n"
+    )
+    assert main(["--root", str(tmp_path)]) == 0
