@@ -23,6 +23,43 @@ A branch is graded only on its own lines, so a dev refresh or a stacked branch d
 
 - **Reuse on the push preflight.** Before the mutation job takes a mutation lane, which the proofs workflow and other dispatches never wait on, the cheap decision job reads the newest graded push preflight for the same head on any branch, then the branch's newest. When that run concluded success with a complete green report and this head equals it or only adds tests since, as defined above, its report is uploaded as this run's `mutation-preflight-report` with a `reuse.json` naming the source run, and the mutation job is skipped. A newer red or failed run, a missing report, any change outside `tests/` or any lookup error runs the mutation job as before, so no head goes green without a complete green report. A reused head never counts as a graded base. Measured on PR 2624: the full preflight 38151448161 took 116 s; the tests only head after it reused that report in run 38151636224, whose decision job took 18 s.
 
+## Touched tests on the push preflight
+
+A branch that adds only failing tests has no mutants, and a head that only adds tests may reuse an earlier green report, so the mutation path alone stays green on the red step of red then green. The `touched-tests` job closes that gap: on every branch push it runs the test files the branch touches and fails the Mutation preflight run when any of them fails.
+
+- **When it runs.** On branch pushes the Mutation preflight takes, which excludes `dev`, `main`, `gh-readonly-queue/**`, `wip/**` and `diffcheck/**`. It needs the `pull-request` decision job and runs only while the branch has no open pull request into dev, the same condition that lets the mutation path run. It runs beside `plan` and `mutation`, never after them, and runs whether or not the report was reused, so a green preflight takes no longer. Dispatched runs (`workflow_call`) skip it.
+- **Which tests.** Files that `git diff --name-only --no-renames origin/dev...HEAD` names, that sit under `tests/`, are named `test_*.py` and still exist at the head. A deleted test file is left out; a renamed one counts as its new name. Fixtures, conftest files and helpers do not select tests on their own. With no touched test the run step is skipped and the job passes. The job log prints the list under `Touched tests:`.
+- **Browser.** When a touched test, or a `conftest.py` or `__init__.py` above it, drives Playwright, the job installs Chromium through the shared `browser-cache` action: it uses the runner image's browser or a verified cached one, else installs with one retry, inside a six minute step timeout. Otherwise no browser is installed.
+- **How it runs.** Python 3.12, the `dev` and `all` extras without the test excludes, then `python -m pytest <files> -n auto --tb=short -p no:cacheprovider`. A failing test is never retried and no step continues on error, so one failure turns the job and the run red. The job runs on the `anton-oss` pool for trusted actors, otherwise `ubuntu-latest`, with a fifteen minute timeout.
+
+Read a branch push's result:
+
+```bash
+gh run list --workflow mutation-preflight.yml --branch <branch> --limit 1 --json databaseId,conclusion,headSha
+gh api repos/the-cloud-clockwork/agentihooks/actions/runs/<run id>/jobs \
+  --jq '.jobs[] | "\(.name) \(.conclusion)"'
+```
+
+A red `touched-tests` with green `mutation` means a touched test failed; the pytest summary in the job log names it. Swarm readers grade the run conclusion, so that red reaches them as a red preflight.
+
+Measured on the pull request that delivered the job, #3959:
+
+| Commit | Workflow | Preflight | `touched-tests` | Run |
+|---|---|---|---|---|
+| Adds a failing test, job absent | old | success | absent | 39018334066 |
+| Adds the job and one planted failing assertion | new | failure | failure in 40 s: `assert 15 == 1`, 1 failed, 83 passed | 39018525928 |
+| Fix commit | new | success | success in 35 s | 39018719387 |
+| Final head after review | new | success | success in 39 s | 39019128351 |
+
+In every run the `mutation` job took 18 s to 20 s, so the job ran inside the time the mutation path already spends.
+
+Limits and troubleshooting:
+
+- Once the branch has an open pull request into dev the push preflight skips every job, this one included; the pull request's own Tests run grades the tests from then on. Read red before opening the first draft.
+- Only touched test files run. A source change that breaks an untouched test turns red in the pull request's Tests run, not here.
+- A test that passes alone but fails beside others under `-n auto` fails here too; fix the test's isolation, since no retry absorbs it.
+- A red `touched-tests` whose failed step is the browser install, not the pytest step, comes from the runner, not a test; the step log names the failed install attempts.
+
 Measured on dispatched proofs:
 
 | Case | Old scope | New scope | Shard time |
