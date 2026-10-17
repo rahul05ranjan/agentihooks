@@ -870,7 +870,7 @@ def test_balance_codex_rows_read_stale_or_forced_accounts_live_and_show_the_read
         ),
     )
     monkeypatch.setattr(codex_router, "probe", lambda account, environ, run=None: live)
-    rows = agents_quota._codex(4600.0, force=force)
+    rows = agents_quota._codex(4600.0, **({"force": True} if force else {}))
     assert calls == [(["alpha"], 4600.0, force)]
     assert [(row.account, row.routing_left, row.observed_at) for row in rows] == [
         ("alpha", 70.0, 4540),
@@ -881,11 +881,29 @@ def test_balance_codex_rows_read_stale_or_forced_accounts_live_and_show_the_read
 
 def test_quota_refresh_reads_every_claude_and_codex_account_live(monkeypatch, capsys):
     seen = []
-    monkeypatch.setattr(agents_quota, "_claude", lambda refresh, timeout: seen.append(("claude", refresh)) or [])
-    monkeypatch.setattr(agents_quota, "_codex", lambda now, force=False: seen.append(("codex", force)) or [])
+    monkeypatch.setattr(agents_quota.time, "time", lambda: 77.0)
+    monkeypatch.setattr(
+        agents_quota, "_claude", lambda refresh, timeout: seen.append(("claude", refresh, timeout)) or []
+    )
+    monkeypatch.setattr(agents_quota, "_codex", lambda now, force=False: seen.append(("codex", now, force)) or [])
     assert agents_quota.main(["--refresh"]) == 1
     assert agents_quota.main([]) == 1
-    assert seen == [("claude", True), ("codex", True), ("claude", False), ("codex", False)]
+    assert seen == [
+        ("claude", True, 60.0),
+        ("codex", 77.0, True),
+        ("claude", False, 60.0),
+        ("codex", 77.0, False),
+    ]
+
+
+def test_quota_help_names_the_refresh_of_every_claude_and_codex_account(monkeypatch, capsys):
+    monkeypatch.setenv("COLUMNS", "200")
+    with pytest.raises(SystemExit):
+        agents_quota.main(["--help"])
+    lines = [line.split() for line in capsys.readouterr().out.splitlines() if line.split()[:1] == ["--refresh"]]
+    assert [" ".join(words[1:]) for words in lines] == [
+        "Probe every Claude and Codex account instead of using the cache"
+    ]
 
 
 def test_page_quota_lists_every_codex_account_a_live_session_runs_on(monkeypatch):
