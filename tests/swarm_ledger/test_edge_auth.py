@@ -123,8 +123,29 @@ def test_edge_mode_refuses_agent_tokens_without_a_server_secret(edge, monkeypatc
 
 
 def test_edge_mode_checks_hive_tokens_through_the_hive_authority(edge, monkeypatch):
-    monkeypatch.setattr(authority, "principal", lambda *given: given)
-    assert authority.caller(headers("hive.abc", WORKER), PAGE, SLUG) == (SEED, SLUG, "hive.abc", WORKER)
+    monkeypatch.setattr(authority, "hive_principal", lambda *given: given)
+    assert authority.caller(headers("hive.abc", WORKER), PAGE, SLUG) == (SLUG, "hive.abc", WORKER)
+
+
+def test_edge_mode_never_takes_the_server_secret_itself_as_the_operator(edge, monkeypatch):
+    monkeypatch.setenv("SWARM_SECRET", "hive.seed")
+    monkeypatch.setattr(authority, "hive_principal", lambda *given: None)
+    assert authority.caller(headers("hive.seed", WORKER), PAGE, SLUG) is None
+
+
+def test_edge_mode_refuses_an_assertion_without_an_expiry(edge):
+    now = int(time.time())
+    unbounded = jwt.encode({"aud": [AUD], "iss": ISSUER, "iat": now}, SIGNER, algorithm="RS256", headers={"kid": "k1"})
+    assert authority.caller(headers(jwt_assertion=unbounded), PAGE, SLUG) is None
+
+
+@pytest.mark.parametrize("failure", [OSError("tls"), ValueError("not json")])
+def test_edge_mode_refuses_an_assertion_when_the_certs_cannot_be_read(edge, monkeypatch, failure):
+    def broken(client):
+        raise failure
+
+    monkeypatch.setattr(jwt.PyJWKClient, "fetch_data", broken)
+    assert authority.caller(headers(jwt_assertion=assertion()), PAGE, SLUG) is None
 
 
 @pytest.mark.parametrize("missing", ["SWARM_ACCESS_TEAM", "SWARM_ACCESS_AUD"])
@@ -134,8 +155,9 @@ def test_edge_mode_refuses_every_assertion_without_its_access_settings(edge, mon
     assert edge == []
 
 
-def test_a_full_team_domain_is_the_issuer(edge, monkeypatch):
-    monkeypatch.setenv("SWARM_ACCESS_TEAM", "anton.cloudflareaccess.com")
+@pytest.mark.parametrize("team", ["anton.cloudflareaccess.com", "https://anton.cloudflareaccess.com"])
+def test_a_full_team_domain_is_the_issuer(edge, monkeypatch, team):
+    monkeypatch.setenv("SWARM_ACCESS_TEAM", team)
     assert authority.caller(headers(jwt_assertion=assertion()), PAGE, SLUG) == ""
     assert edge == [f"{ISSUER}/cdn-cgi/access/certs"]
 

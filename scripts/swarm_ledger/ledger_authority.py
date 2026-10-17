@@ -33,11 +33,15 @@ def principal(admin: str, slug: str, token: str, agent: str) -> str | None:
     if _same(token, admin):
         return ""
     if token.startswith("hive."):
-        member = auth.agent_member(store.redis_client(), token, slug, agent)
-        return agent if member and hive_agent(member, slug, agent) else None
+        return hive_principal(slug, token, agent)
     if not remote() and agent and _same(token, agent_token(admin, slug, agent)):
         return agent
     return None
+
+
+def hive_principal(slug: str, token: str, agent: str) -> str | None:
+    member = auth.agent_member(store.redis_client(), token, slug, agent)
+    return agent if member and hive_agent(member, slug, agent) else None
 
 
 def caller(headers, admin: str, slug: str) -> str | None:
@@ -51,19 +55,27 @@ def caller(headers, admin: str, slug: str) -> str | None:
     if not secret or not token or not agent:
         return None
     if token.startswith("hive."):
-        return principal(secret, slug, token, agent)
+        return hive_principal(slug, token, agent)
     return agent if _same(token, agent_token(secret, slug, agent)) else None
 
 
 def access_operator(assertion) -> bool:
-    team, audience = environ.get("SWARM_ACCESS_TEAM", ""), environ.get("SWARM_ACCESS_AUD", "")
+    team = environ.get("SWARM_ACCESS_TEAM", "").removeprefix("https://")
+    audience = environ.get("SWARM_ACCESS_AUD", "")
     if not assertion or not team or not audience:
         return False
     issuer = f"https://{team if '.' in team else team + '.cloudflareaccess.com'}"
     try:
         key = access_keys(f"{issuer}/cdn-cgi/access/certs").get_signing_key_from_jwt(assertion)
-        jwt.decode(assertion, key.key, algorithms=["RS256"], audience=audience, issuer=issuer)
-    except jwt.PyJWTError:
+        jwt.decode(
+            assertion,
+            key.key,
+            algorithms=["RS256"],
+            audience=audience,
+            issuer=issuer,
+            options={"require": ["exp", "iat"]},
+        )
+    except (jwt.PyJWTError, OSError, ValueError):
         return False
     return True
 
