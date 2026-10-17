@@ -29,6 +29,7 @@ from scripts.swarm import (
     outage,
     overlays,
     quota_view,
+    remote_control,
     retire_watch,
     review_rounds,
     snapshot,
@@ -131,6 +132,7 @@ def findings(store, slug, config, tasks, events):
 
 def _health_rows(store, slug, agents, quiet, at):
     latest = activity.last_events(slug)
+    failed = remote_control.failures(store, slug)
     rows = []
     for agent in agents:
         started = launch_check.session_started_at(agent)
@@ -144,6 +146,7 @@ def _health_rows(store, slug, agents, quiet, at):
                 "quiet_minutes": quiet.get(agent.name),
                 "tool_quiet_minutes": minutes,
                 "pane_state": store.redis.get(store.key(slug, "pane-state", agent.name)),
+                "remote_control_failure": failed.get(agent.name),
             }
         )
     return rows
@@ -277,6 +280,7 @@ def status_report(store: RedisStore, slug: str, state: dict, runtime: Runtime | 
                 "state_since": int(store.redis.hget(store.key(slug, "state-since"), a.name) or 0),
                 "observation": observation(store, slug, a),
                 "capabilities": transport(a),
+                "remote_control": remote_control.line(a.__dict__, slug, os.environ),
                 "gates": active.get(a.name, []),
                 "inbox": [
                     {"text": item.text, "sender": item.sender, "state": item.state}

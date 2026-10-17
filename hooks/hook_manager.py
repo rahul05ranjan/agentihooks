@@ -2564,6 +2564,12 @@ def on_status_line(payload: dict) -> None:
 def on_notification(payload: dict) -> None:
     """Handle Notification event."""
     log("Notification", payload)
+    try:
+        from scripts.swarm import remote_control
+
+        remote_control.on_notification(payload)
+    except Exception as e:
+        log("remote control notice failed", {"error": str(e)})
 
 
 def on_pre_compact(payload: dict) -> None:

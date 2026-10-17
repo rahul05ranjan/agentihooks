@@ -31,6 +31,7 @@ from scripts.swarm import (
     profile_choice,
     prompt,
     reaper,
+    remote_control,
     timing,
 )
 from scripts.swarm.pane import PaneObservation, provider_error, provider_error_id, selection_prompt, typed_input
@@ -594,6 +595,7 @@ class HerdrRuntime:
                 *argv,
                 "--",
                 *route,
+                *remote_control.arguments(lane, agent, route_kind, config.slug, environ),
                 *_model_args(
                     agent,
                     picked.__dict__,
@@ -654,7 +656,8 @@ class HerdrRuntime:
             effort_range.bounds(config, agent.lane),
             preserve=preserves_effort(bool(agent.effort), agent.lane),
         )
-        argv += ["--resume", agent.conversation_id, "--", *route, *model]
+        rc = remote_control.arguments(agent.lane, agent.harness, agent.route_kind, config.slug, os.environ)
+        argv += ["--resume", agent.conversation_id, "--", *route, *rc, *model]
         placed = timing.call(self._launch, config, agent.lane, agent.task, agent.name, argv)
         if not self._holds(placed.pane_id, agent.conversation_id):
             self.retire(
