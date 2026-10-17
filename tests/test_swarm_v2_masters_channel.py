@@ -3,6 +3,7 @@ import json
 import pytest
 
 from scripts.inbox.seats import SeatRegistry
+from scripts.inbox.store import InboxStore
 from scripts.swarm_v2 import masters
 from scripts.swarm_v2.masters_channel import MastersChannel, Post
 
@@ -11,7 +12,8 @@ pytestmark = [pytest.mark.unit, pytest.mark.xdist_group("fakeredis")]
 SLUG = "sw"
 LEAD, SECOND, ENG = f"master@{SLUG}", f"master-2@{SLUG}", f"eng-1@{SLUG}"
 CI, PLANNER = f"ci-1@{SLUG}", f"plan-1@{SLUG}"
-HELD = {"sw-eng-1": ENG, "sw-ci-1": CI, "sw-plan-1": PLANNER, "stranger": "no seat"}
+OTHER = "master@ot"
+HELD = {"sw-eng-1": ENG, "sw-ci-1": CI, "sw-plan-1": PLANNER, "ot-master-1": OTHER, "stranger": "no seat"}
 
 
 @pytest.fixture
@@ -26,12 +28,12 @@ def channel():
     seats.occupy(ENG, "sw-eng-1", 1)
     seats.occupy(CI, "sw-ci-1", 1)
     seats.occupy(PLANNER, "sw-plan-1", 1)
+    masters.MasterSeats(redis).set_count("ot", 1)
+    seats.occupy(OTHER, "ot-master-1", 1)
     return MastersChannel(redis)
 
 
 def _inbox(channel):
-    from scripts.inbox.store import InboxStore
-
     return InboxStore(channel.redis)
 
 
@@ -88,7 +90,7 @@ def test_an_engineer_ci_planner_or_unseated_session_can_neither_post_nor_read(ch
     inbox = _inbox(channel)
     assert inbox.inbox(LEAD) == []
     assert [i.sender for i in inbox.inbox(SECOND)] == ["sw-master-1"]
-    assert all(inbox.inbox(seat) == [] for seat in (ENG, CI, PLANNER, name))
+    assert all(inbox.inbox(seat) == [] for seat in (ENG, CI, PLANNER, OTHER, name))
 
 
 def test_a_seat_beyond_the_master_count_is_refused(channel):
