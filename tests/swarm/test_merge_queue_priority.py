@@ -8,6 +8,12 @@ from scripts.swarm import cli, ledger_events, merge_queue
 
 pytestmark = pytest.mark.unit
 URL = "https://github.com/o/r/pull/9"
+READ_PULL = ledger_events.view
+
+
+@pytest.fixture(autouse=True)
+def read_required_checks(monkeypatch):
+    monkeypatch.setattr(ledger_events, "view", READ_PULL)
 
 
 class FakeQueue:
