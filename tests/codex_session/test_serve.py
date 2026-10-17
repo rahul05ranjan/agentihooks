@@ -167,9 +167,9 @@ def test_prepare_routes_renders_and_builds_the_launch(tmp_path, monkeypatch):
     prompt.write_text("Begin.", encoding="utf-8")
     calls = {}
 
-    def prepare(name, agent, model, effort, args, environ, overlays, push=False):
+    def prepare(name, agent, model, effort, args, environ, overlays, **options):
         calls["prepare"] = (name, agent, model, effort, args, list(overlays), environ["AGENTIHOOKS_BUNDLE_REVISION"])
-        calls["push"] = push
+        calls["options"] = options
         return {"CODEX_HOME": str(home)}, ["-m", "gpt-6.1-sol", "-c", 'model_reasoning_effort="high"', *args]
 
     def route(environ, route, exclude):
@@ -205,7 +205,7 @@ def test_prepare_routes_renders_and_builds_the_launch(tmp_path, monkeypatch):
     args = serve._parser().parse_args(argv)
     spec = serve.prepare(args, ["--route", "t", "-c", "x=1"], dict(SWARM_ENV))
     assert calls["prepare"] == ("engineer", "codex", "", "", ["-c", "x=1"], ["frontend"], "abc")
-    assert calls["push"] is True
+    assert calls["options"] == {"push": True}
     assert calls["route"] == ("t", "old", str(home))
     assert (tmp_path / "route").read_text() == "status=routed\naccount=t\nplacement=open\n"
     assert (spec.slug, spec.agent.name, spec.agent.lane, spec.agent.task, spec.agent.seat) == (
