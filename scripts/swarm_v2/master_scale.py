@@ -109,7 +109,6 @@ def _resize(slug, store, doc, agents, count, want, now_ms):
 
 
 def _below_since(redis, key: str, want: int, now_ms: int) -> int:
-    """The cool off restarts whenever the wanted count rises, even while it stays below the seat count."""
     since, last = int(redis.hget(key, BELOW) or 0), int(redis.hget(key, BELOW_WANT) or want)
     if not since or want > last:
         since = now_ms

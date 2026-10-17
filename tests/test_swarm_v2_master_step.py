@@ -198,6 +198,20 @@ def test_a_zero_step_keeps_the_manual_count(swarm):
     assert count(store) == 1
 
 
+def test_a_manual_master_count_turns_the_step_off_and_holds_under_twelve_agents(swarm, monkeypatch):
+    store, runtime = swarm
+    store.update(SLUG, state="paused")
+    monkeypatch.setattr(cli, "connect", lambda: store)
+
+    assert cli.main([SLUG, "set", "masters=3"]) == 0
+
+    assert store.config(SLUG).masters_step == 0
+    staffed(store, 5)
+    run(store, runtime)
+    assert run(store, runtime, NOW + COOL_OFF + MINUTE) == []
+    assert count(store) == 3 and seated(store) == sorted([LEAD, SECOND, THIRD])
+
+
 def test_an_explicit_master_per_rule_still_wins(swarm):
     store, runtime = swarm
     master_scale.set_rule(store.redis, SLUG, "5")
