@@ -30,6 +30,10 @@ def heard():
             self.end_headers()
             self.wfile.write(body)
 
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            self.do_GET()
+
         def log_message(self, *args):
             pass
 
@@ -128,3 +132,43 @@ def test_swarm_url_never_starts_a_local_server(monkeypatch):
         "ledger server not answering on http://127.0.0.1:9: <urlopen error [Errno 111] Connection refused>"
     )
     assert ledger_hook.serve_ledgers() is None
+
+
+def test_the_event_stream_request_carries_the_access_headers(monkeypatch):
+    from scripts.swarm_ledger import watch_ledger
+
+    monkeypatch.setenv("SWARM_URL", "https://swarm.example")
+    for key, value in ACCESS.items():
+        monkeypatch.setenv(key, value)
+    assert watch_ledger.request(SLUG, "", {"X-Ledger-Token": "t"}) == (
+        f"https://swarm.example/api/v1/ledgers/{SLUG}/events",
+        {**SENT, "X-Ledger-Token": "t", "Accept": "text/event-stream"},
+    )
+
+
+def test_a_proof_ledger_call_carries_the_access_headers(heard):
+    from scripts.swarm_ledger import proof_ledger
+
+    url, seen = heard
+    environ = {"SWARM_URL": url, "AGENTIHOOKS_CONTROLLER_CREDENTIAL": "controller", **ACCESS}
+    assert proof_ledger.call(f"ledgers/{SLUG}/metadata", None, environ) == {}
+    assert {key: seen[0].get(key) for key in (*SENT, "X-Controller-Credential")} == {
+        **SENT,
+        "X-Controller-Credential": "controller",
+    }
+
+
+def test_an_upload_carries_the_access_headers(heard, monkeypatch, tmp_path):
+    url, seen = heard
+    monkeypatch.setenv("SWARM_URL", url)
+    monkeypatch.setenv("AGENTIHOOKS_LEDGER_AGENT_TOKEN", "given")
+    monkeypatch.setenv("AGENTIHOOKS_SWARM", SLUG)
+    monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", WORKER)
+    monkeypatch.delenv("AGENTIHOOKS_CONTROLLER_CREDENTIAL", raising=False)
+    for key, value in ACCESS.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(ledger, "BASE", "")
+    sent = tmp_path / "plan.md"
+    sent.write_text("plan")
+    assert ledger.upload(SLUG, WORKER, str(sent), "artifacts", {}) == {"dir": "/srv/ledgers", "data": {}}
+    assert {key: seen[0].get(key) for key in (*SENT, "X-Ledger-Token")} == {**SENT, "X-Ledger-Token": "given"}

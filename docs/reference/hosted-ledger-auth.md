@@ -45,7 +45,9 @@ A workstation swarm, its agents and the ledger hooks reach a hosted ledger by en
 | `SWARM_URL` | Address of the hosted ledger, such as `https://swarm.homeofanton.com`. Set, it makes every ledger client remote, as any non-local `AGENTIHOOKS_DEPLOYMENT` already does: the CLI, the swarm tick and the session hook never start or restart a local ledger server. `LEDGER_URL` remains the fallback. |
 | `AGENTIHOOKS_LEDGER_AGENT_TOKEN` | The agent's own token, sent with its pinned name. |
 | `SWARM_SECRET` | When the client holds it and no agent token is set, the client derives the token for its own name. The swarm tick derives each spawned agent's token; neither the secret nor the tick's own agent token reaches a spawned agent. |
-| `SWARM_ACCESS_CLIENT_ID`, `SWARM_ACCESS_CLIENT_SECRET` | Cloudflare service token for machines off the tailnet. Both set, every API request and health probe carries `CF-Access-Client-Id` and `CF-Access-Client-Secret`. |
+| `SWARM_ACCESS_CLIENT_ID`, `SWARM_ACCESS_CLIENT_SECRET` | Cloudflare service token for machines off the tailnet. Both set, every API request, upload, event stream, proof ledger call and health probe carries `CF-Access-Client-Id` and `CF-Access-Client-Secret`. |
+
+Every reader of `ledger_link.remote` treats `SWARM_URL` as a non-local deployment, so `take-master` needs `AGENTIHOOKS_HIVE_ID` and a process with it set never accepts page-derived agent tokens. A herdr pane gets its token from the launcher, which exports it after sourcing the operator's env files and unsets `SWARM_SECRET`.
 
 The tick's own service writes still need `AGENTIHOOKS_CONTROLLER_CREDENTIAL`, checked against the hosted ledger's Redis.
 
