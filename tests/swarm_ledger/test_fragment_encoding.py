@@ -105,3 +105,33 @@ def test_opaque_document_fields_reuse_unchanged_container_generations():
     assert new.value["layout"] is old.value["layout"]
     assert new.value["_meta"]["api_operations"] is old.value["_meta"]["api_operations"]
     assert new.text == encode(state(2))
+
+
+def test_only_rows_and_the_generation_root_keep_canonical_text():
+    state = {"tasks": [{"id": "one"}], "_meta": {"events": [{"rev": 1}], "stamps": {"a": {"rev": 1}}}}
+    root = document(state)
+    assert root.text == encode(state)
+    assert root.parts["tasks"].text is None
+    assert root.parts["_meta"].text is None
+    assert root.parts["_meta"].parts["events"].text is None
+    assert root.parts["_meta"].parts["stamps"].text is None
+    assert root.parts["tasks"].parts[0].text == encode({"id": "one"})
+    assert root.parts["_meta"].parts["stamps"].parts["a"].text == encode({"rev": 1})
+
+
+def test_a_container_replacing_a_scalar_or_starting_empty_is_its_own_value():
+    previous = document({"tasks": "scalar", "_meta": "scalar"})
+    state = {"tasks": [], "_meta": {}}
+    replaced = document(state, previous)
+    assert replaced.value == state
+    assert replaced.text == encode(state)
+    assert document({"tasks": []}).value == {"tasks": []}
+
+
+def test_a_reordered_mapping_with_the_same_rows_is_rebuilt():
+    first = document({"_meta": {"stamps": {"a": {"rev": 1}, "b": {"rev": 2}}}})
+    state = {"_meta": {"stamps": {"b": {"rev": 2}, "a": {"rev": 1}}}}
+    second = document(state, first)
+    assert list(second.value["_meta"]["stamps"]) == ["b", "a"]
+    assert second.text == encode(state)
+    assert second.value["_meta"]["stamps"]["a"] is first.value["_meta"]["stamps"]["a"]
