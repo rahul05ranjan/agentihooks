@@ -65,7 +65,11 @@ def test_a_task_add_missing_its_slice_exits_nonzero_and_says_it_was_not_added(mo
             "master",
             "task t9 is a follow up and names no slice",
         ),
-        (["t9", "Fix", "--phase", "p2", "--depends-on", "ghost"], "master", "task t9 depends on unknown tasks: ghost"),
+        (
+            ["t9", "Fix", "--phase", "p2", "--depends-on", "wraith,t1,ghost"],
+            "master",
+            "task t9 depends on unknown tasks: ghost, wraith",
+        ),
     ],
 )
 def test_every_refused_task_add_exits_nonzero_and_says_it_was_not_added(monkeypatch, doc, argv, name, reason):
