@@ -816,6 +816,7 @@ class InboxStore:
         pipe.hset(self.key("item", item.id), mapping=_fields(moved))
         if moved.state in CLOSED:
             pipe.zrem(self.key("open", item.address), item.id)
+            self.pool.stage_remove(pipe, item)
         if moved.state == "delivered" and indexed:
             pipe.zadd(self.key("delivered"), {item.id: moved.updated_at})
         else:

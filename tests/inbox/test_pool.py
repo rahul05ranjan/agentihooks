@@ -125,8 +125,10 @@ def test_no_master_takes_an_item_still_in_the_pool(swarm, inbox, held):
 
 def test_a_closed_item_drops_out_of_the_pool(swarm, inbox, held):
     _masters(swarm, 2)
-    gone, kept = (inbox.send("swarm", FRONT, text) for text in ("gone", "kept"))
+    gone, stale, kept = (inbox.send("swarm", FRONT, text) for text in ("gone", "stale", "kept"))
     inbox.withdraw(gone.id, "swarm", "cancelled: no longer needed")
+    assert swarm.redis.zrange(POOL, 0, -1) == [stale.id, kept.id]
+    swarm.redis.hset(inbox.key("item", stale.id), "state", "done")
     held.undo()
     assert [(i.id, i.address) for i in inbox.pool.distribute(SLUG)] == [(kept.id, FRONT)]
     assert swarm.redis.exists(POOL) == 0
@@ -294,6 +296,7 @@ def test_a_master_cannot_read_an_item_still_in_the_pool(swarm, inbox, held):
         inbox.read(item.id, "sw-master-1")
     assert str(refused.value) == f"message {item.id} waits in the master pool for the next master"
     assert inbox.close(item.id, "sw-master-1", "cancel").state == "cancelled"
+    assert swarm.redis.exists(POOL) == 0
     held.undo()
     assert inbox.pool.distribute(SLUG) == []
     assert swarm.redis.smembers(POOLS) == set()
@@ -373,7 +376,7 @@ def test_an_item_a_gone_master_claimed_but_never_took_goes_to_a_live_master(swar
     assert inbox.pending_mail("sw-master-2") == []
     assert [inbox.get(i.id).address for i in (items[0], items[2])] == [FRONT, THIRD]
     assert inbox.return_to_pool(items[1].id, SECOND) is None
-    assert swarm.redis.smembers(f"{POOL}:holders") == {FRONT, SECOND, THIRD}
+    assert swarm.redis.smembers(f"{POOL}:holders") == {FRONT, THIRD}
 
 
 def test_claims_give_up_after_repeated_contention(swarm, inbox, held, monkeypatch):

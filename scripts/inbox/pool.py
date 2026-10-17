@@ -74,7 +74,8 @@ class MasterPool:
         pipe.sadd(POOLS, slug)
 
     def stage_remove(self, pipe, item) -> None:
-        pipe.zrem(self.key(slug_of(item.address)), item.id)
+        if slug := slug_of(item.address):
+            pipe.zrem(self.key(slug), item.id)
 
     def holds(self, pipe, item) -> bool:
         slug = slug_of(item.address)
@@ -120,6 +121,7 @@ class MasterPool:
         for seat in sorted(self.redis.smembers(self.key(slug, "holders")) - set(live)):
             for item_id in self.redis.zrange(self.inbox.key("pending", seat), 0, -1):
                 self.inbox.return_to_pool(item_id, seat)
+            self.redis.srem(self.key(slug, "holders"), seat)
 
     def _claim_next(self, slug, live):
         from redis.exceptions import WatchError
