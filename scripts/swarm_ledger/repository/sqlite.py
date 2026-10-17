@@ -9,7 +9,7 @@ from scripts.swarm_ledger import request_metrics
 
 from . import hierarchy
 from .events import append_events, read_events, trim_events, write_events
-from .fragments import document
+from .fragments import document, encoded
 from .rows import TABLES, assemble, diff, encode, flatten, read_rows, write_rows
 from .seeds import read_seeds, sync_values, write_seeds
 
@@ -50,8 +50,12 @@ class Entry:
     """One ledger as last stored: its generation, canonical text, a parsed copy callers only read and views of it."""
 
     def __init__(self, generation, text, state, fragments=None):
-        self.generation, self.text, self.state, self.views = generation, text, state, {}
+        self.generation, self._text, self.state, self.views = generation, text, state, {}
         self.fragments = fragments
+
+    @property
+    def text(self) -> str:
+        return encoded(self.fragments) if self._text is None else self._text
 
 
 def summarize(slug: str, state: dict) -> dict:
@@ -306,7 +310,7 @@ class SQLiteLedgerRepository:
             if "events" in state["_meta"]:
                 state["_meta"]["events"] = read_events(connection, slug)
             fragments = document(state)
-            entry = Entry(row[0], fragments.text, fragments.value, fragments)
+            entry = Entry(row[0], None, fragments.value, fragments)
             self._remember(slug, entry)
         return entry
 
@@ -400,7 +404,7 @@ class SQLiteLedgerRepository:
             UPDATE,
             (state["_meta"]["rev"], generation, encode(summarize(slug, state)), self.domain.now_ms(), slug),
         )
-        return Entry(generation, fragments.text, state, fragments)
+        return Entry(generation, None, state, fragments)
 
     def _insert(self, connection, slug: str, state: dict, token: str, seeds: dict | None = None) -> None:
         previous = connection.execute(GENERATION, (slug,)).fetchone()

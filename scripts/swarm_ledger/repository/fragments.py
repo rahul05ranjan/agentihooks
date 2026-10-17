@@ -70,5 +70,4 @@ def document_part(key: str, value: object, previous: Fragment | None) -> Fragmen
 
 
 def document(state: dict, previous: Fragment | None = None) -> Fragment:
-    root = mapping(state, previous, document_part)
-    return root if root is previous else Fragment(root.value, encoded(root), root.parts)
+    return mapping(state, previous, document_part)
