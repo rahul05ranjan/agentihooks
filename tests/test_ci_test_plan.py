@@ -120,7 +120,7 @@ def test_a_missing_record_plans_a_full_run(monkeypatch, tmp_path, capsys):
     out = tmp_path / "reused-tests.json"
     assert ci_test_plan.main(["--repository", REPOSITORY, "--head", HEAD, "--before", LATER, "--out", str(out)]) == 0
     assert not out.exists()
-    assert output.read_text() == "reused=0\n"
+    assert output.read_text() == "reused=0\nrun=\ncommit=\n"
     assert "every test runs" in capsys.readouterr().out
 
 
@@ -142,11 +142,11 @@ def test_a_record_plans_the_unchanged_tests(monkeypatch, tmp_path, capsys, cause
     assert plan["run"] == "1"
     if cause:
         assert plan["tests"] == []
-        assert output.read_text() == "reused=0\n"
+        assert output.read_text() == f"reused=0\nrun=1\ncommit={1:040d}\n"
         assert capsys.readouterr().out == f"Dev run 1 on {1:040d}: 1 of 1 tests invalidated by {cause}, 0 reused\n"
     else:
         assert plan["tests"] == ["tests/test_a.py::test_a"]
-        assert output.read_text() == "reused=1\n"
+        assert output.read_text() == f"reused=1\nrun=1\ncommit={1:040d}\n"
         assert capsys.readouterr().out == f"Dev run 1 on {1:040d}: 0 of 1 tests invalidated, 1 reused\n"
 
 
