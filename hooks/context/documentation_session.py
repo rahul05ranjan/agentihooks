@@ -21,6 +21,7 @@ TASK_DEFAULTS = {
     "lane": "eng",
     "kind": "code",
     "follow_up": True,
+    "rank": "low",
     "not_duplicate": "Documents delivered behavior rather than implementing it",
 }
 DOCUMENTATION_INSTRUCTIONS = (

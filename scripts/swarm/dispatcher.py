@@ -3,7 +3,7 @@
 Each tick it orders every claimable task in focus, leaves included, by the longest open dependency chain behind it,
 then the open work it unblocks, the bottleneck lane, focus order and ledger position. A rank the master or the swarm
 set is a default it reorders; only an operator rank, set by him or relayed with his quoted words, orders ahead of or
-behind that queue. At delegate and full the tick claims from this queue, resumed work first within a rank band and
+behind that queue, and work the swarm generated at rank low, such as documentation tasks, waits behind it. At delegate and full the tick claims from this queue, resumed work first within a rank band and
 clear territory before overlapping, and the dispatcher writes no rank: it comments on a task only when the task
 enters the head of its lane's queue, as many tasks as the lane has seats among those that unblock work or carry an
 operator rank, or leaves it while still open; a lane with no seats keeps its head until seats return. When a task on
@@ -26,6 +26,7 @@ from scripts.swarm_ledger import ledger_rank
 from scripts.swarm_ledger.repository import hierarchy
 
 AUTHOR = "dispatcher"
+SWARM = "swarm"
 APPLIES = ("delegate", "full")
 TOP = 3
 HEAD = "dispatch-head"
@@ -121,7 +122,7 @@ def ordered(doc: dict, named: str, scores: dict) -> list[str]:
 
 
 def queue(doc: dict, fix: str) -> list[str]:
-    fixed, guard, known = _fixed(doc), guarded(doc, fix), {t["id"]: t for t in doc["tasks"]}
+    fixed, guard, known = _banded(doc), guarded(doc, fix), {t["id"]: t for t in doc["tasks"]}
     return sorted(ordered(doc, None, leverage(doc)), key=lambda task_id: _band(known[task_id], fixed, guard))
 
 
@@ -129,17 +130,21 @@ def claim_key(config, doc):
     if config.autonomy not in APPLIES:
         return None
     fix = freeze.fix_phase(config)
-    fixed, guard = _fixed(doc), guarded(doc, fix)
+    fixed, guard = _banded(doc), guarded(doc, fix)
     lined = queue(doc, fix)
     position = {task_id: index for index, task_id in enumerate(lined)}
     return lambda task: (_band(task, fixed, guard), position.get(task["id"], len(lined)))
 
 
 def guarded(doc: dict, fix: str) -> set[str]:
-    graph, known = hierarchy.project(doc)[0], {t["id"]: t for t in doc["tasks"]}
+    graph, known, deferred = hierarchy.project(doc)[0], {t["id"]: t for t in doc["tasks"]}, _deferred(doc)
     depth = chains({**doc, "tasks": [t for t in doc["tasks"] if not freeze.held(t, doc, graph, fix)]})
     longest = depth and max(depth.values())
-    return {task_id for task_id, length in depth.items() if length + 1 >= longest and _merged(known[task_id], known)}
+    return {
+        task_id
+        for task_id, length in depth.items()
+        if length + 1 >= longest and _merged(known[task_id], known) and task_id not in deferred
+    }
 
 
 def _merged(task, known):
@@ -331,6 +336,15 @@ def _open(task):
 def _fixed(doc):
     urgent = {t["id"] for t in doc["tasks"] if t.get("rank") == "urgent"}
     return _ranked_by(doc, ledger_rank.OPERATOR) | (_ranked_by(doc, AUTHOR) & urgent)
+
+
+def _banded(doc):
+    return _fixed(doc) | _deferred(doc)
+
+
+def _deferred(doc):
+    low = {t["id"] for t in doc["tasks"] if t.get("rank") == ledger_rank.RANKS[-1]}
+    return _ranked_by(doc, SWARM) & low
 
 
 def _ranked_by(doc, author):

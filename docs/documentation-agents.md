@@ -83,6 +83,11 @@ task. Queueing happens immediately with the source dependency, including when th
 closing agent leaves CI and merge completion to the controller. Repeated
 completion events use a stable documentation task identifier.
 
+The task is added at rank low. At delegate and full autonomy the dispatcher's
+claim queue keeps a low rank the swarm set behind every other band and outside
+the chain guard, so a free seat takes any claimable urgent, high or normal task
+in focus first; below delegate the rank order does the same.
+
 Classifier or ledger failures retain a pending request. Later bound session
 completions retry a bounded number of requests from the same swarm, oldest
 attempt first so retained requests do not starve later work. Documentation
