@@ -34,7 +34,7 @@ jobs:
           restore-keys: worker-scanner-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('docker/swarm-node/scan.sh', 'docker/swarm-node/versions.lock') }}
       - name: Restore the worker image layers
         id: layers
-        if: matrix.proof != 'rebuild'
+        if: matrix.proof != 'rebuild' && runner.environment == 'self-hosted'
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/worker-layers
