@@ -1,4 +1,7 @@
+from types import SimpleNamespace
+
 import pytest
+from playwright import sync_api
 
 from tests.swarm_ledger import test_client_conflict_retry as conflict_retry
 from tests.swarm_ledger import test_ledger_authority as authority
@@ -43,3 +46,16 @@ def test_http_transport_compensates_only_mutation_instrumentation(monkeypatch, m
 def test_concurrent_add_writers_compensate_only_mutation_instrumentation(monkeypatch, mutant, expected):
     monkeypatch.setenv("MUTANT_UNDER_TEST", mutant)
     assert conflict_retry.Crowded("http://127.0.0.1:1234", {}, None, []).timeout == expected
+
+
+@pytest.mark.parametrize(
+    "mutant, expected", [("", 1500), ("stats", 10500), ("scripts.sample.x_value__mutmut_1", 10500)]
+)
+@pytest.mark.parametrize("owner", [sync_api.Page, sync_api.BrowserContext])
+@pytest.mark.parametrize("setter", ["set_default_timeout", "set_default_navigation_timeout"])
+def test_browser_deadlines_compensate_only_mutation_instrumentation(monkeypatch, mutant, expected, owner, setter):
+    monkeypatch.setenv("MUTANT_UNDER_TEST", mutant)
+    observed = []
+    tab = SimpleNamespace(_impl_obj=SimpleNamespace(**{setter: lambda timeout: observed.append(timeout)}))
+    getattr(owner, setter)(tab, 1500)
+    assert observed == [expected]
