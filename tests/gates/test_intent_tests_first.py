@@ -176,6 +176,7 @@ def checked_part(tmp_path, runner, seen):
     "declaration",
     [
         "Tests-first prerequisite for #3880. Refs #3858.",
+        "## Scope\nThis tests-first prerequisite accepts both gate states.",
         "Retain the smoke commands. This tests first prerequisite permits caching in the following pull request.",
     ],
 )
