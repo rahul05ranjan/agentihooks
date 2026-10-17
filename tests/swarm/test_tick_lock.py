@@ -160,7 +160,9 @@ def test_only_a_local_holder_whose_process_is_gone_is_dead(monkeypatch, host, lo
     monkeypatch.setattr(controller, "_gone", lambda pid, start: asked.append((pid, start)) or pid == 7)
     assert controller._dead(json.dumps({"epoch": 1, "token": "t", **lock})) is dead
     assert controller._dead("legacy") is False
-    assert asked == ([(lock["pid"], "old")] if host and lock["host"] == host and {"pid", "start"} <= lock.keys() else [])
+    assert asked == (
+        [(lock["pid"], "old")] if host and lock["host"] == host and {"pid", "start"} <= lock.keys() else []
+    )
 
 
 def test_read_strips_a_file_and_reads_a_missing_one_as_empty(tmp_path):
