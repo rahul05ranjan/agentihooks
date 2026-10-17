@@ -657,6 +657,13 @@ def test_an_unranked_older_documentation_task_sorts_low_behind_urgent_work(store
     assert dispatcher.queue(found, "")[-1] == "doc-s"
 
 
+def test_a_documentation_task_ranked_above_low_keeps_its_chain_guard_place(store):
+    _, ledger, found = documentation_wait(store, "delegate", ranked=False)
+    ledger.rows["doc-s"]["rank"] = "high"
+    found["_meta"]["stamps"]["tasks/doc-s/rank"] = {"by": MASTER_NAME}
+    assert dispatcher.guarded(found, "") == {"doc-s"}
+
+
 @pytest.mark.parametrize("autonomy", ["delegate", "full", "assist"])
 def test_a_documentation_task_takes_the_seat_when_no_urgent_or_high_task_is_claimable(store, autonomy):
     waiting = (task("w", phase="", state="claimed"), task("u", phase="", rank="urgent", depends_on=["w"]))
