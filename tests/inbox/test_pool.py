@@ -429,7 +429,7 @@ def test_a_claim_retries_when_the_rotation_moves_meanwhile(swarm, inbox, held, m
     real = pool.turn
 
     def moved(live, last, skip):
-        if last is None:
+        if not last:
             swarm.redis.set(f"{POOL}:last", FRONT)
         return real(live, last, skip)
 
