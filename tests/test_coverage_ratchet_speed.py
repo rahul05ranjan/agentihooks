@@ -42,3 +42,27 @@ def test_report_reuses_measured_lines_without_copying_test_contexts(tmp_path, mo
 
     monkeypatch.setattr(CoverageData, "update", refuse_context_merge)
     assert ratchet._missed(tmp_path, shards, tmp_path / "out", measured=measured) == expected
+
+
+def test_identical_source_is_parsed_once_for_different_measurements(monkeypatch):
+    from coverage.exceptions import NotPython
+
+    from tests import coverage_grade
+
+    source = "def parse_reuse_case(x):\n    if x:\n        return 1\n    return 2\n"
+    parsed = []
+    original = coverage_grade.PythonParser
+
+    def parser(*args, **kwargs):
+        parsed.append(kwargs["text"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(coverage_grade, "PythonParser", parser)
+    assert coverage_grade.statements_of(source, {1, 2, 3}) == {1: 1, 2: 2, 3: 3}
+    assert coverage_grade.statements_of(source, {1, 4}) == {1: 1, 4: 4}
+    assert parsed == [source]
+    changed = source.replace("return 2", "return 3")
+    assert coverage_grade.statements_of(changed, {4}) == {4: 4}
+    assert parsed == [source, changed]
+    with pytest.raises(NotPython):
+        coverage_grade.statements_of("def broken(:", {1})
