@@ -2235,6 +2235,7 @@ def test_an_api_account_round_trips_through_the_route_argument(tmp_path, monkeyp
         ("codex", None, 27, "OPEN", 6),
         ("codex", 100, 27, "OPEN", 6),
         ("codex", None, 96, "CLOSED", 0),
+        ("codex", None, 92, "DRAIN", 6),
         ("codex", 0, None, "UNKNOWN", None),
         ("claude", None, 27, "UNKNOWN", None),
         ("claude", 100, 27, "CLOSED", 0),

@@ -80,3 +80,6 @@ def test_balance_reads_a_window_whose_reset_passed_as_full_like_capacity():
     assert balance.routing_left == 60.0
     [held] = agents_quota.claude_rows([result], {}, "cached", {"a": 27_900.0}, 28_000.0)
     assert held.state == "DRAIN"
+    week_passed = ProbeResult("b", "allowed", "DRAIN", 5.0, QuotaWindow(50.0, 90_000), QuotaWindow(95.0, 29_000))
+    [weekly] = agents_quota.claude_rows([week_passed], {}, "cached", {"b": now - 60}, now)
+    assert (weekly.state, weekly.routing_left) == ("OPEN", 50.0)

@@ -44,16 +44,17 @@ def test_a_request_queues_one_quota_row_and_wakes_the_prober_at_once(store):
     assert (message["channel"], message["data"]) == (quota_refresh.WAKE, "sw")
 
 
-def test_answer_probes_only_the_quota_rows_and_writes_the_fresh_page_quota(store, fresh):
+def test_answer_probes_only_the_quota_rows_and_writes_the_fresh_page_quota(store, fresh, monkeypatch):
+    monkeypatch.setattr(commands, "hive_id", lambda: "hive-a")
     commands.submit(store, "sw", "swarm", ["pause"])
     quota_refresh.request(store, "sw")
     ran = []
     actions = quota_refresh.answer(store, "sw", lambda slug, row: ran.append((slug, row["command"])) or "")
     assert actions == ["control quota acknowledged"]
     assert ran == [("sw", "quota")]
-    assert [(r["command"], r["state"]) for r in commands.rows(store, "sw")] == [
-        ("swarm", "pending"),
-        ("quota", "acknowledged"),
+    assert [(r["command"], r["state"], r["owner"]) for r in commands.rows(store, "sw")] == [
+        ("swarm", "pending", ""),
+        ("quota", "acknowledged", "hive-a"),
     ]
     key = quota_refresh.page_key(store, "sw")
     assert key == f"{PREFIX}:sw:quota-page"
