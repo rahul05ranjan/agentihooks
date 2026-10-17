@@ -598,6 +598,7 @@ def test_a_swarm_launcher_exports_the_agent_s_ledger_token_and_drops_the_server_
     assert "export AGENTIHOOKS_LEDGER_AGENT_TOKEN=derived-one" in lines
     assert "unset SWARM_SECRET" in lines
     assert text.index("unset SWARM_SECRET") < text.index(" claude ")
+    assert text.index(init_agent.operator_env.SOURCE) < text.index("unset SWARM_SECRET")
     assert "AGENTIHOOKS_LEDGER_AGENT_TOKEN" not in _launcher_text(tmp_path, {"AGENTIHOOKS_SWARM": "sw"})
 
 
