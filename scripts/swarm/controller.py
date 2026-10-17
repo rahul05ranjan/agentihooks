@@ -132,20 +132,32 @@ def _host() -> str:
         return ""
 
 
-def _started(pid) -> str:
-    fields = _read(f"/proc/{pid}/stat").rsplit(")", 1)[-1].split()
-    return fields[19] if len(fields) > 19 and fields[0] != "Z" else ""
+def _stat(pid) -> list[str]:
+    return _read(f"/proc/{pid}/stat").rsplit(")", 1)[-1].split()
 
 
 def _holder() -> dict:
-    host, start = _host(), _started(os.getpid())
-    return {"host": host, "pid": os.getpid(), "start": start} if host and start else {}
+    host, fields = _host(), _stat(os.getpid())
+    return {"host": host, "pid": os.getpid(), "start": fields[19]} if host and len(fields) > 19 else {}
+
+
+def _gone(pid: int, start: str) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    fields = _stat(pid)
+    return len(fields) > 19 and (fields[0] == "Z" or fields[19] != start)
 
 
 def _dead(raw: str) -> bool:
     held = json.loads(raw) if raw.startswith("{") else {}
     host = _host()
-    return bool(host and held.get("start")) and held.get("host") == host and _started(held.get("pid")) != held["start"]
+    if not host or held.get("host") != host or not {"pid", "start"} <= held.keys():
+        return False
+    return _gone(held["pid"], held["start"])
 
 
 def take_tick_lock(store: RedisStore, slug: str, held: lease.Lease, ttl_ms: int) -> str | None:
