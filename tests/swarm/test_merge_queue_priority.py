@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts.swarm import cli, merge_queue
+from scripts.swarm import cli, ledger_events, merge_queue
 
 pytestmark = pytest.mark.unit
 URL = "https://github.com/o/r/pull/9"
@@ -26,11 +26,46 @@ class FakeQueue:
 
     def run(self, command, **kwargs):
         if command[2] != "graphql":
-            data = {"workflow_runs": [{"head_sha": "head9", "conclusion": "success"}]}
+            assert command == ["gh", "api", "repos/o/r/rules/branches/dev"]
+            data = [
+                {
+                    "type": "required_status_checks",
+                    "parameters": {"required_status_checks": [{"context": "Gate — Required"}]},
+                }
+            ]
         else:
             args = dict(item.split("=", 1) for item in command[4::2])
             query = args.pop("query")
-            if "enqueuePullRequest" in query:
+            if query == ledger_events.PULL_QUERY.replace("$number", "9"):
+                assert args == {"url": URL}
+                data = {
+                    "resource": {
+                        "state": "OPEN",
+                        "headRefOid": "head9",
+                        "commits": {
+                            "nodes": [
+                                {
+                                    "commit": {
+                                        "statusCheckRollup": {
+                                            "contexts": {
+                                                "nodes": [
+                                                    {
+                                                        "name": "Gate — Required",
+                                                        "isRequired": True,
+                                                        "conclusion": "SUCCESS",
+                                                    }
+                                                ],
+                                                "pageInfo": {"hasNextPage": False},
+                                            }
+                                        },
+                                        "checkSuites": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+                                    }
+                                }
+                            ]
+                        },
+                    }
+                }
+            elif "enqueuePullRequest" in query:
                 assert query == merge_queue.QUEUE
                 assert set(args) == {"id", "head"}
                 number = int(args["id"][1:])
