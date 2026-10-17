@@ -7,6 +7,7 @@ from pathlib import Path
 from redis import Redis
 
 from scripts.doctor.priming import doctor_slug
+from scripts.swarm import naming
 from scripts.swarm.store import PREFIX, RedisStore
 
 
@@ -29,13 +30,15 @@ def select(slug: str, repo: str, store: RedisStore) -> str:
     candidates = {
         name: config
         for name in store.slugs()
-        if (config := store.config(name)).state == "running" and repository(config.repo) == repository(repo)
+        if not naming.PROOF_RE.fullmatch(name)
+        and (config := store.config(name)).state == "running"
+        and repository(config.repo) == repository(repo)
     }
     record = key(repo)
     previous = store.redis.hget(record, "owner")
     if previous in candidates:
         return previous
-    preferred = [name for name in candidates if doctor_slug(store.peer(name) or "") != name]
+    preferred = [name for name in candidates if not (peer := store.peer(name)) or doctor_slug(peer) != name]
     owner = min(preferred or candidates or [slug])
     store.redis.hset(record, mapping={"owner": owner, "previous": previous or "", f"swarm:{owner}": owner})
     return owner
