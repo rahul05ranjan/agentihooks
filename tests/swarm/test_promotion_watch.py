@@ -105,6 +105,7 @@ def sonar_run(message, extra_jobs=(), extra_steps=()):
     found = [sonar, {"name": "Gate — Required", "conclusion": "failure"}, *extra_jobs]
 
     def run(argv, **kwargs):
+        assert kwargs["cwd"] == "/repo"
         if "/annotations" in argv[2]:
             assert argv == [
                 "gh",
@@ -120,8 +121,15 @@ def sonar_run(message, extra_jobs=(), extra_steps=()):
                 {"annotation_level": "failure", "message": message},
             ]
         elif "/jobs" in argv[2]:
-            fields = argv[-1].split("{", 1)[1].split("}", 1)[0].replace(" ", "").split(",")
-            body = [{key: job.get(key) for key in fields} for job in found]
+            assert argv == [
+                "gh",
+                "api",
+                "repos/{owner}/{repo}/actions/runs/900/jobs?per_page=100",
+                "--paginate",
+                "--jq",
+                JOBS_JQ,
+            ]
+            body = found
         else:
             body = [RED]
         return subprocess.CompletedProcess(argv, 0, "\n".join(json.dumps(item) for item in body), "")
