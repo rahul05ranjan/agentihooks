@@ -497,6 +497,16 @@ class HerdrRuntime:
                 replace(row, sessions=row.sessions + 1) if row == account else row for row in self._quota_accounts
             ]
 
+    def _route_kind(self, lane, harness, task):
+        explicit = task.get("route_kind")
+        if explicit or lane != MASTER or harness not in ("", "claude"):
+            return explicit or "subscription"
+        try:
+            native_login.check(os.environ, "native", self.run)
+        except native_login.LoginError:
+            return "subscription"
+        return "interactive"
+
     def spawn(self, config, lane, name, task):
         chosen, environ = config.lanes.get(lane, {}), dict(os.environ)
         relaunch = live_binding.complete(task.get("launch_assignment"))
@@ -508,22 +518,24 @@ class HerdrRuntime:
         if want and plugins.claude_only(profile) and want != "claude":
             kind = "master affinity" if lane == MASTER else "lane harness"
             raise SpawnError(f"{kind} {want} cannot mount the claude only profile {profile}", "unsupported")
+        route_kind = self._route_kind(lane, want or requested or saved.get("harness", ""), task)
         quota_transfer = (task.get("handoff_envelope") or {}).get("reason") == "quota"
         saved = (
             self._quota_transfer(saved, profile, environ, lane, want, self._planned_slot(task["id"]))
-            if saved and quota_transfer
+            if saved and quota_transfer and route_kind != "interactive"
             else saved
         )
         avoid = (task.get("transfer") or {}).get("avoid_harness")
         if saved and not quota_transfer and (saved["harness"] != want if want else saved["harness"] == avoid):
             saved = {}
-        if want and not saved:
+        if route_kind == "interactive" and lane == MASTER:
+            agent, reason = want or requested or saved.get("harness") or "claude", "interactive login"
+        elif want and not saved:
             agent, reason = self.choose(want, environ)
         elif saved:
             agent, reason = self._saved_choice(saved, profile, quota_transfer, environ)
         else:
             agent, reason = self._rotation(requested, environ, _prefer(profile, avoid))
-        route_kind = task.get("route_kind", "subscription")
         if reason == agent_choice.ALL_FULL and not hasattr(self, "_quota_accounts") and route_kind != "interactive":
             raise SpawnError(reason, "unavailable")
         planned = getattr(self, "_quota_tasks", {}).get(task["id"])
