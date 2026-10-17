@@ -25,7 +25,6 @@ async def test_one_runner_drains_work_and_refuses_a_second_runner(monkeypatch, t
     with service.machine_lock("runner"):
         with pytest.raises(service.AlreadyRunning, match="^scheduler runner is already running$"):
             await service.run(scheduler, stop)
-    await service.run(scheduler, stop=asyncio.Event()) if False else asyncio.sleep(0)
     await service.run(scheduler, stop)
     assert calls == ["drained"]
     with service.machine_lock("runner"):
