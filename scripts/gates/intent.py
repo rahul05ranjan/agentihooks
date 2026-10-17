@@ -73,7 +73,7 @@ def mode_of(config):
 def _tests_first(body: str) -> bool:
     return "Task part: tests-first" in body.splitlines() or bool(
         re.search(
-            r"(?:^|[.!?]\s+)(?:This tests[- ]first prerequisite\b|Tests[- ]first prerequisite for\b)",
+            r"(?:^|[.!?]\s+)(?:This tests[- ]first prerequisite\b|Tests[- ]first prerequisite for #\d+\.(?=\s|$))",
             body,
             re.MULTILINE,
         )
