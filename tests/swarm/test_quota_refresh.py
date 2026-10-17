@@ -185,16 +185,19 @@ def test_run_listens_on_the_wake_channel_and_answers_every_swarm_on_each_wake(st
             seen.append(("wait", timeout))
 
     def answer_all(store_, execute):
-        rounds.append(store_)
+        rounds.append((store_, execute))
         if len(rounds) == 2:
             raise Stop
+
+    def execute(slug, row):
+        return ""
 
     monkeypatch.setattr(store.redis, "pubsub", PubSub)
     monkeypatch.setattr(quota_refresh, "answer_all", answer_all)
     with pytest.raises(Stop):
-        quota_refresh.run(store, lambda slug, row: "", 7)
+        quota_refresh.run(store, execute, 7)
     assert seen == [("subscribe", quota_refresh.WAKE), ("wait", 7), ("wait", 7)]
-    assert rounds == [store, store]
+    assert rounds == [(store, execute), (store, execute)]
 
 
 def test_timer_ensure_also_runs_the_quota_prober_service(tmp_path):

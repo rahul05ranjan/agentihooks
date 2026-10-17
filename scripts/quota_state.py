@@ -5,10 +5,12 @@ DRAIN_LEFT = 10
 BANDS = frozenset({"NORMAL", "REDUCE", "DRAIN_SOON", "DRAIN", "BLOCKED"})
 
 
-def routing_left(harness: str, five: float | None, week: float | None) -> float | None:
-    if harness == "codex":
-        return week
+def claude_left(five: float | None, week: float | None) -> float | None:
     return None if five is None or week is None else min(five, week)
+
+
+def routing_left(harness: str, five: float | None, week: float | None) -> float | None:
+    return week if harness == "codex" else claude_left(five, week)
 
 
 def draining(left: float | None, limit: float = DRAIN_LEFT) -> bool:

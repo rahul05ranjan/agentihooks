@@ -103,7 +103,7 @@ def _claude_row(
     cap = account_cap(result, now, include_fable) if session_bands.fresh(seen, now) else None
     five = session_bands.left(result.five_hour.used, result.five_hour.resets_at, now)
     week = session_bands.left(result.seven_day.used, result.seven_day.resets_at, now)
-    routing = quota_state.routing_left("claude", five, week)
+    routing = quota_state.claude_left(five, week)
     row = QuotaRow(
         agent="claude",
         account=result.account,
