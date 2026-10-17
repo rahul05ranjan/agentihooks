@@ -797,9 +797,14 @@ def _store_master_rules(store, slug, rules):
         master_scale.set_rule(store.redis, slug, rule)
 
 
+def _manual_count_step(counts):
+    return {"masters_step": 0} if counts else {}
+
+
 def cmd_set(store, args):
     changes, lanes = {}, {key: dict(value) for key, value in store.config(args.slug).lanes.items()}
     counts, pairs = _split_master_pairs(args.pairs, "masters", masters.count_of)
+    changes.update(_manual_count_step(counts))
     rules, pairs = _split_master_pairs(pairs, "master-per", master_scale.rule_of)
     hives, pairs = masters.hive_pairs(args.slug, pairs)
     masters.MasterSeats(store.redis).check_hives(args.slug, counts, hives)
@@ -838,8 +843,6 @@ def cmd_set(store, args):
                 f"or {', '.join(LANE_KEYS)}=<value>"
             )
         changes[SETTABLE[key]] = int(value)
-    if counts:
-        changes.setdefault("masters_step", 0)
     config = store.update(args.slug, **changes)
     _store_master_counts(store, args.slug, counts, hives)
     _store_master_rules(store, args.slug, rules)
