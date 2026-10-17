@@ -465,12 +465,18 @@ def test_promotion_shard_reports_use_the_pushed_grader_and_prs_keep_the_base():
 
 
 def test_unit_shards_check_out_full_history_without_old_file_contents():
-    _, checkout = _unit_step_index(lambda s: s.get("uses", "").startswith("actions/checkout"))
-    assert {key: value for key, value in checkout["with"].items() if key != "ref"} == {
-        "fetch-depth": 0,
-        "filter": "blob:none",
-    }
-    assert checkout["with"].get("ref") in (None, "${{ github.sha }}")
+    checkouts = [
+        step
+        for step in _workflow()["jobs"]["unit"]["steps"]
+        if step.get("uses", "").startswith("actions/checkout")
+    ]
+    assert checkouts
+    for checkout in checkouts:
+        assert {key: value for key, value in checkout["with"].items() if key != "ref"} == {
+            "fetch-depth": 0,
+            "filter": "blob:none",
+        }
+        assert checkout["with"].get("ref") in (None, "${{ github.sha }}")
 
 
 def test_unit_pins_an_exact_uv_version():
