@@ -243,7 +243,7 @@ def test_a_called_workflow_never_waits_on_its_callers_lane(caller):
         assert mutation["group"] != _resolve(_block("mutation-preflight.yml"), **github)["group"]
 
 
-def test_direct_dispatches_and_branch_pushes_queue_on_a_lane():
+def test_direct_dispatches_and_mutation_branch_pushes_queue_on_a_lane():
     dispatch = {"event_name": "workflow_dispatch", "ref": "refs/heads/diffcheck/plant", "run_id": 1000}
     for name, (title, _) in DIRECT.items():
         assert _is_lane(_resolve(_block(name), workflow=title, **dispatch)["group"]), name
