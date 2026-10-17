@@ -83,6 +83,7 @@ def test_a_lock_without_a_verifiable_holder_is_not_stolen(locked_store, legacy):
 
 STAT = "7 (tick (x)) " + " ".join(["S", *map(str, range(4, 52))])
 SHORT = "7 (x) " + " ".join(["S", *map(str, range(4, 22))])
+EXACT = "7 (x) " + " ".join(["S", *map(str, range(4, 23))])
 
 
 def test_the_stat_fields_follow_the_process_name(monkeypatch):
@@ -109,7 +110,7 @@ def test_an_unreadable_pid_namespace_names_no_host(monkeypatch):
     assert controller._host() == ""
 
 
-@pytest.mark.parametrize(("host", "stat", "holder"), [("h", STAT, True), ("", STAT, False), ("h", SHORT, False)])
+@pytest.mark.parametrize(("host", "stat", "holder"), [("h", STAT, True), ("h", EXACT, True), ("", STAT, False), ("h", SHORT, False)])
 def test_a_holder_is_recorded_only_with_its_host_and_start(monkeypatch, host, stat, holder):
     pid = controller.os.getpid()
     monkeypatch.setattr(controller, "_host", lambda: host)
@@ -126,6 +127,7 @@ def test_a_holder_is_recorded_only_with_its_host_and_start(monkeypatch, host, st
         (None, STAT, "21", True),
         (None, STAT.replace(") S ", ") Z "), "22", True),
         (None, SHORT, "22", False),
+        (None, EXACT, "21", True),
         (None, "", "22", False),
     ],
 )
