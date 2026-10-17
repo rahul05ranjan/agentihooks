@@ -1,5 +1,6 @@
 import argparse
 import ast
+from collections.abc import Iterator
 from pathlib import Path
 
 FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
@@ -15,7 +16,7 @@ def qualified(node: ast.AST) -> str:
     return ""
 
 
-def statements(node: ast.AST):
+def statements(node: ast.AST) -> Iterator[ast.AST]:
     for child in ast.iter_child_nodes(node):
         if not isinstance(child, (*FUNCTIONS, ast.ClassDef)):
             yield child
@@ -51,7 +52,7 @@ def bindings_for(function: ast.AST) -> dict:
 
 
 class Timing:
-    def __init__(self, tree: ast.Module, helpers: dict):
+    def __init__(self, tree: ast.Module, helpers: dict) -> None:
         self.functions = {node.name: node for node in ast.walk(tree) if isinstance(node, FUNCTIONS)}
         self.functions.update(helpers)
         self.aliases = {}
@@ -60,8 +61,12 @@ class Timing:
                 self.aliases.update((name.asname or name.name, name.name) for name in node.names)
             elif isinstance(node, ast.ImportFrom):
                 self.aliases.update((name.asname or name.name, f"{node.module}.{name.name}") for name in node.names)
-        functions = {*self.functions.values(), *(node for node in ast.walk(tree) if isinstance(node, FUNCTIONS))}
-        self.bindings = {function: bindings_for(function) for function in functions}
+        self.bindings = {}
+
+    def bindings_for(self, function: ast.AST) -> dict:
+        if function not in self.bindings:
+            self.bindings[function] = bindings_for(function)
+        return self.bindings[function]
 
     def value(self, node: ast.AST, function: ast.AST, seen: frozenset = frozenset()) -> int:
         key = (node, function)
@@ -70,7 +75,7 @@ class Timing:
         seen = seen | {key}
         if isinstance(node, ast.Name):
             return max(
-                (self.value(value, function, seen) for value in self.bindings[function].get(node.id, [])), default=0
+                (self.value(value, function, seen) for value in self.bindings_for(function).get(node.id, [])), default=0
             )
         if isinstance(node, ast.BinOp):
             left, right = self.value(node.left, function, seen), self.value(node.right, function, seen)
@@ -81,11 +86,15 @@ class Timing:
             name = self.aliases.get(first, first) + (f".{rest}" if rest else "")
             if any(name.endswith(f"time.{clock}") for clock in CLOCKS):
                 return 1
-            if qualified(node.func) in self.bindings[function]:
+            if qualified(node.func) in self.bindings_for(function):
+                binding = (function, qualified(node.func), "call")
+                if binding in seen:
+                    return 0
+                seen = seen | {binding}
                 return max(
                     (
                         self.value(ast.Call(func=value, args=[], keywords=[]), function, seen)
-                        for value in self.bindings[function][qualified(node.func)]
+                        for value in self.bindings_for(function)[qualified(node.func)]
                         if not isinstance(value, ast.Call)
                     ),
                     default=0,
@@ -112,7 +121,7 @@ class Timing:
         seen = seen | {key}
         if isinstance(node, ast.Name):
             return max(
-                (self.indexed(value, index, function, seen) for value in self.bindings[function].get(node.id, [])),
+                (self.indexed(value, index, function, seen) for value in self.bindings_for(function).get(node.id, [])),
                 default=0,
             )
         if isinstance(node, ast.Call) and (helper := self.functions.get(qualified(node.func))):
