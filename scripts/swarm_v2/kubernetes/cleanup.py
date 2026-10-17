@@ -8,6 +8,7 @@ from typing import Protocol
 from scripts.swarm.store import RedisStore
 from scripts.swarm_v2 import retention
 from scripts.swarm_v2.kubernetes.client import DELETABLE, PreconditionFailed
+from scripts.swarm_v2.kubernetes.diagnostics import startup
 from scripts.swarm_v2.kubernetes.runtime import GENERATION_LABEL
 from scripts.swarm_v2.kubernetes.watch import EXECUTION_LABEL, OWNER_LABEL, owner_for
 
@@ -23,6 +24,8 @@ class CleanupApi(Protocol):
     def list_services(self, selector: str) -> list[dict]: ...
 
     def read(self, kind: str, name: str) -> dict | None: ...
+
+    def pod_logs(self, name: str, container: str) -> str: ...
 
     def delete(self, kind: str, name: str, uid: str) -> bool: ...
 
@@ -109,7 +112,8 @@ class Cleanup:
         settled = {item["uid"] for item in journal["removed"][step]}
         for pinned in journal["pinned"][step]:
             if pinned["uid"] not in settled:
-                journal["removed"][step].append({**pinned, "outcome": self._remove(step, pinned, journal)})
+                outcome = self._remove(step, pinned, journal)
+                journal["removed"][step].append({**pinned, "outcome": outcome})
                 self._save(journal)
 
     def _remove(self, kind: str, pinned: dict, journal: dict) -> str:
@@ -125,6 +129,11 @@ class Cleanup:
         expected = self._labels(journal["execution_id"], journal["generation"])
         if {key: labels.get(key) for key in expected} != expected:
             return "unselected"
+        if kind == "pods" and "startup" not in pinned:
+            captured = startup(current, self.api)
+            if captured is not None:
+                pinned["startup"] = captured
+                self._save(journal)
         if not resent:
             journal["sent"].append(pinned["uid"])
             self._save(journal)

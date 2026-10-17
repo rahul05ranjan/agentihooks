@@ -57,3 +57,52 @@ def test_unreadable_startup_logs_keep_the_pod_for_retry(ready):
         world.cleanup(controller).run(old.execution_id)
     assert name in world.api.objects
     assert retention.retained(world.store, cases.SLUG, old.execution_id) is None
+
+
+def test_logs_are_persisted_before_delete_and_reused_after_a_refused_delete(ready):
+    import json
+
+    world, controller, old, _ = ready
+    name = refused(world, old)
+    world.api.pod_logs = lambda pod, container: "startup refused\n"
+    delete = world.api.delete
+
+    def interrupted(kind, pod, uid):
+        journal = json.loads(world.store.redis.hget(world.store.key(cases.SLUG, "cleanup-journal"), old.execution_id))
+        assert journal["pinned"]["pods"][0]["startup"]["containers"][0]["log"] == "startup refused\n"
+        raise ConnectionError("delete unavailable")
+
+    world.api.delete = interrupted
+    with pytest.raises(ConnectionError, match="delete unavailable"):
+        world.cleanup(controller).run(old.execution_id)
+    assert name in world.api.objects
+    world.api.delete = delete
+
+    def unreadable(pod, container):
+        raise AssertionError("persisted logs must not be fetched twice")
+
+    world.api.pod_logs = unreadable
+    assert world.cleanup(controller).run(old.execution_id).state == "done"
+    assert retention.retained(world.store, cases.SLUG, old.execution_id)["removed"]["pods"][0]["startup"]
+
+
+@pytest.mark.parametrize("status", [200, 403, 404])
+def test_pod_log_requests_are_bounded_and_refusals_raise(status):
+    from urllib.parse import parse_qs, urlsplit
+
+    from scripts.swarm_v2.kubernetes.client import ApiRefused, PodClient
+
+    class Http:
+        def send(self, method, path, body=None, read=None):
+            assert method == "GET" and body is None
+            parsed = urlsplit(path)
+            assert parsed.path == "/api/v1/namespaces/workers/pods/refused/log"
+            assert parse_qs(parsed.query) == {"container": ["agent"], "limitBytes": ["65536"], "timestamps": ["true"]}
+            return (status, read(b"startup refused\xff\n")) if status == 200 else (status, {})
+
+    client = PodClient(Http(), "workers")
+    if status == 200:
+        assert client.pod_logs("refused", "agent") == "startup refused\ufffd\n"
+    else:
+        with pytest.raises(ApiRefused):
+            client.pod_logs("refused", "agent")

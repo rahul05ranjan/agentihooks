@@ -169,6 +169,13 @@ class PodClient:
     def read_pod(self, name: str) -> dict | None:
         return self.read("pods", name)
 
+    def pod_logs(self, name: str, container: str) -> str:
+        query = urllib.parse.urlencode({"container": container, "limitBytes": 65536, "timestamps": "true"})
+        status, answer = self.http.send(
+            "GET", f"{self._path(name)}/log?{query}", read=lambda raw: raw.decode("utf-8", errors="replace")
+        )
+        return _answer(status, answer)
+
     def list_pods(self, selector: str) -> list[dict]:
         return self.snapshot(selector)[0]
 
