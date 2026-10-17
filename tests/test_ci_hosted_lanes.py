@@ -260,6 +260,20 @@ def test_direct_dispatches_and_branch_pushes_queue_on_a_lane():
     }
 
 
+@pytest.mark.parametrize("name", ["startup-stages.yml", "worker-resources.yml"])
+def test_a_measurement_branch_push_never_holds_a_lane_that_proof_dispatches_wait_on(name):
+    title, own = DIRECT[name]
+    push = {"event_name": "push", "ref": "refs/heads/task-branch", "workflow": title}
+    for run_id in range(1000, 1010):
+        assert _resolve(_block(name), run_id=run_id, **push) == {
+            "group": f"{own}-refs/heads/task-branch",
+            "queue": "single",
+            "cancel-in-progress": None,
+        }
+    dispatch = {"event_name": "workflow_dispatch", "ref": "refs/heads/task-branch", "workflow": title, "run_id": 1000}
+    assert _resolve(_block(name), **dispatch) == {"group": "hosted-lane-a", "queue": "max", "cancel-in-progress": None}
+
+
 @pytest.mark.parametrize("event", ["push", "workflow_dispatch"])
 def test_only_the_dev_push_worker_image_build_stays_uncapped_because_it_publishes_the_deploy_image(event):
     github = {"event_name": event, "ref": "refs/heads/dev", "workflow": "Swarm worker image", "run_id": 1000}
