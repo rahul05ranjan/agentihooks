@@ -67,7 +67,7 @@ class LoginRefused(RuntimeError):
 
 
 def enabled(config, lane: str, harness: str) -> bool:
-    return lane == LANE and harness == "claude" and getattr(config, FIELD, False) is True
+    return lane == LANE and harness == "claude" and getattr(config, FIELD, None) is True
 
 
 def route(login: bool) -> list[str]:
