@@ -100,6 +100,22 @@ def test_refused_scaffold_leaves_zero_new_folders(cli, options):
     assert json.loads(output)["tasks"] == []
 
 
+def test_scaffold_failure_after_acceptance_reports_the_recorded_task(cli, monkeypatch):
+    def refuse(slug, task, doc=None):
+        raise PermissionError("work folder refused")
+
+    monkeypatch.setattr(ledger.ledger_workspace, "scaffold", refuse)
+    code, output, error = cli("task", "add", "t1", "Recorded contract", "--scaffold")
+    assert code == 0, (output, error, code)
+    assert json.loads(output) == {"task": "t1", "added": "Recorded contract", "workspace_error": "work folder refused"}
+    assert "task t1 was added; its work folder was not created: work folder refused" in error
+    code, output, error = cli("show")
+    assert code == 0, error
+    task = json.loads(output)["tasks"][0]
+    assert task["id"] == "t1"
+    assert not Path(task["workspace"]).exists()
+
+
 def test_accepted_scaffold_records_one_workspace_and_retry_keeps_it(cli):
     root = Path.home() / ".agentihooks" / "swarm"
     before = set(root.glob("*/tasks/*"))
