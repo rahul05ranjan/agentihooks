@@ -572,7 +572,7 @@ agentihooks scratch rm <task-dir>       # safe replacement for rm -rf "$dir": re
 A path is actionable only when it is **unused** and **removing it loses nothing**:
 
 - Unused: no live process has its cwd inside it, no lease holder is alive (pid + `/proc` start time + `boot_id`, or a live session file with the same `sessionId` and matching `procStart`), nothing in it changed recently, and the machine has been up at least 2 h.
-- Worktrees: clean and reachable from a remote after 2 h idle (`remove`); dirty or unpushed after 24 h idle (`snapshot` — pushed to `wip/` first). Primary checkouts, `dev`/`main`/`master`, git-locked worktrees and any merge/rebase in progress are never touched.
+- Worktrees: clean and reachable from a remote after 2 h idle (`remove`), or at once, due on first sight, when its lease names holders and none is alive; dirty or unpushed after 24 h idle (`snapshot` — pushed to `wip/` first). Primary checkouts, `dev`/`main`/`master`, git-locked worktrees and any merge/rebase in progress are never touched.
 - Scratch task dirs (`~/scratchpad/<repo>/<task>`): idle past the root's `idle_days`, then the oldest dead dirs while the root is over `budget_gb`. A `.keep` file pins a dir; files at depth ≤ 2 are never touched.
 - Injection traces (`~/.agentihooks/injections/<session>.jsonl`): removed once the session is no longer live and the trace was last written more than `AGENTIHOOKS_TRACE_KEEP_DAYS` ago (default: the root's `idle_days`, 14). Liveness is checked again right before removal.
 - An action is `due` only after two sweeps at least 1 h apart in the same boot. `--enforce` re-checks each due path against a fresh process snapshot right before acting.
