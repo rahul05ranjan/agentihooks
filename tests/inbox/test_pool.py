@@ -352,16 +352,15 @@ def test_a_redirected_item_left_in_the_pool_drops_out_of_it(swarm, inbox, held):
     assert inbox.get(item.id).address == "eng-1@sw"
 
 
-def test_a_redirect_to_the_same_seat_clears_its_pool_marks(swarm, inbox):
+def test_a_redirect_to_the_same_seat_keeps_its_pool_marks(swarm, inbox):
     _masters(swarm, 2)
     inbox.send("swarm", FRONT, "first")
     item = inbox.send("swarm", FRONT, "second")
-    assert swarm.redis.hget(inbox.key("item", item.id), "pool_holder") == SECOND
     assert inbox.redirect(item.id, "swarm", SECOND, "for its next occupant").address == SECOND
-    assert swarm.redis.hmget(inbox.key("item", item.id), "pool_holder", "pool_skip") == [None, None]
+    assert swarm.redis.hget(inbox.key("item", item.id), "pool_holder") == SECOND
     assert inbox.deliver(item.id, "sw-master-2").state == "delivered"
     inbox.redeliver(now_ms() + 10, 0)
-    assert (inbox.get(item.id).address, inbox.get(item.id).state) == (SECOND, "pending")
+    assert (inbox.get(item.id).address, inbox.get(item.id).reason) == (FRONT, claimed(FRONT))
 
 
 def test_an_item_a_gone_master_claimed_but_never_took_goes_to_a_live_master(swarm, inbox):

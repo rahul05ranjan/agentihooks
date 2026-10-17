@@ -402,7 +402,8 @@ class InboxStore:
             )
             pipe.multi()
             pipe.hset(key, mapping=_fields(moved))
-            pipe.hdel(key, POOL_HOLDER, POOL_SKIP)
+            if moved.address != item.address:
+                pipe.hdel(key, POOL_HOLDER, POOL_SKIP)
             if pooled:
                 self.pool.stage_remove(pipe, item)
             if moved.state in CLOSED or moved.address != item.address:
