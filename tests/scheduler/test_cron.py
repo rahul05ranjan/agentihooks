@@ -14,6 +14,7 @@ def test_cron_coalesces_downtime_and_continues_with_distinct_occurrences():
     scheduler = Scheduler(redis, machine="proof")
     cron = scheduler.cron(owner="operator", expression="* * * * *", payload="tick", now=0)
     cron.timeout.connect(InboxSlot("session-proof"))
+    cron.start()
     assert cron.record["due"] == 60
     assert cron.record["timezone"] == "UTC"
     assert scheduler.run_due(now=59) == 0

@@ -14,6 +14,7 @@ def test_stopwatch_elapsed_and_limit_survive_restart():
     scheduler = Scheduler(redis, machine="proof")
     watch = scheduler.stopwatch(owner="operator", limit=10, payload="limit crossed", now=100)
     watch.limit_reached.connect(InboxSlot("session-proof"))
+    watch.start()
     assert watch.elapsed(now=104) == 4
     assert watch.limit_reached.name == "limit_reached"
     assert scheduler.run_due(now=109) == 0
@@ -36,6 +37,7 @@ def test_stopped_stopwatch_records_elapsed_without_firing():
     scheduler = Scheduler(redis, machine="proof")
     watch = scheduler.stopwatch(owner="operator", limit=10, payload="limit crossed", now=100)
     watch.limit_reached.connect(InboxSlot("session-proof"))
+    watch.start()
     watch.stop(now=103)
     assert watch.elapsed(now=120) == 3
     assert watch.state == "stopped"

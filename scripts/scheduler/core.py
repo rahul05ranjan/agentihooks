@@ -6,11 +6,13 @@ from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Callable
 
 from hooks._redis import redis_key
+from scripts.scheduler.lease import dispatch_lock, verify_lease
 from scripts.scheduler.model import Schedule, next_due
 from scripts.scheduler.slots import CallableSlot, Slot, restore
 
 if TYPE_CHECKING:
     from redis import Redis
+    from redis.lock import Lock
 
 
 @dataclass(frozen=True)
@@ -52,6 +54,14 @@ class Entry:
     def state(self) -> str:
         return self.record["state"]
 
+    def start(self) -> None:
+        def change(entry):
+            if entry["state"] != "ready":
+                raise ValueError("only a ready schedule can be started")
+            entry["state"] = "active"
+
+        self.scheduler.update(self.id, change)
+
     @property
     def timeout(self) -> Signal:
         return Signal(self.scheduler, self.id, "timeout")
@@ -72,12 +82,14 @@ class Entry:
         def change(entry):
             entry["state"] = "stopped"
             entry["stopped_at"] = now
+            entry.pop("pending", None)
 
         self.scheduler.update(self.id, change)
 
     def cancel(self) -> None:
         def change(entry):
             entry["state"] = "cancelled"
+            entry.pop("pending", None)
 
         self.scheduler.update(self.id, change)
 
@@ -95,7 +107,7 @@ class Scheduler:
         entry.record
         return entry
 
-    def update(self, entry_id: str, change: Callable[[dict], None]) -> None:
+    def update(self, entry_id: str, change: Callable[[dict], None], *, lease: "Lock | None" = None) -> None:
         from redis.exceptions import WatchError
 
         key = self.key("entries")
@@ -103,6 +115,9 @@ class Scheduler:
             with self.redis.pipeline() as pipe:
                 try:
                     pipe.watch(key)
+                    if lease is not None:
+                        pipe.watch(lease.name)
+                        verify_lease(pipe, lease)
                     raw = pipe.hget(key, entry_id)
                     if raw is None:
                         raise KeyError(entry_id)
@@ -114,6 +129,10 @@ class Scheduler:
                         pipe.zadd(self.key("due"), {entry_id: entry["due"]})
                     else:
                         pipe.zrem(self.key("due"), entry_id)
+                    if "pending" in entry:
+                        pipe.sadd(self.key("pending"), entry_id)
+                    else:
+                        pipe.srem(self.key("pending"), entry_id)
                     pipe.execute()
                     return
                 except WatchError:
@@ -150,23 +169,21 @@ class Scheduler:
         entry = {
             **asdict(schedule),
             "id": entry_id,
-            "state": "active",
+            "state": "ready",
             "signal": "limit_reached" if schedule.kind == "stopwatch" else "timeout",
             "slots": [],
         }
-        with self.redis.pipeline() as pipe:
-            pipe.hset(self.key("entries"), entry_id, json.dumps(entry))
-            pipe.zadd(self.key("due"), {entry_id: schedule.due})
-            pipe.execute()
+        self.redis.hset(self.key("entries"), entry_id, json.dumps(entry))
         return Entry(self, entry_id)
 
-    def _claim(self, entry_id: str, now: float) -> dict | None:
+    def _claim(self, entry_id: str, now: float, lease: "Lock") -> dict | None:
         from redis.exceptions import WatchError
 
         key = self.key("entries")
         with self.redis.pipeline() as pipe:
             try:
-                pipe.watch(key)
+                pipe.watch(key, lease.name)
+                verify_lease(pipe, lease)
                 entry = json.loads(pipe.hget(key, entry_id))
                 if entry["state"] != "active" or entry["due"] > now:
                     return None
@@ -185,9 +202,10 @@ class Scheduler:
                 pipe.execute()
                 return entry
             except WatchError:
+                verify_lease(self.redis, lease)
                 return None
 
-    def _deliver(self, entry_id: str, now: float) -> None:
+    def _deliver(self, entry_id: str, now: float, lease: "Lock") -> None:
         entry = self.get(entry_id).record
         pending = entry["pending"]
         event = {
@@ -196,18 +214,27 @@ class Scheduler:
             "fired_at": pending["fired_at"],
         }
         for connection in pending["slots"]:
+            if self.get(entry_id).state != "pending":
+                return
+            verify_lease(self.redis, lease)
             if connection["id"] in pending["delivered"]:
                 continue
             slot = dict(connection)
             connection_id = slot.pop("id")
             slot.pop("signal")
             restore(slot).deliver(event, f"{pending['id']}:{connection_id}", self.redis)
-            self.update(entry_id, lambda current: current["pending"]["delivered"].append(connection_id))
-        self.update(entry_id, lambda current: self._finish(current, now))
-        self.redis.srem(self.key("pending"), entry_id)
+
+            def acknowledge(current):
+                if current["state"] == "pending":
+                    current["pending"]["delivered"].append(connection_id)
+
+            self.update(entry_id, acknowledge, lease=lease)
+        self.update(entry_id, lambda current: self._finish(current, now), lease=lease)
 
     @staticmethod
     def _finish(entry: dict, now: float) -> None:
+        if entry["state"] != "pending":
+            return
         entry["state"] = "fired"
         if entry["kind"] == "cron":
             entry["state"] = "active"
@@ -216,23 +243,13 @@ class Scheduler:
 
     def run_due(self, *, now: float | None = None) -> int:
         now = time.time() if now is None else now
-        lock = self.redis.lock(self.key("dispatch-lock"), timeout=30, blocking=False)
-        if not lock.acquire():
-            raise RuntimeError("another scheduler is dispatching on this machine")
-        try:
+        with dispatch_lock(self.redis, self.key("dispatch-lock")) as lease:
             fired = 0
             for entry_id in self.redis.zrangebyscore(self.key("due"), "-inf", now):
-                if self._claim(entry_id, now) is not None:
+                if self._claim(entry_id, now, lease) is not None:
                     fired += 1
             for entry_id in self.redis.smembers(self.key("pending")):
-                if not lock.owned():
-                    raise RuntimeError("scheduler lost its dispatch lock")
                 entry = self.get(entry_id).record
-                if "pending" in entry:
-                    self._deliver(entry_id, now)
-                else:
-                    self.redis.srem(self.key("pending"), entry_id)
+                if entry["state"] == "pending":
+                    self._deliver(entry_id, now, lease)
             return fired
-        finally:
-            if lock.owned():
-                lock.release()

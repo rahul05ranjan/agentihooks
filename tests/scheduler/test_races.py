@@ -53,9 +53,11 @@ def test_cancel_or_stop_discards_a_claimed_but_undelivered_signal(monkeypatch, s
     if kind == "timer":
         entry = scheduler.timer(owner="operator", payload="cancelled", delay=1, now=100)
         entry.timeout.connect(InboxSlot("proof-session"))
+        entry.start()
     else:
         entry = scheduler.stopwatch(owner="operator", payload="cancelled", limit=1, now=100)
         entry.limit_reached.connect(InboxSlot("proof-session"))
+        entry.start()
 
     def crash(*args):
         raise RuntimeError("crash before transport")
@@ -82,6 +84,7 @@ def test_cron_cancelled_inside_a_slot_never_reactivates_or_calls_later_slots(mon
     cron = scheduler.cron(owner="operator", payload="tick", expression="* * * * *", now=0)
     cron.timeout.connect(InboxSlot("first-slot"))
     cron.timeout.connect(InboxSlot("later-slot"))
+    cron.start()
     original = InboxSlot.deliver
 
     def cancel_after_acceptance(self, event, delivery_id, redis):
@@ -103,6 +106,7 @@ def test_lost_lease_cannot_acknowledge_accepted_delivery(monkeypatch, scheduler)
 
     timer = scheduler.timer(owner="operator", payload="once", delay=1, now=100)
     timer.timeout.connect(InboxSlot("proof-session"))
+    timer.start()
     original = InboxSlot.deliver
     lock_key = scheduler.key("dispatch-lock")
 
@@ -123,6 +127,7 @@ def test_lost_lease_cannot_acknowledge_accepted_delivery(monkeypatch, scheduler)
 
 def test_lease_loss_before_claim_commit_keeps_the_entry_unclaimed(monkeypatch, scheduler):
     timer = scheduler.timer(owner="operator", payload="notice", delay=1, now=100)
+    timer.start()
     pipeline = scheduler.redis.pipeline
     stolen = []
     lock_key = scheduler.key("dispatch-lock")

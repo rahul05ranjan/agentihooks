@@ -14,6 +14,7 @@ def test_timer_signal_survives_restart_and_delivers_once():
     scheduler = Scheduler(redis, machine="proof")
     timer = scheduler.timer(owner="operator", delay=5, payload="time expired", now=100)
     timer.timeout.connect(InboxSlot("session-proof"))
+    timer.start()
     assert scheduler.run_due(now=104) == 0
     restarted = Scheduler(redis, machine="proof")
     assert restarted.run_due(now=110) == 1
