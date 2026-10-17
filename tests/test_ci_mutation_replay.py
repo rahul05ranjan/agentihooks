@@ -228,6 +228,7 @@ def test_replay_verify_counts_every_unit_and_grades_split_survivors_against_the_
     (tmp_path / "manifest.json").write_text(json.dumps({"case": "third", "mutants": 1}))
     (tmp_path / "stats").mkdir()
     (tmp_path / "stats/plan.json").write_text(json.dumps({"shards": 2, "assignments": {"split": [1, 0]}}))
+    (tmp_path / "source").mkdir()
     if cleared:
         write_clearance(tmp_path / "source", "scripts/sample.py:split:f", {"reader": "Standards", "reason": "same"})
     row = {"name": "split", "status": "survived", "lines": [2], "fingerprint": "f", "diff": "changed"}

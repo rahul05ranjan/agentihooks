@@ -26,7 +26,7 @@ def function_tests(results: list[dict]) -> tuple[dict[str, set[str]], dict[str, 
             tests.setdefault(function, set()).update(nodes)
         for node, seconds in result["durations"].items():
             durations[node] = max(durations.get(node, 0.0), seconds)
-    return tests, durations, max(MUTANT_SECONDS, *durations.values())
+    return tests, durations, max([MUTANT_SECONDS, *durations.values()])
 
 
 def measured_costs(names: list[str], results: list[dict]) -> dict[str, float]:

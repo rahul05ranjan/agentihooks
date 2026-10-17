@@ -298,15 +298,17 @@ def test_selection_passes_exact_lines_before_generation_and_reloads_source_packa
             ("m", ["tests/test_y.py::t"]),
         ]
         unit = "scripts.s.x_f__mutmut_1"
-        split = {"head": ["h"], "slices": [["a"], ["b"]]}
+        units = []
+
+        def shard_tests(tests, name, index):
+            units.append((tests, name, index))
+            return [test for test in tests if test in {"h", "b"}]
+
         with monkeypatch.context() as planned:
-            planned.chdir(tmp_path)
-            (tmp_path / "shard-plan.json").write_text(
-                json.dumps({"assignments": {unit: [0, 1]}, "splits": {"scripts.s.x_f": split}})
-            )
+            planned.setitem(run_selected.__globals__, "shard_tests", shard_tests)
             assert runner.PytestRunner().run_tests(mutant_name=unit, tests=["a"]) == 0
-            runner.PytestRunner().run_tests(mutant_name=unit, tests=["h", "a", "b"])
-            (tmp_path / "shard-plan.json").unlink()
+            runner.PytestRunner().run_tests(mutant_name=unit, tests=("h", "a", "b"))
+        assert units == [(["a"], unit, 1), (["h", "a", "b"], unit, 1)]
         assert test_calls[-1] == (unit, ["h", "b"])
         assert len(test_calls) == 5
         data.exit_code_by_key = {}
