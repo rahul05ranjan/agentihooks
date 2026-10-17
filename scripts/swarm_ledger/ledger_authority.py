@@ -6,6 +6,10 @@ binding governs the transport a session selects; any process of the operator's u
 
 import hashlib
 import hmac
+from functools import lru_cache
+from os import environ
+
+import jwt
 
 from scripts.hive import auth
 from scripts.swarm import store
@@ -34,6 +38,39 @@ def principal(admin: str, slug: str, token: str, agent: str) -> str | None:
     if not remote() and agent and _same(token, agent_token(admin, slug, agent)):
         return agent
     return None
+
+
+def caller(headers, admin: str, slug: str) -> str | None:
+    """principal for this request under SWARM_AUTH_MODE: local reads the page credential, edge never does."""
+    token, agent = headers.get("X-Ledger-Token"), headers.get("X-Ledger-Agent")
+    if environ.get("SWARM_AUTH_MODE", "local") != "edge":
+        return principal(admin, slug, token, agent)
+    if access_operator(headers.get("Cf-Access-Jwt-Assertion")):
+        return ""
+    secret = environ.get("SWARM_SECRET", "")
+    if not secret or not token or not agent:
+        return None
+    if token.startswith("hive."):
+        return principal(secret, slug, token, agent)
+    return agent if _same(token, agent_token(secret, slug, agent)) else None
+
+
+def access_operator(assertion) -> bool:
+    team, audience = environ.get("SWARM_ACCESS_TEAM", ""), environ.get("SWARM_ACCESS_AUD", "")
+    if not assertion or not team or not audience:
+        return False
+    issuer = f"https://{team if '.' in team else team + '.cloudflareaccess.com'}"
+    try:
+        key = access_keys(f"{issuer}/cdn-cgi/access/certs").get_signing_key_from_jwt(assertion)
+        jwt.decode(assertion, key.key, algorithms=["RS256"], audience=audience, issuer=issuer)
+    except jwt.PyJWTError:
+        return False
+    return True
+
+
+@lru_cache(maxsize=4)
+def access_keys(url: str) -> jwt.PyJWKClient:
+    return jwt.PyJWKClient(url, cache_keys=True, timeout=10)
 
 
 def hive_member(credential):
