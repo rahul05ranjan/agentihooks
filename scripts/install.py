@@ -816,7 +816,7 @@ def _package_role_dir(profile_name: str) -> Path | None:
     return path if path.is_dir() else None
 
 
-def _resolve_profile_dir(profile_name: str) -> Path | None:
+def _resolve_profile_dir(profile_name: str, bundle: Path | None = None) -> Path | None:
     """Resolve a profile name to its directory — built-in, bundle, linked, then package roles."""
     from hooks.context.profile_chain import PACKAGE_PREFIX
 
@@ -827,7 +827,7 @@ def _resolve_profile_dir(profile_name: str) -> Path | None:
     if local.is_dir():
         return local
     # Bundle profiles
-    bundle = _get_bundle_path()
+    bundle = bundle or _get_bundle_path()
     if bundle:
         bp = bundle / "profiles" / profile_name
         if bp.is_dir():
@@ -853,7 +853,7 @@ def _profile_source_label(profile_name: str) -> str:
     return "unknown"
 
 
-def _resolve_profile_chain(profile_input: str) -> list[tuple[str, Path]]:
+def _resolve_profile_chain(profile_input: str, bundle: Path | None = None) -> list[tuple[str, Path]]:
     """Resolve a comma-separated profile chain to a list of (name, path) tuples.
 
     Missing chain entries are skipped; invalid inheritance raises ValueError.
@@ -864,7 +864,7 @@ def _resolve_profile_chain(profile_input: str) -> list[tuple[str, Path]]:
     dirs: list[tuple[str, Path]] = []
     linked_names = {e.get("name") for e in _get_linked_profiles()}
     for name in chain:
-        d = _resolve_profile_dir(name)
+        d = _resolve_profile_dir(name, bundle)
         if d is None:
             if name in linked_names:
                 _cprint(
@@ -877,8 +877,8 @@ def _resolve_profile_chain(profile_input: str) -> list[tuple[str, Path]]:
         dirs.append((name, d))
     from hooks.context.profile_chain import expand_profiles
 
-    resolved = {name: path for name, path in dirs}
-    return [(name, _resolve_profile_dir(name)) for name in expand_profiles(list(resolved), _resolve_profile_dir)]
+    names, lookup = list(dict.fromkeys(name for name, _ in dirs)), lambda name: _resolve_profile_dir(name, bundle)
+    return [(name, lookup(name)) for name in expand_profiles(names, lookup)]
 
 
 def cmd_bundle(action: str, path: str | None = None, rebase: bool = False) -> None:

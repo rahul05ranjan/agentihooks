@@ -67,23 +67,11 @@ def _global_env() -> dict[str, str]:
 
 
 def _resolve(name: str) -> Path | None:
-    _i = _install_module()
-    copy = bundle_copy.current()
-    if copy is None or name.startswith(profile_chain.PACKAGE_PREFIX):
-        return _i._resolve_profile_dir(name)
-    local = _i.PROFILES_DIR / name
-    if local.is_dir():
-        return local
-    candidate = copy / "profiles" / name
-    if candidate.is_dir():
-        return candidate
-    return _i._resolve_linked_profile_dir(name) or _i._package_role_dir(name)
+    return _install_module()._resolve_profile_dir(name, bundle_copy.current())
 
 
 def _resolve_chain(names: list[str]) -> list[tuple[str, Path]]:
-    if bundle_copy.current() is None:
-        return _install_module()._resolve_profile_chain(",".join(names))
-    return [(name, _resolve(name)) for name in profile_chain.expand_profiles(names, _resolve)]
+    return _install_module()._resolve_profile_chain(",".join(names), bundle_copy.current())
 
 
 def declared(name: str) -> list[str]:
