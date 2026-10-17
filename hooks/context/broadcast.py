@@ -433,7 +433,7 @@ def create_broadcast(
     channel: str | None = None,
     delivery_id: str = "",
 ) -> str | None:
-    """Publish a broadcast to the shared file (and Redis if configured).
+    """Publish a broadcast; delivery_id makes scheduled publication idempotent.
 
     Args:
         message: Body text. Empty / whitespace-only messages are dropped.
@@ -449,9 +449,10 @@ def create_broadcast(
             sessions whose ``AGENTIHOOKS_BASE_CHANNELS`` env var includes this
             channel name (or contains the wildcard ``*``). When ``None``, the
             message is global and reaches every session regardless of subscription.
+        delivery_id: Durable identity; retries cannot republish an entry after clearing.
 
     Returns:
-        The 12-char message ID on success, or ``None`` for empty input.
+        The generated message ID or supplied delivery identity, or ``None`` for empty input.
     """
     if channel and channel.startswith(MASTERS_CHANNEL_PREFIX):
         slug = channel.removeprefix(MASTERS_CHANNEL_PREFIX)

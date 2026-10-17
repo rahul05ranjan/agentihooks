@@ -11,7 +11,9 @@ if TYPE_CHECKING:
 class Slot(Protocol):
     def record(self) -> dict: ...
 
-    def deliver(self, event: dict, delivery_id: str, redis: "Redis") -> None: ...
+    def deliver(self, event: dict, delivery_id: str, redis: "Redis") -> None:
+        """Commit effects idempotently under delivery_id; retries reuse that identity."""
+        ...
 
 
 @dataclass(frozen=True)
