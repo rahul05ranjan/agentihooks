@@ -85,7 +85,7 @@ def defect(item: dict, jobs: list[dict]) -> str | None:
     return text
 
 
-def stage_evidence(redis, slug: str, item: dict, jobs: list[dict], now_ms: int) -> tuple:
+def _stage_evidence(redis, slug: str, item: dict, jobs: list[dict], now_ms: int) -> tuple:
     cache = key(slug, "stages")
     gate = next(job for job in jobs if job["name"] == ci_budget.GATE and job.get("completed_at"))
     sample = {
@@ -194,7 +194,7 @@ def refresh(
                 continue
             text = defect(item, jobs_of(item["id"]))
             if text:
-                evidence, links = stage_evidence(redis, slug, item, jobs_of(item["id"]), now_ms)
+                evidence, links = _stage_evidence(redis, slug, item, jobs_of(item["id"]), now_ms)
                 reading = standing.Reading(
                     round(spent / 60, 1), ci_budget.RUN_BUDGET_S / 60, UNIT, str(item["id"]), text, evidence, links
                 )
