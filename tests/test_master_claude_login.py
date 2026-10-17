@@ -72,7 +72,8 @@ def test_the_private_home_lives_under_the_agentihooks_home_per_swarm(ah):
 
 
 def test_build_copies_the_rendered_master_home_without_the_shared_credential_link(ah, rendered):
-    (login.root("rig") / "staging").mkdir(parents=True)
+    login.root("rig").mkdir(mode=0o700, parents=True)
+    (login.root("rig") / "staging").mkdir()
     (login.root("rig") / "staging" / "left-over").write_text("old")
     target = login.build("rig", rendered)
     assert not (target / "left-over").exists()
