@@ -69,7 +69,7 @@ def computed_mutation_lane(name: str, block: object, jobs: dict, trusted: dict) 
     if any(jobs[name].get(key) != baseline[name].get(key) for key in ("needs", "strategy")):
         return False
     stage, index, producer, output = stages[name]
-    if (baseline.get(producer, {}).get("outputs") or {}).get(output) != "${{ steps.lanes.outputs.lane }}":
+    if (baseline[producer].get("outputs") or {}).get(output) != "${{ steps.lanes.outputs.lane }}":
         return False
     value = f"needs.{producer}.outputs.{output}"
     group = (

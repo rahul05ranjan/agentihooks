@@ -633,11 +633,11 @@ def test_mutation_lanes_follow_batch_capacity_and_actual_stage_width(ceiling, sh
 def test_mutation_lanes_reject_missing_capacity_or_stage_width(ceiling, shards):
     from scripts.ci_mutation.lanes import allocation
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="^Batch ceiling and stage width must be positive$"):
         allocation(ceiling, shards, 1000)
 
 
-def test_mutation_lanes_read_the_authoritative_public_batch_ceiling(tmp_path, monkeypatch):
+def test_mutation_lanes_read_the_authoritative_public_batch_ceiling(tmp_path, monkeypatch, capsys):
     from scripts.ci_mutation.lanes import main
 
     values = tmp_path / "values.yaml"
@@ -647,6 +647,7 @@ def test_mutation_lanes_read_the_authoritative_public_batch_ceiling(tmp_path, mo
     monkeypatch.setattr("sys.argv", ["lanes", "--values", str(values), "--shards", "[0, 1, 2]", "--run-id", "1009"])
     assert main() == 0
     assert output.read_text() == "ceiling=30\nlanes=10\nlane=9\n"
+    assert capsys.readouterr().out == "ceiling=30\nlanes=10\nlane=9\n"
 
 
 def test_mutation_lanes_reuse_the_same_ceiling_after_refining_shards(tmp_path, monkeypatch):
@@ -657,3 +658,16 @@ def test_mutation_lanes_reuse_the_same_ceiling_after_refining_shards(tmp_path, m
     monkeypatch.setattr("sys.argv", ["lanes", "--ceiling", "30", "--shards", "[0, 1, 2, 3, 4]", "--run-id", "1009"])
     assert main() == 0
     assert output.read_text() == "ceiling=30\nlanes=6\nlane=1\n"
+
+
+@pytest.mark.parametrize("missing", ["--ceiling", "--shards", "--run-id"])
+def test_mutation_lane_cli_requires_capacity_width_and_run(missing, monkeypatch):
+    from scripts.ci_mutation.lanes import main
+
+    arguments = {"--ceiling": "30", "--shards": "[0, 1, 2]", "--run-id": "1009"}
+    monkeypatch.setattr(
+        "sys.argv", ["lanes", *(value for pair in arguments.items() if pair[0] != missing for value in pair)]
+    )
+    with pytest.raises(SystemExit) as error:
+        main()
+    assert error.value.code == 2
