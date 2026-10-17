@@ -115,6 +115,7 @@ def test_edge_mode_takes_an_agent_token_derived_from_the_server_secret(edge):
     assert authority.caller(headers(token, WORKER), PAGE, "other-ledger") is None
     assert authority.caller(headers(token + "0", WORKER), PAGE, SLUG) is None
     assert authority.caller(headers(token), PAGE, SLUG) is None
+    assert authority.caller(headers(agent=WORKER), PAGE, SLUG) is None
 
 
 def test_edge_mode_refuses_agent_tokens_without_a_server_secret(edge, monkeypatch):

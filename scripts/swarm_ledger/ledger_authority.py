@@ -47,12 +47,12 @@ def hive_principal(slug: str, token: str, agent: str) -> str | None:
 def caller(headers, admin: str, slug: str) -> str | None:
     """principal for this request under SWARM_AUTH_MODE: local reads the page credential, edge never does."""
     token, agent = headers.get("X-Ledger-Token"), headers.get("X-Ledger-Agent")
-    if environ.get("SWARM_AUTH_MODE", "local") != "edge":
+    if environ.get("SWARM_AUTH_MODE") != "edge":
         return principal(admin, slug, token, agent)
     if access_operator(headers.get("Cf-Access-Jwt-Assertion")):
         return ""
-    secret = environ.get("SWARM_SECRET", "")
-    if not secret or not token or not agent:
+    secret = environ.get("SWARM_SECRET")
+    if not secret or not token:
         return None
     if token.startswith("hive."):
         return hive_principal(slug, token, agent)
@@ -61,7 +61,7 @@ def caller(headers, admin: str, slug: str) -> str | None:
 
 def access_operator(assertion) -> bool:
     team = environ.get("SWARM_ACCESS_TEAM", "").removeprefix("https://")
-    audience = environ.get("SWARM_ACCESS_AUD", "")
+    audience = environ.get("SWARM_ACCESS_AUD")
     if not assertion or not team or not audience:
         return False
     issuer = f"https://{team if '.' in team else team + '.cloudflareaccess.com'}"
