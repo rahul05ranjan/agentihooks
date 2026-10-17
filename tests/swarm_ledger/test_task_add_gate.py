@@ -200,7 +200,7 @@ def test_task_add_cli_exits_with_the_refusal_for_a_taken_id(monkeypatch, capsys)
     make_ledger([("eng", "done", "engineer@abcdef-0001")])
     with pytest.raises(SystemExit) as raised:
         cli(monkeypatch, "add", "c0", "new", "work")
-    assert raised.value.code == TAKEN
+    assert raised.value.code == f"task c0 was not added: {TAKEN}"
     assert capsys.readouterr().out == ""
 
 
