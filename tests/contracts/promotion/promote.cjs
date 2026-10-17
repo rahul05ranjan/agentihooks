@@ -134,7 +134,7 @@ const supersededFixture = options => fixture({
     promotionPull(6, 'older', 'owner/repo', 'feature'), promotionPull(8, 'older', 'fork/repo'),
     promotionPull(9, 'older', null), promotionPull(7, 'graded'),
   ],
-  ancestry: { 'older...graded': 'ahead', 'newer...graded': 'behind' },
+  ancestry: { 'older...graded': 'ahead', 'graded...graded': 'ahead', 'newer...graded': 'behind' },
   ...options,
 });
 
@@ -162,10 +162,19 @@ test('closes superseded promotion pull requests when main already carries the gr
   assert.equal(f.outputs.main, 'main');
 });
 
-test('an already deleted superseded snapshot does not stop promotion', async () => {
-  const f = supersededFixture({ deleted: 422 });
-  await promote(f);
-  assert.equal(f.outputs.main, 'rebased');
+for (const status of [404, 422]) {
+  test(`an already deleted superseded snapshot does not stop promotion (${status})`, async () => {
+    const f = supersededFixture({ deleted: status });
+    await promote(f);
+    assert.deepEqual(f.writes.filter(([kind]) => kind === 'close').map(([, args]) => args.pull_number), [3]);
+    assert.equal(f.outputs.main, 'rebased');
+  });
+}
+
+test('a failed superseded snapshot deletion keeps its pull request open for the next run', async () => {
+  const f = supersededFixture({ deleteFailed: true });
+  await assert.rejects(promote(f), /Server error/);
+  assert.deepEqual(f.writes, []);
 });
 
 for (const status of [404, 422]) {

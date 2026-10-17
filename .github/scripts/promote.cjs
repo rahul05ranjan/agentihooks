@@ -35,8 +35,8 @@ async function closeSuperseded(github, api, repository, graded) {
         pull.head.ref !== `promotion/${pull.head.sha}`) continue;
     const { status } = (await github.rest.repos.compareCommitsWithBasehead({ ...api, basehead: `${pull.head.sha}...${graded}` })).data;
     if (status !== 'ahead') continue;
-    await github.rest.pulls.update({ ...api, pull_number: pull.number, state: 'closed' });
     await deleteSnapshot(github, api, `heads/${pull.head.ref}`);
+    await github.rest.pulls.update({ ...api, pull_number: pull.number, state: 'closed' });
   }
 }
 
