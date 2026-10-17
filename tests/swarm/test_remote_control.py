@@ -1,4 +1,5 @@
 import json
+import shlex
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,9 +10,12 @@ from scripts import init_agent
 from scripts.swarm import remote_control
 from scripts.swarm.health import findings
 from scripts.swarm.runtime import HerdrRuntime
+from scripts.swarm.store import AgentRecord
+from scripts.swarm.tick import Placed, placed_record
 from tests.swarm.test_runtime import _passed, _resuming, validated
 
 RC = ["--remote-control", "master · proof", "--remote-control-session-name-prefix", "hive-a"]
+ON = {"state": "on", "detail": "master · proof"}
 
 
 @pytest.fixture(autouse=True)
@@ -39,8 +43,8 @@ def _spawn(tmp_path, lane, harness, kind):
         lanes={lane: {"agent": harness}},
         autonomy="delegate",
     )
-    runtime.spawn(config, lane, "agent", {"id": lane, "title": "proof", "route_kind": kind})
-    return _passed(seen[0])
+    placed = runtime.spawn(config, lane, "agent", {"id": lane, "title": "proof", "route_kind": kind})
+    return _passed(seen[0]), placed
 
 
 def _rc(passed):
@@ -51,49 +55,85 @@ def _rc(passed):
 
 
 def test_an_interactive_claude_master_spawns_with_remote_control_after_its_route(tmp_path):
-    passed = _spawn(tmp_path, "master", "claude", "interactive")
+    passed, placed = _spawn(tmp_path, "master", "claude", "interactive")
     assert passed[:6] == ["--route", "interactive", *RC]
+    assert placed.remote_control == ON
 
 
 @pytest.mark.parametrize(
-    ("lane", "harness", "kind"),
-    [("master", "claude", "subscription"), ("master", "claude", "api"), ("master", "codex", "interactive")],
+    ("kind", "decided"),
+    [("subscription", {"state": "off", "detail": "fallback auth"}), ("api", {"state": "off", "detail": "gateway"})],
 )
-def test_token_api_and_codex_masters_spawn_without_remote_control(tmp_path, lane, harness, kind):
-    assert _rc(_spawn(tmp_path, lane, harness, kind)) == []
+def test_token_and_api_masters_spawn_without_remote_control_and_record_why(tmp_path, kind, decided):
+    passed, placed = _spawn(tmp_path, "master", "claude", kind)
+    assert _rc(passed) == []
+    assert placed.remote_control == decided
 
 
-def test_an_engineer_on_the_interactive_route_spawns_without_remote_control(tmp_path):
-    assert _rc(_spawn(tmp_path, "eng", "claude", "interactive")) == []
+@pytest.mark.parametrize(("lane", "harness"), [("master", "codex"), ("eng", "claude")])
+def test_codex_masters_and_engineers_spawn_without_remote_control_or_a_record(tmp_path, lane, harness):
+    passed, placed = _spawn(tmp_path, lane, harness, "interactive")
+    assert _rc(passed) == []
+    assert placed.remote_control == {}
 
 
 def test_the_flag_turns_remote_control_off_at_spawn(tmp_path, monkeypatch):
     monkeypatch.setenv(remote_control.FLAG, "false")
-    assert _rc(_spawn(tmp_path, "master", "claude", "interactive")) == []
+    passed, placed = _spawn(tmp_path, "master", "claude", "interactive")
+    assert _rc(passed) == []
+    assert placed.remote_control == {"state": "off", "detail": "flag"}
+
+
+def test_a_master_placed_on_the_api_route_records_gateway(tmp_path):
+    def run(argv, **kwargs):
+        output = "status=started\nroute_status=routed\naccount=api\n"
+        return SimpleNamespace(returncode=0, stdout=validated(argv, output), stderr="")
+
+    runtime = HerdrRuntime(home=tmp_path, run=run, choose=lambda *_: ("claude", "requested"))
+    config = SimpleNamespace(
+        slug="proof",
+        repo=str(tmp_path),
+        code="a1b2c3",
+        compact_limit=0,
+        lanes={"master": {"agent": "claude"}},
+        autonomy="delegate",
+    )
+    placed = runtime.spawn(config, "master", "agent", {"id": "master", "title": "proof"})
+    assert (placed.route_kind, placed.remote_control) == ("api", {"state": "off", "detail": "gateway"})
 
 
 def _resumed(tmp_path, lane, harness, kind):
     runtime, config, agent, seen = _resuming(tmp_path, "c0ffee", harness)
     config.slug = "proof"
-    runtime.resume(config, replace(agent, lane=lane, task=lane, route_kind=kind), "resume")
-    return _passed(seen["runs"][0])
+    placed = runtime.resume(config, replace(agent, lane=lane, task=lane, route_kind=kind), "resume")
+    return _passed(seen["runs"][0]), placed
 
 
 def test_an_interactive_claude_master_resumes_with_remote_control_after_its_route(tmp_path):
-    passed = _resumed(tmp_path, "master", "claude", "interactive")
+    passed, placed = _resumed(tmp_path, "master", "claude", "interactive")
     assert passed[:6] == ["--route", "interactive", *RC]
+    assert placed.remote_control == ON
 
 
 @pytest.mark.parametrize(
-    ("lane", "harness", "kind"),
+    ("lane", "harness", "kind", "decided"),
     [
-        ("master", "claude", "subscription"),
-        ("master", "codex", "interactive"),
-        ("eng", "claude", "interactive"),
+        ("master", "claude", "subscription", {"state": "off", "detail": "fallback auth"}),
+        ("master", "codex", "interactive", {}),
+        ("eng", "claude", "interactive", {}),
     ],
 )
-def test_token_codex_and_engineer_resumes_carry_no_remote_control(tmp_path, lane, harness, kind):
-    assert _rc(_resumed(tmp_path, lane, harness, kind)) == []
+def test_token_codex_and_engineer_resumes_carry_no_remote_control(tmp_path, lane, harness, kind, decided):
+    passed, placed = _resumed(tmp_path, lane, harness, kind)
+    assert _rc(passed) == []
+    assert placed.remote_control == decided
+
+
+def test_the_flag_turns_remote_control_off_at_resume(tmp_path, monkeypatch):
+    monkeypatch.setenv(remote_control.FLAG, "off")
+    passed, placed = _resumed(tmp_path, "master", "claude", "interactive")
+    assert _rc(passed) == []
+    assert placed.remote_control == {"state": "off", "detail": "flag"}
 
 
 def test_the_session_name_uses_the_seat_role_and_the_slug():
@@ -113,36 +153,30 @@ def test_off_reason_by_route_kind(kind, reason):
     assert remote_control.off_reason(kind, {remote_control.FLAG: "on"}) == reason
 
 
+def test_only_an_on_decision_produces_launch_arguments():
+    assert remote_control.arguments(ON) == RC
+    assert remote_control.arguments({"state": "off", "detail": "flag"}) == []
+    assert remote_control.arguments({}) == []
+
+
 @pytest.mark.parametrize(
-    ("agent", "environ", "text"),
+    ("decided", "text"),
     [
-        (
-            {"lane": "master", "harness": "claude", "route_kind": "interactive", "seat": "master@proof"},
-            {},
-            "Remote Control: on (master · proof)",
-        ),
-        (
-            {"lane": "master", "harness": "claude", "route_kind": "interactive"},
-            {},
-            "Remote Control: on (master · proof)",
-        ),
-        (
-            {"lane": "master", "harness": "claude", "route_kind": "subscription"},
-            {},
-            "Remote Control: off (fallback auth)",
-        ),
-        ({"lane": "master", "harness": "claude", "route_kind": "api"}, {}, "Remote Control: off (gateway)"),
-        (
-            {"lane": "master", "harness": "claude", "route_kind": "interactive"},
-            {remote_control.FLAG: "off"},
-            "Remote Control: off (flag)",
-        ),
-        ({"lane": "master", "harness": "codex", "route_kind": "interactive"}, {}, ""),
-        ({"lane": "eng", "harness": "claude", "route_kind": "interactive"}, {}, ""),
+        (ON, "Remote Control: on (master · proof)"),
+        ({"state": "off", "detail": "fallback auth"}, "Remote Control: off (fallback auth)"),
+        ({}, ""),
+        (None, ""),
     ],
 )
-def test_status_line_for_each_master_state(agent, environ, text):
-    assert remote_control.line(agent, "proof", environ) == text
+def test_status_line_reads_the_recorded_decision(decided, text):
+    assert remote_control.line({"remote_control": decided}) == text
+
+
+def test_placement_records_the_decision_and_keeps_it_when_a_relaunch_has_none():
+    agent = AgentRecord("master@a1b2c3-0001", "master", "master")
+    placed = placed_record(agent, Placed("w1:p1", "claude", remote_control=ON))
+    assert placed.remote_control == ON
+    assert placed_record(placed, Placed("w1:p2", "claude")).remote_control == ON
 
 
 @pytest.mark.parametrize(
@@ -150,6 +184,11 @@ def test_status_line_for_each_master_state(agent, environ, text):
     [
         ("Remote Control failed · /remote-control", True),
         ("Remote Control disconnected — run /login to restore Remote Control", True),
+        ("Remote Control stopped: the server refused to reconnect this computer", True),
+        ("Remote Control session expired", True),
+        ("Remote Control back on", False),
+        ("Upload failed", False),
+        ("Remote Control on. Upload failed", False),
         ("Claude needs your permission to use Bash", False),
         ("", False),
     ],
@@ -215,5 +254,7 @@ def test_a_master_launch_with_remote_control_still_marks_its_folder_trusted(monk
         [*argv, "--route-timeout", "0", "--", "--route", "interactive", *RC],
         {"HOME": str(tmp_path), "XDG_RUNTIME_DIR": str(tmp_path / "runtime")},
     )
-    assert rc == 0 and "trust=marked" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert rc == 0 and "trust=marked" in out
+    assert f"--remote-control {shlex.quote('master · proof')}" in out
     assert json.loads((tmp_path / ".claude.json").read_text())["projects"][str(project)]["hasTrustDialogAccepted"]

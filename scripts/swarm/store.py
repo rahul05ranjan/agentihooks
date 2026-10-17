@@ -118,6 +118,7 @@ class AgentRecord:
     hive: str = ""
     route_kind: str = "subscription"
     transport: str = ""
+    remote_control: dict = field(default_factory=dict)
 
 
 class RedisStore:

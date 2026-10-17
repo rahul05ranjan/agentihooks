@@ -606,6 +606,7 @@ class HerdrRuntime:
             if route_kind == "interactive"
             else (["--route", saved["account"]] if saved.get("account") else [])
         )
+        rc = remote_control.decision(lane, agent, route_kind, config.slug, environ)
         account = None
         if hasattr(self, "_quota_accounts") and route_kind != "interactive":
             account = self._quota_account(
@@ -622,7 +623,7 @@ class HerdrRuntime:
                 *argv,
                 "--",
                 *route,
-                *remote_control.arguments(lane, agent, route_kind, config.slug, environ),
+                *remote_control.arguments(rc),
                 *_model_args(
                     agent,
                     picked.__dict__,
@@ -637,6 +638,7 @@ class HerdrRuntime:
         )
         self._reserve_account(account, lane, agent)
         placed = codex.complete(config, name, placed, self._terminate)
+        placed_kind = "api" if placed.account == "api" else route_kind
         return replace(
             placed,
             model_source=picked.source,
@@ -644,7 +646,8 @@ class HerdrRuntime:
             profile_decision={**decision.record(), **placed.profile_decision},
             choice=agent_choice.choice_kind(reason),
             overlays=list(decision.overlays),
-            route_kind="api" if placed.account == "api" else route_kind,
+            route_kind=placed_kind,
+            remote_control=remote_control.decision(lane, agent, placed_kind, config.slug, environ),
         )
 
     def resume(self, config, agent, text):
@@ -683,8 +686,8 @@ class HerdrRuntime:
             effort_range.bounds(config, agent.lane),
             preserve=preserves_effort(bool(agent.effort), agent.lane),
         )
-        rc = remote_control.arguments(agent.lane, agent.harness, agent.route_kind, config.slug, os.environ)
-        argv += ["--resume", agent.conversation_id, "--", *route, *rc, *model]
+        rc = remote_control.decision(agent.lane, agent.harness, agent.route_kind, config.slug, dict(os.environ))
+        argv += ["--resume", agent.conversation_id, "--", *route, *remote_control.arguments(rc), *model]
         placed = timing.call(self._launch, config, agent.lane, agent.task, agent.name, argv)
         if not self._holds(placed.pane_id, agent.conversation_id):
             self.retire(
@@ -700,6 +703,7 @@ class HerdrRuntime:
             profile_decision={**agent.profile_decision, **placed.profile_decision},
             overlays=agent.overlays,
             route_kind=agent.route_kind,
+            remote_control=rc,
         )
 
     def operator(self, config, name, profile, text):

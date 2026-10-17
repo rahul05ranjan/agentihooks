@@ -935,8 +935,8 @@ def _affinity_line(report):
     return f"{line}  order to {order['to']} {order['state']}{reason}"
 
 
-def _remote_control_text(agents, slug):
-    return "".join(f"{line}\n" for a in agents if (line := remote_control.line(a.__dict__, slug, os.environ)))
+def _remote_control_text(agents):
+    return "".join(f"{line}\n" for a in agents if (line := remote_control.line(a.__dict__)))
 
 
 def cmd_status(store, args):
@@ -976,7 +976,7 @@ def cmd_status(store, args):
     print(bottleneck_status.line(bottleneck_status.report(store, args.slug, now_ms())))
     print(_snapshot_line(auto_snapshot(config)))
     print(_affinity_line(affinity.report(store, args.slug, config, agents)))
-    print(_remote_control_text(agents, args.slug), end="")
+    print(_remote_control_text(agents), end="")
     if promotion := tick_master.status_line(tick_master.read(store, args.slug)):
         print(promotion)
     print(
