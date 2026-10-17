@@ -2,7 +2,6 @@ import json
 from dataclasses import asdict
 
 import pytest
-from redis.exceptions import ConnectionError as RedisConnectionError
 
 from scripts.codex_session import protocol, stand_down
 from scripts.codex_session.binding import CONNECTED, EXITED, PUBLISHING, STOOD_DOWN, BindingStore, TransportRecord
@@ -321,6 +320,8 @@ def command(rig, monkeypatch):
 
 def test_a_redis_error_after_the_fence_exits_one_and_says_it_stays_fenced(rig, command, capsys):
     def fail(*args):
+        from redis.exceptions import ConnectionError as RedisConnectionError
+
         raise RedisConnectionError("Connection refused")
 
     command.setattr(stand_down, "_settle", fail)
@@ -335,6 +336,8 @@ def test_a_redis_error_after_the_fence_exits_one_and_says_it_stays_fenced(rig, c
 
 def test_a_redis_error_in_the_fence_exits_one_and_says_it_is_not_fenced(rig, command, capsys):
     def fail(*args):
+        from redis.exceptions import ConnectionError as RedisConnectionError
+
         raise RedisConnectionError("Connection refused")
 
     command.setattr(stand_down, "_fence", fail)
@@ -348,6 +351,8 @@ def test_a_redis_error_in_the_fence_exits_one_and_says_it_is_not_fenced(rig, com
 
 def test_a_redis_error_before_the_plan_exits_one_and_says_nothing_is_fenced(rig, command, capsys):
     def fail(*args):
+        from redis.exceptions import ConnectionError as RedisConnectionError
+
         raise RedisConnectionError("Connection refused")
 
     command.setattr(stand_down, "plan", fail)
