@@ -133,7 +133,7 @@ def test_gate_imports_store_from_scratch_directory(tmp_path, monkeypatch, child,
         assert report["failed"] is False
 
 
-def _assert_units_run_their_own_tests(monkeypatch, run_selected, runner, test_calls):
+def _assert_units_run_their_own_tests(monkeypatch, selection, runner, test_calls):
     unit = "scripts.s.x_f__mutmut_1"
     units = []
 
@@ -142,7 +142,7 @@ def _assert_units_run_their_own_tests(monkeypatch, run_selected, runner, test_ca
         return [test for test in tests if test in {"h", "b"}]
 
     with monkeypatch.context() as planned:
-        planned.setitem(run_selected.__globals__, "shard_tests", shard_tests)
+        planned.setattr(selection, "shard_tests", shard_tests)
         assert runner.PytestRunner().run_tests(mutant_name=unit, tests=["a"]) == 0
         runner.PytestRunner().run_tests(mutant_name=unit, tests=("h", "a", "b"))
     assert units == [(["a"], unit, 1), (["h", "a", "b"], unit, 1)]
@@ -156,6 +156,7 @@ def _assert_units_run_their_own_tests(monkeypatch, run_selected, runner, test_ca
 def test_selection_passes_exact_lines_before_generation_and_reloads_source_packages(tmp_path, monkeypatch, header):
     from mutmut import configuration as engine_config
 
+    from scripts.ci_mutation import selection as selection_module
     from scripts.ci_mutation.selection import run_selected
 
     monkeypatch.setenv("CI", "true")
@@ -314,7 +315,7 @@ def test_selection_passes_exact_lines_before_generation_and_reloads_source_packa
             (None, ["tests/test_x.py::t"]),
             ("m", ["tests/test_y.py::t"]),
         ]
-        _assert_units_run_their_own_tests(monkeypatch, run_selected, runner, test_calls)
+        _assert_units_run_their_own_tests(monkeypatch, selection_module, runner, test_calls)
         data.exit_code_by_key = {}
         with pytest.raises(SystemExit) as empty:
             runner.collect_or_load_stats(test_runner)
