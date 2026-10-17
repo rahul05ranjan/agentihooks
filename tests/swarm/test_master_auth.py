@@ -3,9 +3,10 @@ from types import SimpleNamespace
 import pytest
 
 
+@pytest.mark.parametrize("quota_handoff", [False, True])
 @pytest.mark.parametrize("lane", ["master", "eng"])
 @pytest.mark.parametrize("five_left,week_left,cap", [(90, 25, 6), (90, 9, 6), (4, 25, 0), (90, 25, None), (90, 25, 0)])
-def test_only_the_master_can_use_reserved_room(tmp_path, lane, five_left, week_left, cap):
+def test_only_the_master_can_use_reserved_room(tmp_path, lane, five_left, week_left, cap, quota_handoff):
     from scripts.routing.reservation import Reservation
     from scripts.swarm.capacity import Account, reserve
     from scripts.swarm.runtime import HerdrRuntime
@@ -34,6 +35,18 @@ def test_only_the_master_can_use_reserved_room(tmp_path, lane, five_left, week_l
         autonomy="delegate",
     )
     task = {"id": lane, "title": "proof", "route_kind": "subscription"}
+    if quota_handoff:
+        task["handoff"] = "Continue the task after quota handoff."
+        task["handoff_envelope"] = {
+            "reason": "quota",
+            "launch": {
+                "profile": "master" if lane == "master" else "engineer",
+                "harness": "claude",
+                "account": "previous",
+                "model": "opus",
+                "effort": "high",
+            },
+        }
     if lane != "master" or five_left == 4 or week_left == 9 or not cap:
         with pytest.raises(SpawnError):
             runtime.spawn(config, lane, "agent", task)
