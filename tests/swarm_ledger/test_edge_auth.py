@@ -128,6 +128,25 @@ def test_edge_mode_checks_hive_tokens_through_the_hive_authority(edge, monkeypat
     assert authority.caller(headers("hive.abc", WORKER), PAGE, SLUG) == (SLUG, "hive.abc", WORKER)
 
 
+def test_edge_mode_refuses_an_empty_agent_identity(edge):
+    token = authority.agent_token(SEED, SLUG, "")
+    assert authority.caller(headers(token, ""), PAGE, SLUG) is None
+
+
+def test_edge_mode_checks_hive_tokens_without_a_server_secret(edge, monkeypatch):
+    monkeypatch.delenv("SWARM_SECRET")
+    seen = []
+
+    def verify(slug, token, agent):
+        seen.append((slug, token, agent))
+        return WORKER if token == "hive.valid" else None
+
+    monkeypatch.setattr(authority, "hive_principal", verify)
+    assert authority.caller(headers("hive.valid", WORKER), PAGE, SLUG) == WORKER
+    assert authority.caller(headers("hive.invalid", WORKER), PAGE, SLUG) is None
+    assert seen == [(SLUG, "hive.valid", WORKER), (SLUG, "hive.invalid", WORKER)]
+
+
 def test_edge_mode_never_takes_the_server_secret_itself_as_the_operator(edge, monkeypatch):
     monkeypatch.setenv("SWARM_SECRET", "hive.seed")
     monkeypatch.setattr(authority, "hive_principal", lambda *given: None)
