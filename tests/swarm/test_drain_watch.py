@@ -95,7 +95,7 @@ def test_a_stored_reading_past_the_freshness_window_or_never_read_is_not_drainin
     assert not drain_watch.draining({**_read(closed, 100.0), "five_resets_at": 160}, Limits(), 160)
     assert not drain_watch.draining({**_read(closed, 100.0), "week_resets_at": 160}, Limits(), 160)
     store = _drain_swarm()
-    old = {**DECISION, "accounts": [_read(row("alpha", "CLOSED", 1, 40.0, 7.5), 1_000.0)]}
+    old = {**DECISION, "accounts": [_read(row("alpha", "CLOSED", 1, 40.0, 7.5), 1_059.0)]}
     store.redis.set(store.key(SLUG, "quota-capacity"), json.dumps(old))
     [found] = drain_watch.findings(store, SLUG, Limits(), 1_000_000 + 15 * MINUTE)
     assert found.evidence == ("account alpha is closed, routing 7.5% left", "task t1")
