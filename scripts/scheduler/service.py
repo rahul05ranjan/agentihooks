@@ -74,7 +74,9 @@ def ensure_running(environ: Mapping[str, str] | None = None) -> bool:
     if not (active.get("REDIS_URL") or active.get("AGENTIHOOKS_HIVE_REDIS_URL")):
         return False
     try:
-        with machine_lock("supervisor"):
+        with machine_lock("startup"):
+            with machine_lock("supervisor"):
+                pass
             with (runtime_dir() / "scheduler.log").open("ab") as log:
                 subprocess.Popen(
                     _command("supervise"),
