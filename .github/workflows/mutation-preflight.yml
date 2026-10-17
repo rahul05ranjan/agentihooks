@@ -119,7 +119,7 @@ jobs:
           PYTHONUNBUFFERED: "1"
         run: |
           read -ra files <<< "$FILES"
-          python -m pytest "${files[@]}" -n auto --reruns 2 --tb=short -p no:cacheprovider
+          python -m pytest "${files[@]}" -n auto --tb=short -p no:cacheprovider
 
   plan:
     needs: pull-request
