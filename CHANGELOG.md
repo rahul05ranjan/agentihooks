@@ -48,6 +48,9 @@ release assembles them into its release notes. See `changelog.d/README.md`.
 
 ### Fixed
 
+- The swarm stall watchdog no longer reopens a task or stops its owner while
+  the task depends on a task not yet done, or while its owner has declared a
+  wait on another open task or on another open pull request's merge.
 - The quota usage banner test passes in any test order: tests that change the
   banner cadence restore it, and a regression test runs them before it.
 - Launch checks report unavailable process observations without inventing profile,
