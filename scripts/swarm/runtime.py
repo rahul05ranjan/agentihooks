@@ -620,9 +620,7 @@ class HerdrRuntime:
             choice=agent_choice.choice_kind(reason),
             overlays=list(decision.overlays),
             route_kind=placed_kind,
-            remote_control=rc
-            if placed_kind == route_kind
-            else remote_control.decision(lane, agent, placed_kind, config.slug, environ),
+            remote_control=remote_control.decision(lane, agent, placed_kind, config.slug, environ),
         )
 
     def resume(self, config, agent, text):
