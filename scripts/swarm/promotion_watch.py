@@ -182,4 +182,13 @@ def refresh(
     with promotion_owner.intake(slug, config.repo, store) as owner:
         if owner != slug:
             return []
-        return _refresh(slug, config, store, ledger, doc, now_ms, run)
+        record = promotion_owner.key(config.repo)
+        seen = max(int(store.redis.hget(record, "seen") or 0), int(store.redis.get(key(slug, "seen")) or 0))
+        if seen:
+            store.redis.set(key(slug, "seen"), seen)
+        if slug in store.slugs():
+            doc = ledger.state(slug)
+        actions = _refresh(slug, config, store, ledger, doc, now_ms, run)
+        if handled := store.redis.get(key(slug, "seen")):
+            store.redis.hset(record, "seen", handled)
+        return actions
