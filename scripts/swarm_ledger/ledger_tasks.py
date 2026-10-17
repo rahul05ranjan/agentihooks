@@ -47,8 +47,8 @@ UPDATABLE = (
     "slice",
     "follow_up",
     "split_pulls",
-    "recovery",
     "after_release",
+    "recovery",
 )
 BOOL_FIELDS = ("artifact", "follow_up")
 DIFFICULTIES = ("S", "M", "L")
@@ -132,6 +132,7 @@ def check(op):
     check_quote(op)
     check_lists(fields)
     check_stack(fields)
+    check_release(fields)
     check_bools(fields)
     check_profile(fields)
     check_urls(fields)
