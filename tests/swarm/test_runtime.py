@@ -301,9 +301,9 @@ def test_spawn_hands_each_agent_its_own_ledger_token_and_never_the_server_secret
     assert "SWARM_SECRET" not in env
 
 
-def test_spawn_without_the_server_secret_adds_no_ledger_token(tmp_path, monkeypatch):
+def test_spawn_without_the_server_secret_never_passes_on_the_tick_s_token(tmp_path, monkeypatch):
     monkeypatch.delenv("SWARM_SECRET", raising=False)
-    monkeypatch.delenv("AGENTIHOOKS_LEDGER_AGENT_TOKEN", raising=False)
+    monkeypatch.setenv("AGENTIHOOKS_LEDGER_AGENT_TOKEN", "the-tick-s-own")
     env = _spawn_env(tmp_path, monkeypatch, compact_limit=0)
     assert "AGENTIHOOKS_LEDGER_AGENT_TOKEN" not in env and "SWARM_SECRET" not in env
 

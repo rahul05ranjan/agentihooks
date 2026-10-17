@@ -48,6 +48,7 @@ PICKED_LANES = ("eng", "ci")
 PLAN_MODE = ["--permission-mode", "plan"]
 REMOTE_PANE = "a remote agent's pane lives on its worker herdr server, never on the local one"
 MANAGED_RESUME = "unsupported resume: a managed Codex execution continues through its supervised server"
+TICK_ONLY = ("SWARM_SECRET", "AGENTIHOOKS_LEDGER_AGENT_TOKEN")
 
 
 def codex_plan_mode(environ):
@@ -802,7 +803,7 @@ class HerdrRuntime:
                 text=True,
                 timeout=SPAWN_TIMEOUT_S,
                 env={
-                    **{key: value for key, value in os.environ.items() if key not in (PREDECESSOR, "SWARM_SECRET")},
+                    **{key: value for key, value in os.environ.items() if key not in (PREDECESSOR, *TICK_ONLY)},
                     **({PREDECESSOR: predecessor} if predecessor else {}),
                     **_ledger_token(config.slug, name),
                     "AGENTIHOOKS_SWARM": config.slug,

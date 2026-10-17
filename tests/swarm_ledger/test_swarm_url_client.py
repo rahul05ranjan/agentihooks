@@ -124,5 +124,7 @@ def test_swarm_url_never_starts_a_local_server(monkeypatch):
     monkeypatch.setattr(ledger_hook.subprocess, "Popen", started)
     with pytest.raises(SystemExit) as exc:
         ledger.call(SLUG)
-    assert str(exc.value).startswith("ledger server not answering on http://127.0.0.1:9: ")
+    assert str(exc.value) == (
+        "ledger server not answering on http://127.0.0.1:9: <urlopen error [Errno 111] Connection refused>"
+    )
     assert ledger_hook.serve_ledgers() is None
