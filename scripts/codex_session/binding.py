@@ -12,6 +12,7 @@ TRANSPORT = "codex_app_server"
 STARTING, CONNECTED, FAILED, EXITED, DEGRADED = "starting", "connected", "failed", "exited", "degraded"
 STOOD_DOWN = "stood_down"
 RECORDS, ENDPOINTS, OPENINGS = "codex-transport", "codex-endpoints", "codex-openings"
+VIEWERS = "codex-viewers"
 PUBLISHING = "execution-publishing"
 IDENTITY = ("execution_id", "execution_generation", "seat", "agent_name", "task_id", "endpoint_ref", "transport")
 
@@ -119,3 +120,14 @@ class BindingStore:
 
     def claim_opening(self, slug: str, execution_id: str, at: int) -> bool:
         return bool(self.redis.hsetnx(self.store.key(slug, OPENINGS), execution_id, at))
+
+    def add_viewer(self, slug: str, execution_id: str, pane_id: str) -> None:
+        self.redis.hset(self.store.key(slug, VIEWERS), pane_id, execution_id)
+
+    def viewers(self, slug: str, execution_id: str) -> list[str]:
+        rows = self.redis.hgetall(self.store.key(slug, VIEWERS))
+        return sorted(pane for pane, owner in rows.items() if owner == execution_id)
+
+    def forget_viewers(self, slug: str, panes: list[str]) -> None:
+        if panes:
+            self.redis.hdel(self.store.key(slug, VIEWERS), *panes)

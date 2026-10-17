@@ -916,6 +916,7 @@ class HerdrRuntime:
 
     def _retire_managed(self, agent):
         from scripts.codex_session.binding import EXITED, BindingStore
+        from scripts.codex_session.supervisor import execution_directory
 
         store = connect()
         record = live_binding.transport(store, agent)
@@ -930,6 +931,17 @@ class HerdrRuntime:
         slug = store.names.slug_of(agent.name)
         bindings.put(slug, replace(record, state=EXITED, active_turn_id=""))
         bindings.release(slug, record)
+        viewers = [pane for pane in (agent.pane_id, *bindings.viewers(slug, record.execution_id)) if pane]
+        for pane in viewers:
+            try:
+                self.close_pane(pane)
+            except Exception as exc:
+                self.refusals[agent.name] = {"process": record.server_pid, "refusal": f"viewer pane {pane}: {exc}"}
+                return False
+        bindings.forget_viewers(slug, viewers)
+        directory = execution_directory(record)
+        if directory is not None and directory.exists():
+            shutil.rmtree(directory)
         self.refusals.pop(agent.name, None)
         return True
 

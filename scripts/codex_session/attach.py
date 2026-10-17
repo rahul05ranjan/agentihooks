@@ -8,7 +8,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from scripts.codex_session.binding import CONNECTED, EXITED, FAILED, TransportRecord
+from scripts.codex_session.binding import CONNECTED, EXITED, FAILED, BindingStore, TransportRecord
 
 if TYPE_CHECKING:
     from scripts.herdr_host import Placement
@@ -127,7 +127,9 @@ def local_terminal(store: "RedisStore", slug: str, execution_id: str, environ: d
     def open_viewer(title: str, argv: list[str]) -> "Placement":
         return herdr_host.open_command(Path(config.repo), title, argv, workspace, environ)
 
-    return reopen(store, agent, open_viewer, "codex")
+    opened = reopen(store, agent, open_viewer, "codex")
+    BindingStore(store).add_viewer(slug, execution_id, opened["pane"])
+    return opened
 
 
 def _parser() -> argparse.ArgumentParser:

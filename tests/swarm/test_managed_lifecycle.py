@@ -19,6 +19,14 @@ def _close_only(args):
     return {}
 
 
+def _endpoint(rig, endpoint_ref):
+    import json
+    from dataclasses import asdict
+
+    moved = replace(rig.record, endpoint_ref=endpoint_ref, state=CONNECTED)
+    rig.store.redis.hset(rig.store.key(SLUG, "codex-transport"), moved.execution_id, json.dumps(asdict(moved)))
+
+
 @pytest.fixture
 def rig(monkeypatch):
     import fakeredis
@@ -301,7 +309,7 @@ def test_managed_retirement_closes_every_recorded_viewer_and_removes_the_runtime
 
     path = supervisor.socket_path(tmp_path, rig.agent.execution_id)
     (path.parent / "codex").mkdir()
-    rig.bindings.put(SLUG, replace(rig.record, endpoint_ref=f"unix://{path}", state=CONNECTED))
+    _endpoint(rig, f"unix://{path}")
     rig.bindings.add_viewer(SLUG, rig.agent.execution_id, "w2:p5")
     rig.bindings.add_viewer(SLUG, "exe-other", "w2:p6")
     rig.runner.end = Mock(return_value=reaper.Outcome((123,)))
@@ -321,7 +329,7 @@ def test_managed_retirement_keeps_a_folder_outside_the_endpoint_layout(rig, tmp_
 
     foreign = tmp_path / "shared"
     foreign.mkdir()
-    rig.bindings.put(SLUG, replace(rig.record, endpoint_ref=f"unix://{foreign}/s", state=CONNECTED))
+    _endpoint(rig, f"unix://{foreign}/s")
     rig.runner.end = Mock(return_value=reaper.Outcome((123,)))
     assert rig.runner.retire(rig.agent)
     assert foreign.exists()
@@ -342,3 +350,15 @@ def test_a_viewer_pane_already_gone_does_not_refuse_the_retirement(rig):
     rig.herdr.side_effect = RuntimeError("pane viewer not found")
     rig.runner.end = Mock(return_value=reaper.Outcome((123,)))
     assert rig.runner.retire(rig.agent)
+
+
+def test_a_headless_retirement_with_its_runtime_home_already_gone_succeeds(rig, tmp_path):
+    from scripts.swarm import reaper
+
+    directory = rig.agent.execution_id.removeprefix(supervisor.EXECUTION_PREFIX)[: supervisor.ENDPOINT_ID_CHARS]
+    _endpoint(rig, f"unix://{tmp_path}/{directory}/s")
+    headless = replace(rig.agent, pane_id="")
+    rig.runner.end = Mock(return_value=reaper.Outcome((123,)))
+    assert rig.runner.retire(headless)
+    rig.herdr.assert_not_called()
+    assert rig.runner.refusal(headless) == {"process": 0, "refusal": "unknown"}
