@@ -420,7 +420,7 @@ class HerdrRuntime:
         )
 
     def _quota_transfer(self, saved, profile, environ, lane, want, planned=None):
-        from scripts.swarm import quota_handoff
+        from scripts.swarm import capacity, quota_handoff
 
         thresholds = quota_handoff.Thresholds.from_env(environ)
         allocation = getattr(self, "_quota_allocations", {}).get(lane)
@@ -434,7 +434,8 @@ class HerdrRuntime:
                 return f"has no seat in the {lane} allocation"
             return quota_handoff.exclusion(row, thresholds, predecessor)
 
-        candidates = [row for row in self._quota_accounts if not blocked(row)]
+        rows = capacity.unreserved(self._quota_accounts) if lane == MASTER else self._quota_accounts
+        candidates = [row for row in rows if not blocked(row)]
         preferred = [row for row in candidates if planned and row.harness == planned[0]]
         order = agent_choice.preferring(saved["harness"])
         account = (
@@ -443,9 +444,7 @@ class HerdrRuntime:
             or quota_handoff.successor(candidates, order, thresholds)
         )
         if account is None:
-            raise SpawnError(
-                quota_handoff.refusal(predecessor, harnesses, self._quota_accounts, blocked), "unavailable"
-            )
+            raise SpawnError(quota_handoff.refusal(predecessor, harnesses, rows, blocked), "unavailable")
         return {
             **saved,
             "harness": account.harness,
