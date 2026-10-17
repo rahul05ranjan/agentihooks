@@ -23,6 +23,15 @@ async def test_one_runner_drains_work_and_refuses_a_second_runner(monkeypatch, t
         stop.set()
 
     scheduler = SimpleNamespace(run_due=drain)
+    monkeypatch.setattr(
+        service,
+        "asyncio",
+        SimpleNamespace(
+            to_thread=asyncio.to_thread,
+            wait_for=asyncio.wait_for,
+            Event=Mock(side_effect=AssertionError("supplied stop was ignored")),
+        ),
+    )
     with service.machine_lock("runner"):
         with pytest.raises(service.AlreadyRunning, match="^scheduler runner is already running$"):
             await service.run(scheduler, stop)
@@ -30,6 +39,27 @@ async def test_one_runner_drains_work_and_refuses_a_second_runner(monkeypatch, t
     assert calls == ["drained"]
     with service.machine_lock("runner"):
         pass
+
+
+async def test_runner_polls_again_after_the_wait_timeout(monkeypatch, tmp_path):
+    from scripts.scheduler import service
+
+    monkeypatch.setattr(service, "runtime_dir", lambda: tmp_path)
+    stop = asyncio.Event()
+    timeouts = []
+    drain = Mock()
+
+    async def wait_for(awaitable, *, timeout):
+        awaitable.close()
+        timeouts.append(timeout)
+        if len(timeouts) == 1:
+            raise TimeoutError
+        stop.set()
+
+    monkeypatch.setattr(service, "asyncio", SimpleNamespace(to_thread=asyncio.to_thread, wait_for=wait_for))
+    await service.run(SimpleNamespace(run_due=drain), stop)
+    assert timeouts == [1, 1]
+    assert drain.call_count == 2
 
 
 def test_supervisor_restarts_an_exited_runner_without_machine_timers(monkeypatch, tmp_path):
@@ -43,6 +73,7 @@ def test_supervisor_restarts_an_exited_runner_without_machine_timers(monkeypatch
     monkeypatch.setattr(service, "subprocess", SimpleNamespace(Popen=spawn, DEVNULL=subprocess.DEVNULL))
     stop = Mock(spec=Event)
     stop.is_set.return_value = False
+    monkeypatch.setattr(service, "Event", Mock(side_effect=AssertionError("supplied stop was ignored")))
     stop.wait.side_effect = [False, True]
     service.supervise(stop)
     assert spawn.call_count == 2
@@ -64,13 +95,19 @@ def test_supervisor_terminates_its_active_child_on_shutdown(monkeypatch, tmp_pat
     monkeypatch.setattr(service, "subprocess", SimpleNamespace(Popen=Mock(return_value=child)))
     stop = Mock(spec=Event)
     stop.is_set.return_value = False
+    monkeypatch.setattr(service, "Event", Mock(side_effect=AssertionError("supplied stop was ignored")))
     stop.wait.return_value = True
     service.supervise(stop)
     child.terminate.assert_called_once_with()
     child.wait.assert_called_once_with()
+    stop.wait.assert_called_once_with(1)
 
 
-def test_agentihooks_starts_one_detached_supervisor_when_redis_is_configured(monkeypatch, tmp_path):
+@pytest.mark.parametrize("variable", ["REDIS_URL", "AGENTIHOOKS_HIVE_REDIS_URL"])
+@pytest.mark.parametrize("inherited", [False, True])
+def test_agentihooks_starts_one_detached_supervisor_when_redis_is_configured(
+    monkeypatch, tmp_path, variable, inherited
+):
     from scripts.scheduler import service
 
     monkeypatch.setattr(service, "runtime_dir", lambda: tmp_path)
@@ -78,20 +115,26 @@ def test_agentihooks_starts_one_detached_supervisor_when_redis_is_configured(mon
     monkeypatch.setattr(service, "subprocess", SimpleNamespace(Popen=spawn, DEVNULL=subprocess.DEVNULL))
     assert service.ensure_running({}) is False
     spawn.assert_not_called()
-    environ = {"REDIS_URL": "redis://proof.invalid/0"}
-    assert service.ensure_running(environ) is True
+    environ = {variable: "redis://proof.invalid/0"}
+    monkeypatch.setattr(service, "os", SimpleNamespace(environ=environ))
+    assert service.ensure_running(None if inherited else environ) is True
     call = spawn.call_args
     assert call.args[0] == [sys.executable, "-m", "scripts.scheduler.service", "supervise"]
     assert call.kwargs["env"] == environ
+    assert call.kwargs["cwd"] == Path(service.__file__).resolve().parents[2]
     assert call.kwargs["stdin"] == subprocess.DEVNULL
     assert call.kwargs["start_new_session"] is True
     assert call.kwargs["stdout"].name == str(tmp_path / "scheduler.log")
     assert call.kwargs["stderr"] is call.kwargs["stdout"]
     assert call.kwargs["stdout"].closed
+    with service.machine_lock("startup"):
+        assert service.ensure_running(environ) is False
     with service.machine_lock("supervisor"):
         assert service.ensure_running(environ) is False
+        stopped = Event()
+        stopped.set()
         with pytest.raises(service.AlreadyRunning, match="^scheduler supervisor is already running$"):
-            service.supervise()
+            service.supervise(stopped)
     assert spawn.call_count == 1
 
 
@@ -106,6 +149,7 @@ def test_service_entrypoint_runs_the_configured_redis_scheduler(monkeypatch):
         received.append(scheduler.redis)
 
     monkeypatch.setattr(service, "run", run)
+    monkeypatch.setattr(service, "supervise", Mock(side_effect=AssertionError("unexpected supervisor")))
     assert service.main(["run"]) == 0
     assert received == [redis]
 
@@ -119,8 +163,21 @@ def test_service_entrypoint_reports_a_duplicate_runner(monkeypatch, capsys):
         raise service.AlreadyRunning("scheduler runner is already running")
 
     monkeypatch.setattr(service, "run", duplicate)
+    monkeypatch.setattr(service, "supervise", Mock(side_effect=AssertionError("unexpected supervisor")))
     assert service.main(["run"]) == 2
     assert capsys.readouterr().err == "scheduler runner is already running\n"
+
+
+@pytest.mark.parametrize("args", [["--help"], ["wrong-mode"]])
+def test_service_entrypoint_names_its_command(monkeypatch, capsys, args):
+    from scripts.scheduler import service
+
+    monkeypatch.setattr(service, "supervise", Mock(side_effect=AssertionError("invalid mode was accepted")))
+    with pytest.raises(SystemExit) as result:
+        service.main(args)
+    output = capsys.readouterr()
+    assert result.value.code == (0 if args == ["--help"] else 2)
+    assert (output.out or output.err).splitlines()[0] == ("usage: agentihooks scheduler service [-h] {run,supervise}")
 
 
 def test_supervisor_entrypoint_stops_on_signals_and_restores_handlers(monkeypatch):

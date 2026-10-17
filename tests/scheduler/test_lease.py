@@ -60,3 +60,17 @@ def test_fenced_dispatch_accepts_both_redis_response_encodings(decode):
     timer.start(now=0)
     assert scheduler.run_due(now=1) == 1
     assert timer.state == "fired"
+
+
+@pytest.mark.parametrize("stored,held", [(None, None), (b"owner", None), (b"successor", b"owner")])
+def test_lease_verification_rejects_absent_or_changed_ownership(stored, held):
+    from types import SimpleNamespace
+
+    from scripts.scheduler import lease
+
+    reader = Mock()
+    reader.get.return_value = stored
+    owner = SimpleNamespace(name="proof-lock", local=SimpleNamespace(token=held))
+    with pytest.raises(RuntimeError, match="^scheduler lost its dispatch lock$"):
+        lease.verify_lease(reader, owner)
+    reader.get.assert_called_once_with("proof-lock")

@@ -43,6 +43,19 @@ def test_timer_broadcast_is_delivered_once_after_crash_and_clear(monkeypatch, ch
     assert broadcast.list_broadcasts() == []
 
 
+def test_publication_recognizes_a_retained_receipt_from_an_earlier_runner(tmp_path):
+    import sqlite3
+
+    from hooks.context import scheduled_broadcasts
+
+    path = tmp_path / "broadcast.json"
+    with sqlite3.connect(tmp_path / "broadcast.scheduler.sqlite3") as database:
+        database.execute("CREATE TABLE emissions (id TEXT PRIMARY KEY, entry TEXT)")
+        database.execute("INSERT INTO emissions VALUES (?, NULL)", ("accepted",))
+    scheduled_broadcasts.publish(path, {"id": "accepted", "message": "already cleared"})
+    assert scheduled_broadcasts.merge(path, []) == []
+
+
 def test_scheduled_broadcast_retains_delivery_and_normal_broadcasts(monkeypatch):
     import fakeredis
 

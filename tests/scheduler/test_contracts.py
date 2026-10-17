@@ -18,6 +18,7 @@ def scheduler():
 def test_default_clock_and_machine_namespace(monkeypatch):
     import fakeredis
 
+    from hooks._redis import redis_key
     from scripts.scheduler import core
     from scripts.scheduler.slots import InboxSlot
 
@@ -25,9 +26,11 @@ def test_default_clock_and_machine_namespace(monkeypatch):
     monkeypatch.setattr(core, "socket", SimpleNamespace(gethostname=lambda: "default-machine"))
     redis = fakeredis.FakeRedis(decode_responses=True)
     scheduler = core.Scheduler(redis)
+    assert scheduler.key("entries") == redis_key("scheduler", "default-machine:entries")
     timer = scheduler.timer(owner="operator", payload="notice", delay=0)
     timer.timeout.connect(InboxSlot("proof-session"))
     timer.start(now=100)
+    assert timer.record["id"] == timer.id
     assert timer.record["kind"] == "timer"
     assert timer.record["started_at"] == 100
     assert timer.record["due"] == 100
@@ -70,6 +73,7 @@ def test_signal_disconnect_and_timer_cancel(scheduler):
     cancelled.start(now=100)
     cancelled.cancel()
     assert cancelled.state == "cancelled"
+    assert scheduler.redis.zcard(scheduler.key("due")) == 0
     assert scheduler.run_due(now=120) == 0
     assert inbox.pending_items("cancelled") == []
 
@@ -119,6 +123,35 @@ def test_inbox_retry_after_transport_acceptance_keeps_one_item(monkeypatch, sche
     assert timer.state == "fired"
 
 
+def test_retry_continues_after_an_already_acknowledged_slot(monkeypatch, scheduler):
+    from scripts.inbox.store import InboxStore
+    from scripts.scheduler.slots import InboxSlot
+
+    timer = scheduler.timer(owner="operator", payload="both", delay=1, now=100)
+    first_connection = timer.timeout.connect(InboxSlot("first-session"))
+    timer.timeout.connect(InboxSlot("second-session"))
+    timer.start(now=100)
+    original = InboxSlot.deliver
+
+    def crash_second(self, event, delivery_id, redis):
+        if self.address == "second-session":
+            raise RuntimeError("second slot unavailable")
+        original(self, event, delivery_id, redis)
+
+    with monkeypatch.context() as fault:
+        fault.setattr(InboxSlot, "deliver", crash_second)
+        with pytest.raises(RuntimeError, match="^second slot unavailable$"):
+            scheduler.run_due(now=101)
+    inbox = InboxStore(scheduler.redis)
+    assert len(inbox.pending_items("first-session")) == 1
+    assert inbox.pending_items("second-session") == []
+    assert timer.record["pending"]["delivered"] == [first_connection]
+    assert scheduler.run_due(now=110) == 0
+    assert len(inbox.pending_items("first-session")) == 1
+    assert [item.text for item in inbox.pending_items("second-session")] == ["both"]
+    assert timer.state == "fired"
+
+
 def test_dispatch_lock_refuses_a_competing_drain_without_losing_work(scheduler):
     timer = scheduler.timer(owner="operator", payload="notice", delay=1, now=100)
     timer.start(now=100)
@@ -132,6 +165,68 @@ def test_dispatch_lock_refuses_a_competing_drain_without_losing_work(scheduler):
     assert timer.state == "active"
     assert scheduler.run_due(now=101) == 1
     assert timer.state == "fired"
+
+
+def test_missing_schedule_reports_its_identity(scheduler):
+    with pytest.raises(KeyError) as read:
+        scheduler.get("absent")
+    assert read.value.args == ("absent",)
+    with pytest.raises(KeyError) as update:
+        scheduler.update("absent", lambda entry: None)
+    assert update.value.args == ("absent",)
+
+
+def test_update_indexes_a_pending_entry_for_restart(scheduler):
+    timer = scheduler.timer(owner="operator", payload="durable", delay=1, now=100)
+    timer.start(now=100)
+
+    def materialize(entry):
+        entry["state"] = "pending"
+        entry["pending"] = {
+            "id": "recovered-occurrence",
+            "scheduled_at": 101,
+            "fired_at": 110,
+            "slots": [],
+            "delivered": [],
+        }
+
+    scheduler.update(timer.id, materialize)
+    assert scheduler.redis.zcard(scheduler.key("due")) == 0
+    assert scheduler.redis.smembers(scheduler.key("pending")) == {timer.id}
+    assert scheduler.run_due(now=120) == 0
+    assert timer.state == "fired"
+    assert scheduler.redis.scard(scheduler.key("pending")) == 0
+
+
+def test_zero_limit_stopwatch_fires_once(scheduler):
+    from scripts.inbox.store import InboxStore
+    from scripts.scheduler.slots import InboxSlot
+
+    watch = scheduler.stopwatch(owner="operator", payload="zero", limit=0, now=100)
+    watch.limit_reached.connect(InboxSlot("proof-session"))
+    watch.start(now=100)
+    assert scheduler.run_due(now=100) == 1
+    assert scheduler.run_due(now=100) == 0
+    assert watch.elapsed(now=100) == 0
+    assert [item.text for item in InboxStore(scheduler.redis).pending_items("proof-session")] == ["zero"]
+
+
+@pytest.mark.parametrize("kind,option", [("timer", "delay"), ("stopwatch", "limit")])
+def test_relative_entry_records_its_deadline_preview_before_start(scheduler, kind, option):
+    entry = getattr(scheduler, kind)(owner="operator", payload="preview", now=100, **{option: 5})
+    assert entry.state == "ready"
+    assert entry.record["due"] == 105
+    assert entry.record["started_at"] is None
+
+
+def test_a_drain_reports_each_due_entry(scheduler):
+    first = scheduler.timer(owner="operator", payload="first", delay=1, now=100)
+    second = scheduler.stopwatch(owner="operator", payload="second", limit=1, now=100)
+    first.start(now=100)
+    second.start(now=100)
+    assert scheduler.run_due(now=101) == 2
+    assert first.state == second.state == "fired"
+    assert scheduler.run_due(now=101) == 0
 
 
 @pytest.mark.parametrize(

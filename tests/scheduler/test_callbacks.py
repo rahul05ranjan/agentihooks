@@ -13,7 +13,12 @@ def test_a_module_function_connects_as_a_durable_named_slot():
     import fakeredis
 
     from scripts.scheduler.core import Scheduler
+    from scripts.scheduler.slots import restore
 
+    assert restore({"kind": "callable", "reference": f"{__name__}:capture_signal"}).record() == {
+        "kind": "callable",
+        "reference": f"{__name__}:capture_signal",
+    }
     redis = fakeredis.FakeRedis(decode_responses=True)
     scheduler = Scheduler(redis, machine="proof")
     timer = scheduler.timer(owner="operator", delay=5, payload="call slot", now=100)

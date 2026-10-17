@@ -41,3 +41,11 @@ def test_cron_uses_standard_weekday_and_explicit_timezone():
     assert cron.record["due"] == 288000
     assert cron.record["expression"] == "0 9 * * 0"
     assert cron.record["timezone"] == "Europe/Madrid"
+
+
+@pytest.mark.parametrize("expression", ["* * * *", "* * * * * *"])
+def test_calendar_rejects_expressions_outside_five_fields(expression):
+    from scripts.scheduler.model import next_due
+
+    with pytest.raises(ValueError, match="^a cron expression needs five fields$"):
+        next_due(expression, "UTC", 0)

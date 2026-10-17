@@ -45,6 +45,22 @@ def test_due_now_timer_waits_until_connections_are_ready(scheduler):
         timer.start(now=100)
 
 
+@pytest.mark.parametrize("state,due", [("cancelled", 100), ("active", 120)])
+def test_stale_due_index_cannot_claim_an_inactive_or_future_entry(scheduler, state, due):
+    from scripts.inbox.store import InboxStore
+    from scripts.scheduler.slots import InboxSlot
+
+    entry = scheduler.timer(owner="operator", payload="stale", at=due, now=100)
+    entry.timeout.connect(InboxSlot("proof-session"))
+    entry.start(now=100)
+    if state == "cancelled":
+        entry.cancel()
+    scheduler.redis.zadd(scheduler.key("due"), {entry.id: 100})
+    assert scheduler.run_due(now=110) == 0
+    assert entry.state == state
+    assert InboxStore(scheduler.redis).pending_items("proof-session") == []
+
+
 @pytest.mark.parametrize("kind", ["timer", "stopwatch"])
 def test_cancel_or_stop_discards_a_claimed_but_undelivered_signal(monkeypatch, scheduler, kind):
     from scripts.inbox.store import InboxStore
@@ -66,6 +82,8 @@ def test_cancel_or_stop_discards_a_claimed_but_undelivered_signal(monkeypatch, s
         fault.setattr(InboxSlot, "deliver", crash)
         with pytest.raises(RuntimeError, match="^crash before transport$"):
             scheduler.run_due(now=101)
+    assert scheduler.redis.zcard(scheduler.key("due")) == 0
+    assert scheduler.redis.smembers(scheduler.key("pending")) == {entry.id}
     if kind == "timer":
         entry.cancel()
         expected = "cancelled"
@@ -74,6 +92,7 @@ def test_cancel_or_stop_discards_a_claimed_but_undelivered_signal(monkeypatch, s
         expected = "stopped"
     assert scheduler.run_due(now=110) == 0
     assert entry.state == expected
+    assert scheduler.redis.scard(scheduler.key("pending")) == 0
     assert InboxStore(scheduler.redis).pending_items("proof-session") == []
 
 
@@ -119,10 +138,34 @@ def test_lost_lease_cannot_acknowledge_accepted_delivery(monkeypatch, scheduler)
         with pytest.raises(RuntimeError, match="^scheduler lost its dispatch lock$"):
             scheduler.run_due(now=101)
     assert timer.state == "pending"
+    assert timer.record["pending"]["delivered"] == []
     scheduler.redis.delete(lock_key)
     assert scheduler.run_due(now=110) == 0
     assert timer.state == "fired"
     assert len(InboxStore(scheduler.redis).pending_items("proof-session")) == 1
+
+
+def test_lost_lease_after_acknowledgment_cannot_finish_the_occurrence(monkeypatch, scheduler):
+    from scripts.scheduler.slots import InboxSlot
+
+    timer = scheduler.timer(owner="operator", payload="once", delay=1, now=100)
+    timer.timeout.connect(InboxSlot("proof-session"))
+    timer.start(now=100)
+    original = scheduler.update
+
+    def lose_after_ack(entry_id, change, *, lease=None):
+        original(entry_id, change, lease=lease)
+        if lease is not None:
+            scheduler.redis.set(lease.name, "successor")
+
+    with monkeypatch.context() as fault:
+        fault.setattr(scheduler, "update", lose_after_ack)
+        with pytest.raises(RuntimeError, match="^scheduler lost its dispatch lock$"):
+            scheduler.run_due(now=101)
+    assert timer.state == "pending"
+    scheduler.redis.delete(scheduler.key("dispatch-lock"))
+    assert scheduler.run_due(now=110) == 0
+    assert timer.state == "fired"
 
 
 def test_lease_loss_before_claim_commit_keeps_the_entry_unclaimed(monkeypatch, scheduler):
@@ -153,3 +196,54 @@ def test_lease_loss_before_claim_commit_keeps_the_entry_unclaimed(monkeypatch, s
     scheduler.redis.delete(lock_key)
     assert scheduler.run_due(now=110) == 1
     assert timer.state == "fired"
+
+
+def test_concurrent_cancellation_before_claim_commit_is_preserved(monkeypatch, scheduler):
+    timer = scheduler.timer(owner="operator", payload="notice", delay=1, now=100)
+    timer.start(now=100)
+    pipeline = scheduler.redis.pipeline
+    cancelled = []
+
+    def raced_pipeline(*args, **kwargs):
+        pipe = pipeline(*args, **kwargs)
+        execute = pipe.execute
+
+        def race(*args, **kwargs):
+            if not cancelled:
+                cancelled.append(True)
+                timer.cancel()
+            return execute(*args, **kwargs)
+
+        pipe.execute = race
+        return pipe
+
+    monkeypatch.setattr(scheduler.redis, "pipeline", raced_pipeline)
+    assert scheduler.run_due(now=101) == 0
+    assert timer.state == "cancelled"
+
+
+def test_start_retries_a_concurrent_entry_update(monkeypatch, scheduler):
+    from redis.exceptions import WatchError
+
+    timer = scheduler.timer(owner="operator", payload="notice", delay=1, now=100)
+    pipeline = scheduler.redis.pipeline
+    raced = []
+
+    def raced_pipeline(*args, **kwargs):
+        pipe = pipeline(*args, **kwargs)
+        execute = pipe.execute
+
+        def race(*args, **kwargs):
+            if not raced:
+                raced.append(True)
+                raise WatchError("concurrent entry update")
+            return execute(*args, **kwargs)
+
+        pipe.execute = race
+        return pipe
+
+    monkeypatch.setattr(scheduler.redis, "pipeline", raced_pipeline)
+    timer.start(now=100)
+    assert timer.state == "active"
+    assert timer.record["started_at"] == 100
+    assert scheduler.run_due(now=101) == 1
