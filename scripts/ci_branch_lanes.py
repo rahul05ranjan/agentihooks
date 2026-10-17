@@ -64,7 +64,7 @@ def computed_mutation_lane(name: str, block: object, jobs: dict, trusted: dict) 
     if trusted.get("name") != "Mutation preflight" or name not in stages:
         return False
     baseline = trusted.get("jobs") or {}
-    if name not in baseline or any(jobs.get(producer) != baseline.get(producer) for producer in ("plan", "refine")):
+    if name not in baseline or any(jobs.get(producer) != baseline.get(producer) for producer in ("capacity", "plan", "refine")):
         return False
     if any(jobs[name].get(key) != baseline[name].get(key) for key in ("needs", "strategy")):
         return False

@@ -422,7 +422,7 @@ def test_computed_lane_acceptance_still_grades_later_jobs():
 
 
 @pytest.mark.parametrize(
-    "change", ["plan", "refine", "queue", "cancel", "group", "output", "untrusted", "needs", "strategy"]
+    "change", ["capacity", "plan", "refine", "queue", "cancel", "group", "output", "untrusted", "needs", "strategy"]
 )
 def test_computed_mutation_lane_migration_keeps_trusted_producers_and_queue_policy(change):
     import copy
@@ -437,6 +437,8 @@ def test_computed_mutation_lane_migration_keeps_trusted_producers_and_queue_poli
     )
     if change in {"needs", "strategy"}:
         updated["jobs"]["stats"][change] = None
+    elif change == "capacity":
+        updated["jobs"]["capacity"] = {"steps": [{"run": "echo values=unbounded"}]}
     elif change in {"plan", "refine"}:
         updated["jobs"][change]["steps"].append({"run": "echo changed producer"})
     elif change == "queue":
