@@ -105,6 +105,13 @@ def test_the_status_view_without_any_quota_adds_none(store):
     assert "quota" not in commands.view(store, "sw")
 
 
+def test_a_page_request_reaches_the_status_view_after_one_prober_round(store, fresh):
+    commands.publish(store, "sw", {"agents": [], "tasks": {}, "quota": {"probed_at": 10, "rows": ["tick"]}}, {})
+    quota_refresh.request(store, "sw")
+    assert quota_refresh.answer_all(store, lambda slug, row: "") == ["sw: control quota acknowledged"]
+    assert commands.view(store, "sw")["quota"] == fresh
+
+
 def test_answer_all_reports_every_swarm_and_carries_on_past_a_refused_one(store, monkeypatch, capsys):
     store.create(SwarmConfig("two", ".", 0, 0, state="paused"))
 
