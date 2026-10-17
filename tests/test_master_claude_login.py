@@ -336,6 +336,12 @@ def test_publish_reads_missing_generations_as_zero(tmp_path, monkeypatch):
     assert [entries["generation"] for _, entries in bao.writes] == ["1", "0"]
 
 
+def test_publish_reads_a_missing_stored_epoch_as_zero(tmp_path, monkeypatch):
+    bao = FakeBao({"generation": "3000"}).install(monkeypatch)
+    assert login.publish("bao", "rig", _home(tmp_path), 1) is True
+    assert len(bao.writes) == 1
+
+
 def test_publish_skips_a_home_without_a_refresh_token(tmp_path, monkeypatch):
     bao = FakeBao().install(monkeypatch)
     assert login.publish("bao", "rig", _home(tmp_path, {"accessToken": "a"}), 1) is False
@@ -422,7 +428,7 @@ def test_prepare_claims_above_the_stored_epoch_builds_restores_and_keeps(ah, ren
     _seed(rendered)
     calls = []
     monkeypatch.setattr(openbao_kv, "from_env", lambda environ: "bao" if environ.get("OPENBAO_URL") else None)
-    monkeypatch.setattr(login, "stored", lambda bao, slug: {"epoch": "5"} if bao else {})
+    monkeypatch.setattr(login, "stored", lambda bao, slug: {"epoch": "5"} if (bao, slug) == ("bao", "rig") else {})
     monkeypatch.setattr(login, "restore", lambda copy, target: calls.append(("restore", copy, target)))
     monkeypatch.setattr(
         login, "keep", lambda bao, slug, target, epoch: calls.append(("keep", bao, slug, target, epoch))

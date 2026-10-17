@@ -1,5 +1,6 @@
 import json
 import os
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -83,11 +84,13 @@ def test_master_mode_falls_back_to_claude_on_the_path(ah, monkeypatch):
 
 def test_master_mode_stores_the_recovery_copy_when_asked(ah, monkeypatch, capsys):
     stored = []
-    deps = _deps(ah, [])
+    deps = replace(_deps(ah, []), opener="opener")
     monkeypatch.setattr(
         openbao_step,
         "target",
-        lambda choice, environ, console, opener: "bao" if (choice, console) == (True, deps.console) else None,
+        lambda choice, environ, console, opener: (
+            "bao" if (choice, console, opener) == (True, deps.console, "opener") else None
+        ),
     )
     monkeypatch.setattr(login, "publish", lambda bao, slug, target, epoch: stored.append((bao, slug, target, epoch)))
     assert claude_login.master("rig", True, {}, deps) == 0
