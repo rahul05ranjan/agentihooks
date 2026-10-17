@@ -142,18 +142,8 @@ jobs:
       - name: Fail when the head writes slower or busier than the base
         if: ${{ always() && inputs.compare }}
         run: |
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          def measured(side):
-              lines = Path(f"load-evidence/{side}.log").read_text().splitlines()
-              return json.loads(next(line for line in lines if line.startswith('{"seconds"')))
-          base, head = measured("base"), measured("head")
-          print(json.dumps({"base": base, "head": head}, indent=2))
-          assert head["errors"] <= base["errors"], "Head load run had more errors"
-          assert head["write_p95_s"] <= base["write_p95_s"] * 1.1, "Head write p95 regressed past base"
-          assert head["busiest_cores"] <= base["busiest_cores"] * 1.1, "Head server CPU regressed past base"
-          PY
+          "$HOME/venv/bin/python" -m tests.ledger_load.paired \
+            load-evidence/base.log load-evidence/head.log
 
       - name: Preserve both load measurements and server logs
         if: ${{ always() && inputs.compare }}

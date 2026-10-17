@@ -186,6 +186,8 @@ jobs:
           }, indent=2))
           assert head['mean_cpu_seconds'] <= base['mean_cpu_seconds'] / 2
           assert head['peak_rss_kib_after_replay'] <= base['peak_rss_kib_after_replay'] * 1.1
+          growth = {side: run['peak_rss_kib_after_replay'] - run['peak_rss_kib_before_replay'] for side, run in (('base', base), ('head', head))}
+          print(json.dumps({'peak_rss_growth_kib': growth}))
           PY
       - name: Retain the CPU profile and every outcome
         if: always()
