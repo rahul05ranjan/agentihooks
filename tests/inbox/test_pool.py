@@ -15,7 +15,7 @@ SLUG = "sw"
 FRONT = "master@sw"
 SECOND = "master-2@sw"
 THIRD = "master-3@sw"
-POOL = "agentihooks:inbox:pool:sw"
+POOL = f"{pool.PREFIX}:sw"
 CLAIMED = "claimed from the master pool by {}"
 
 
@@ -208,8 +208,8 @@ def test_an_item_a_backend_master_left_unconfirmed_returns_to_the_front_door(swa
     assert inbox.get(second.id).address == FRONT
     assert inbox.open_items(SECOND) == []
     assert [i.id for i in inbox.pending_mail("sw-master-1")] == [second.id]
-    assert int(swarm.redis.get(f"agentihooks:inbox:open-size:{SECOND}")) == 0
-    assert int(swarm.redis.get(f"agentihooks:inbox:open-size:{FRONT}")) == 2
+    assert int(swarm.redis.get(inbox.key("open-size", SECOND))) == 0
+    assert int(swarm.redis.get(inbox.key("open-size", FRONT))) == 2
 
 
 def test_a_lone_live_master_takes_what_waits(swarm, inbox, held):
