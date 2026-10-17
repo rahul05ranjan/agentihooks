@@ -209,6 +209,21 @@ def test_a_lost_master_hive_moves_the_master_to_a_live_hive(store):  # noqa: F81
     assert master_move.pending(store, "sw") is None
 
 
+def test_a_lost_master_hive_without_a_live_spare_starts_an_unpinned_successor(store):  # noqa: F811
+    from scripts.swarm import master_move
+
+    _hive(store, "lost", NOW - GRACE_MS - 1)
+    master = _hive_master(store)
+    runtime = RecoveryRuntime()
+
+    actions = tick("sw", store, tasks(), runtime, NOW)
+
+    assert f"moved master {master.name} off lost hive lost" in actions
+    [(_, task)] = runtime.masters
+    assert "hive" not in task
+    assert master_move.pending(store, "sw") is None
+
+
 @pytest.mark.parametrize(
     ("beat", "live", "grace"),
     [(NOW - GRACE_MS, False, None), (NOW - GRACE_MS - 1, True, None), (0, False, None), (NOW - 400_000, False, 600)],
@@ -331,17 +346,21 @@ def test_master_move_orders_a_handoff_and_pins_the_successor_to_the_hive(store):
 @pytest.mark.parametrize(
     ("to", "reason"),
     [
-        ("home", "no live hive takes master"),
-        ("dead", "no live hive takes master"),
-        ("absent", "no live hive takes master"),
+        ("home", "no UI hive live"),
+        ("dead", "no UI hive live"),
+        ("absent", "no UI hive live"),
+        ("bare", "no hive for master advertises the claude slot one"),
     ],
 )
 def test_master_move_refuses_a_hive_that_cannot_take_the_master(store, to, reason):  # noqa: F811
+    from scripts.hive import registry
     from scripts.swarm import master_move
     from scripts.swarm.store import SwarmError
 
     _hive(store, "home", NOW)
     _hive(store, "dead", NOW - 100_000)
+    registry.update(store.redis, "bare", ["ui=yes", "roles=master"])
+    store.redis.hset(registry.key("bare"), "heartbeat_at", NOW)
     _hive_master(store, "home")
 
     with pytest.raises(SwarmError) as refused:
