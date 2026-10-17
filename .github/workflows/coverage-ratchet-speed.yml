@@ -45,7 +45,6 @@ jobs:
         run: |
           python - <<'PY'
           import json
-          import os
           import pstats
           import subprocess
           import sys
@@ -73,7 +72,7 @@ jobs:
           (evidence / "timings.json").write_text(json.dumps(results, indent=2))
           assert results["original"]["verdict"] == results["candidate"]["verdict"] == 1
           assert (evidence / "original/report.txt").read_bytes() == (evidence / "candidate/report.txt").read_bytes()
-          command = [sys.executable, "-m", "cProfile", "-o", str(evidence / "original.prof"), *command[2:]]
+          command = [sys.executable, "-m", "cProfile", "-o", str(evidence / "original.prof"), "-m", *command[2:]]
           subprocess.run(command, cwd=root / "original", capture_output=True, text=True)
           with (evidence / "profile.txt").open("w") as stream:
               pstats.Stats(str(evidence / "original.prof"), stream=stream).sort_stats("cumulative").print_stats(35)
