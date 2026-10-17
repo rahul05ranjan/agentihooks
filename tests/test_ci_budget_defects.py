@@ -18,7 +18,7 @@ NOW_MS = 1_791_540_000_000
 URL = "https://github.com/o/r/actions/runs/{}/job/9"
 TEXT = (
     "A pull request Tests run took 16 minutes 8 seconds from push to Gate Required, over the 15 minute budget."
-    " Its slowest stage mutation took 14 minutes 4 seconds against 8 minutes. " + URL.format(1)
+    " Its slowest stage mutation took 14 minutes 4 seconds against 8 minutes."
 )
 
 
@@ -106,6 +106,8 @@ def test_a_run_over_fifteen_minutes_updates_one_standing_ci_overrun_finding_in_p
         "threshold": 15.0,
         "unit": "minutes from push to Gate Required",
         "detail": TEXT,
+        "evidence": ["mutation: 1 run over budget; worst 14 minutes 4 seconds."],
+        "links": [{"label": "Slow run 1", "url": URL.format(1)}],
         "fired": 1,
         "episodes": ["1"],
         "first_at": NOW_MS,
@@ -137,7 +139,7 @@ def test_each_new_slow_run_updates_the_same_finding_and_counts_once(swarm):
         del JOBS[6]
     found = _found(store)
     assert (found["fired"], found["episodes"], found["value"], found["updated_at"]) == (2, ["1", "6"], 17.5, later)
-    assert found["detail"].endswith(URL.format(6))
+    assert found["links"][-1] == {"label": "Slow run 6", "url": URL.format(6)}
     assert len(standing.findings(store.redis, "sw", later)) == 1
 
 

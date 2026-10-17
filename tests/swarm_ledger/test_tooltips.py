@@ -379,7 +379,7 @@ def test_health_evidence_renders_structured_run_links_and_rejects_script_urls(ta
         ],
     )
     page = tab(ledger_html())
-    page.locator('[data-tab="swarm"]').click()
+    page.locator("#tab-swarm").click()
     link = page.locator("#health").get_by_role("link", name="Slow run 6")
     assert link.get_attribute("href") == "https://github.com/o/r/actions/runs/6"
     assert link.get_attribute("target") == "_blank"
