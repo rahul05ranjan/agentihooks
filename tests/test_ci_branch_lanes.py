@@ -244,6 +244,37 @@ def test_cancel_stops_each_open_run_once_and_waits_until_every_refused_workflow_
     assert stops == [("o/r", 1), ("o/r", 6), ("o/r", 3), ("o/r", 6)]
 
 
+def test_cancel_ends_at_once_when_every_matching_run_has_completed(monkeypatch):
+    monkeypatch.setattr(
+        lanes, "api", lambda *a: {"workflow_runs": [_run(1, "a.yml", "completed"), _run(2, "b.yml@x", "completed")]}
+    )
+    monkeypatch.setattr(lanes, "stop", lambda *a: pytest.fail("nothing left to cancel"))
+    monkeypatch.setattr(lanes.time, "sleep", lambda *a: pytest.fail("nothing left to wait for"))
+    assert lanes.cancel("o/r", "abc", {"a.yml", "b.yml"}, 60) == set()
+
+
+def test_cancel_keeps_waiting_while_a_matching_run_still_runs(monkeypatch):
+    pages = [
+        [_run(1, "a.yml", "completed"), _run(2, "b.yml")],
+        [_run(1, "a.yml", "completed"), _run(2, "b.yml")],
+    ]
+    monkeypatch.setattr(lanes, "api", lambda *a: {"workflow_runs": pages.pop(0)})
+    stops = []
+    monkeypatch.setattr(lanes, "stop", lambda repo, run: stops.append(run) or len(stops) > 1)
+    sleeps = []
+    monkeypatch.setattr(lanes.time, "sleep", sleeps.append)
+    assert lanes.cancel("o/r", "abc", {"a.yml", "b.yml"}, 60) == {2}
+    assert sleeps == [5.0]
+    assert stops == [2, 2]
+
+
+def test_an_accepted_cancel_ends_the_wait_while_the_run_still_shows_running(monkeypatch):
+    monkeypatch.setattr(lanes, "api", lambda *a: {"workflow_runs": [_run(1, "a.yml")]})
+    monkeypatch.setattr(lanes, "stop", lambda *a: True)
+    monkeypatch.setattr(lanes.time, "sleep", lambda *a: pytest.fail("the cancel was accepted"))
+    assert lanes.cancel("o/r", "abc", {"a.yml"}, 60) == {1}
+
+
 @pytest.mark.parametrize("code, stopped", [(0, True), (1, False)])
 def test_stop_reports_whether_github_accepted_the_cancel(monkeypatch, code, stopped):
     seen = []
