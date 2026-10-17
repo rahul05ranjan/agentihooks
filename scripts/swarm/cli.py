@@ -1357,7 +1357,9 @@ def cmd_merge(store, args):
             done_gate.require_local(store, args.slug, agent.task)
             done_gate.require_target(store, args.slug, agent.task, args.url, LedgerClient().tasks(args.slug))
         if args.action == "queue":
-            result = merge_queue.operate(args.action, args.url, admit=lambda head: _queue_intent(store, args, agent, head))
+            result = merge_queue.operate(
+                args.action, args.url, admit=lambda head: _queue_intent(store, args, agent, head)
+            )
         else:
             result = merge_queue.operate(args.action, args.url)
     print(json.dumps(result))
