@@ -51,11 +51,13 @@ def caller(headers, admin: str, slug: str) -> str | None:
         return principal(admin, slug, token, agent)
     if access_operator(headers.get("Cf-Access-Jwt-Assertion")):
         return ""
-    secret = environ.get("SWARM_SECRET")
-    if not secret or not token:
+    if not token or not agent:
         return None
     if token.startswith("hive."):
         return hive_principal(slug, token, agent)
+    secret = environ.get("SWARM_SECRET")
+    if not secret:
+        return None
     return agent if _same(token, agent_token(secret, slug, agent)) else None
 
 
