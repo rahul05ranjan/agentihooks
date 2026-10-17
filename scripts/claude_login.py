@@ -151,7 +151,7 @@ def _fail(message: str) -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=PROG)
     parser.add_argument("slug", nargs="?")
-    parser.add_argument("--master", metavar="SWARM")
+    parser.add_argument("--master")
     store = parser.add_mutually_exclusive_group()
     store.add_argument("--openbao", action="store_true", default=None)
     store.add_argument("--no-openbao", dest="openbao", action="store_false")

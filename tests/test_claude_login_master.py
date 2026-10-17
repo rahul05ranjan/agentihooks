@@ -74,11 +74,23 @@ def test_master_mode_reports_a_missing_claude_binary(ah, capsys):
     assert "cannot run /opt/claude: No such file or directory" in capsys.readouterr().err
 
 
+def test_master_mode_falls_back_to_claude_on_the_path(ah, monkeypatch):
+    runs = []
+    monkeypatch.setattr(claude_login.shutil, "which", lambda name: None)
+    assert claude_login.master("rig", False, {}, _deps(ah, runs)) == 0
+    assert runs[0][0][0] == "claude"
+
+
 def test_master_mode_stores_the_recovery_copy_when_asked(ah, monkeypatch, capsys):
     stored = []
-    monkeypatch.setattr(openbao_step, "target", lambda choice, environ, console, opener: "bao" if choice else None)
+    deps = _deps(ah, [])
+    monkeypatch.setattr(
+        openbao_step,
+        "target",
+        lambda choice, environ, console, opener: "bao" if (choice, console) == (True, deps.console) else None,
+    )
     monkeypatch.setattr(login, "publish", lambda bao, slug, target, epoch: stored.append((bao, slug, target, epoch)))
-    assert claude_login.master("rig", True, {}, _deps(ah, [])) == 0
+    assert claude_login.master("rig", True, {}, deps) == 0
     assert stored == [("bao", "rig", login.home("rig"), 1)]
     assert "Storing the master login recovery copy in OpenBao" in capsys.readouterr().out
 

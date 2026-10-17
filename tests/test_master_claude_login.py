@@ -268,6 +268,17 @@ def test_a_process_is_alive_only_by_its_integer_pid():
     assert login._alive(2**22 + 7) is False
 
 
+class _Stdout:
+    def __init__(self):
+        self.text, self.flushed = "", ""
+
+    def write(self, text):
+        self.text += text
+
+    def flush(self):
+        self.flushed = self.text
+
+
 class FakeBao:
     def __init__(self, stored=None):
         self.stored = dict(stored or {})
@@ -275,7 +286,9 @@ class FakeBao:
 
     def install(self, monkeypatch):
         monkeypatch.setattr(
-            openbao_kv, "read", lambda bao, path: (self.stored if path == "agentihooks/master-claude/rig" else {}, 3)
+            openbao_kv,
+            "read",
+            lambda bao, path: (self.stored if (bao, path) == ("bao", "agentihooks/master-claude/rig") else {}, 3),
         )
         monkeypatch.setattr(openbao_kv, "merge", lambda bao, path, entries: self.writes.append((path, dict(entries))))
         return self
@@ -311,6 +324,16 @@ def test_publish_replaces_an_older_generation_of_the_same_epoch(tmp_path, monkey
     bao = FakeBao({"epoch": "4", "generation": "1999"}).install(monkeypatch)
     assert login.publish("bao", "rig", _home(tmp_path), 4) is True
     assert len(bao.writes) == 1
+
+
+def test_publish_reads_missing_generations_as_zero(tmp_path, monkeypatch):
+    bao = FakeBao({"epoch": "4"}).install(monkeypatch)
+    assert login.publish("bao", "rig", _home(tmp_path, {"refreshToken": "r", "expiresAt": 1}), 4) is True
+    other = tmp_path / "other"
+    other.mkdir()
+    bao.stored = {}
+    assert login.publish("bao", "rig", _home(other, {"refreshToken": "r"}), 1) is True
+    assert [entries["generation"] for _, entries in bao.writes] == ["1", "0"]
 
 
 def test_publish_skips_a_home_without_a_refresh_token(tmp_path, monkeypatch):
@@ -372,11 +395,13 @@ def test_a_checkpoint_publishes_only_from_the_master_login_home(ah, rendered, mo
     monkeypatch.setattr(login, "keep", lambda bao, slug, target, epoch: kept.append((bao, slug, target, epoch)) or True)
     monkeypatch.setattr(openbao_kv, "from_env", lambda environ: "bao")
     _seed(rendered)
+    master = {"AGENTIHOOKS_SWARM": "rig", "CLAUDE_CONFIG_DIR": str(login.home("rig"))}
+    assert login.checkpoint(master) is True
     login.claim("rig", "master@a-1", 10, lambda pid: False)
     assert login.checkpoint({"AGENTIHOOKS_SWARM": "rig", "CLAUDE_CONFIG_DIR": str(rendered)}) is False
     assert login.checkpoint({"CLAUDE_CONFIG_DIR": str(login.home("rig"))}) is False
-    assert login.checkpoint({"AGENTIHOOKS_SWARM": "rig", "CLAUDE_CONFIG_DIR": str(login.home("rig"))}) is True
-    assert kept == [("bao", "rig", login.home("rig"), 1)]
+    assert login.checkpoint(master) is True
+    assert kept == [("bao", "rig", login.home("rig"), 0), ("bao", "rig", login.home("rig"), 1)]
 
 
 def _environ(rendered, **extra):
@@ -443,13 +468,17 @@ def test_launch_execs_native_claude_in_the_private_home_with_the_session_setting
     _seed(rendered)
     monkeypatch.setattr(openbao_kv, "from_env", lambda environ: None)
     monkeypatch.chdir(tmp_path)
-    executed = []
-    monkeypatch.setattr(login.os, "execvpe", lambda binary, argv, env: executed.append((binary, argv, env)))
+    executed, out = [], _Stdout()
+    monkeypatch.setattr(
+        login.os, "execvpe", lambda binary, argv, env: executed.append((binary, argv, env, out.flushed))
+    )
+    monkeypatch.setattr(login.sys, "stdout", out)
     report = tmp_path / "route"
     login.launch_claude(
         "/opt/claude", ["--model", "opus"], _environ(rendered, CLAUDE_CODE_OAUTH_TOKEN="x"), str(report)
     )
-    binary, argv, env = executed[0]
+    binary, argv, env, flushed = executed[0]
+    assert flushed == "[agenti] account=masteratexample_com route=master-login\n"
     assert binary == "/opt/claude"
     assert argv == install._claude_command(
         "/opt/claude", ["--settings", '{"forceLoginMethod":"claudeai"}', "--model", "opus"]
@@ -458,7 +487,6 @@ def test_launch_execs_native_claude_in_the_private_home_with_the_session_setting
     assert "CLAUDE_CODE_OAUTH_TOKEN" not in env and "AH_CC_TOKEN_workeratexample_com" not in env
     assert env["AH_ROUTE_INTERACTIVE_masteratexample_com"] == "1"
     assert report.read_text().splitlines() == ["status=routed", "account=masteratexample_com", "placement=forced"]
-    assert capsys.readouterr().out == "[agenti] account=masteratexample_com route=master-login\n"
 
 
 def test_launch_turns_a_refusal_into_a_routing_error(ah, rendered, tmp_path, monkeypatch):
