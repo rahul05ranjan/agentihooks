@@ -21,6 +21,7 @@
   "mutation-preflight.yml/pull-request": "light",
   "mutation-preflight.yml/refine": "light",
   "mutation-preflight.yml/stats": "batch",
+  "mutation-preflight.yml/touched-tests": "standard",
   "mutation-replay.yml/grade": "batch",
   "mutation-replay.yml/plan": "light",
   "mutation-replay.yml/verify": "light",
