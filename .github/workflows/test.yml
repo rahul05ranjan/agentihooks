@@ -1212,7 +1212,12 @@ jobs:
 
       - *python
       - *day
-      - *venv
+      - name: Restore the shared test environment without saving it again
+        id: venv
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/venv
+          key: venv-${{ runner.os }}-${{ steps.python.outputs.python-version }}-${{ steps.day.outputs.date }}-${{ hashFiles('pyproject.toml', '.github/test-excludes.txt') }}
       - *uv
       - *install
       - *use-venv
@@ -1226,8 +1231,19 @@ jobs:
           echo "BASE: $BASE"
           git worktree add --detach "$RUNNER_TEMP/base" "$BASE"
 
+      - name: Restore exact count collections
+        id: counts
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/count-collections
+          key: ${{ steps.venv.outputs.cache-primary-key }}-counts-v1-${{ github.sha }}
+          restore-keys: ${{ steps.venv.outputs.cache-primary-key }}-counts-v1-
+
       # The base revision's copy grades, so a pull request cannot loosen its own floor.
       - name: Hold the base revision's test count
+        env:
+          TEST_COUNT_COLLECTION_CACHE: ${{ runner.temp }}/count-collections
+          TEST_COUNT_ENVIRONMENT: ${{ steps.venv.outputs.cache-primary-key }}
         run: |
           if [[ ! -f "$RUNNER_TEMP/base/tests/count_floor.py" ]]; then
             echo "::error::The base carries no tests/count_floor.py, so nothing trusted can grade."
@@ -1235,6 +1251,13 @@ jobs:
           fi
           cd "$RUNNER_TEMP/base"
           python -m tests.count_floor --base "$RUNNER_TEMP/base" --head "$GITHUB_WORKSPACE"
+
+      - name: Save exact count collections
+        if: steps.counts.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/count-collections
+          key: ${{ steps.counts.outputs.cache-primary-key }}
 
   sonar:
     if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || needs.admission.result == 'success') && github.event_name != 'merge_group' }}
@@ -2220,11 +2243,6 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GRADER: ${{ github.event.pull_request.base.sha }}
         run: |
-          if ! grep -q "^def exact(" "$RUNNER_TEMP/grader/scripts/ci_mutation/reuse.py"; then
-            echo "The protected copy has no exact head reuse; mutating"
-            echo "reused=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
           base=$(git merge-base origin/dev "$HEAD_SHA")
           PYTHONPATH="$RUNNER_TEMP/grader" python -P -m scripts.ci_mutation.reuse "$BRANCH" "$GITHUB_RUN_ID" \
             --head "$HEAD_SHA" --base "$base" --grader "$GRADER"
