@@ -4,6 +4,7 @@ import subprocess
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
+from scripts.profiles import master_login
 from scripts.routing import envs
 
 COMMAND = ["auth", "status", "--text"]
@@ -22,7 +23,7 @@ def check(environ: Mapping[str, str], account: str, run: Callable = subprocess.r
     try:
         status = run(
             [shutil.which("claude") or "claude", *COMMAND],
-            env=envs.claude_interactive_child(environ, account),
+            env={**envs.claude_interactive_child(environ, account), "CLAUDE_CONFIG_DIR": str(master_login.directory())},
             capture_output=True,
             text=True,
             timeout=30,

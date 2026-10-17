@@ -15,13 +15,13 @@ from pathlib import Path
 
 from hooks.context import profile_chain, quarantine
 from scripts.claude_config import claude_home, claude_json
-from scripts.profiles import binding, browser, bundle_copy, connectors, homes, plugins, sources
+from scripts.profiles import binding, browser, bundle_copy, connectors, homes, master_login, plugins, sources
 from scripts.targets._common import _atomic_write, _install_module, agents_skills_home, build_persona
 from scripts.targets.claude_target import settings_document
 from scripts.targets.codex_hook_trust import trusted_state
 from scripts.targets.codex_target import codex_home
 
-SHARED = ("projects", "sessions", "todos", "plugins", ".credentials.json", "keybindings.json")
+SHARED = ("projects", "sessions", "todos", "plugins", "keybindings.json")
 CODEX_STATE = ("auth.json", "sessions", "history.jsonl", "session_index.jsonl", "hooks.json")
 CODEX_INHERITED = ("model", "model_reasoning_effort", "service_tier", "notify", "projects")
 COPILOT_STATE = ("config.json", "settings.json", "agentihooks-hook.sh", "hooks", "session-state", "logs")
@@ -351,6 +351,7 @@ def _claude_fresh(root: Path, stamp: dict, required: set[str]) -> bool:
     return (
         _read_json(out / STAMP) == stamp
         and all((out / item).is_symlink() for item in SHARED)
+        and master_login.fresh(out, stamp["chain"])
         and not (out / "rules").exists()
         and sources.path(root.name, "claude", root.parent).is_file()
         and (out / binding.FILE).is_file()
@@ -397,6 +398,7 @@ def render_claude(name: str, force: bool = False, overlays: Sequence[str] = ()) 
     shared = claude_home(_global_env())
     for item in SHARED:
         (out / item).symlink_to(shared / item)
+    master_login.link(out, current["chain"])
     # Claude Code refuses plan file writes that resolve through a symlink.
     (out / "plans").mkdir()
     if all(mounts[server]["mounted"] for server in required):
