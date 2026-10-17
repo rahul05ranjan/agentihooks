@@ -1,12 +1,16 @@
 FROM mirror.gcr.io/library/python:3.12-slim-bookworm AS build
+COPY --from=ghcr.io/astral-sh/uv:0.10.9 /uv /usr/local/bin/uv
 WORKDIR /build
-COPY pyproject.toml README.md docker/swarm/requirements.lock ./
-RUN python -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir --require-hashes -r requirements.lock
+COPY docker/swarm/requirements.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv venv /opt/venv && uv pip install --python /opt/venv/bin/python --require-hashes -r requirements.lock
+COPY pyproject.toml README.md ./
 COPY hooks/ hooks/
 COPY scripts/ scripts/
 COPY profiles/ profiles/
 ARG VERSION=0.0.0
-RUN SETUPTOOLS_SCM_PRETEND_VERSION_FOR_AGENTIHOOKS="$VERSION" /opt/venv/bin/pip install --no-cache-dir --no-deps .
+RUN --mount=type=cache,target=/root/.cache/uv \
+    SETUPTOOLS_SCM_PRETEND_VERSION_FOR_AGENTIHOOKS="$VERSION" uv pip install --python /opt/venv/bin/python --no-deps .
 
 FROM mirror.gcr.io/library/python:3.12-slim-bookworm AS herdr
 ARG TARGETARCH=amd64
