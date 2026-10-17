@@ -29,6 +29,9 @@ jobs:
       - name: Install Semgrep
         run: python -m pip install semgrep==1.177.0
 
+      - name: Prove the repository rules red on their fixtures
+        run: semgrep --test --strict --metrics off --config semgrep/claim_holds.yaml tests/semgrep/claim_holds.py
+
       - name: Resolve the merge base of the head and the base
         id: baseline
         env:
@@ -45,6 +48,6 @@ jobs:
           BASE: ${{ steps.baseline.outputs.sha }}
         run: >-
           python scripts/ci_semgrep.py semgrep scan --error --strict --verbose --timeout 30 --metrics off
-          --config p/ci --config p/secrets --config p/python
+          --config p/ci --config p/secrets --config p/python --config semgrep/
           --exclude-rule yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
           --baseline-commit "$BASE"

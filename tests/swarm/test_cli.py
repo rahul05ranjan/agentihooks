@@ -2977,3 +2977,17 @@ def test_list_and_status_header_show_the_scaling_mode(env, capsys):
     assert "\tscaling manual\t" in capsys.readouterr().out
     run("sw", "status")
     assert "  scaling manual  " in capsys.readouterr().out.splitlines()[0]
+
+
+def test_the_tick_records_an_urgent_task_its_phase_holds(env):
+    from scripts.swarm.health import urgent_hold
+
+    store, ledger, rt = env
+    run("sw", "create", "--repo", "/repo")
+    ledger.phases = [{"id": "p1", "depends_on": []}, {"id": "p2", "title": "later", "depends_on": ["p1"]}]
+    ledger.rows["t1"].update(phase="p2", rank="urgent", title="fix quota")
+    cli.run_tick(store, "sw", ledger, rt, FakeHerdr({}))
+    held = urgent_hold.read(store, "sw")["tasks"]
+    assert {task_id: row["why"] for task_id, row in held.items()} == {
+        "t1": "its phase later is waiting on an earlier phase"
+    }

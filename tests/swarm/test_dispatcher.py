@@ -971,3 +971,16 @@ def test_the_tick_hands_its_clock_to_the_dispatcher_steps(monkeypatch):
     monkeypatch.setattr(dispatcher, "rank_pass", lambda *a: seen.append(("rank", a[-1])) or [])
     tick.tick(SLUG, saved, FakeLedger([{"id": "a"}]), FakeRuntime(), now_ms=4_321)
     assert seen == [("group", 4_321), ("rank", 4_321)]
+
+
+@pytest.mark.parametrize("author", [MASTER_NAME, "swarm", "operator", dispatcher.AUTHOR])
+def test_an_urgent_rank_sorts_in_the_urgent_band_whoever_set_it(store, author):
+    config = store.update(SLUG, autonomy="delegate")
+    found = stamped([task("u", phase=""), task("h", phase=""), task("m", phase="")], {"u": author}, rank="urgent")
+    rows = {t["id"]: t for t in found["tasks"]}
+    rows["h"]["rank"], rows["m"]["rank"] = "high", "high"
+    found["_meta"]["stamps"]["tasks/h/rank"] = {"by": "operator"}
+    found["_meta"]["stamps"]["tasks/m/rank"] = {"by": MASTER_NAME}
+    key = dispatcher.claim_key(config, found)
+    assert [key(rows[t])[0] for t in ("u", "h", "m")] == [0, 1, 2]
+    assert dispatcher.queue(found, "") == ["u", "h", "m"]
