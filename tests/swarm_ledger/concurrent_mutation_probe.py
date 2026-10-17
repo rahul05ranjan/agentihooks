@@ -20,7 +20,9 @@ def statistics(root, work, baseline=False, delay=False):
     work.mkdir()
     paths = [path for path in PATHS if (root / path).is_file()]
     prepare_workspace(root, work, paths, [CASE])
-    (work / CASE).write_text(f"from tests.swarm_ledger.test_client_conflict_retry import authority_live, live, {NAME}\n")
+    (work / CASE).write_text(
+        f"from tests.swarm_ledger.test_client_conflict_retry import authority_live, live, {NAME}\n"
+    )
     if delay:
         (work / CASE).write_text(
             "import time\n"
@@ -70,7 +72,9 @@ def statistics(root, work, baseline=False, delay=False):
     print(result.stdout, flush=True)
     if baseline:
         assert result.returncode != 0 and "TimeoutError: timed out" in result.stdout
-        print("Original ten second deadline control failed on concurrent adds with eleven second POST delay.", flush=True)
+        print(
+            "Original ten second deadline control failed on concurrent adds with eleven second POST delay.", flush=True
+        )
         return
     assert result.returncode == 0, f"concurrent mutation statistics failed with {result.returncode}"
     stats = json.loads((work / "stats.json").read_text())
