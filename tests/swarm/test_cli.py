@@ -1091,6 +1091,7 @@ def test_timer_reconcile_installs_a_newly_added_service_and_leaves_current_units
         "agentihooks-inbox-waker.service",
         "agentihooks-alert-intake.service",
         "agentihooks-quota-prober.service",
+        "agentihooks-swarm-waits.timer",
         "agentihooks-swarm.timer",
     ]
     assert calls == [(["systemctl", "--user", "is-enabled", "--quiet", name], kw) for name in names]
@@ -1098,7 +1099,7 @@ def test_timer_reconcile_installs_a_newly_added_service_and_leaves_current_units
     calls.clear()
     failing.add("is-enabled")
     assert timer.reconcile("/bin/agentihooks", tmp_path, run=run)
-    assert [call[0][2] for call in calls] == ["is-enabled", "enable", "enable", "enable", "enable"]
+    assert [call[0][2] for call in calls] == ["is-enabled", "enable", "enable", "enable", "enable", "enable"]
 
     calls.clear()
     failing.clear()
@@ -1127,6 +1128,7 @@ def test_timer_reconcile_installs_a_newly_added_service_and_leaves_current_units
         enable("agentihooks-alert-intake.service"),
         enable("agentihooks-quota-prober.service"),
         enable("agentihooks-new-intake.service"),
+        enable("agentihooks-swarm-waits.timer"),
         enable("agentihooks-swarm.timer"),
     ]
 

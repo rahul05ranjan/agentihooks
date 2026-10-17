@@ -18,9 +18,10 @@ LOST = (FIXTURES / "lost_communication.txt").read_text()
 RED = (FIXTURES / "test_failure.txt").read_text()
 QUEUE_BRANCH = "gh-readonly-queue/dev/pr-3259-810e2717650390eb596adff102841b05c86eff69"
 REMOVED = {"createdAt": "2026-10-15T05:40:23Z", "reason": "failed_checks"}
+HEAD = "810e2717650390eb596adff102841b05c86eff69"
 PULL_QUERY = (
     'query{repository(owner:"o",name:"r"){pullRequest(number:3259){'
-    "id state isInMergeQueue commits(last:1){nodes{commit{committedDate}}} "
+    "id state isInMergeQueue commits(last:1){nodes{commit{oid committedDate}}} "
     "timelineItems(last:100,itemTypes:[REMOVED_FROM_MERGE_QUEUE_EVENT])"
     "{nodes{... on RemovedFromMergeQueueEvent{createdAt reason}}}}}}"
 )
@@ -30,7 +31,8 @@ def pull(removals):
     return {
         "state": "OPEN",
         "isInMergeQueue": False,
-        "commits": {"nodes": [{"commit": {"committedDate": "2026-10-14T23:06:11Z"}}]},
+        "id": "PR_kwDO3259",
+        "commits": {"nodes": [{"commit": {"oid": HEAD, "committedDate": "2026-10-14T23:06:11Z"}}]},
         "timelineItems": {"nodes": removals},
     }
 
@@ -149,7 +151,7 @@ def test_main_reads_the_run_and_writes_the_decision(monkeypatch, tmp_path, capsy
         "requeue": True,
         "reason": "runner lost on unit (3.11, 2); first failed checks removal of this head",
     }
-    assert output.read_text() == "requeue=true\npull=3259\n"
+    assert output.read_text() == f"requeue=true\npull=3259\nnode=PR_kwDO3259\nhead={HEAD}\n"
     assert ("graphql", "-f", f"query={PULL_QUERY}") in asked
     assert ("repos/o/r/actions/jobs/1/logs", "--allow-escape-sequences") in asked
 
@@ -166,6 +168,44 @@ def test_a_signature_quoted_in_test_output_is_not_a_runner_loss(monkeypatch):
     failed = ci_queue_retry.failed_jobs("o/r", 9)
     assert failed == [{"name": "unit (3.11, 2)", "text": "##[error]Process completed with exit code 1."}]
     assert not ci_queue_retry.decide(RUN, failed, WORKFLOW)[0]
+
+
+def cancelled_run_pages(lost_log):
+    jobs = {
+        "total_count": 4,
+        "jobs": [
+            {"id": 1, "name": "unit (3.12, 2)", "conclusion": "cancelled"},
+            {"id": 2, "name": "unit (3.12, 3)", "conclusion": "cancelled"},
+            {"id": 3, "name": "shard-check", "conclusion": "cancelled"},
+            {"id": 4, "name": "Gate — Required", "conclusion": "failure"},
+        ],
+    }
+    return {
+        "repos/o/r/actions/runs/9/jobs?filter=latest&per_page=100": json.dumps(jobs),
+        "repos/o/r/check-runs/1/annotations": json.dumps([{"message": "The operation was canceled."}]),
+        "repos/o/r/check-runs/2/annotations": json.dumps([{"message": "The operation was canceled."}]),
+        "repos/o/r/check-runs/4/annotations": "[]",
+        "repos/o/r/actions/jobs/1/logs": lost_log,
+        "repos/o/r/actions/jobs/2/logs": "##[error]The operation was canceled.",
+    }
+
+
+def test_a_lost_shard_that_ends_cancelled_is_a_runner_loss(monkeypatch):
+    pages = cancelled_run_pages(SHUTDOWN + "##[error]The operation was canceled.")
+    monkeypatch.setattr(ci_queue_retry, "_api", lambda path, *flags: pages[path])
+    failed = ci_queue_retry.failed_jobs("o/r", 9)
+    assert [job["name"] for job in failed] == ["unit (3.12, 2)", "Gate — Required"]
+    run = {**RUN, "conclusion": "cancelled"}
+    assert ci_queue_retry.decide(run, failed, WORKFLOW) == (True, "runner lost on unit (3.12, 2)")
+
+
+def test_shards_cancelled_without_a_runner_loss_are_not_retried(monkeypatch):
+    pages = cancelled_run_pages("##[error]The operation was canceled.")
+    monkeypatch.setattr(ci_queue_retry, "_api", lambda path, *flags: pages[path])
+    failed = ci_queue_retry.failed_jobs("o/r", 9)
+    assert failed == [{"name": "Gate — Required", "text": ""}]
+    run = {**RUN, "conclusion": "cancelled"}
+    assert ci_queue_retry.decide(run, failed, WORKFLOW) == (False, "no unit shard failed")
 
 
 @pytest.mark.parametrize("total, extra", [(1, []), (2, [{"name": "1 unlisted jobs", "text": ""}])])
@@ -198,7 +238,11 @@ def test_the_retry_workflow_requeues_unless_enforcement_is_switched_off():
     assert requeue["if"] == "steps.classify.outputs.requeue == 'true' && vars.QUEUE_RETRY_ENFORCE != 'false'"
     assert steps["Mint the TCC Main CI queue token"]["if"] == requeue["if"]
     assert requeue["env"]["GH_TOKEN"] == "${{ steps.app-token.outputs.token }}"
-    assert requeue["run"].startswith('gh pr merge "$PULL" --squash --auto')
+    assert requeue["env"]["NODE"] == "${{ steps.classify.outputs.node }}"
+    assert requeue["env"]["HEAD"] == "${{ steps.classify.outputs.head }}"
+    assert requeue["run"].startswith("gh api graphql -f query='mutation($pull: ID!, $head: GitObjectID!)")
+    assert "enqueuePullRequest(input: {pullRequestId: $pull, expectedHeadOid: $head})" in requeue["run"]
+    assert requeue["run"].endswith('-f pull="$NODE" -f head="$HEAD"')
     assert not any("rerun" in str(step.get("run", "")) for step in retry["steps"])
 
 
@@ -325,7 +369,7 @@ def test_a_lost_shard_outside_a_queue_branch_is_not_requeued(monkeypatch, tmp_pa
         "requeue": False,
         "reason": "no pull request in queue branch dev",
     }
-    assert output.read_text() == "requeue=false\npull=\n"
+    assert output.read_text() == "requeue=false\npull=\nnode=\nhead=\n"
 
 
 def queued_then(states, monkeypatch):
