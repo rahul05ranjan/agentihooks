@@ -907,14 +907,19 @@ jobs:
           path: ${{ runner.temp }}/dev-coverage
 
       # Sonar and the ratchet grade the whole suite, so the reused tests carry their dev coverage and page captures.
+      # The grader that planned the reuse filters it, so a change cannot move dev coverage onto its own lines.
       - name: Keep the reused tests' dev coverage
         if: *reused-coverage
         env:
           COMMIT: ${{ needs.split.outputs.commit }}
+          GRADER: ${{ github.event_name == 'pull_request' && 'origin/dev' || github.sha }}
         run: |
-          python -m tests.reused_coverage --coverage "$RUNNER_TEMP/dev-coverage/.coverage" --commit "$COMMIT" \
-            --reused reused.json --out reused-coverage/.coverage \
-            --captures "$RUNNER_TEMP/dev-coverage/js-coverage" --captures-out js-coverage
+          git worktree add --detach "$RUNNER_TEMP/grader" "$GRADER"
+          cd "$RUNNER_TEMP/grader"
+          python -m tests.reused_coverage --repo "$GITHUB_WORKSPACE" --head HEAD \
+            --coverage "$RUNNER_TEMP/dev-coverage/.coverage" --commit "$COMMIT" \
+            --reused "$GITHUB_WORKSPACE/reused.json" --out "$GITHUB_WORKSPACE/reused-coverage/.coverage" \
+            --captures "$RUNNER_TEMP/dev-coverage/js-coverage" --captures-out "$GITHUB_WORKSPACE/js-coverage"
 
       # Page tests drive Chromium; the coverage shards run them so the page JavaScript they reach is measured.
       - name: Install the browser that page tests drive

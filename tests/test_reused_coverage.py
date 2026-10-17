@@ -98,8 +98,10 @@ def test_coverage_shards_ship_the_reused_tests_dev_coverage_to_sonar_and_the_rat
     names = list(steps)
     kept = steps["Keep the reused tests' dev coverage"]
     assert "python -m tests.reused_coverage" in kept["run"]
-    assert "--reused reused.json --out reused-coverage/.coverage" in kept["run"]
-    assert "--captures-out js-coverage" in kept["run"]
+    assert 'cd "$RUNNER_TEMP/grader"' in kept["run"]
+    assert kept["env"]["GRADER"] == "${{ github.event_name == 'pull_request' && 'origin/dev' || github.sha }}"
+    assert '--out "$GITHUB_WORKSPACE/reused-coverage/.coverage"' in kept["run"]
+    assert '--captures-out "$GITHUB_WORKSPACE/js-coverage"' in kept["run"]
     assert "github.event_name != 'merge_group'" in kept["if"]
     assert names.index("Download the tests this run reuses") < names.index("Keep the reused tests' dev coverage")
     assert names.index("Keep the reused tests' dev coverage") < names.index("Run tests")
