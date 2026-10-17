@@ -3,10 +3,14 @@ import socket
 import time
 import uuid
 from dataclasses import asdict, dataclass
+from typing import TYPE_CHECKING, Callable
 
 from hooks._redis import redis_key
 from scripts.scheduler.model import Schedule, next_due
 from scripts.scheduler.slots import Slot, restore
+
+if TYPE_CHECKING:
+    from redis import Redis
 
 
 @dataclass(frozen=True)
@@ -76,7 +80,7 @@ class Entry:
 
 
 class Scheduler:
-    def __init__(self, redis, *, machine: str | None = None):
+    def __init__(self, redis: "Redis", *, machine: str | None = None) -> None:
         self.redis = redis
         self.machine = machine or socket.gethostname()
 
@@ -88,7 +92,7 @@ class Scheduler:
         entry.record
         return entry
 
-    def update(self, entry_id: str, change) -> None:
+    def update(self, entry_id: str, change: Callable[[dict], None]) -> None:
         from redis.exceptions import WatchError
 
         key = self.key("entries")

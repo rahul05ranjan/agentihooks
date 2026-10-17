@@ -1,11 +1,14 @@
 from dataclasses import asdict, dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from redis import Redis
 
 
 class Slot(Protocol):
     def record(self) -> dict: ...
 
-    def deliver(self, event: dict, delivery_id: str, redis) -> None: ...
+    def deliver(self, event: dict, delivery_id: str, redis: "Redis") -> None: ...
 
 
 @dataclass(frozen=True)
@@ -15,7 +18,7 @@ class InboxSlot:
     def record(self) -> dict:
         return {"kind": "inbox", **asdict(self)}
 
-    def deliver(self, event: dict, delivery_id: str, redis) -> None:
+    def deliver(self, event: dict, delivery_id: str, redis: "Redis") -> None:
         from scripts.inbox.store import DuplicateItem, InboxStore
 
         try:
@@ -31,7 +34,7 @@ class BroadcastSlot:
     def record(self) -> dict:
         return {"kind": "broadcast", **asdict(self)}
 
-    def deliver(self, event: dict, delivery_id: str, redis) -> None:
+    def deliver(self, event: dict, delivery_id: str, redis: "Redis") -> None:
         from hooks.context.broadcast import create_broadcast
 
         create_broadcast(event["payload"], source=event["owner"], channel=self.channel, delivery_id=delivery_id)

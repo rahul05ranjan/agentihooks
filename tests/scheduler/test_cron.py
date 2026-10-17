@@ -7,7 +7,8 @@ def test_cron_coalesces_downtime_and_continues_with_distinct_occurrences():
     import fakeredis
 
     from scripts.inbox.store import InboxStore
-    from scripts.scheduler import InboxSlot, Scheduler
+    from scripts.scheduler.core import Scheduler
+    from scripts.scheduler.slots import InboxSlot
 
     redis = fakeredis.FakeRedis(decode_responses=True)
     scheduler = Scheduler(redis, machine="proof")
@@ -30,7 +31,7 @@ def test_cron_coalesces_downtime_and_continues_with_distinct_occurrences():
 def test_cron_uses_standard_weekday_and_explicit_timezone():
     import fakeredis
 
-    from scripts.scheduler import Scheduler
+    from scripts.scheduler.core import Scheduler
 
     scheduler = Scheduler(fakeredis.FakeRedis(decode_responses=True), machine="proof")
     cron = scheduler.cron(owner="operator", expression="0 9 * * 0", payload="Sunday", timezone="Europe/Madrid", now=0)

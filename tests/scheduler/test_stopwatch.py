@@ -7,7 +7,8 @@ def test_stopwatch_elapsed_and_limit_survive_restart():
     import fakeredis
 
     from scripts.inbox.store import InboxStore
-    from scripts.scheduler import InboxSlot, Scheduler
+    from scripts.scheduler.core import Scheduler
+    from scripts.scheduler.slots import InboxSlot
 
     redis = fakeredis.FakeRedis(decode_responses=True)
     scheduler = Scheduler(redis, machine="proof")
@@ -28,7 +29,8 @@ def test_stopped_stopwatch_records_elapsed_without_firing():
     import fakeredis
 
     from scripts.inbox.store import InboxStore
-    from scripts.scheduler import InboxSlot, Scheduler
+    from scripts.scheduler.core import Scheduler
+    from scripts.scheduler.slots import InboxSlot
 
     redis = fakeredis.FakeRedis(decode_responses=True)
     scheduler = Scheduler(redis, machine="proof")

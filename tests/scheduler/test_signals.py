@@ -5,9 +5,10 @@ pytestmark = [pytest.mark.unit, pytest.mark.xdist_group("fakeredis")]
 
 def test_timer_signal_survives_restart_and_delivers_once():
     import fakeredis
-    from scripts.scheduler import InboxSlot, Scheduler
 
     from scripts.inbox.store import InboxStore
+    from scripts.scheduler.core import Scheduler
+    from scripts.scheduler.slots import InboxSlot
 
     redis = fakeredis.FakeRedis(decode_responses=True)
     scheduler = Scheduler(redis, machine="proof")
