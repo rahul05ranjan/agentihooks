@@ -77,3 +77,26 @@ def test_noncanonical_float_signatures_reuse_committed_rows():
     new = fragments.document(copy.deepcopy(state), old)
     assert new.value["tasks"][0] is old.value["tasks"][0]
     assert fragments.encoded(new) == rows.encode(state)
+
+
+def test_operation_relay_borrows_the_committed_state(tmp_path, monkeypatch):
+    from scripts.swarm_ledger.api import mutations
+    from tests.swarm_ledger import operations_cpu_replay as replay
+    from tests.swarm_ledger.test_operations_cpu_contract import small_corpus
+
+    apply = mutations.apply
+    observed = []
+
+    def check_borrowed(server, slug, principal, payload):
+        reply = apply(server, slug, principal, payload)
+        relayed = server.relay_to_inbox.call_args.args[1]
+        assert relayed is server.repository.current(slug).state
+        observed.append(reply)
+        return reply
+
+    monkeypatch.setattr(mutations, "apply", check_borrowed)
+    monkeypatch.setattr(replay, "corpus", small_corpus)
+    report = replay.replay(tmp_path, monkeypatch)
+    assert len(observed) == report["requests"] == 2
+    assert observed[0]["applied"] == ["accepted"]
+    assert observed[1]["rejected"] == ["missing"]
