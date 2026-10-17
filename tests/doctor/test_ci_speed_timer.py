@@ -116,3 +116,15 @@ def test_a_judged_speed_finding_returns_only_after_its_cooldown(store, monkeypat
     cli.timer(store, DOCTOR, NOW + 120000, False)
     second = json.loads(store.redis.hget(judgments.key, "ci-runner-wait/7-1-11"))
     assert second["returned"] is True
+
+
+def test_persisted_notifications_suppress_a_crossing_after_a_process_restart(store, monkeypatch):
+    identity = "ci-runner-wait/7-1-11"
+    for slug in (DOCTOR, WATCHED):
+        store.redis.sadd(store.key(DOCTOR, "ci-speed-notified", slug), identity)
+    monkeypatch.setattr(
+        ci_speed_read, "read", lambda *args, **kwargs: snapshot([record([job(0, queued=True, created=-301)])])
+    )
+    cli.timer(store, DOCTOR, NOW, False)
+    for slug in (DOCTOR, WATCHED):
+        assert InboxStore(store.redis).inbox(f"master@{slug}") == []

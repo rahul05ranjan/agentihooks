@@ -169,3 +169,16 @@ def test_api_failure_preserves_diagnostic_type_and_counts():
         "api_calls": 1,
         "discovered_runs": 0,
     }
+
+
+def test_api_job_reads_have_a_fixed_concurrency_ceiling(monkeypatch):
+    from unittest.mock import Mock
+
+    from scripts.doctor import ci_speed_read
+
+    pool = Mock(wraps=ci_speed_read.ThreadPoolExecutor)
+    monkeypatch.setattr(ci_speed_read, "ThreadPoolExecutor", pool)
+    run, _ = api([{"id": n} for n in range(10)])
+    result = ci_speed_read.read(NOW - 60000, NOW, run=run)
+    assert result["complete"] is True
+    pool.assert_called_once_with(max_workers=6)
