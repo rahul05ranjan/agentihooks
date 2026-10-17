@@ -60,8 +60,7 @@ def read(
         since = datetime.fromtimestamp(since_ms / 1000, timezone.utc).isoformat()
         until = datetime.fromtimestamp(now_ms / 1000, timezone.utc).isoformat()
         queries = [{"created": f"{since}..{until}"}]
-        if pending is None:
-            queries.extend({"status": status} for status in ACTIVE)
+        queries.extend({"status": status} for status in ACTIVE)
         for query in queries:
             for workflow in api.pages(f"{root}?{urlencode(query)}", "workflow_runs"):
                 discovered[workflow["id"]] = workflow

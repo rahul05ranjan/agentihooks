@@ -87,6 +87,6 @@ def test_active_runs_are_discovered_even_when_they_predate_the_window():
             body = {"total_count": 0, "workflow_runs": []}
         return SimpleNamespace(stdout=json.dumps(body))
 
-    result = ci_speed_read.read(NOW - 60000, NOW, run=run)
+    result = ci_speed_read.read(NOW - 60000, NOW, pending=[], run=run)
     assert result["complete"] is True and result["runs"][0]["id"] == 88
     assert len(calls) == 7
