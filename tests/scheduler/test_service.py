@@ -116,7 +116,7 @@ def test_agentihooks_starts_one_detached_supervisor_when_redis_is_configured(
     assert service.ensure_running({}) is False
     spawn.assert_not_called()
     environ = {variable: "redis://proof.invalid/0"}
-    monkeypatch.setattr(service, "os", SimpleNamespace(environ=environ))
+    monkeypatch.setattr(service, "os", SimpleNamespace(environ=environ, getpid=service.os.getpid))
     assert service.ensure_running(None if inherited else environ) is True
     call = spawn.call_args
     assert call.args[0] == [sys.executable, "-m", "scripts.scheduler.service", "supervise"]
