@@ -1,3 +1,5 @@
+import argparse
+import json
 from dataclasses import replace
 
 import pytest
@@ -146,3 +148,226 @@ def test_a_finished_master_is_retired_instead_of_adopted(store):  # noqa: F811
     tick("sw", store, tasks(), runtime, 2)
     assert old.name in runtime.killed
     assert len(runtime.masters) == 2
+
+
+NOW = 10_000_000
+GRACE_MS = 300_000
+QUIET = {"slots": [], "interactive": {}, "repos": [], "sessions": {}, "quota": {}}
+
+
+def _hive(store, hive, beat):  # noqa: F811
+    from scripts.hive import registry
+
+    registry.update(store.redis, hive, ["ui=yes", "roles=master"])
+    slots = [{"harness": "claude", "account": "one", "kind": "subscription"}]
+    store.redis.hset(
+        registry.key(hive),
+        mapping={"heartbeat_at": beat, "slots": json.dumps(slots), "repos": json.dumps(["/repo"])},
+    )
+
+
+def _hive_master(store, hive="lost"):  # noqa: F811
+    name = store.next_name("sw", MASTER)
+    record = AgentRecord(
+        name,
+        MASTER,
+        MASTER,
+        harness="claude",
+        account="one",
+        seat="master@sw",
+        hive=hive,
+        runtime_target={"host_id": hive},
+    )
+    master = store.start_execution("sw", record)
+    store.seats.occupy("master@sw", name, 1)
+    return master
+
+
+def test_a_lost_master_hive_moves_the_master_to_a_live_hive(store):  # noqa: F811
+    from scripts.handoff import transfers
+    from scripts.swarm import master_move
+
+    _hive(store, "lost", NOW - GRACE_MS - 1)
+    _hive(store, "spare", NOW)
+    master = _hive_master(store)
+    generation = store.seats.occupant("master@sw").generation
+    runtime = RecoveryRuntime()
+
+    actions = tick("sw", store, tasks(), runtime, NOW)
+
+    assert f"moved master {master.name} off lost hive lost" in actions
+    [moved] = [row for row in transfers.list_transfers(store, "sw") if row["reason"] == master_move.LOST]
+    assert moved["predecessor"] == master.name
+    assert moved["handoff"] == master_move.RECOVERY.format(slug="sw", name=master.name, hive="lost", seconds=300)
+    assert moved["handoff"].count("unknown:") == 3
+    fence = json.loads(store.redis.hget(master_move.fenced("lost"), master.execution_id))
+    assert fence == {"slug": "sw", "generation": generation + 1, "at": NOW}
+    [(successor, task)] = runtime.masters
+    assert task["hive"] == "spare"
+    assert moved["successor"] == successor
+    assert master.name not in [a.name for a in masters(store) if a.state != "finished"]
+    assert master_move.pending(store, "sw") is None
+
+
+@pytest.mark.parametrize(
+    ("beat", "live", "grace"),
+    [(NOW - GRACE_MS, False, None), (NOW - GRACE_MS - 1, True, None), (0, False, None), (NOW - 400_000, False, 600)],
+    ids=["inside-grace", "seen-live", "never-beat", "longer-grace"],
+)
+def test_a_master_hive_back_inside_the_grace_keeps_its_master(store, beat, live, grace):  # noqa: F811
+    from scripts.handoff import transfers
+    from scripts.swarm import master_move
+
+    if grace:
+        store.update("sw", master_move_grace=grace)
+    _hive(store, "lost", beat)
+    _hive(store, "spare", NOW)
+    master = _hive_master(store)
+    generation = store.seats.occupant("master@sw").generation
+    runtime = RecoveryRuntime()
+    if live:
+        runtime.live.add(master.name)
+
+    actions = tick("sw", store, tasks(), runtime, NOW)
+
+    assert not [a for a in actions if a.startswith("moved master")]
+    assert transfers.list_transfers(store, "sw") == []
+    assert store.seats.occupant("master@sw").generation == generation
+    assert store.redis.hlen(master_move.fenced("lost")) == 0
+    assert [(a.name, a.state) for a in masters(store)] == [(master.name, "working")]
+    assert runtime.masters == []
+
+
+class FenceRuntime:
+    def __init__(self, ok=True):
+        self.ok, self.terminated = ok, []
+
+    def terminate(self, agent, homes=()):
+        from scripts.hive import registry
+        from scripts.swarm_v2.runtime.base import Outcome, Status
+
+        self.terminated.append((agent.execution_id, registry.show(self.redis, "lost")["heartbeat_at"]))
+        return Outcome("terminate", Status.OK if self.ok else Status.REFUSED, "local")
+
+
+def _beat(store, monkeypatch, runtime):  # noqa: F811
+    from scripts.hive import daemon, orders
+
+    runtime.redis = store.redis
+    monkeypatch.setattr(daemon, "observe", lambda **kwargs: QUIET)
+    monkeypatch.setattr(daemon, "execution_report", lambda redis, hive, herdr: {})
+    monkeypatch.setattr(orders.Consumer, "local", classmethod(lambda cls, redis, hive: cls(redis, hive, runtime)))
+    monkeypatch.setattr(daemon.time, "time", lambda: NOW / 1000 + 5)
+    daemon.beat(store.redis, "lost")
+
+
+@pytest.mark.parametrize("ok", [True, False])
+def test_a_returning_hive_terminates_its_superseded_master_before_it_beats(store, monkeypatch, ok):  # noqa: F811
+    from scripts.hive import registry
+    from scripts.swarm import master_move
+
+    _hive(store, "lost", NOW - GRACE_MS - 1)
+    master = _hive_master(store)
+    tick("sw", store, tasks(), RecoveryRuntime(), NOW)
+    runtime = FenceRuntime(ok)
+
+    _beat(store, monkeypatch, runtime)
+
+    assert runtime.terminated == [(master.execution_id, NOW - GRACE_MS - 1)]
+    assert registry.show(store.redis, "lost")["heartbeat_at"] == NOW + 5000
+    assert store.redis.hexists(master_move.fenced("lost"), master.execution_id) is not ok
+
+
+def test_a_fence_naming_an_unknown_execution_is_dropped(store, monkeypatch):  # noqa: F811
+    from scripts.swarm import master_move
+
+    _hive(store, "lost", NOW)
+    store.redis.hset(master_move.fenced("lost"), "exe-gone", json.dumps({"slug": "sw", "generation": 2, "at": 1}))
+    runtime = FenceRuntime()
+
+    _beat(store, monkeypatch, runtime)
+
+    assert runtime.terminated == []
+    assert store.redis.hlen(master_move.fenced("lost")) == 0
+
+
+def test_master_move_orders_a_handoff_and_pins_the_successor_to_the_hive(store):  # noqa: F811
+    from scripts.swarm import cli, master_move
+
+    _hive(store, "home", NOW)
+    _hive(store, "spare", NOW)
+    master = _hive_master(store, "home")
+    inbox = InboxStore(store.redis)
+    args = cli.build_parser().parse_args(["sw", "master", "move", "--to", "spare"])
+    assert (args.action, args.to) == ("move", "spare")
+
+    found = master_move.order(store, "sw", "spare", NOW)
+
+    item = inbox.get(found["item"])
+    assert item.address == "master@sw"
+    assert item.text == master_move.ORDER.format(to="spare", current="home", slug="sw")
+    assert found == {
+        "from": "home",
+        "to": "spare",
+        "master": master.name,
+        "item": item.id,
+        "state": "ordered",
+        "reason": "",
+        "at": NOW,
+    }
+    assert master_move.pending(store, "sw") == found
+    current = next(a for a in store.agents("sw") if a.name == master.name)
+    store.put_agent("sw", replace(current, state="finished"))
+    runtime = RecoveryRuntime()
+
+    tick("sw", store, tasks(), runtime, NOW + 1)
+
+    [(_, task)] = runtime.masters
+    assert task["hive"] == "spare"
+    assert master_move.pending(store, "sw") is None
+    assert inbox.get(item.id).state == "done"
+
+
+@pytest.mark.parametrize(
+    ("to", "reason"),
+    [
+        ("home", "no live hive takes master"),
+        ("dead", "no live hive takes master"),
+        ("absent", "no live hive takes master"),
+    ],
+)
+def test_master_move_refuses_a_hive_that_cannot_take_the_master(store, to, reason):  # noqa: F811
+    from scripts.swarm import master_move
+    from scripts.swarm.store import SwarmError
+
+    _hive(store, "home", NOW)
+    _hive(store, "dead", NOW - 100_000)
+    _hive_master(store, "home")
+
+    with pytest.raises(SwarmError) as refused:
+        master_move.order(store, "sw", to, NOW)
+
+    assert str(refused.value) == f"the master cannot move to hive {to}: {reason}"
+    assert master_move.pending(store, "sw") is None
+
+
+def test_master_move_without_a_live_master_is_refused(store):  # noqa: F811
+    from scripts.swarm import master_move
+    from scripts.swarm.store import SwarmError
+
+    _hive(store, "spare", NOW)
+    with pytest.raises(SwarmError) as refused:
+        master_move.order(store, "sw", "spare", NOW)
+    assert str(refused.value) == "no live master to move"
+
+
+def test_master_move_grace_round_trips(store):  # noqa: F811
+    from scripts.swarm import cli
+
+    store.update("sw", state="paused")
+    assert store.config("sw").master_move_grace == 300
+
+    cli.cmd_set(store, argparse.Namespace(slug="sw", pairs=["master-move-grace=600"]))
+
+    assert store.config("sw").master_move_grace == 600
+    assert cli.setting(store.config("sw"), "master-move-grace") == 600
