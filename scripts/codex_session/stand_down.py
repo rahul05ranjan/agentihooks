@@ -202,7 +202,7 @@ def _finish(report: dict, as_json: bool) -> int:
     return 0
 
 
-def run(selector: str, swarm: str | None, dry_run: bool, sessions: "list[Session]", as_json: bool = False) -> int:
+def run(selector: str, swarm: str | None, dry_run: bool, sessions: "list[Session]", as_json: bool) -> int:
     from redis.exceptions import RedisError
 
     try:
