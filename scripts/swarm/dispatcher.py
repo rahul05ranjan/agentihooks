@@ -4,7 +4,7 @@ Each tick it orders every claimable task in focus, leaves included, by the longe
 then the open work it unblocks, the bottleneck lane, focus order and ledger position. A rank the master or the swarm
 set is a default it reorders; only an operator rank, set by him or relayed with his quoted words, orders ahead of
 that queue, and an operator rank or a low rank the swarm set on work it generated, such as documentation tasks,
-orders behind it; that low work never leads the head, the chain guard or a proposal. At delegate and full the tick
+or a generated documentation task left unranked, orders behind it; that low work never leads the head, the chain guard or a proposal. At delegate and full the tick
 claims from this queue, resumed work first within a rank band and clear territory before overlapping, and the
 dispatcher writes no rank: it comments on a task only when the task enters the head of its lane's queue, as many
 tasks as the lane has seats among those that unblock work or carry an operator rank, or leaves it while still open;
@@ -351,7 +351,7 @@ def _banded(doc):
 
 def _deferred(doc):
     low = {t["id"] for t in doc["tasks"] if t.get("rank") == ledger_rank.RANKS[-1]}
-    unranked = {t["id"] for t in doc["tasks"] if "rank" not in t and ledger_rank.generated(t)}
+    unranked = {t["id"] for t in doc["tasks"] if t.get("rank") not in ledger_rank.RANKS and ledger_rank.generated(t)}
     return (_ranked_by(doc, SWARM) & low) | unranked
 
 

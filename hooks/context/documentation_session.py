@@ -10,6 +10,7 @@ from hooks.common import inject_context, log
 from hooks.config import AGENTIHOOKS_HOME as HOME
 from hooks.context import documentation, documentation_evidence
 from scripts.swarm.ledger_client import LedgerClient
+from scripts.swarm_ledger import ledger_rank
 
 TERMINAL = {"queued", "complete"}
 
@@ -17,7 +18,7 @@ TERMINAL = {"queued", "complete"}
 WORKER_OPTIONS = {"timeout_sec": 180, "task_name": "documentation-session-end"}
 NO_CHANGES = {"needs_documentation": False, "size": "none", "source": "no changes"}
 TASK_DEFAULTS = {
-    "profile": "documentation",
+    "profile": ledger_rank.GENERATED_PROFILE,
     "lane": "eng",
     "kind": "code",
     "follow_up": True,
