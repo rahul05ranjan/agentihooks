@@ -167,10 +167,7 @@ def page(rows: list, rev: str, query: dict, revisions: list | None = None, hash_
             raise APIError(409, "revision_conflict", "Collection changed; restart pagination")
         offset = int(offset_text)
     selected = []
-    envelope = {"data": [], "revision": rev, "next_cursor": None}
-    if hash_page:
-        envelope["page_hash"] = revision([])
-    size = reply_size(envelope)
+    size = reply_size(envelope([], rev, None, hash_page))
     for row in rows[offset : offset + query.get("limit", 50)]:
         item = project(row)
         end = offset + len(selected) + 1
@@ -187,10 +184,15 @@ def page(rows: list, rev: str, query: dict, revisions: list | None = None, hash_
         size += item_size
     end = offset + len(selected)
     next_cursor = f"{rev}:{end}" if end < len(rows) else None
-    reply = {"data": selected, "revision": rev, "next_cursor": next_cursor}
-    if hash_page:
-        reply["page_hash"] = revision(selected)
+    reply = envelope(selected, rev, next_cursor, hash_page)
     return reply if selected else bounded(reply)
+
+
+def envelope(rows: list, rev: str, next_cursor: str | None, hash_page: bool) -> dict:
+    reply = {"data": rows, "revision": rev, "next_cursor": next_cursor}
+    if hash_page:
+        reply["page_hash"] = revision(rows)
+    return reply
 
 
 def swarm_read(status: dict | None, path: str, query: dict) -> dict:
