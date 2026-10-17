@@ -294,7 +294,7 @@ LIGHT_BOOTSTRAP = (
 
 def run_unit(run_tests, runner, mutant_name: str | None, tests: list[str], memory: KillMemory) -> int:
     if mutant_name is not None and not tests:
-        # The units partition the mutant's tests and the others hold all of them, so a unit with none votes survived.
+        # Each unit runs the head and one slice and together they cover every test, so a unit with none votes survived.
         return 0
     return run_tests(runner, mutant_name=mutant_name, tests=memory.prepare(mutant_name, tests))
 
