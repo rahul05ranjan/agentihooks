@@ -457,6 +457,25 @@ def test_a_claim_retries_when_the_pool_changes_meanwhile(swarm, inbox, held, mon
     assert [i.id for i in inbox.pool.distribute(SLUG)] == [first.id, second.id]
 
 
+def test_a_pass_hands_only_the_items_waiting_when_it_began(swarm, inbox, held, monkeypatch):
+    _masters(swarm, 2)
+    first, second, third = (inbox.send("swarm", FRONT, text) for text in ("first", "second", "third"))
+    swarm.redis.zrem(POOL, second.id, third.id)
+    held.undo()
+    real, calls = pool.turn, []
+
+    def arriving(live, last, skip):
+        late = {0: second, 2: third}.get(len(calls))
+        if late:
+            swarm.redis.zadd(POOL, {late.id: late.sequence})
+        calls.append(last)
+        return real(live, last, skip)
+
+    monkeypatch.setattr(pool, "turn", arriving)
+    assert [i.id for i in inbox.pool.distribute(SLUG)] == [first.id, second.id]
+    assert swarm.redis.zrange(POOL, 0, -1) == [third.id]
+
+
 def test_a_redirect_clears_the_marks_of_an_item_waiting_to_return(swarm, inbox, monkeypatch):
     _masters(swarm, 2)
     inbox.send("swarm", FRONT, "first")

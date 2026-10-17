@@ -108,8 +108,9 @@ class MasterPool:
         return [item for slug in sorted(self.redis.smembers(POOLS)) for item in self.distribute(slug)]
 
     def distribute(self, slug: str) -> list:
-        """Hand each pool item, oldest first, to the next live master; stop when the pool is empty or another
-        process is claiming from it, since that process carries on."""
+        """Hand the items waiting when the pass began, oldest first, to the next live master; stop early when another
+        process is claiming from the pool, since that process carries on. A later item waits for its own sender's
+        pass or the next redelivery."""
         live = live_masters(self.redis, slug)
         self._reclaim(slug, live)
         claimed = []
