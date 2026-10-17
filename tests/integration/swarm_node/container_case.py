@@ -36,7 +36,7 @@ def main():
     }
     write(attempt / "registration.json", authority)
     fixture = "/opt/fixture/process_fixture.py"
-    delay = "2" if mode == "late" else "0.2"
+    delay = "4" if mode == "late" else "0.2"
     agent_mode = "stubborn" if mode == "forced" else "complete" if mode == "natural" else "cooperative"
     spec = {
         "schema_version": 1,

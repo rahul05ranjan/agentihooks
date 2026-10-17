@@ -47,19 +47,23 @@ def ready(container):
 def heartbeats(container: str, root: str, initial: dict | None = None) -> dict:
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
-        ticks = json.loads(
-            docker(
-                "exec",
-                container,
-                "python",
-                "-c",
-                f"import json; from pathlib import Path; r=Path({root!r}); print(json.dumps({{p.name:json.loads(p.read_text())['tick'] for p in r.glob('heartbeat-*.json')}}))",
+        try:
+            ticks = json.loads(
+                docker(
+                    "exec",
+                    container,
+                    "python",
+                    "-c",
+                    f"import json; from pathlib import Path; r=Path({root!r}); print(json.dumps({{p.name:json.loads(p.read_text())['tick'] for p in r.glob('heartbeat-*.json')}}))",
+                )
             )
-        )
-        if len(ticks) == 5 and all(ticks.get(key, value) > value for key, value in (initial or {}).items()):
-            return ticks
+        except (subprocess.CalledProcessError, ValueError) as exc:
+            ticks = getattr(exc, "output", None) or exc
+        else:
+            if len(ticks) == 5 and all(ticks.get(key, value) > value for key, value in (initial or {}).items()):
+                return ticks
         time.sleep(0.02)
-    raise AssertionError(f"supervised heartbeat timeout: initial={initial}, observed={ticks}")
+    raise AssertionError(f"heartbeats not accepted before timeout: initial={initial}, observed={ticks}")
 
 
 def herdr_argv(container, root):
