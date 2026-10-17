@@ -5,7 +5,6 @@ import re
 from dataclasses import asdict
 from functools import cache
 
-from hooks.config import HANDOFF_MARGIN
 from hooks.context import context_recycle
 from scripts.doctor import (
     ci,
@@ -62,7 +61,6 @@ def _overruns(store, slug):
     return context_overruns.findings(
         [asdict(a) for a in store.agents(slug)],
         lambda session: context_recycle.unmarked_overrun(session, limit),
-        limit + HANDOFF_MARGIN,
     )
 
 

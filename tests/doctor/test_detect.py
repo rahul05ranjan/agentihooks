@@ -88,15 +88,13 @@ def test_the_context_overrun_reader_reads_the_swarm_agents_at_its_compact_limit(
 
     asked = []
     monkeypatch.setenv("AGENTIHOOKS_COMPACT_LIMIT", "600")
-    monkeypatch.setattr(detect, "HANDOFF_MARGIN", 50)
     monkeypatch.setattr(
         context_recycle, "unmarked_overrun", lambda session, compact: asked.append((session, compact)) or 1
     )
 
-    def found(agents, overrun, gate):
+    def found(agents, overrun):
         assert [(a["name"], a["conversation_id"]) for a in agents] == [("master@323133-0175", "c1")]
-        assert overrun("c1") == 1
-        return [STALE] if gate == limit + 50 else []
+        return [STALE] if overrun("c1") == 1 else []
 
     monkeypatch.setattr(context_overruns, "findings", found)
     agent = AgentRecord("master@323133-0175", "master", "master", conversation_id="c1")

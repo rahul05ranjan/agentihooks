@@ -8,7 +8,7 @@ from scripts.swarm.health.findings import Finding
 KIND = "context overrun"
 
 
-def findings(agents: list[dict], overrun: Callable[[str], int | None], gate: int) -> list[Finding]:
+def findings(agents: list[dict], overrun: Callable[[str], int | None]) -> list[Finding]:
     found = []
     for agent in agents:
         session = agent["conversation_id"]
@@ -21,7 +21,7 @@ def findings(agents: list[dict], overrun: Callable[[str], int | None], gate: int
                 agent["name"],
                 "swarm session passed the hard gate with no handoff preparation or recycle",
                 (f"session {session}", f"context {used // 1000}k tokens", f"state {agent['state']}"),
-                f"context at or over {gate}k with no prepare or recycle marker",
+                "context past the session's compact limit plus margin with no prepare or recycle marker",
                 used // 1000,
             )
         )
