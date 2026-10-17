@@ -44,6 +44,9 @@ def test_every_timer_tick_reads_speed_and_sends_each_crossing_to_both_masters_on
     assert any("CI speed" in action for action in second)
     finding, _ = loop.judged(store, DOCTOR, "ci-runner-wait/7-1-11")
     assert finding["measure"] == 361
+    assert int(store.redis.hget(store.key(DOCTOR, "doctor-timer"), "last_new")) == NOW
+    seen = json.loads(store.redis.hget(store.key(DOCTOR, "doctor-findings"), "ci-runner-wait/7-1-11"))
+    assert seen["seen_at"] == NOW
 
 
 def test_an_api_failure_reports_incomplete_counts_and_preserves_the_window_for_retry(store, monkeypatch):
@@ -62,6 +65,17 @@ def test_an_api_failure_reports_incomplete_counts_and_preserves_the_window_for_r
     assert any("incomplete" in action and "API unavailable" in action for action in actions)
     [item] = InboxStore(store.redis).inbox(f"master@{WATCHED}")
     assert "API unavailable" in item.text
+    assert item.text.startswith("New Doctor findings on the swarm speed-watched:")
+    finding, _ = loop.judged(store, DOCTOR, "ci-speed-read/agentihooks")
+    assert finding == {
+        "kind": "ci speed read",
+        "subject": "agentihooks",
+        "summary": "CI speed API read is incomplete",
+        "evidence": ["API unavailable"],
+        "threshold": "Actions API read must complete",
+        "id": "ci-speed-read/agentihooks",
+        "measure": 1,
+    }
 
 
 def test_stopped_or_unlinked_doctors_do_not_read_the_api(store, monkeypatch):
@@ -79,3 +93,26 @@ def test_a_complete_pass_records_full_counts_and_the_next_active_set(store, monk
     saved = json.loads(store.redis.get(store.key(DOCTOR, "ci-speed")))
     assert saved["last"] == NOW and saved["pending"] == []
     assert saved["report"]["runs"] == 1 and saved["report"]["jobs"] == 0
+
+
+def test_the_timer_excludes_jobs_that_started_before_the_saved_window(store, monkeypatch):
+    monkeypatch.setattr(ci_speed_read, "read", lambda *args, **kwargs: snapshot([record([job(301, created=-601)])]))
+    actions = cli.timer(store, DOCTOR, NOW, False)
+    assert "doctor CI speed: complete; 1 runs read of 1 discovered, 1 jobs, 0 crossings, 7 API calls" in actions
+    assert InboxStore(store.redis).inbox(f"master@{WATCHED}") == []
+
+
+def test_a_judged_speed_finding_returns_only_after_its_cooldown(store, monkeypatch):
+    monkeypatch.setenv("AGENTIHOOKS_HEALTH_COOLDOWN_MINUTES", "2")
+    monkeypatch.setattr(
+        ci_speed_read, "read", lambda *args, **kwargs: snapshot([record([job(0, queued=True, created=-301)])])
+    )
+    cli.timer(store, DOCTOR, NOW, False)
+    judgments = loop.verdicts(store, DOCTOR)
+    judgments.judge("ci-runner-wait/7-1-11", "early-real", "runner delay", "reader", NOW)
+    cli.timer(store, DOCTOR, NOW + 60000, False)
+    first = json.loads(store.redis.hget(judgments.key, "ci-runner-wait/7-1-11"))
+    assert first["returned"] is False
+    cli.timer(store, DOCTOR, NOW + 120000, False)
+    second = json.loads(store.redis.hget(judgments.key, "ci-runner-wait/7-1-11"))
+    assert second["returned"] is True

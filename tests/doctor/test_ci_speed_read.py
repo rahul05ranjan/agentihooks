@@ -38,7 +38,7 @@ def test_repository_runs_and_all_job_pages_are_discovered_with_full_counts():
     run, calls = api(records, [{"id": n} for n in range(101)])
     result = ci_speed_read.read(NOW - 60000, NOW, run=run, max_calls=300)
     assert result["complete"] is True
-    assert len(result["runs"]) == 101
+    assert len(result["runs"]) == result["discovered_runs"] == 101
     assert sum(len(r["jobs"]) for r in result["runs"]) == 10201
     assert result["api_calls"] == len(calls) == 209
     assert all(0 < kwargs["timeout"] <= 25 for _, kwargs in calls)
@@ -90,3 +90,82 @@ def test_active_runs_are_discovered_even_when_they_predate_the_window():
     result = ci_speed_read.read(NOW - 60000, NOW, pending=[], run=run)
     assert result["complete"] is True and result["runs"][0]["id"] == 88
     assert len(calls) == 7
+
+
+def test_api_requests_use_the_exact_repository_window_and_safe_subprocess_options(monkeypatch):
+    from scripts.doctor import ci_speed_read
+
+    monkeypatch.setattr(ci_speed_read.time, "monotonic", lambda: 100)
+    run, calls = api()
+    result = ci_speed_read.read(NOW - 60000, NOW, run=run)
+    assert result == {"complete": True, "runs": [], "api_calls": 6, "discovered_runs": 0}
+    first_args, _ = calls[0]
+    assert first_args[:2] == ["gh", "api"]
+    assert urlsplit(first_args[2]).path == "repos/the-cloud-clockwork/agentihooks/actions/runs"
+    assert parse_qs(urlsplit(first_args[2]).query) == {
+        "created": ["2026-10-17T21:59:00+00:00..2026-10-17T22:00:00+00:00"],
+        "per_page": ["100"],
+        "page": ["1"],
+    }
+    for args, kwargs in calls:
+        assert args[:2] == ["gh", "api"]
+        assert kwargs == {"capture_output": True, "text": True, "check": True, "timeout": 25}
+
+
+def test_incomplete_pagination_reports_the_missing_full_count():
+    from scripts.doctor import ci_speed_read
+
+    def run(args, **kwargs):
+        return SimpleNamespace(stdout=json.dumps({"total_count": 1, "workflow_runs": []}))
+
+    result = ci_speed_read.read(NOW - 60000, NOW, run=run)
+    assert result == {
+        "complete": False,
+        "error": "Actions API read failed: RuntimeError: Actions API pagination ended before the full count",
+        "runs": [],
+        "api_calls": 1,
+        "discovered_runs": 0,
+    }
+
+
+@pytest.mark.parametrize("elapsed,complete", [(24.5, True), (25, False), (25.5, False)])
+def test_the_default_time_budget_allows_work_until_its_deadline(monkeypatch, elapsed, complete):
+    from scripts.doctor import ci_speed_read
+
+    times = iter([100])
+    monkeypatch.setattr(ci_speed_read.time, "monotonic", lambda: next(times, 100 + elapsed))
+    run, calls = api()
+    result = ci_speed_read.read(NOW - 60000, NOW, run=run)
+    assert result["complete"] is complete
+    if complete:
+        assert calls and all(kwargs["timeout"] == 0.5 for _, kwargs in calls)
+    else:
+        assert calls == []
+        assert result["error"] == "Actions API read failed: RuntimeError: Actions API request or time budget exhausted"
+
+
+def test_the_default_request_budget_stops_after_sixty_calls():
+    from scripts.doctor import ci_speed_read
+
+    run, calls = api([{"id": n} for n in range(101)])
+    result = ci_speed_read.read(NOW - 60000, NOW, run=run)
+    assert result["complete"] is False
+    assert result["api_calls"] == len(calls) == 60
+    assert result["discovered_runs"] == 101
+    assert result["error"] == "Actions API read failed: RuntimeError: Actions API request or time budget exhausted"
+
+
+def test_api_failure_preserves_diagnostic_type_and_counts():
+    from scripts.doctor import ci_speed_read
+
+    run, calls = api(fail=True)
+    result = ci_speed_read.read(NOW - 60000, NOW, run=run)
+    assert result == {
+        "complete": False,
+        "error": "Actions API read failed: CalledProcessError: Command '"
+        + str(calls[0][0])
+        + "' returned non-zero exit status 1.",
+        "runs": [],
+        "api_calls": 1,
+        "discovered_runs": 0,
+    }
