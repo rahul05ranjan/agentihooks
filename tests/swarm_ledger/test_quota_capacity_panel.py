@@ -68,7 +68,7 @@ def test_each_quota_row_shows_the_balance_state_and_routing_left_even_when_the_t
     ]
 
 
-def test_routing_left_is_unknown_when_a_window_is_unknown():
+def test_an_unknown_routing_reading_shows_a_dash():
     out = run_js(
         ["percent", "accountState"],
         "[accountState({account: 'a', agent: 'claude', state: 'UNKNOWN', routing_left: null})]",

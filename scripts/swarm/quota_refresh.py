@@ -1,4 +1,4 @@
-"""Quota refresh requests from the ledger page, probed on the hive the moment they land instead of at the next tick."""
+"""Answers quota refresh requests queued from the ledger page, probed on the hive as they land."""
 
 import json
 from collections.abc import Callable
