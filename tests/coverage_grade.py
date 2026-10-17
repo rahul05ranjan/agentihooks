@@ -136,9 +136,15 @@ def _lost(
     return lost
 
 
-def statements_of(source: str, lines: Iterable[int]) -> dict[int, int]:
+@functools.lru_cache(maxsize=512)
+def _parser(source: str) -> PythonParser:
     parser = PythonParser(text=source)
     parser.parse_source()
+    return parser
+
+
+def statements_of(source: str, lines: Iterable[int]) -> dict[int, int]:
+    parser = _parser(source)
     return {line: parser.first_line(line) for line in lines if parser.first_line(line) in parser.statements}
 
 

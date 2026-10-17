@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches-ignore: [dev, main, "gh-readonly-queue/**", "wip/**"]
-    paths: [tests/coverage_ratchet.py, .github/workflows/coverage-ratchet-speed.yml]
+    paths: [tests/coverage_ratchet.py, tests/coverage_grade.py, .github/workflows/coverage-ratchet-speed.yml]
 
 permissions:
   contents: read
@@ -51,7 +51,6 @@ jobs:
         run: |
           python - <<'PY'
           import json
-          import pstats
           import subprocess
           import sys
           import time
@@ -61,29 +60,36 @@ jobs:
           evidence = root / "speed-evidence"
           evidence.mkdir()
           baseline = Path.home() / "coverage-baseline/baseline.json"
+          clean = evidence / "clean-baseline.json"
+          subprocess.run([sys.executable, "-m", "tests.coverage_baseline", "--head", str(root / "original"),
+                          "--shards", "12", "--head-shards", str(root / "head-coverage"),
+                          "--out", str(clean)], cwd=root / "original", check=True)
           results = {}
-          for name, code in (("original", root / "original"), ("candidate", root)):
-              out = evidence / name
-              command = [sys.executable, "-m", "tests.coverage_ratchet",
-                         "--base", "224f880cc9b4f6b6cfd15a17b5a7d22f72958ea4",
-                         "--head", str(root / "original"), "--shards", "12",
-                         "--head-shards", str(root / "head-coverage"),
-                         "--base-baseline", str(baseline), "--out", str(out)]
-              started = time.perf_counter()
-              result = subprocess.run(command, cwd=code, capture_output=True, text=True)
-              elapsed = time.perf_counter() - started
-              (evidence / f"{name}.log").write_text(result.stdout + result.stderr)
-              results[name] = {"seconds": elapsed, "verdict": result.returncode}
-              print(name, json.dumps(results[name]), flush=True)
+          for case, base, snapshot, verdict in (
+              ("loss", "224f880cc9b4f6b6cfd15a17b5a7d22f72958ea4", baseline, 1),
+              ("clean", "768175723e90908ad02a738ed57791fcabcc296b", clean, 0),
+          ):
+              results[case] = {}
+              for name, code in (("original", root / "original"), ("candidate", root)):
+                  out = evidence / case / name
+                  command = [sys.executable, "-m", "tests.coverage_ratchet", "--base", base,
+                             "--head", str(root / "original"), "--shards", "12",
+                             "--head-shards", str(root / "head-coverage"),
+                             "--base-baseline", str(snapshot), "--out", str(out)]
+                  started = time.perf_counter()
+                  result = subprocess.run(command, cwd=code, capture_output=True, text=True)
+                  elapsed = time.perf_counter() - started
+                  (evidence / f"{case}-{name}.log").write_text(result.stdout + result.stderr)
+                  results[case][name] = {"seconds": elapsed, "verdict": result.returncode}
+                  print(case, name, json.dumps(results[case][name]), flush=True)
+              assert results[case]["original"]["verdict"] == results[case]["candidate"]["verdict"] == verdict
+              assert (evidence / case / "original/report.txt").read_bytes() == (evidence / case / "candidate/report.txt").read_bytes()
+              print(case, "identical full reports and verdicts", flush=True)
           (evidence / "timings.json").write_text(json.dumps(results, indent=2))
-          assert results["original"]["verdict"] == results["candidate"]["verdict"] == 1
-          assert (evidence / "original/report.txt").read_bytes() == (evidence / "candidate/report.txt").read_bytes()
-          command = [sys.executable, "-m", "cProfile", "-o", str(evidence / "original.prof"), "-m", *command[2:]]
-          subprocess.run(command, cwd=root / "original", capture_output=True, text=True)
-          with (evidence / "profile.txt").open("w") as stream:
-              pstats.Stats(str(evidence / "original.prof"), stream=stream).sort_stats("cumulative").print_stats(35)
-          print((evidence / "profile.txt").read_text())
-          print("Identical full reports and failure verdicts on head 768175723e90908ad02a738ed57791fcabcc296b")
+          for case, pair in results.items():
+              saved = pair["original"]["seconds"] - pair["candidate"]["seconds"]
+              print(case, "seconds saved", saved, flush=True)
+              assert saved >= 20, f"{case} saved only {saved:.2f} seconds"
           PY
       - name: Retain timing and equivalence evidence
         if: always()
