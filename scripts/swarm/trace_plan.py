@@ -311,7 +311,8 @@ def run(folder, state, ledger, who, mode, home=None, now_ms=None):
     try:
         pieces = _read(folder, who, state)
     except ValueError as exc:
-        gate_log.append(who.swarm, gate_log.Row.of(GATE.name, "deny", who, reason=f"{mode} mode: {exc}"), home)
+        if mode in FAIL_KINDS:
+            gate_log.append(who.swarm, gate_log.Row.of(GATE.name, FAIL_KINDS[mode], who, reason=str(exc)), home)
         raise
     previous = load(folder)
     if previous.get("plan_hash") == plan_hash(pieces) and previous.get("authorizations", []) == _ids(state):

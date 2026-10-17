@@ -787,7 +787,7 @@ def test_run_needs_a_plan_file(tmp_path):
     assert str(refused.value) == f"write the plan first: {tmp_path / 't1' / 'plan.md'}, {trace_plan.FORMAT}"
 
 
-@pytest.mark.parametrize("mode", ["enforce", "observe", "off"])
+@pytest.mark.parametrize(("mode", "kind"), [("enforce", "deny"), ("observe", "observe"), ("off", None)])
 @pytest.mark.parametrize(
     ("text", "refusal"),
     [
@@ -797,7 +797,7 @@ def test_run_needs_a_plan_file(tmp_path):
         ("prose only\n", "the plan holds no pieces"),
     ],
 )
-def test_run_logs_every_refusal_as_one_deny_row_before_raising(ask, tmp_path, mode, text, refusal):
+def test_run_logs_every_refusal_by_its_mode_before_raising(ask, tmp_path, mode, kind, text, refusal):
     folder, home = tmp_path / "t1", tmp_path / "home"
     if text is not None:
         write_plan(folder, text)
@@ -805,9 +805,8 @@ def test_run_logs_every_refusal_as_one_deny_row_before_raising(ask, tmp_path, mo
     with pytest.raises(ValueError) as refused:
         trace_plan.run(folder, INTENT, Ledger(), WHO, mode, home=home)
     assert str(refused.value).startswith(refusal) and fake.calls == []
-    [row] = rows(home)
-    assert (row["gate"], row["kind"], row["agent"], row["task"]) == ("trace-plan", "deny", WHO.name, WHO.task)
-    assert row["reason"] == f"{mode} mode: {refused.value}"
+    expected = [("trace-plan", kind, WHO.name, WHO.task, str(refused.value))] if kind else []
+    assert [(r["gate"], r["kind"], r["agent"], r["task"], r["reason"]) for r in rows(home)] == expected
 
 
 def test_run_accepts_a_task_identifier_the_ledger_would_refuse_in_prose(ask, tmp_path):
