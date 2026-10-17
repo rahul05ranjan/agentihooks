@@ -94,6 +94,9 @@ LAYER_DOCKER = """#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "$PULL_LOG"
 if [[ "$1" == manifest ]]; then
+  if (( "$(grep -c '^manifest ' "$PULL_LOG")" <= ${MANIFEST_STALLS:-0} )); then
+    exec python3 -c 'import time; time.sleep(30)'
+  fi
   if (( "$(grep -c '^manifest ' "$PULL_LOG")" <= ${MANIFEST_FAILURES:-0} )); then
     echo 'manifest lookup: registry unavailable' >&2
     exit 18
@@ -104,6 +107,9 @@ fi
 if [[ "$1" == --host ]]; then shift 2; fi
 if [[ "$1" == pull ]]; then
   attempt="$(grep -c ' pull ' "$PULL_LOG")"
+  if (( attempt <= ${STALLS:-0} )); then
+    exec python3 -c 'import time; time.sleep(30)'
+  fi
   if (( attempt <= FAILURES )); then
     echo "could not fetch content descriptor sha256:layer from remote: not found on attempt $attempt" >&2
     exit 17
@@ -122,7 +128,7 @@ def tools_with(tmp_path, docker):
     return tools
 
 
-def pull_runtime(tmp_path, failures, manifest_failures=0):
+def pull_runtime(tmp_path, failures, manifest_failures=0, stalls=0, manifest_stalls=0):
     tools = tools_with(tmp_path, LAYER_DOCKER)
     log, waits = tmp_path / "docker.log", tmp_path / "waits.log"
     result = subprocess.run(
@@ -134,6 +140,9 @@ def pull_runtime(tmp_path, failures, manifest_failures=0):
             "WAITS": str(waits),
             "FAILURES": str(failures),
             "MANIFEST_FAILURES": str(manifest_failures),
+            "STALLS": str(stalls),
+            "MANIFEST_STALLS": str(manifest_stalls),
+            "PULL_ATTEMPT_SECONDS": "1",
         },
         text=True,
         capture_output=True,
@@ -175,6 +184,24 @@ def test_runtime_pull_retries_a_failed_digest_lookup_within_the_same_bound(tmp_p
     assert not pulls
     assert len(waits) == 2
     assert result.stderr.count("manifest lookup: registry unavailable") == 3
+
+
+@pytest.mark.parametrize("stalled", ["stalls", "manifest_stalls"])
+def test_runtime_pull_retries_a_stalled_mirror_within_the_same_bound(tmp_path, stalled):
+    result, pulls, tags, waits = pull_runtime(tmp_path, 0, **{stalled: 1})
+    assert result.returncode == 0, result.stderr
+    assert len(pulls) == 2 - (stalled == "manifest_stalls")
+    assert len(waits) == 1
+    assert len(tags) == 1
+    assert "failed on attempt 1 of 3" in result.stderr
+
+
+def test_runtime_pull_fails_after_three_stalled_attempts(tmp_path):
+    result, pulls, tags, waits = pull_runtime(tmp_path, 0, stalls=99)
+    assert result.returncode == 124
+    assert len(pulls) == 3
+    assert len(waits) == 2
+    assert not tags
 
 
 def dockerfile_bases():
