@@ -101,6 +101,25 @@ def test_the_decision_lives_on_the_execution_and_stays_out_of_the_legacy_project
     assert store.agents("fixture")[0].remote_control == {"state": "off", "detail": "flag"}
 
 
+def test_an_execution_written_before_the_decision_existed_reads_back_empty():
+    import json
+
+    import fakeredis
+
+    from scripts.swarm.store import AgentRecord, SwarmConfig
+
+    store = RedisStore(fakeredis.FakeRedis(decode_responses=True))
+    store.create(SwarmConfig("fixture", "agentihooks", 1, 0))
+    name = store.next_name("fixture", "master")
+    store.start_execution("fixture", AgentRecord(name, "master", "master", seat="master@fixture", started_at=1))
+    key = store.key("fixture", "executions")
+    for field, raw in store.redis.hgetall(key).items():
+        row = json.loads(raw)
+        del row["remote_control"]
+        store.redis.hset(key, field, json.dumps(row))
+    assert store.agents("fixture")[0].remote_control == {}
+
+
 def test_the_notification_hook_hands_its_payload_to_the_recorder(monkeypatch):
     seen = []
     monkeypatch.setattr(remote_control, "on_notification", lambda payload: seen.append(payload))
