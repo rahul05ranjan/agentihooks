@@ -205,7 +205,9 @@ def imported_helpers(tree: ast.Module, root: Path, seen: frozenset = frozenset()
         helpers.update(imported_helpers(source, root, seen | {path}))
         functions = {item.name: item for item in source.body if isinstance(item, FUNCTIONS)}
         helpers.update(
-            (name.asname or name.name, functions[name.name]) for name in node.names if name.name in functions
+            (name.asname or name.name, (functions[name.name], aliases_for(source)))
+            for name in node.names
+            if name.name in functions
         )
     return helpers
 
