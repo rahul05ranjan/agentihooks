@@ -25,7 +25,14 @@ def job(wait, *, queued=False, created=-1000, name="unit", identity=11):
 
 
 def record(jobs, event="push", identity=7, **extra):
-    return {"id": identity, "event": event, "status": "in_progress", "jobs": jobs, **extra}
+    return {
+        "id": identity,
+        "event": event,
+        "path": ".github/workflows/test.yml",
+        "status": "in_progress",
+        "jobs": jobs,
+        **extra,
+    }
 
 
 @pytest.mark.parametrize("wait, count", [(299, 0), (300, 0), (301, 1)])
