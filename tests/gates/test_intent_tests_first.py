@@ -128,13 +128,13 @@ def test_declared_part_reads_the_actual_diff_from_the_same_head():
     assert ["gh", "pr", "diff", "https://github.com/org/repo/pull/1"] in calls
 
 
-def pull_request_runner(diff, failure=None, moved=False):
+def pull_request_runner(diff, failure=None, moved=False, body=DECLARATION):
     heads = iter(["head", "moved" if moved else "head"])
 
     def run(args, **kwargs):
         if args[1:3] == ["pr", "view"]:
             output = json.dumps(
-                {"title": "Tests first", "body": DECLARATION, "files": [{"path": "tests/gates/test_required.py"}]}
+                {"title": "Tests first", "body": body, "files": [{"path": "tests/gates/test_required.py"}]}
             )
         elif args[1:3] == ["pr", "diff"]:
             if isinstance(failure, Exception):
@@ -158,6 +158,36 @@ def checked_part(tmp_path, runner, seen):
         ask=lambda value: intent.judge(value, decide=classifier(seen)),
     ).run(doc)
     return verdicts(tmp_path).read(WHO.task)
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "Tests-first prerequisite for #3880. Refs #3858.",
+        "Retain the smoke commands. This tests first prerequisite permits caching in the following pull request.",
+    ],
+)
+def test_tick_grades_a_declared_prerequisite_then_requires_the_follow_on_implementation(tmp_path, declaration):
+    task = {**TASK, "id": WHO.task, "state": "pr", "pr_url": "https://github.com/org/repo/pull/1"}
+    doc = {**DOC, "tasks": [task]}
+    seen = []
+
+    def ask(value):
+        usable = 0.9 if value.get("task_part") == "tests-first" else 0.1
+        return intent.judge(value, decide=classifier(seen, usable=usable))
+
+    def grade(body):
+        runner = pull_request_runner("+assert result in {old_state, new_state}", body=body)
+        check(tmp_path, view=lambda url: intent.pr_view(url, run=runner), ask=ask).run(doc)
+        return verdicts(tmp_path).read(WHO.task)["verdict"]
+
+    assert grade(declaration) == "pass"
+    assert seen[-1][0]["task_part"] == "tests-first"
+    assert "accepts_both_states" in seen[-1][1]
+    task["pr_url"] = "https://github.com/org/repo/pull/2"
+    assert grade("Closes #1. Tests-first prerequisite #3880 must merge first.") == "fail"
+    assert "task_part" not in seen[-1][0]
+    assert "aligned" in seen[-1][1]
 
 
 @pytest.mark.parametrize("failure", [1, subprocess.TimeoutExpired("gh", 30), OSError("unavailable")])
