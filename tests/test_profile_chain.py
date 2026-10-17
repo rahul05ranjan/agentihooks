@@ -144,6 +144,53 @@ def test_parent_lookup_keeps_builtin_bundle_and_linked_precedence(tmp_path, monk
     ]
 
 
+def test_a_bundle_root_replaces_the_linked_bundle_in_the_same_order(tmp_path, monkeypatch):
+    builtin = tmp_path / "builtin"
+    bundle = tmp_path / "bundle"
+    copy = tmp_path / "copy"
+    linked = tmp_path / "linked"
+    for root in (builtin / "base", copy / "profiles" / "base", copy / "profiles" / "parent", linked):
+        root.mkdir(parents=True)
+    (bundle / "profiles" / "child").mkdir(parents=True)
+    child = copy / "profiles" / "child"
+    child.mkdir()
+    (child / "profile.yml").write_text("extends: [base, external, parent]\n")
+    monkeypatch.setattr(install, "PROFILES_DIR", builtin)
+    install.STATE_JSON.write_text(
+        json.dumps(
+            {
+                "bundle": {"path": str(bundle)},
+                "linked_profiles": [{"name": name, "path": str(linked)} for name in ("external", "parent")],
+            }
+        )
+    )
+    assert install._resolve_profile_dir("child") == bundle / "profiles" / "child"
+    assert install._resolve_profile_dir("child", copy) == child
+    assert install._resolve_profile_chain("child", copy) == [
+        ("base", builtin / "base"),
+        ("external", linked),
+        ("parent", copy / "profiles" / "parent"),
+        ("child", child),
+    ]
+
+
+def test_the_renderer_looks_profiles_up_through_the_installer(tmp_path, monkeypatch):
+    from scripts.profiles import bundle_copy, render
+    from scripts.targets._common import _install_module
+
+    copy = tmp_path / "copy"
+    calls = []
+
+    def lookup(name, bundle=None):
+        calls.append((name, bundle))
+        return tmp_path / name
+
+    monkeypatch.setattr(bundle_copy, "current", lambda: copy)
+    monkeypatch.setattr(_install_module(), "_resolve_profile_dir", lookup)
+    assert render._resolve("child") == tmp_path / "child"
+    assert calls == [("child", copy)]
+
+
 def test_init_installs_inherited_assets_and_child_settings(tmp_path, monkeypatch):
     profiles_root = tmp_path / "profiles"
     for name, parents in (("base", []), ("child", ["base"])):
