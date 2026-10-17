@@ -7,8 +7,6 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from typing import TYPE_CHECKING
 
-from redis.exceptions import RedisError
-
 from scripts.codex_session import protocol
 from scripts.codex_session.binding import (
     EXITED,
@@ -70,7 +68,7 @@ def _unmanaged(slug: str, selector: str, sessions: "list[Session]") -> Refused:
         return Refused(reason, LISTING)
     [pid] = pids
     ids = ", ".join(sorted(s.session_id for s in sessions if s.process.pid == pid and s.session_id))
-    hosted = ids or "agentihooks has not registered, so which ones is unknown"
+    hosted = ids or "that agentihooks has not registered, so which ones is unknown"
     return Refused(
         reason,
         f"process {pid} hosts conversations {hosted}; "
@@ -150,6 +148,8 @@ def execute(
     sleep: Callable[[float], None] = time.sleep,
     wait_s: float = WAIT_S,
 ) -> dict:
+    from redis.exceptions import RedisError
+
     record = chosen.record
     try:
         _fence(bindings, chosen.slug, record)
@@ -203,6 +203,8 @@ def _finish(report: dict, as_json: bool) -> int:
 
 
 def run(selector: str, swarm: str | None, dry_run: bool, sessions: "list[Session]", as_json: bool = False) -> int:
+    from redis.exceptions import RedisError
+
     try:
         bindings, chosen = _choose(selector, swarm, sessions)
     except Refused as refused:
@@ -211,8 +213,8 @@ def run(selector: str, swarm: str | None, dry_run: bool, sessions: "list[Session
         return _failed(exc, f"{selector} {NOT_FENCED}")
     report = {
         "action": f"stand-down{'-dry-run' if dry_run else ''}",
-        "stops": [*chosen.stops],
-        "keeps": [*chosen.keeps],
+        "stops": chosen.stops,
+        "keeps": chosen.keeps,
     }
     if not as_json:
         print(f"action={report['action']}")

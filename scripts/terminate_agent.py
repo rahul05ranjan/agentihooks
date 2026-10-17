@@ -301,7 +301,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.stand_down:
         from scripts.codex_session import stand_down
 
-        return stand_down.run(args.selector, args.swarm, args.dry_run, items, args.json)
+        codex = [item for item in items if item.target == "codex"]
+        return stand_down.run(args.selector, args.swarm, args.dry_run, codex, args.json)
     try:
         selected = resolve(items, args.selector, args.type)
         members = validate(selected, items, force_shared=args.force_shared)

@@ -363,7 +363,7 @@ def test_an_unregistered_process_is_refused_as_hosting_unknown_conversations(rig
     command.setattr("scripts.terminate_agent.sessions", lambda: unregistered)
     assert main(["2448581", "--stand-down", "--swarm", SLUG]) == 2
     assert capsys.readouterr().err.splitlines()[1] == (
-        "terminate-agent: safe alternative: process 2448581 hosts conversations agentihooks has not registered, "
+        "terminate-agent: safe alternative: process 2448581 hosts conversations that agentihooks has not registered, "
         "so which ones is unknown; "
         "agentihooks terminate-agent 2448581 --force-shared --dry-run names its process group, "
         "and the same command without --dry-run ends every conversation in that process, "
@@ -395,6 +395,15 @@ def test_the_command_refuses_a_claude_type(rig, command, capsys):
         "terminate-agent: --stand-down stops Codex conversations only, not --type claude",
     ]
     assert rig.record("exe-old").state == CONNECTED
+
+
+@pytest.mark.parametrize("kind", ["codex", "any"])
+def test_the_command_never_offers_a_claude_process_as_the_alternative(rig, command, capsys, kind):
+    process = Process(2448581, 1, 2448581, 2448581, 9, "S", "claude", ("claude",))
+    claude = Session("uuid-c", "claude", "ci@abc-0700", process, "/repo", "alive")
+    command.setattr("scripts.terminate_agent.sessions", lambda: [claude])
+    assert main(["2448581", "--stand-down", "--swarm", SLUG, "--type", kind]) == 2
+    assert capsys.readouterr().err.splitlines()[1] == (f"terminate-agent: safe alternative: {stand_down.LISTING}")
 
 
 def test_the_command_prints_one_json_report_for_a_dry_run(rig, command, capsys):

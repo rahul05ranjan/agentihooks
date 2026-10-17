@@ -12,7 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   stands down one managed Codex conversation without a signal: it fences the
   conversation from new inbox turns and interrupts its active turn, leaving the
   app-server and its other conversations running. A refusal names its reason and
-  a safe alternative.
+  a safe alternative. It refuses `--type claude`, considers only Codex processes
+  and prints one JSON report with `--json`.
 - Bounded ledger write timing and request route CPU reports through the metrics
   endpoint and `python -m scripts.swarm_ledger.request_metrics` command.
 - Swarm waits accept branch mutation preflight runs and report every failing
@@ -47,8 +48,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `terminate-agent --stand-down` reports a Redis error with whether the
   conversation is fenced, names a process with unregistered conversations as
-  unknown, refuses to fence a conversation that exited after its plan, refuses
-  `--type claude` and prints one JSON report with `--json`.
+  unknown and refuses to fence a conversation that exited after its plan.
 - The quota usage banner test passes in any test order: tests that change the
   banner cadence restore it, and a regression test runs them before it.
 - Launch checks report unavailable process observations without inventing profile,
