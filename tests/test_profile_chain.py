@@ -191,6 +191,23 @@ def test_the_renderer_looks_profiles_up_through_the_installer(tmp_path, monkeypa
     assert calls == [("child", copy)]
 
 
+def test_the_renderer_looks_chains_up_through_the_installer(tmp_path, monkeypatch):
+    from scripts.profiles import bundle_copy, render
+    from scripts.targets._common import _install_module
+
+    copy = tmp_path / "copy"
+    calls = []
+
+    def lookup(chain, bundle=None):
+        calls.append((chain, bundle))
+        return [("child", tmp_path / "child")]
+
+    monkeypatch.setattr(bundle_copy, "current", lambda: copy)
+    monkeypatch.setattr(_install_module(), "_resolve_profile_chain", lookup)
+    assert render._resolve_chain(["base", "child"]) == [("child", tmp_path / "child")]
+    assert calls == [("base,child", copy)]
+
+
 def test_init_installs_inherited_assets_and_child_settings(tmp_path, monkeypatch):
     profiles_root = tmp_path / "profiles"
     for name, parents in (("base", []), ("child", ["base"])):
