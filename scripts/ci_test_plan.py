@@ -63,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     found = find_record(args.repository, args.before)
     reused = 0
+    source = commit = ""
     if found is None:
         print(
             f"::notice title=No test record::No dev push run with passed unit shards kept a dependency manifest in the last {CANDIDATES}; every test runs."
@@ -74,6 +75,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         args.out.write_text(json.dumps(chosen))
         reused = len(chosen["tests"])
+        source, commit = str(run["id"]), manifest["commit"]
         cause = f" by {chosen['global']}" if chosen["global"] else ""
         print(
             f"Dev run {run['id']} on {manifest['commit']}: {chosen['invalidated']} of {len(manifest['tests'])}"
@@ -81,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     if destination := os.environ.get("GITHUB_OUTPUT"):
         with Path(destination).open("a") as output:
-            output.write(f"reused={reused}\n")
+            output.write(f"reused={reused}\nrun={source}\ncommit={commit}\n")
     return 0
 
 
