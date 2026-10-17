@@ -2239,6 +2239,7 @@ def test_an_api_account_round_trips_through_the_route_argument(tmp_path, monkeyp
         ("codex", 0, None, "UNKNOWN", None),
         ("claude", None, 27, "UNKNOWN", None),
         ("claude", 100, 27, "CLOSED", 0),
+        ("claude", 92, 27, "DRAIN", 2),
     ],
 )
 def test_aggregate_capacity_uses_the_codex_week_rule(monkeypatch, harness, five_used, week_used, state, cap):
