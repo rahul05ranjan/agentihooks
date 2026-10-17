@@ -88,6 +88,7 @@ def _resolve_claude_home() -> Path:
 
 
 CLAUDE_HOME = _resolve_claude_home()
+ROUTE_LAUNCHERS = {"interactive": "scripts.routing.interactive", "master-login": "scripts.master_claude_login"}
 
 # Persistent state directory for user-level agentihooks configuration.
 # Overridable via AGENTIHOOKS_HOME for per-pod isolation on shared filesystems.
@@ -5439,9 +5440,6 @@ def _write_route_report(path: str, **fields: str) -> None:
     temporary = target.with_name(f".{target.name}.tmp")
     temporary.write_text("".join(f"{key}={value}\n" for key, value in fields.items()), encoding="utf-8")
     os.replace(temporary, target)
-
-
-ROUTE_LAUNCHERS = {"interactive": "scripts.routing.interactive", "master-login": "scripts.master_claude_login"}
 
 
 def _claude_command(claude_bin: str, extra_args: list[str]) -> list[str]:
