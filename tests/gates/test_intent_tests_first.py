@@ -190,7 +190,7 @@ def test_tick_grades_a_declared_prerequisite_then_requires_the_follow_on_impleme
 
     def grade(body):
         runner = pull_request_runner("+assert result in {old_state, new_state}", body=body)
-        check(tmp_path, view=lambda url: intent.pr_view(url, run=runner), ask=ask).run(doc)
+        check(tmp_path, mode="coach", view=lambda url: intent.pr_view(url, run=runner), ask=ask).run(doc)
         return verdicts(tmp_path).read(WHO.task)["verdict"]
 
     assert grade(declaration) == "pass"
