@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from redis import Redis
 
     from scripts.swarm.runtime import HerdrRuntime
+    from scripts.swarm_v2.runtime.local import LocalHerdrRuntime
 
 BEAT_SECONDS = 15
 TTL_SECONDS = BEAT_SECONDS * 3
@@ -58,7 +59,7 @@ def beat(redis: "Redis", local_id: str) -> None:
     redis.set(reports.key(local_id), json.dumps(hosted), ex=TTL_SECONDS)
 
 
-def fence(redis: "Redis", local_id: str, runtime) -> None:
+def fence(redis: "Redis", local_id: str, runtime: "LocalHerdrRuntime") -> None:
     """Terminate the superseded executions the controller fenced on this hive, before the hive reports live."""
     from scripts.swarm import master_move
     from scripts.swarm.store import RedisStore, SwarmError
