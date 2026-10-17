@@ -497,6 +497,11 @@ class HerdrRuntime:
                 replace(row, sessions=row.sessions + 1) if row == account else row for row in self._quota_accounts
             ]
 
+    def _fallback_choice(self, saved, profile, quota_transfer, environ, requested, avoid):
+        if saved:
+            return self._saved_choice(saved, profile, quota_transfer, environ)
+        return self._rotation(requested, environ, _prefer(profile, avoid))
+
     def _route_kind(self, lane, harness, task):
         explicit = task.get("route_kind")
         if explicit or lane != MASTER or harness not in ("", "claude"):
@@ -532,10 +537,8 @@ class HerdrRuntime:
             agent, reason = want or requested or saved.get("harness") or "claude", "interactive login"
         elif want and not saved:
             agent, reason = self.choose(want, environ)
-        elif saved:
-            agent, reason = self._saved_choice(saved, profile, quota_transfer, environ)
         else:
-            agent, reason = self._rotation(requested, environ, _prefer(profile, avoid))
+            agent, reason = self._fallback_choice(saved, profile, quota_transfer, environ, requested, avoid)
         if reason == agent_choice.ALL_FULL and not hasattr(self, "_quota_accounts") and route_kind != "interactive":
             raise SpawnError(reason, "unavailable")
         planned = getattr(self, "_quota_tasks", {}).get(task["id"])
