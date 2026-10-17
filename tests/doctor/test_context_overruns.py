@@ -16,7 +16,7 @@ def test_a_swarm_session_past_the_hard_gate_with_no_marker_is_a_finding():
 
     def overrun(session):
         asked.append(session)
-        return 930_000 if session == "c214557b" else None
+        return 930_500 if session == "c214557b" else None
 
     found = context_overruns.findings(AGENTS, overrun, 650)
     assert asked == ["c214557b", "marked"]

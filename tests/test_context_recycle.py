@@ -277,9 +277,30 @@ def test_an_operator_lane_session_is_never_remembered_as_a_swarm_session(monkeyp
 
 
 def test_an_unmarked_overrun_reports_the_tokens_until_a_marker_exists(monkeypatch):
-    monkeypatch.setattr(recycle, "used_tokens", lambda session_id: 650_000 if session_id == "s1" else None)
+    usage = {"s1": 650_000, "s3": 620_000}
+    monkeypatch.setattr(recycle, "used_tokens", usage.get)
     assert recycle.unmarked_overrun("s1", 600) == 650_000
     assert recycle.unmarked_overrun("s1", 601) is None
     assert recycle.unmarked_overrun("other", 600) is None
     assert recycle.directive("s1", _swarm_env()) is not None
     assert recycle.unmarked_overrun("s1", 600) is None
+    assert "PREPARATION" in recycle.directive("s3", _swarm_env())
+    usage["s3"] = 700_000
+    assert recycle.unmarked_overrun("s3", 600) is None
+
+
+def test_the_session_remembers_its_first_identity_in_a_fresh_home(monkeypatch, tmp_path):
+    monkeypatch.setattr(recycle, "AGENTIHOOKS_HOME", tmp_path / "home")
+    monkeypatch.setattr(recycle, "used_tokens", lambda session_id: 100_000)
+    assert recycle.directive("s1", MASTER) is None
+    assert recycle.directive("s1", _swarm_env("other-eng-1")) is None
+    monkeypatch.setattr(recycle, "used_tokens", lambda session_id: 650_000)
+    assert recycle.over_limit("s1", {}) == "sw"
+
+
+def test_the_session_remembers_its_identity_beside_existing_snapshots(monkeypatch, tmp_path):
+    (tmp_path / "context_usage").mkdir()
+    monkeypatch.setattr(recycle, "used_tokens", lambda session_id: 100_000)
+    assert recycle.directive("s1", MASTER) is None
+    monkeypatch.setattr(recycle, "used_tokens", lambda session_id: 650_000)
+    assert recycle.over_limit("s1", {}) == "sw"

@@ -5,9 +5,12 @@ import re
 from dataclasses import asdict
 from functools import cache
 
+from hooks.config import COMPACT_LIMIT, HANDOFF_MARGIN
+from hooks.context import context_recycle
 from scripts.doctor import (
     ci,
     ci_read,
+    context_overruns,
     handoffs,
     health,
     inbox,
@@ -54,6 +57,15 @@ def _traces(store, ledger, slug, now_ms, env):
     return traces.findings(record, traces.Limits.from_env(env))
 
 
+def _overruns(store, slug):
+    limit = store.config(slug).compact_limit or COMPACT_LIMIT
+    return context_overruns.findings(
+        [asdict(a) for a in store.agents(slug)],
+        lambda session: context_recycle.unmarked_overrun(session, limit),
+        limit + HANDOFF_MARGIN,
+    )
+
+
 def readers(store, ledger, slug, now_ms, environ=None, home=SWARM_HOME, telemetry=True):
     env = os.environ if environ is None else environ
     mail = InboxStore(store.redis)
@@ -74,6 +86,7 @@ def readers(store, ledger, slug, now_ms, environ=None, home=SWARM_HOME, telemetr
         "startup": lambda: spawns.silent_starts(
             [asdict(a) for a in store.agents(slug)], activity.first_events(slug), now_ms
         ),
+        "context overrun": lambda: _overruns(store, slug),
         "ci": lambda: [
             f
             for repo, number in open_pulls(ledger.tasks(slug))
