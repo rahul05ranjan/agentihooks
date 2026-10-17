@@ -213,7 +213,20 @@ def test_sonar_builds_the_manifest_and_only_dev_pushes_save_it():
     assert steps.index("Wait for the coverage merge") < steps.index("Build the test dependency manifest")
     build = _step("sonar", "Build the test dependency manifest")
     assert "python -m tests.dep_manifest build" in build["run"]
-    assert _step("sonar", "Upload the test dependency manifest")["with"]["name"] == "dep-manifest"
+    assert "< /dev/null" in build["run"] and 'echo "pid=$!"' in build["run"]
+    assert '--out "$RUNNER_TEMP/dep-manifest/manifest.json"' in build["run"]
+    assert (
+        steps.index("Build the test dependency manifest")
+        < steps.index("SonarQube Scan")
+        < steps.index("Wait for the test dependency manifest")
+        < steps.index("Upload the test dependency manifest")
+    )
+    wait = _step("sonar", "Wait for the test dependency manifest")
+    assert wait["env"]["MANIFEST_PID"] == "${{ steps.manifest.outputs.pid }}"
+    assert 'exit "$(< "$RUNNER_TEMP/manifest.status")"' in wait["run"]
+    upload = _step("sonar", "Upload the test dependency manifest")
+    assert upload["with"]["name"] == "dep-manifest"
+    assert upload["with"]["path"] == "${{ runner.temp }}/dep-manifest/manifest.json"
     assert not any("cache/save" in step.get("uses", "") for step in _job("sonar")["steps"])
     assert "github.event_name == 'push'" in _job("coverage-baseline")["if"]
     assert _step("coverage-baseline", "Download the test dependency manifest")["with"]["name"] == "dep-manifest"
@@ -276,3 +289,24 @@ def test_queue_shards_split_on_the_tests_the_planner_did_not_reuse():
     check = _step("shard-check", "Check every collected test ran in exactly one shard")
     assert check["run"].endswith(" $REUSED")
     assert "reused-plan/reused-tests.json" in check["env"]["REUSED"]
+
+
+def test_the_reused_plan_reaches_workers_but_never_nested_pytest_runs(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import pytest
+
+    from tests import conftest
+
+    plan = tmp_path / "reused.json"
+    plan.write_text(json.dumps({"tests": ["tests/test_a.py::one"], "files": ["tests/test_b.py"]}))
+    monkeypatch.setenv("CI_REUSED", str(plan))
+    controller = SimpleNamespace(stash=pytest.Stash())
+    assert conftest._reused(controller) == (frozenset({"tests/test_a.py::one"}), frozenset({"tests/test_b.py"}))
+    assert "CI_REUSED" not in os.environ
+    node = SimpleNamespace(config=controller, workerinput={})
+    conftest.pytest_configure_node(node)
+    assert node.workerinput == {"ci_reused": str(plan)}
+    worker = SimpleNamespace(stash=pytest.Stash(), workerinput=node.workerinput)
+    assert conftest._reused(worker) == conftest._reused(controller)
+    assert conftest._reused(SimpleNamespace(stash=pytest.Stash())) == (frozenset(), frozenset())
