@@ -413,7 +413,11 @@ def test_computed_lane_acceptance_still_grades_later_jobs():
     updated["jobs"]["stats"]["concurrency"]["group"] = (
         "${{ format('{0}-stats-{1}', github.workflow == 'Mutation preflight' && needs.plan.outputs.stats_lane != '' && format('mutation-lane-{0}', needs.plan.outputs.stats_lane) || format('mutation-preflight-job-{0}', github.run_id), matrix.part) }}"
     )
-    updated["jobs"]["unbounded"] = {"runs-on": "ubuntu-latest", "steps": [{"run": "echo unbounded"}]}
+    updated["jobs"]["unbounded"] = {
+        "runs-on": "ubuntu-latest",
+        "concurrency": {"group": "${{ github.run_id }}"},
+        "steps": [{"run": "echo unbounded"}],
+    }
     assert any("job unbounded " in problem for problem in lanes.problems(updated, baseline))
 
 
