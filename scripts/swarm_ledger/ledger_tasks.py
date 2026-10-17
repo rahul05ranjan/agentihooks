@@ -48,6 +48,7 @@ UPDATABLE = (
     "follow_up",
     "split_pulls",
     "recovery",
+    "after_release",
 )
 BOOL_FIELDS = ("artifact", "follow_up")
 DIFFICULTIES = ("S", "M", "L")
@@ -58,6 +59,7 @@ LIST_FIELDS = ("depends_on", "territory", "parked_on", "parked_repos", "overlays
 OVERLAY_CAP = 3
 BRANCH_RE = re.compile(r"^(?!-)\S*$")
 COMMIT_RE = re.compile(r"^([0-9a-f]{7,64})?$")
+RELEASE_RE = re.compile(r"^(v?\d+\.\d+\.\d+)?$")
 OBJECT_FIELDS = ("contract", "proof", "recovery", "repository_branches")
 URL_FIELDS = ("issue_url", "pr_url", "plan_url")
 URL_RE = re.compile(r"^https?://[^\s]+$")
@@ -180,6 +182,8 @@ def check_stack(fields):
         raise ValueError("stacked_base must be a lowercase commit hash of 7 to 64 characters, or empty to clear it")
     if not all(ID_RE.match(task_id) for task_id in fields.get("parked_on", [])):
         raise ValueError("parked_on must list task ids")
+    if not (isinstance(fields.get("after_release", ""), str) and RELEASE_RE.match(fields.get("after_release", ""))):
+        raise ValueError("after_release must be a release tag such as v2.17.1, or empty to clear it")
 
 
 def check_rank(fields):
@@ -320,6 +324,7 @@ def _add(doc, op, ctx):
         "repository_branches",
         "slice",
         "follow_up",
+        "after_release",
     ):
         if key in op:
             task[key] = op[key]
