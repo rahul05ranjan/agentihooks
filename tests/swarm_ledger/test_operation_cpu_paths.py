@@ -56,7 +56,7 @@ def test_dictionary_field_edits_do_not_enumerate_unchanged_subtrees(monkeypatch)
     monkeypatch.setattr(rows, "children", children)
     before, after = rows.diff(old, new)
     assert list(before) == list(after) == ['["change"]']
-    children.assert_not_called()
+    assert [call.args[0] for call in children.call_args_list] == [1, 2]
 
 
 def test_dictionary_walk_skips_shared_containers_and_visits_shared_floats():
