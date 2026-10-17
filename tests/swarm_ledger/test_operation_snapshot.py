@@ -31,8 +31,10 @@ def test_default_reads_and_mutation_results_remain_detached(tmp_path, monkeypatc
 
 def test_borrowed_result_keeps_its_own_committed_generation(tmp_path, monkeypatch):
     stored = repository(tmp_path, monkeypatch)
+    previous = stored.current(SLUG).state
     first, rejected = stored.apply_ops(SLUG, ops=[message("first")], copy_state=False)
     assert rejected == []
+    assert first["tasks"][0] is previous["tasks"][0]
     assert first is stored.current(SLUG).state
     revision = first["_meta"]["rev"]
     stored.apply_ops(SLUG, ops=[message("second")])
