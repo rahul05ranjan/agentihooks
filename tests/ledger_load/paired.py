@@ -10,7 +10,7 @@ BEST = (("write_p95_s", "write p95"), ("busiest_cores", "busiest CPU window"))
 
 
 def graded_measure(log: str) -> dict | None:
-    """The measure the gate graded: its repeat when a lone write breach made it measure twice."""
+    """The last measure line in the log: the one the gate graded."""
     lines = [line for line in log.splitlines() if line.startswith(MEASURE)]
     return json.loads(lines[-1]) if lines else None
 
