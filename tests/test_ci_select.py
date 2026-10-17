@@ -142,13 +142,13 @@ UNREGISTERED_FAKEREDIS = "import fakeredis\nfrom hooks import sample\n"
     [
         ["tests/test_store.py"],
         ["tests/test_other.py"],
-        ["tests/test_gone.py", "tests/test_store.py"],
-        ["tests/swarm/test_store.py"],
+        ["tests/test_gone.py", "tests/test_other.py"],
+        ["tests/swarm/test_plain.py"],
     ],
 )
 def test_a_changed_test_module_selects_the_suite_speed_checks(repo, changed):
     write(repo, {SUITE_SPEED: "import os\n", "tests/test_store.py": UNREGISTERED_FAKEREDIS})
-    write(repo, {"tests/swarm/test_store.py": UNREGISTERED_FAKEREDIS})
+    write(repo, {"tests/swarm/test_plain.py": "import os\n"})
     scope, legs = decide(repo, changed)
     assert scope == "selected"
     assert SUITE_SPEED in set().union(*map(set, legs))
@@ -169,6 +169,11 @@ def test_a_source_no_fakeredis_test_imports_leaves_the_suite_speed_checks_out(re
 def test_a_changed_file_outside_python_leaves_the_suite_speed_checks_out(repo):
     write(repo, {SUITE_SPEED: "import os\n", "scripts/static/ledger.js": "x\n"})
     assert decide(repo, ["scripts/static/ledger.js"]) == ("selected", [["tests/test_page.py"]])
+
+
+def test_a_test_module_whose_name_breaks_the_output_line_still_runs_the_full_suite(repo):
+    write(repo, {SUITE_SPEED: "import os\n", "tests/test_spaced name.py": "import os\n"})
+    assert decide(repo, ["tests/test_spaced name.py"]) == ("full", [])
 
 
 @pytest.mark.parametrize("name", ["tests/test_spaced name.py", "tests/test_split\nscope=none.py"])

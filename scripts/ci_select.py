@@ -89,11 +89,14 @@ def selected_tests(root: Path, changed: list[str]) -> set[str]:
             }
         )
     tests |= naming_tests(root, needles)
-    if any(is_test(path) for path in changed) or any(
-        (root / path).is_file() and FAKEREDIS in (root / path).read_text() for path in tests
+    tests = {path for path in tests if SAFE.fullmatch(path) and (root / path).is_file()}
+    if (
+        tests
+        and (root / SUITE_SPEED).is_file()
+        and (any(is_test(path) for path in changed) or any(FAKEREDIS in (root / path).read_text() for path in tests))
     ):
         tests.add(SUITE_SPEED)
-    return {path for path in tests if SAFE.fullmatch(path) and (root / path).is_file()}
+    return tests
 
 
 def file_seconds(durations: dict[str, float], files: set[str]) -> dict[str, float]:
