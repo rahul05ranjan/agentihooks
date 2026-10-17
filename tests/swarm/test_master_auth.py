@@ -107,6 +107,8 @@ def test_health_reports_only_master_fallback_and_clears_after_move_back(kind, la
         assert len(found) == 1
         assert found[0].id == "master-fallback-auth/master@proof"
         assert found[0].summary == "master on fallback auth, phone access lost"
+        assert found[0].measure == 1
+        assert f"route: {kind}" in found[0].evidence
     else:
         assert found == []
 
