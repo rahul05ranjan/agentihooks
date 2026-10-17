@@ -141,6 +141,33 @@ def test_each_new_slow_run_updates_the_same_finding_and_counts_once(swarm):
     assert len(standing.findings(store.redis, "sw", later)) == 1
 
 
+def test_standing_finding_groups_each_slow_stage_with_count_worst_time_and_run_links(swarm, monkeypatch):
+    store, config = swarm
+    monkeypatch.setitem(JOBS, 6, [
+        _job("mutation (1)", "01:00", "15:00", 6),
+        _job("lint", "00:00", "05:00", 6),
+        _job("Gate — Required", "17:30", "17:30", 6),
+    ])
+    monkeypatch.setitem(JOBS, 7, [
+        _job("mutation (1)", "01:00", "16:00", 7),
+        _job("Gate — Required", "18:00", "18:00", 7),
+    ])
+    runs = [_run(6, "00:00", "17:30"), _run(7, "00:00", "18:00")]
+    defects.refresh("sw", config, store, NOW_MS, run=_gh([], runs))
+    found = standing.findings(store.redis, "sw", NOW_MS)
+    assert len(found) == 1
+    assert "mutation: 2 runs over budget; worst 15 minutes." in found[0].evidence
+    assert "lint: 1 run over budget; worst 5 minutes." in found[0].evidence
+    assert found[0].as_dict()["links"] == [
+        {"label": "Slow run 6", "url": URL.format(6)},
+        {"label": "Slow run 7", "url": URL.format(7)},
+    ]
+    assert all("https://" not in text for text in found[0].evidence)
+    defects.refresh("sw", config, store, NOW_MS + defects.REFRESH_MS, run=_gh([], runs))
+    assert standing.findings(store.redis, "sw", NOW_MS + defects.REFRESH_MS)[0].as_dict() == found[0].as_dict()
+    assert standing.read(store.redis, "doctor") == {}
+
+
 def test_github_is_read_from_the_repository_over_the_window(swarm):
     store, config = swarm
     calls = []
