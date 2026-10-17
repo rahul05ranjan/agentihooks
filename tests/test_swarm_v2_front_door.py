@@ -3,10 +3,10 @@ import json
 import pytest
 
 import scripts.swarm_ledger.repository  # noqa: F401  puts the ledger folder on sys.path before ledger_core loads
-from scripts.gates import log, talk
+from scripts.gates import log
 from scripts.swarm_ledger import ledger_core as core
 from scripts.swarm_ledger import ledger_server
-from scripts.swarm_v2 import front_door, master_fence
+from scripts.swarm_v2 import front_door
 from tests import sv2_mst04_cases as cases
 from tests.sv2_mst04_cases import ENGINEER, LEAD, LEAD_NAME, SECOND, SECOND_NAME, SLUG
 
@@ -59,7 +59,7 @@ def test_the_refusal_names_the_front_door_and_the_masters_channel():
         ({"op": "add", "thread": "chat", "by": "m"}, True),
         ({"op": "edit", "thread": "chat", "by": "m"}, True),
         ({"op": "add", "thread": "chat"}, False),
-        ({"op": "delete", "thread": "chat", "by": "m"}, False),
+        ({"op": "delete", "thread": "chat", "by": "m"}, True),
         ({"op": "clear", "thread": "chat", "by": "m"}, False),
         ({"op": "add", "thread": "followups/f1/comments", "by": "m"}, False),
         ({"op": "answer", "item": "questions/q1", "by": "m"}, False),
@@ -69,13 +69,36 @@ def test_only_agent_chat_adds_and_edits_are_covered(op, covered):
     assert front_door.chat_write(op) is covered
 
 
-def test_a_backend_master_chat_write_is_refused_naming_the_front_door(world):
-    accepted, warnings = write(world, chat(SECOND_NAME))
+def gate_rows(home):
+    return [json.loads(line) for line in log.gate_log_path(SLUG, home).read_text().splitlines()]
+
+
+def test_a_backend_master_chat_write_is_refused_naming_the_front_door(world, tmp_path):
+    accepted, warnings = write(world, chat(SECOND_NAME), home=tmp_path)
 
     assert accepted is False
     assert warnings == [front_door.refusal(SLUG, SECOND)]
     assert LEAD in warnings[0]
     assert chat_texts(world) == []
+    assert [(r["gate"], r["kind"], r["agent"], r["tool"], r["reason"]) for r in gate_rows(tmp_path)] == [
+        (front_door.NAME, "deny", SECOND_NAME, "ledger", warnings[0])
+    ]
+
+
+def test_a_former_backend_occupant_stays_refused(world):
+    world.store.seats.occupy(SECOND, cases.SUCCESSOR, 2)
+
+    assert write(world, chat(SECOND_NAME)) == (False, [front_door.refusal(SLUG, SECOND)])
+    assert write(world, chat(cases.SUCCESSOR, n=1)) == (False, [front_door.refusal(SLUG, SECOND)])
+
+
+def test_a_backend_master_chat_delete_is_refused(world):
+    assert write(world, chat(LEAD_NAME))[0] is True
+
+    accepted, _ = write(world, {"op": "delete", "thread": "chat", "id": "m-0", "by": SECOND_NAME})
+
+    assert accepted is False
+    assert chat_texts(world) == [(LEAD_NAME, "hello from the masters")]
 
 
 def test_a_backend_master_chat_edit_is_refused(world):
@@ -111,8 +134,7 @@ def test_a_crashed_seat_lookup_lets_the_write_through_and_logs_it(world, tmp_pat
         raise ConnectionError("redis down")
 
     assert write(world, chat(SECOND_NAME), connect=broken, home=tmp_path) == (True, [])
-    rows = [json.loads(line) for line in log.gate_log_path(SLUG, tmp_path).read_text().splitlines()]
-    assert [(r["gate"], r["kind"], r["agent"], r["tool"], r["reason"]) for r in rows] == [
+    assert [(r["gate"], r["kind"], r["agent"], r["tool"], r["reason"]) for r in gate_rows(tmp_path)] == [
         (front_door.NAME, "fail-open", SECOND_NAME, "ledger", "ConnectionError: redis down")
     ]
 
@@ -131,10 +153,12 @@ def test_the_door_passes_admitted_writes_to_its_inner_gate(world):
     assert (seen, set(rejected)) == (["m-1"], {"m-2"})
 
 
-def test_the_ledger_write_gate_puts_the_front_door_inside_the_fence_and_outside_the_talk_budget():
-    gate = ledger_server.write_gate(SLUG)
+def test_the_server_write_gate_refuses_a_backend_master_chat_write_naming_the_front_door(world, monkeypatch):
+    monkeypatch.setattr(front_door, "_connect", lambda: world.redis)
+    ops = [chat(SECOND_NAME, n=1), chat(LEAD_NAME, n=2)]
 
-    assert isinstance(gate, master_fence.Fence)
-    assert isinstance(gate.inner, front_door.Door)
-    assert isinstance(gate.inner.inner, talk.Budget)
-    assert gate.inner.slug == SLUG
+    state, rejected = core.sync(SLUG, ops=ops, gate=ledger_server.write_gate(SLUG))
+
+    assert set(rejected) == {"m-1"}
+    assert state["_meta"]["warnings"] == [front_door.refusal(SLUG, SECOND)]
+    assert chat_texts(world) == [(LEAD_NAME, "hello from the masters")]

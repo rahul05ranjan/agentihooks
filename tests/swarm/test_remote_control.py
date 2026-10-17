@@ -131,7 +131,7 @@ def test_the_front_door_seat_spawns_with_remote_control(tmp_path):
 
 def test_a_backend_master_never_reaches_the_master_login_home(tmp_path, monkeypatch):
     for name in ("build", "claim", "prepare", "publish", "restore"):
-        monkeypatch.setattr(master_claude_login, name, lambda *_: pytest.fail("master login touched"))
+        monkeypatch.setattr(master_claude_login, name, lambda *_, **__: pytest.fail("master login touched"))
     passed, _ = _spawn(tmp_path, "master", "claude", "interactive", seat="master-3@proof")
     assert passed[:2] == ["--route", "interactive"]
 

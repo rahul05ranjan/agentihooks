@@ -10,7 +10,7 @@ from scripts.swarm.store import MASTER
 
 NAME = "front-door"
 CHAT = "chat"
-CHAT_WRITES = ("add", "edit")
+CHAT_WRITES = ("add", "edit", "delete")
 
 
 def seat(slug: str) -> str:
@@ -42,8 +42,9 @@ def _connect():
 class Door:
     def __init__(self, slug: str, inner=None, connect=None, home=None) -> None:
         self.slug, self.inner, self.connect, self.home = slug, inner, connect or _connect, home
+        self._redis = None
 
-    def apply(self, doc, op, ctx, apply):
+    def apply(self, doc: dict, op: dict, ctx, apply) -> bool:
         from scripts.swarm.naming import lane_of
 
         if not chat_write(op):
@@ -52,14 +53,18 @@ class Door:
         if lane_of(by) != MASTER:
             return self._inner(doc, op, ctx, apply)
         try:
-            held = SeatRegistry(self.connect()).seat_of(by)
+            if self._redis is None:
+                self._redis = self.connect()
+            held = SeatRegistry(self._redis).known_seat(by)
         except Exception as exc:  # a crashed door lets the write through, counted in the gate log
             reason = f"{type(exc).__name__}: {exc}"
             log.append(self.slug, log.Row.of(NAME, "fail-open", Who(name=by), "ledger", reason), self.home)
             return self._inner(doc, op, ctx, apply)
         if holds(self.slug, held):
             return self._inner(doc, op, ctx, apply)
-        ctx.refused.append(refusal(self.slug, held))
+        reason = refusal(self.slug, held)
+        log.append(self.slug, log.Row.of(NAME, "deny", Who(name=by), "ledger", reason), self.home)
+        ctx.refused.append(reason)
         return False
 
     def _inner(self, doc, op, ctx, apply):
