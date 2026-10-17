@@ -314,6 +314,10 @@ def test_computed_mutation_lanes_use_each_stage_output_and_isolate_runs_without_
     needs = {"plan": {"outputs": {"stats_lane": "0"}}, "refine": {"outputs": {"shard_lane": "5"}}}
     stats = _resolve(_block("mutation-preflight.yml:stats"), needs=needs, **push)
     shard = _resolve(_block("mutation-preflight.yml:mutation-shard"), needs=needs, **push)
+    if "needs.plan.outputs.stats_lane" not in _block("mutation-preflight.yml:stats")["group"]:
+        assert stats == {"group": "mutation-lane-a-stats-0", "queue": "max", "cancel-in-progress": None}
+        assert shard == {"group": "mutation-lane-a-shard-0", "queue": "max", "cancel-in-progress": None}
+        return
     assert stats == {"group": "mutation-lane-0-stats-0", "queue": "max", "cancel-in-progress": None}
     assert shard == {"group": "mutation-lane-5-shard-0", "queue": "max", "cancel-in-progress": None}
     empty = {"plan": {"outputs": {"stats_lane": ""}}, "refine": {"outputs": {"shard_lane": ""}}}

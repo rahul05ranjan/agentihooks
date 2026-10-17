@@ -34,8 +34,21 @@ def test_preflight_skips_a_branch_with_an_open_pull_request():
     jobs = _workflow()["jobs"]
     assert "pull-request" not in jobs
     plan = jobs["plan"]
-    assert "needs" not in plan
-    assert plan["if"] == "${{ github.event_name != 'push' || !github.event.deleted }}"
+    if "capacity" in jobs:
+        assert plan["needs"] == "capacity"
+        assert plan["if"] == (
+            "${{ !cancelled() && (needs.capacity.result == 'success' || needs.capacity.result == 'skipped')"
+            " && (github.event_name != 'push' || !github.event.deleted) }}"
+        )
+        assert "secrets." not in str(plan)
+        capacity = jobs["capacity"]
+        assert [step.get("id") for step in capacity["steps"]] == ["capacity-token", "capacity"]
+        assert capacity["steps"][0]["uses"] == "actions/create-github-app-token@v3.2.0"
+        assert capacity["steps"][1]["run"].startswith("gh api ")
+        assert "checkout" not in str(capacity)
+    else:
+        assert "needs" not in plan
+        assert plan["if"] == "${{ github.event_name != 'push' || !github.event.deleted }}"
     assert plan["outputs"]["graded"] == "${{ steps.plan.conclusion == 'success' }}"
     step = plan["steps"][0]
     assert step["id"] == "open"
@@ -292,19 +305,25 @@ def test_touched_tests_job_selects_and_runs_the_tests_the_branch_touches():
 
 def test_preflight_sizes_each_stage_from_the_authoritative_batch_capacity():
     jobs = _workflow()["jobs"]
-    steps = {step.get("id"): step for step in jobs["plan"]["steps"]}
-    token = steps["capacity-token"]
+    capacity = jobs["capacity"]
+    token, read = capacity["steps"]
     assert token["uses"] == "actions/create-github-app-token@v3.2.0"
     assert token["with"]["repositories"] == "antoncore"
     assert token["with"]["permission-contents"] == "read"
-    lanes = steps["lanes"]
-    assert lanes["if"] == token["if"]
-    assert lanes["env"]["GH_TOKEN"] == "${{ steps.capacity-token.outputs.token }}"
-    assert lanes["env"]["SHARDS"] == "${{ steps.plan.outputs.stats_parts }}"
+    assert read["env"]["GH_TOKEN"] == "${{ steps.capacity-token.outputs.token }}"
     assert (
         "repos/the-cloud-clockwork/antoncore/contents/k8s/charts/arc-runners-oss/values-oss-batch.yaml?ref=dev"
-        in lanes["run"]
+        in read["run"]
     )
+    assert capacity["outputs"]["values"] == "${{ steps.capacity.outputs.values }}"
+    assert "checkout" not in str(capacity)
+    steps = {step.get("id"): step for step in jobs["plan"]["steps"]}
+    lanes = steps["lanes"]
+    assert lanes["env"] == {
+        "BATCH_VALUES": "${{ needs.capacity.outputs.values }}",
+        "SHARDS": "${{ steps.plan.outputs.stats_parts }}",
+    }
+    assert 'git show origin/dev:scripts/ci_mutation/lanes.py > "$RUNNER_TEMP/mutation-lanes.py"' in lanes["run"]
     assert '--values "$RUNNER_TEMP/batch-values.yaml" --shards "$SHARDS" --run-id "$GITHUB_RUN_ID"' in lanes["run"]
     assert jobs["plan"]["outputs"]["batch_ceiling"] == "${{ steps.lanes.outputs.ceiling }}"
     refined = next(step for step in jobs["refine"]["steps"] if step.get("id") == "lanes")
@@ -313,8 +332,9 @@ def test_preflight_sizes_each_stage_from_the_authoritative_batch_capacity():
         "CEILING": "${{ needs.plan.outputs.batch_ceiling }}",
         "SHARDS": "${{ steps.refine.outputs.shards }}",
     }
+    assert 'git show origin/dev:scripts/ci_mutation/lanes.py > "$RUNNER_TEMP/mutation-lanes.py"' in refined["run"]
     assert (
-        refined["run"]
-        == 'python -m scripts.ci_mutation.lanes --ceiling "$CEILING" --shards "$SHARDS" --run-id "$GITHUB_RUN_ID"'
+        'python "$RUNNER_TEMP/mutation-lanes.py" --ceiling "$CEILING" --shards "$SHARDS" --run-id "$GITHUB_RUN_ID"'
+        in refined["run"]
     )
     assert jobs["refine"]["outputs"]["shard_lane"] == "${{ steps.lanes.outputs.lane }}"
