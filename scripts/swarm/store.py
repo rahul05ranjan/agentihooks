@@ -117,6 +117,7 @@ class AgentRecord:
     launch_timings: dict = field(default_factory=dict)
     hive: str = ""
     route_kind: str = "subscription"
+    desired_route_kind: str = ""
     transport: str = ""
 
 
