@@ -79,13 +79,14 @@ def test_the_command_remaps_files_changed_since_the_dev_commit(tmp_path):
     reused.write_text(json.dumps({"tests": ["tests/test_a.py::one"], "files": []}))
     out = tmp_path / "out" / ".coverage"
     args = ["--coverage", str(source), "--commit", commit, "--reused", str(reused), "--repo", str(repo)]
+    args += ["--captures", str(tmp_path / "none"), "--captures-out", str(tmp_path / "js")]
     assert reused_coverage.main([*args, "--out", str(out)]) == 0
     assert _arcs(out) == {"hooks/a.py": {(-4, 5), (5, -4)}}
 
 
 def test_pull_requests_into_dev_plan_reuse_from_the_protected_dev_grader():
     plan = _steps("split")["Plan the tests whose inputs did not change"]
-    assert "(github.event_name == 'pull_request' && github.base_ref == 'dev')" in plan["if"]
+    assert "github.event.pull_request.head.repo.full_name == github.repository" in plan["if"]
     assert "'origin/dev'" in plan["env"]["GRADER"]
     outputs = yaml.safe_load(WORKFLOW.read_text())["jobs"]["split"]["outputs"]
     assert outputs["run"] == "${{ steps.plan.outputs.run }}"
@@ -98,9 +99,40 @@ def test_coverage_shards_ship_the_reused_tests_dev_coverage_to_sonar_and_the_rat
     kept = steps["Keep the reused tests' dev coverage"]
     assert "python -m tests.reused_coverage" in kept["run"]
     assert "--reused reused.json --out reused-coverage/.coverage" in kept["run"]
+    assert "--captures-out js-coverage" in kept["run"]
     assert "github.event_name != 'merge_group'" in kept["if"]
     assert names.index("Download the tests this run reuses") < names.index("Keep the reused tests' dev coverage")
     assert names.index("Keep the reused tests' dev coverage") < names.index("Run tests")
     assert "reused-coverage/" in steps["Upload coverage"]["with"]["path"]
     combine = (ROOT / ".github" / "coverage" / "combine.sh").read_text()
     assert "coverage-3.12-$shard/reused-coverage/.coverage" in combine
+
+
+def test_a_function_with_repeated_short_lines_keeps_its_own_lines_after_an_earlier_function_changes():
+    body = "    if x:\n        return None\n    else:\n        return None\n"
+    old = "def a(x):\n" + body + "\n\ndef b(x):\n" + body
+    new = "def a(x):\n    y = x\n" + body + "\n\ndef b(x):\n" + body
+    lines = reused_coverage.line_map(old, new)
+    assert [lines[number] for number in range(8, 13)] == list(range(9, 14))
+
+
+def test_only_page_captures_of_reused_tests_or_of_no_test_are_kept(tmp_path):
+    source, out = tmp_path / "dev", tmp_path / "head"
+    (source / "sources").mkdir(parents=True)
+    for name in ("kept", "rerun", "outside", "legacy"):
+        (source / "sources" / f"{name}.js").write_text(name)
+    captures = {
+        "capture-browser-1.json": {"result": [{"source": "kept"}], "test": "tests/test_a.py::kept@grp (teardown)"},
+        "capture-node-2.json": {"result": [{"source": "rerun"}], "test": "tests/test_a.py::rerun (call)"},
+        "capture-browser-3.json": {"result": [{"source": "outside"}], "test": ""},
+        "capture-browser-4.json": {"result": [{"source": "legacy"}]},
+    }
+    for name, recorded in captures.items():
+        (source / name).write_text(json.dumps(recorded))
+    assert reused_coverage.keep_captures(source, out, {"tests/test_a.py::kept"}) == 3
+    assert sorted(path.name for path in out.glob("capture-*.json")) == [
+        "capture-browser-1.json",
+        "capture-browser-3.json",
+        "capture-browser-4.json",
+    ]
+    assert sorted(path.name for path in (out / "sources").iterdir()) == ["kept.js", "legacy.js", "outside.js"]

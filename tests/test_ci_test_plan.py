@@ -38,7 +38,7 @@ def _zip(manifest):
     return buffer.getvalue()
 
 
-def _github(monkeypatch, runs, *, manifests, failed=()):
+def _github(monkeypatch, runs, *, manifests, failed=(), uncovered=()):
     listing = f"{ACTIONS}/workflows/test.yml/runs?branch=dev&event=push&status=completed&per_page=10"
 
     def api(endpoint):
@@ -48,6 +48,10 @@ def _github(monkeypatch, runs, *, manifests, failed=()):
         if endpoint.endswith("/artifacts?per_page=100"):
             run_id = int(endpoint.split("/runs/")[1].split("/")[0])
             kept = [{"id": run_id, "name": "dep-manifest", "expired": False}] if run_id in manifests else []
+            kept += [
+                {"id": 0, "name": name, "expired": run_id in uncovered and name == "coverage-3.12-12"}
+                for name in sorted(ci_test_plan.COVERAGE)
+            ]
             return json.dumps({"artifacts": [{"id": 0, "name": "durations-merged", "expired": False}, *kept]}).encode()
         assert endpoint.endswith("/zip")
         return _zip(manifests[int(endpoint.split("/artifacts/")[1].split("/")[0])])
@@ -111,6 +115,11 @@ def test_a_manifest_for_another_commit_is_skipped_for_an_older_record(monkeypatc
     _github(monkeypatch, [_run(2), _run(1)], manifests={2: _manifest(9), 1: _manifest(1)})
     assert ci_test_plan.find_record(REPOSITORY, LATER)[0]["id"] == 1
     assert capsys.readouterr().out == f"Dev run 2 recorded a manifest for {9:040d}, not {2:040d}\n"
+
+
+def test_a_record_whose_shard_coverage_expired_is_skipped(monkeypatch):
+    _github(monkeypatch, [_run(2), _run(1)], manifests={2: _manifest(2), 1: _manifest(1)}, uncovered={2})
+    assert ci_test_plan.find_record(REPOSITORY, LATER)[0]["id"] == 1
 
 
 def test_a_missing_record_plans_a_full_run(monkeypatch, tmp_path, capsys):

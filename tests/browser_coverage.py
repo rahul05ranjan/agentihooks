@@ -53,7 +53,9 @@ def flush(folder: Path, pages) -> None:
             if entry["url"].startswith("http")
         ]
         folder.mkdir(parents=True, exist_ok=True)
-        (folder / f"capture-browser-{uuid.uuid4().hex}.json").write_text(json.dumps({"result": result}))
+        (folder / f"capture-browser-{uuid.uuid4().hex}.json").write_text(
+            json.dumps({"result": result, "test": os.environ.get("PYTEST_CURRENT_TEST", "")})
+        )
 
 
 def patches(folder: Path):

@@ -1,7 +1,8 @@
 """Keep a dev shard's coverage of the tests this run reused, moved onto this run's source lines.
 
 A reused test executed only units whose text did not change, so its arcs survive in the head source at the line the
-unchanged text moved to. Import time arcs carry the empty context and are kept the same way.
+unchanged text moved to. Import time arcs carry the empty context and are kept the same way. Page captures name the
+test that took them; captures taken outside a test, or recorded before captures named one, are kept whole.
 """
 
 import argparse
@@ -59,7 +60,22 @@ def keep(source: Path, out: Path, tests: set[str], moved: dict[str, dict[int, in
                 if start is not None and end is not None
             ]
             db.executemany("insert or ignore into arc (file_id, context_id, fromno, tono) values (?, ?, ?, ?)", shifted)
-    return len(kept) - any(not context for _, context in contexts)
+    return len({node(context.rsplit("|", 1)[0]) for _, context in contexts if context} & tests)
+
+
+def keep_captures(source: Path, out: Path, tests: set[str]) -> int:
+    count = 0
+    for capture in sorted(source.glob("capture-*.json")):
+        recorded = json.loads(capture.read_text(encoding="utf-8"))
+        test = recorded.get("test")
+        if test and node(test.rsplit(" (", 1)[0]) not in tests:
+            continue
+        (out / "sources").mkdir(parents=True, exist_ok=True)
+        for entry in recorded["result"]:
+            shutil.copyfile(source / "sources" / f"{entry['source']}.js", out / "sources" / f"{entry['source']}.js")
+        shutil.copyfile(capture, out / capture.name)
+        count += 1
+    return count
 
 
 def _show(repo: Path, revision: str, path: str) -> str | None:
@@ -85,11 +101,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--captures", type=Path, required=True, help="the dev shard's page capture folder")
+    parser.add_argument("--captures-out", type=Path, required=True)
     args = parser.parse_args(argv)
     tests = set(json.loads(args.reused.read_text())["tests"])
     moved = moved_lines(args.repo, args.commit, args.head)
     count = keep(args.coverage, args.out, tests, moved)
-    print(f"Kept the dev coverage of {count} reused tests from {args.commit}; {len(moved)} changed files remapped")
+    captures = keep_captures(args.captures, args.captures_out, tests)
+    print(
+        f"Kept the dev coverage of {count} reused tests and {captures} page captures from {args.commit};"
+        f" {len(moved)} changed files remapped"
+    )
     return 0
 
 

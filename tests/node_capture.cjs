@@ -24,7 +24,7 @@ if (folder && typeof script === "string") {
       const result = coverage.result
         .filter((entry) => /^\[eval\d*\]$/.test(entry.url))
         .map((entry) => ({ source, functions: entry.functions }));
-      fs.writeFileSync(path.join(folder, `capture-node-${unique}.json`), JSON.stringify({ result }));
+      fs.writeFileSync(path.join(folder, `capture-node-${unique}.json`), JSON.stringify({ result, test: process.env.PYTEST_CURRENT_TEST || "" }));
     });
   });
 }

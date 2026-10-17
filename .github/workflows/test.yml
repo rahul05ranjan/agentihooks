@@ -696,7 +696,7 @@ jobs:
 
       - name: Mint the token that reads the dev test record
         id: app-token
-        if: github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'dev')
+        if: github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository)
         uses: actions/create-github-app-token@v3.2.0
         with:
           client-id: ${{ secrets.TCC_CI_CLIENT_ID }}
@@ -707,7 +707,7 @@ jobs:
       # The protected grader plans, so a queued change cannot widen what it reuses.
       - name: Plan the tests whose inputs did not change
         id: plan
-        if: github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'dev')
+        if: github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository)
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GRADER: ${{ github.event.merge_group.base_sha || github.event_name == 'pull_request' && 'origin/dev' || github.sha }}
@@ -716,6 +716,11 @@ jobs:
           git worktree add --detach "$RUNNER_TEMP/planner" "$GRADER"
           if [[ ! -f "$RUNNER_TEMP/planner/scripts/ci_test_plan.py" ]]; then
             echo "The grader has no test planner; every test runs."
+            echo "reused=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == pull_request && ! -f "$RUNNER_TEMP/planner/tests/reused_coverage.py" ]]; then
+            echo "The grader cannot carry reused tests' coverage into Sonar; every test runs."
             echo "reused=0" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -908,9 +913,8 @@ jobs:
           COMMIT: ${{ needs.split.outputs.commit }}
         run: |
           python -m tests.reused_coverage --coverage "$RUNNER_TEMP/dev-coverage/.coverage" --commit "$COMMIT" \
-            --reused reused.json --out reused-coverage/.coverage
-          mkdir -p js-coverage
-          cp -r "$RUNNER_TEMP/dev-coverage/js-coverage/." js-coverage/
+            --reused reused.json --out reused-coverage/.coverage \
+            --captures "$RUNNER_TEMP/dev-coverage/js-coverage" --captures-out js-coverage
 
       # Page tests drive Chromium; the coverage shards run them so the page JavaScript they reach is measured.
       - name: Install the browser that page tests drive
