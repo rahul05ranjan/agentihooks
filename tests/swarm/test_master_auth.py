@@ -99,7 +99,7 @@ def test_health_reports_only_master_fallback_and_clears_after_move_back(kind, la
         "route_kind": kind,
         "desired_route_kind": desired,
     }
-    found = [f for f in findings({}, [agent], [], Limits()) if f.kind == "master-fallback-auth"]
+    found = [f for f in findings({}, [agent], {}, Limits()) if f.kind == "master-fallback-auth"]
     if lane == "master" and desired == "interactive" and kind != "interactive":
         assert len(found) == 1
         assert found[0].id == "master-fallback-auth/master@proof"
