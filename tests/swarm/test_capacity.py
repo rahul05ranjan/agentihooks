@@ -27,7 +27,7 @@ def _store():
 
 
 def account(name="a", cap=3, sessions=0, left=90, harness="claude"):
-    return capacity.Account(harness, name, capacity._state(cap, harness, None, None), sessions, left, left, cap)
+    return capacity.Account(harness, name, capacity._state(cap, None), sessions, left, left, cap)
 
 
 def test_routed_session_reads_quota_for_every_occupied_account(monkeypatch, tmp_path):
@@ -2078,7 +2078,7 @@ def test_quota_capacity_hands_autoscale_its_previous_state_and_warnings(tmp_path
 
 def api(harness="claude", weight=25, sessions=0, cap=10**6):
     return capacity.Account(
-        harness, "api", capacity._state(cap, harness, None, None), sessions, None, None, cap, kind="api", weight=weight
+        harness, "api", capacity._state(cap, None), sessions, None, None, cap, kind="api", weight=weight
     )
 
 

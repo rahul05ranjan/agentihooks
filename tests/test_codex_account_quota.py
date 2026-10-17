@@ -201,6 +201,13 @@ def test_rows_say_stale_unknown_and_blocked_and_never_carry_a_stale_cap():
     assert rows[2].source == "no session log"
 
 
+def test_a_fresh_reading_at_eight_percent_of_its_week_drains_like_capacity():
+    drained = CodexQuota(NOW - 60, "pro", QuotaWindow(10.0, NOW + 60), QuotaWindow(92.0, NOW + 6000))
+    [row] = agents_quota.codex_rows([CodexAccount("alpha", "AH_CX_TOKEN_alpha")], {"alpha": drained}, {}, NOW)
+    assert (row.state, row.routing_left) == ("DRAIN", 8.0)
+    assert row.cap
+
+
 def test_an_old_reading_keeps_its_week_state_and_cap_without_its_old_five_hour_window(monkeypatch):
     monkeypatch.delenv("AGENTIHOOKS_CODEX_READING_MAX_AGE_H", raising=False)
     hot = CodexQuota(NOW - 3600, "pro", QuotaWindow(95.0, NOW + 60), QuotaWindow(20.0, NOW + 6000))

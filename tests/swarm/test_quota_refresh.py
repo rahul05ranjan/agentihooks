@@ -148,6 +148,23 @@ def test_a_row_another_process_accepts_mid_claim_is_left_to_it(store, monkeypatc
     assert json.loads(store.redis.hget(records, row["id"]))["owner"] == ""
 
 
+def test_consume_moves_past_a_row_another_process_claimed_to_the_next_one(store, monkeypatch):
+    lost, kept = quota_refresh.request(store, "sw"), quota_refresh.request(store, "sw")
+    real = commands.claim
+    monkeypatch.setattr(
+        commands,
+        "claim",
+        lambda store_, records, key, owner, epoch: (
+            None if key == lost["id"] else real(store_, records, key, owner, epoch)
+        ),
+    )
+    ran = []
+    assert commands.consume(store, "sw", "hive-a", lambda row: ran.append(row["id"]) or "") == [
+        "control quota acknowledged"
+    ]
+    assert ran == [kept["id"]]
+
+
 def test_answer_all_reports_every_swarm_and_carries_on_past_a_refused_one(store, monkeypatch, capsys):
     store.create(SwarmConfig("two", ".", 0, 0, state="paused"))
 

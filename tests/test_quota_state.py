@@ -65,18 +65,18 @@ def test_an_account_with_room_reads_open_everywhere():
     now = 1_000.0
     result = ProbeResult("alpha", "allowed", "REDUCE", 30.0, QuotaWindow(5.0, 20_000), QuotaWindow(70.0, 90_000))
     [balance] = agents_quota.claude_rows([result], {}, "cached", {"alpha": now}, now)
-    state = capacity._state(balance.cap, "claude", 95.0, 30.0)
+    state = capacity._state(balance.cap, quota_state.routing_left("claude", 95.0, 30.0))
     assert balance.state == state == "OPEN"
-    assert capacity._state(balance.cap, "codex", 5.0, 30.0) == "OPEN"
-    assert capacity._state(balance.cap, "codex", 50.0, 8.0) == "DRAIN"
-    assert capacity._state(0, "claude", 95.0, 30.0) == "CLOSED"
+    assert capacity._state(balance.cap, quota_state.routing_left("codex", 5.0, 30.0)) == "OPEN"
+    assert capacity._state(balance.cap, quota_state.routing_left("codex", 50.0, 8.0)) == "DRAIN"
+    assert capacity._state(0, quota_state.routing_left("claude", 95.0, 30.0)) == "CLOSED"
 
 
 def test_balance_reads_a_window_whose_reset_passed_as_full_like_capacity():
     now = 30_000.0
     result = ProbeResult("a", "allowed", "DRAIN", 7.0, QuotaWindow(93.0, 29_000), QuotaWindow(40.0, 90_000))
     [balance] = agents_quota.claude_rows([result], {}, "cached", {"a": now - 60}, now)
-    assert balance.state == capacity._state(balance.cap, "claude", 100.0, 60.0) == "OPEN"
+    assert balance.state == capacity._state(balance.cap, quota_state.routing_left("claude", 100.0, 60.0)) == "OPEN"
     assert balance.routing_left == 60.0
     [held] = agents_quota.claude_rows([result], {}, "cached", {"a": 27_900.0}, 28_000.0)
     assert held.state == "DRAIN"

@@ -40,8 +40,8 @@ def _left(window: balancer.QuotaWindow, now: float) -> float | None:
     return session_bands.left(window.used, window.resets_at, now)
 
 
-def _state(cap: int | None, harness: str, five: float | None, week: float | None) -> str:
-    return quota_state.state(cap, quota_state.routing_left(harness, five, week))
+def _state(cap: int | None, left: float | None) -> str:
+    return quota_state.state(cap, left)
 
 
 def _claude(environ: dict, now: float) -> list[Account]:
@@ -66,7 +66,7 @@ def _claude(environ: dict, now: float) -> list[Account]:
             Account(
                 "claude",
                 result.account,
-                _state(cap, "claude", five, week),
+                _state(cap, quota_state.claude_left(five, week)),
                 counts.get(result.account, 0),
                 five,
                 week,
@@ -93,7 +93,7 @@ def _api(source, harness: str, environ: dict, now: float) -> list[Account]:
         Account(
             harness,
             slot.account,
-            _state(slot.cap, harness, None, None),
+            _state(slot.cap, None),
             slot.sessions,
             None,
             None,
@@ -127,7 +127,7 @@ def _codex(environ: dict, now: float, refresh: bool) -> list[Account]:
             Account(
                 "codex",
                 account.name,
-                _state(cap, "codex", five, week),
+                _state(cap, week),
                 counts.get(account.name, 0),
                 five,
                 week,
@@ -159,7 +159,7 @@ def _global(environ: dict, now: float) -> list[Account]:
             Account(
                 row["harness"],
                 row["account"],
-                _state(cap, row["harness"], five, week),
+                _state(cap, quota_state.routing_left(row["harness"], five, week)),
                 row["sessions"],
                 five,
                 week,
