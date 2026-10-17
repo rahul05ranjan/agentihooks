@@ -251,7 +251,9 @@ def test_a_tick_on_a_hosted_ledger_never_restarts_a_local_server(store, tmp_path
     assert ledger_watchdog.watch(store, "sw", ProbedLedger(Clock()), FakeRuntime(), host) == []
     assert host.calls == []
     monkeypatch.delenv("SWARM_URL")
-    assert ledger_watchdog.watch(store, "sw", ProbedLedger(Clock()), FakeRuntime(), host) != []
+    assert ledger_watchdog.watch(store, "sw", ProbedLedger(Clock()), FakeRuntime(), host) == [
+        "restarted the ledger server on new code; three writes took 0.0 seconds, 0.0 seconds and 0.0 seconds"
+    ]
 
 
 def test_a_start_that_fails_or_hangs_returns_its_error(tmp_path):
