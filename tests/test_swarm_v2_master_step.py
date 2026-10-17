@@ -78,6 +78,13 @@ def test_the_masters_step_defaults_to_twelve():
     assert SwarmConfig(SLUG, "/repo", 1, 1).masters_step == 12
 
 
+def test_a_new_swarm_stores_twelve_and_a_swarm_stored_before_the_step_loads_zero(swarm):
+    store, _ = swarm
+    assert store.config(SLUG).masters_step == 12
+    store.redis.hdel(store.key(SLUG, "config"), "masters_step")
+    assert store.config(SLUG).masters_step == 0
+
+
 @pytest.mark.parametrize(("agents", "wanted"), [(0, 1), (11, 1), (12, 2), (23, 2), (24, 3), (36, 4)])
 def test_wanted_masters_are_one_plus_running_agents_over_the_step(agents, wanted):
     found = [AgentRecord(f"e{i}", "eng", f"t{i}") for i in range(agents)]

@@ -198,7 +198,7 @@ class RedisStore:
             raw.get("codex_model") or default_models.DEFAULTS["codex"],
             raw.get("scratch") == "True",
             raw.get("codex_inbox_transport") or LEGACY_TRANSPORT,
-            int(raw.get("masters_step") or DEFAULT_MASTERS_STEP),
+            int(raw.get("masters_step") or 0),
         )
 
     def update(self, slug, **changes):
