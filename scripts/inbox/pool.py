@@ -73,6 +73,9 @@ class MasterPool:
         pipe.zadd(self.key(slug), {item.id: item.sequence})
         pipe.sadd(POOLS, slug)
 
+    def stage_remove(self, pipe, item) -> None:
+        pipe.zrem(self.key(slug_of(item.address)), item.id)
+
     def holds(self, pipe, item) -> bool:
         slug = slug_of(item.address)
         if not slug:
@@ -95,7 +98,8 @@ class MasterPool:
 
     def keys_of(self, address: str) -> list[str]:
         slug = slug_of(address)
-        return [key for key in (self.key(slug), self.key(slug, "last")) if slug and self.redis.exists(key)]
+        keys = (self.key(slug), self.key(slug, "last"), self.key(slug, "holders"))
+        return [key for key in keys if slug and self.redis.exists(key)]
 
     def distribute_all(self) -> list:
         return [item for slug in sorted(self.redis.smembers(POOLS)) for item in self.distribute(slug)]
@@ -104,11 +108,18 @@ class MasterPool:
         """Hand each pool item, oldest first, to the next live master; stop when the pool is empty or another
         process is claiming from it, since that process carries on."""
         live = live_masters(self.redis, slug) if live is None else live
+        self._reclaim(slug, live)
         claimed = []
         while (item := self._claim_next(slug, live)) is not None:
             if item is not DROPPED:
                 claimed.append(item)
         return claimed
+
+    def _reclaim(self, slug, live):
+        """Items a master that is gone claimed and never took go back to the pool."""
+        for seat in sorted(self.redis.smembers(self.key(slug, "holders")) - set(live)):
+            for item_id in self.redis.zrange(self.inbox.key("pending", seat), 0, -1):
+                self.inbox.return_to_pool(item_id, seat)
 
     def _claim_next(self, slug, live):
         from redis.exceptions import WatchError
@@ -126,15 +137,16 @@ class MasterPool:
             pipe.watch(pool, last)
             head = pipe.zrange(pool, 0, 0)
             if not head:
-                pipe.multi()
-                pipe.srem(POOLS, slug)
-                pipe.execute()
+                if not pipe.exists(self.key(slug, "holders")):
+                    pipe.multi()
+                    pipe.srem(POOLS, slug)
+                    pipe.execute()
                 return None
             if not live:
                 return None
             item_key = self.inbox.key("item", head[0])
             pipe.watch(item_key)
-            if pipe.hmget(item_key, "state", "address") != ["pending", front_door(slug)]:
+            if pipe.hget(item_key, "state") != "pending":
                 pipe.multi()
                 pipe.zrem(pool, head[0])
                 pipe.execute()
@@ -144,6 +156,7 @@ class MasterPool:
             pipe.multi()
             pipe.zrem(pool, item.id)
             pipe.set(last, seat)
+            pipe.sadd(self.key(slug, "holders"), seat)
             moved = self.inbox.stage_claim(pipe, item, seat, CLAIMER)
             pipe.execute()
             return moved

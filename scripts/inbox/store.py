@@ -24,6 +24,7 @@ OWNER_TTL_ENV = "AGENTIHOOKS_INBOX_OWNER_TTL_S"
 DEFAULT_OWNER_TTL_S = 30
 REDELIVERED = "redelivered: never confirmed inside the redelivery window"
 REDELIVERER = "inbox"
+RECLAIMED = "returned to the master pool: its master is gone"
 CLOSED = ("done", "blocked", "handed_off", "cancelled")
 CLOSE_KINDS = {"done": "done", "handoff": "handed_off", "blocked": "blocked", "cancel": "cancelled"}
 NEEDS_DETAIL = {"handoff": "the address the work went to", "blocked": "what it is blocked on"}
@@ -391,6 +392,7 @@ class InboxStore:
             pending = self.key("pending", item.address)
             pipe.watch(pending)
             last = pipe.zscore(pending, item_id) is not None and pipe.zcard(pending) == 1
+            pooled = self.pool.holds(pipe, item)
             moved = replace(
                 item,
                 address=address or item.address,
@@ -400,8 +402,9 @@ class InboxStore:
             )
             pipe.multi()
             pipe.hset(key, mapping=_fields(moved))
-            if moved.address != item.address:
-                pipe.hdel(key, POOL_HOLDER, POOL_SKIP)
+            pipe.hdel(key, POOL_HOLDER, POOL_SKIP)
+            if pooled:
+                self.pool.stage_remove(pipe, item)
             if moved.state in CLOSED or moved.address != item.address:
                 pipe.zrem(self.key("open", item.address), item_id)
             pipe.zrem(self.key("delivered"), item_id)
@@ -449,9 +452,35 @@ class InboxStore:
         key = self.key("item", item.id)
         pipe.hset(key, mapping={**_fields(back), POOL_SKIP: holder})
         pipe.hdel(key, POOL_HOLDER)
+        pipe.zrem(self.key("pending", item.address), item.id)
         self._move_address(pipe, item, front)
         self.pool.stage_add(pipe, back)
         return back
+
+    def return_to_pool(self, item_id, holder):
+        """A pool item still pending at the seat of a master that is gone goes back to the pool; None once it moved."""
+        from redis.exceptions import WatchError
+
+        key = self.key("item", item_id)
+        for _ in range(MOVE_ATTEMPTS):
+            with self.redis.pipeline() as pipe:
+                try:
+                    pipe.watch(key)
+                    raw = pipe.hgetall(key)
+                    if not raw or (raw["state"], raw["address"], raw.get(POOL_HOLDER)) != ("pending", holder, holder):
+                        return None
+                    item = _item(raw, item_id)
+                    moved = replace(item, updated_at=now_ms(), reason=RECLAIMED)
+                    pipe.multi()
+                    moved = self._stage_pool_return(pipe, item, moved, holder)
+                    pipe.rpush(
+                        self.key("history", item_id), _entry("pending", REDELIVERER, RECLAIMED, moved.updated_at)
+                    )
+                    pipe.execute()
+                    return moved
+                except WatchError:
+                    continue
+        return None
 
     def reply(self, item_id: str, replier: str, text: str, fyi: bool = False, answer_id: str = "") -> Item:
         from redis.exceptions import WatchError
