@@ -6,7 +6,7 @@ from scripts.swarm_ledger import ledger_server as server
 from scripts.swarm_ledger.events import patch
 from scripts.swarm_ledger.events.hub import Hub
 from scripts.swarm_ledger.repository.rows import encode
-from scripts.swarm_ledger.repository.sqlite import SQLiteLedgerRepository
+from scripts.swarm_ledger.repository.sqlite import Entry, SQLiteLedgerRepository
 from tests.swarm_ledger.test_operation_snapshot import SLUG, message, repository
 from tests.swarm_ledger.test_operations_cpu_contract import small_corpus
 
@@ -28,6 +28,15 @@ def test_unchanged_collections_share_read_only_generations(tmp_path, monkeypatch
     detached = stored.get_document(SLUG)
     detached["tasks"][0]["title"] = "Caller edit"
     assert old.state["tasks"][0]["title"] == "é𝄞"
+
+
+def test_a_generation_joins_its_text_when_read_and_keeps_no_copy(tmp_path, monkeypatch):
+    stored = repository(tmp_path, monkeypatch)
+    new, _ = stored.apply_ops(SLUG, ops=[message("chat")], copy_state=False)
+    entry = stored.current(SLUG)
+    assert entry.fragments.text is None
+    assert entry.text == encode(new)
+    assert Entry(1, "stored text", {}).text == "stored text"
 
 
 def test_snapshot_publication_reuses_immutable_resources_and_patches(tmp_path, monkeypatch):

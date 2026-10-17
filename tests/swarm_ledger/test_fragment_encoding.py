@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from scripts.swarm_ledger.repository.fragments import document
+from scripts.swarm_ledger.repository.fragments import document, encoded
 from scripts.swarm_ledger.repository.rows import encode
 
 
@@ -19,7 +19,7 @@ from scripts.swarm_ledger.repository.rows import encode
 def test_generation_text_matches_canonical_encoding(state):
     first = document(state)
     second = document(json.loads(encode(state)), first)
-    assert first.text == second.text == encode(state)
+    assert encoded(first) == encoded(second) == encode(state)
     assert first.value == state
     assert second is first
 
@@ -30,7 +30,7 @@ def test_generation_reuses_unchanged_rows_and_exact_number_types():
     assert type(new.value["tasks"][0]["value"]) is int
     assert new.value["tasks"][0] is not old.value["tasks"][0]
     assert new.value["tasks"][1] is old.value["tasks"][1]
-    assert new.text == encode(new.value)
+    assert encoded(new) == encode(new.value)
     assert type(old.value["tasks"][0]["value"]) is bool
 
 
@@ -39,8 +39,8 @@ def test_generation_removal_and_reordering_do_not_keep_obsolete_fragments():
     changed = {"_meta": {"stamps": {}}, "tasks": [{"id": "two"}, {"id": "one"}, {"id": "three"}]}
     second = document(changed, first)
     third = document({"tasks": []}, second)
-    assert second.text == encode(changed)
-    assert third.text == encode({"tasks": []})
+    assert encoded(second) == encode(changed)
+    assert encoded(third) == encode({"tasks": []})
     assert first.value["_meta"]["stamps"] == {"a": 1}
 
 
@@ -53,7 +53,7 @@ def test_metadata_generations_share_unchanged_events_and_stamps():
     assert second.value["_meta"]["stamps"]["b"] is not first.value["_meta"]["stamps"]["b"]
     assert first.value["_meta"]["events"] == [{"rev": 1}]
     assert first.value["_meta"]["stamps"]["b"] == {"rev": 1}
-    assert second.text == encode(state)
+    assert encoded(second) == encode(state)
 
 
 def test_generation_rejects_nonfinite_values_before_identity_reuse():
@@ -73,7 +73,7 @@ def test_large_integers_keep_canonical_precision_in_the_fallback():
     same = document({"tasks": [{"value": 2**100}]}, first)
     changed = document({"tasks": [{"value": 2**100 + 1}]}, same)
     assert same is first
-    assert changed.text == encode(changed.value)
+    assert encoded(changed) == encode(changed.value)
     assert changed.value["tasks"][0]["value"] == 2**100 + 1
 
 
@@ -82,7 +82,7 @@ def test_fallback_signature_preserves_changed_number_types():
     new = document({"tasks": [{"large": 2**100, "value": 1}]}, old)
     assert type(new.value["tasks"][0]["value"]) is int
     assert new.value["tasks"][0] is not old.value["tasks"][0]
-    assert new.text == encode(new.value)
+    assert encoded(new) == encode(new.value)
     assert type(old.value["tasks"][0]["value"]) is bool
 
 
@@ -90,7 +90,7 @@ def test_scalar_metadata_remains_a_leaf():
     value = {"_meta": "scalar"}
     result = document(value)
     assert result.value == value
-    assert result.text == encode(value)
+    assert encoded(result) == encode(value)
 
 
 def test_opaque_document_fields_reuse_unchanged_container_generations():
@@ -104,13 +104,14 @@ def test_opaque_document_fields_reuse_unchanged_container_generations():
     new = document(state(2), old)
     assert new.value["layout"] is old.value["layout"]
     assert new.value["_meta"]["api_operations"] is old.value["_meta"]["api_operations"]
-    assert new.text == encode(state(2))
+    assert encoded(new) == encode(state(2))
 
 
-def test_only_rows_and_the_generation_root_keep_canonical_text():
+def test_only_rows_keep_canonical_text_and_the_root_is_joined_from_them():
     state = {"tasks": [{"id": "one"}], "_meta": {"events": [{"rev": 1}], "stamps": {"a": {"rev": 1}}}}
     root = document(state)
-    assert root.text == encode(state)
+    assert root.text is None
+    assert encoded(root) == encode(state)
     assert root.parts["tasks"].text is None
     assert root.parts["_meta"].text is None
     assert root.parts["_meta"].parts["events"].text is None
@@ -124,7 +125,7 @@ def test_a_container_replacing_a_scalar_or_starting_empty_is_its_own_value():
     state = {"tasks": [], "_meta": {}}
     replaced = document(state, previous)
     assert replaced.value == state
-    assert replaced.text == encode(state)
+    assert encoded(replaced) == encode(state)
     assert document({"tasks": []}).value == {"tasks": []}
 
 
@@ -133,5 +134,5 @@ def test_a_reordered_mapping_with_the_same_rows_is_rebuilt():
     state = {"_meta": {"stamps": {"b": {"rev": 2}, "a": {"rev": 1}}}}
     second = document(state, first)
     assert list(second.value["_meta"]["stamps"]) == ["b", "a"]
-    assert second.text == encode(state)
+    assert encoded(second) == encode(state)
     assert second.value["_meta"]["stamps"]["a"] is first.value["_meta"]["stamps"]["a"]
