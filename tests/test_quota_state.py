@@ -1,0 +1,78 @@
+from scripts import agents_quota, quota_state
+from scripts.claude_quota_balancer import ProbeResult, QuotaWindow
+from scripts.swarm import capacity, drain_watch, quota_view
+from scripts.swarm.health.findings import Limits
+
+
+def test_the_vocabulary_names_four_states_and_drains_at_ten_percent_routing_left():
+    assert (quota_state.OPEN, quota_state.DRAIN, quota_state.CLOSED, quota_state.UNKNOWN) == (
+        "OPEN",
+        "DRAIN",
+        "CLOSED",
+        "UNKNOWN",
+    )
+    assert quota_state.DRAIN_LEFT == 10
+    assert [quota_state.state(6, left) for left in (0.0, 10.0, 10.5, None)] == ["DRAIN", "DRAIN", "OPEN", "OPEN"]
+    assert quota_state.state(0, 80.0) == "CLOSED"
+    assert quota_state.state(None, 5.0) == "UNKNOWN"
+
+
+def test_draining_takes_an_operator_limit_and_never_drains_an_unknown_reading():
+    assert quota_state.draining(10.0) and not quota_state.draining(10.5)
+    assert quota_state.draining(12.0, 12) and not quota_state.draining(12.5, 12)
+    assert not quota_state.draining(None)
+    assert not quota_state.draining(None, 100)
+
+
+def test_routing_left_is_the_week_for_codex_and_the_lower_window_for_claude():
+    assert quota_state.routing_left("codex", 5.0, 40.0) == 40.0
+    assert quota_state.routing_left("codex", None, 40.0) == 40.0
+    assert quota_state.routing_left("claude", 5.0, 40.0) == 5.0
+    assert quota_state.routing_left("claude", 50.0, 40.0) == 40.0
+    assert quota_state.routing_left("claude", None, 40.0) is None
+    assert quota_state.routing_left("claude", 40.0, None) is None
+
+
+def test_every_quota_band_becomes_the_shared_state_and_a_diagnostic_state_stays_as_it_is():
+    bands = ("NORMAL", "REDUCE", "DRAIN_SOON", "DRAIN")
+    assert quota_state.BANDS == frozenset(bands)
+    assert [quota_state.shown(band, 6, 9.0) for band in bands] == ["DRAIN"] * 4
+    assert [quota_state.shown(band, 6, 50.0) for band in bands] == ["OPEN"] * 4
+    assert quota_state.shown("DRAIN", 0, 2.0) == "CLOSED"
+    diagnostic = ("STALE", "SIGNED_OUT", "BLOCKED", "EXPIRED", "ERROR", "MASTERS_ONLY", "OPEN")
+    assert [quota_state.shown(name, 6, 9.0) for name in diagnostic] == list(diagnostic)
+
+
+def test_balance_swarm_status_and_the_drain_watch_agree_on_one_draining_account():
+    now = 1_000.0
+    result = ProbeResult("alpha", "allowed", "DRAIN", 9.0, QuotaWindow(5.0, 20_000), QuotaWindow(91.0, 90_000))
+    [balance] = agents_quota.claude_rows([result], {}, "cached", {"alpha": now}, now)
+    assert balance.cap and balance.cap > 0
+    stored = capacity.record(
+        capacity.Account(
+            "claude",
+            "alpha",
+            capacity._state(balance.cap, "claude", 95.0, 9.0),
+            0,
+            95.0,
+            9.0,
+            balance.cap,
+            90_000,
+            five_resets_at=20_000,
+            observed_at=now,
+        )
+    )
+    assert balance.state == stored["state"] == "DRAIN"
+    assert quota_view.state_text(stored) == "drain"
+    assert drain_watch.draining(stored, Limits(), now)
+
+
+def test_an_account_with_room_reads_open_everywhere():
+    now = 1_000.0
+    result = ProbeResult("alpha", "allowed", "REDUCE", 30.0, QuotaWindow(5.0, 20_000), QuotaWindow(70.0, 90_000))
+    [balance] = agents_quota.claude_rows([result], {}, "cached", {"alpha": now}, now)
+    state = capacity._state(balance.cap, "claude", 95.0, 30.0)
+    assert balance.state == state == "OPEN"
+    assert capacity._state(balance.cap, "codex", 5.0, 30.0) == "OPEN"
+    assert capacity._state(balance.cap, "codex", 50.0, 8.0) == "DRAIN"
+    assert capacity._state(0, "claude", 95.0, 30.0) == "CLOSED"

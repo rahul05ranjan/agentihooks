@@ -209,9 +209,9 @@ def test_an_old_reading_keeps_its_week_state_and_cap_without_its_old_five_hour_w
     accounts = [CodexAccount("default"), CodexAccount("alpha", "AH_CX_TOKEN_alpha"), CodexAccount("beta", "x")]
     rows = agents_quota.codex_rows(accounts, {"default": hot, "alpha": reset, "beta": fresh}, {}, NOW)
     assert [(row.account, row.state, row.cap) for row in rows] == [
-        ("default", "NORMAL", 6),
-        ("alpha", "NORMAL", 6),
-        ("beta", fresh.state_at(NOW), 6),
+        ("default", "OPEN", 6),
+        ("alpha", "OPEN", 6),
+        ("beta", "OPEN", 6),
     ]
     assert fresh.state_at(NOW) != "NORMAL"
     assert [row.five_hour_left for row in rows] == [None, None, 5.0]
@@ -226,8 +226,8 @@ def test_a_window_whose_reset_has_passed_reads_full_and_unused():
     accounts = [CodexAccount("default"), CodexAccount("alpha", "AH_CX_TOKEN_alpha")]
     rows = agents_quota.codex_rows(accounts, {"default": five_passed, "alpha": week_passed}, {}, NOW)
     assert [(row.five_hour_left, row.seven_day_left, row.state) for row in rows] == [
-        (100.0, 60.0, "NORMAL"),
-        (30.0, 100.0, "REDUCE"),
+        (100.0, 60.0, "OPEN"),
+        (30.0, 100.0, "OPEN"),
     ]
     assert (rows[0].five_hour_resets_at, rows[0].seven_day_resets_at, rows[0].observed_at) == (
         NOW,
@@ -251,7 +251,7 @@ def test_two_accounts_render_both_windows_their_resets_and_the_reading_age():
         "beta",
         agents_quota.NEXT_MARK,
         "subscription",
-        "REDUCE",
+        "OPEN",
         "2/6",
         "-",
         "6",
@@ -267,7 +267,7 @@ def test_two_accounts_render_both_windows_their_resets_and_the_reading_age():
         "codex",
         "alpha",
         "subscription",
-        "DRAIN",
+        "CLOSED",
         "1/0",
         "-",
         "0",
