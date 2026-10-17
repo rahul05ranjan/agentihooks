@@ -48,6 +48,14 @@ def test_string_dictionary_prefixes_use_the_direct_path_comparison():
     assert not rows._dict_paths_match({}, {1: 2})
 
 
+def test_leaf_keeps_a_compact_signature_that_differs_from_its_text():
+    fragment = fragments.leaf(1e-7)
+    assert fragment.text == "1e-07"
+    assert fragment.signature == "1e-7"
+    same = fragments.leaf("same")
+    assert same.signature is same.text
+
+
 def test_list_diff_keeps_the_direct_path_comparison(monkeypatch):
     old = [{"id": "one", "value": 1}]
     new = [*old, {"id": "two", "value": 2}]
