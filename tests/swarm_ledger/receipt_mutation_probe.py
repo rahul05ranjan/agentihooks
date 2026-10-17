@@ -43,7 +43,7 @@ def statistics(root, work, baseline=False, delay=False):
             "    receipt_case(live)\n"
         )
     if baseline:
-        transport = work / "tests/swarm_ledger/test_ledger_authority.py"
+        transport = work / "tests/mutation_trace.py"
         transport.write_text(transport.read_text().replace("MUTATION_TRACE_FACTOR = 7", "MUTATION_TRACE_FACTOR = 1"))
     selection = work / "selection.json"
     selection.write_text(
