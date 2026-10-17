@@ -147,3 +147,100 @@ def test_handover_on_a_new_failed_run_preserves_the_existing_active_repair(linke
     observe(store, ledger, DOCTOR, NOW + promotion_watch.REFRESH_MS)
     assert ledger.docs[DOCTOR]["tasks"] == []
     assert ledger.docs[WATCHED]["tasks"] == original
+
+
+def test_concurrent_linked_observers_share_one_intake_and_retry_after_lock_contention(linked, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    store, ledger = linked
+    entered, release = threading.Event(), threading.Event()
+    call = ledger._call
+
+    def blocked(slug, ops=None):
+        if ops:
+            entered.set()
+            assert release.wait(10)
+        return call(slug, ops)
+
+    monkeypatch.setattr(ledger, "_call", blocked)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(observe, store, ledger, WATCHED)
+        try:
+            assert entered.wait(10)
+            assert observe(store, ledger, DOCTOR) == []
+            assert observe(store, ledger, WATCHED) == []
+        finally:
+            release.set()
+        assert pending.result(10)
+    observe(store, ledger, DOCTOR, NOW + promotion_watch.REFRESH_MS)
+    assert [(slug, task["id"]) for slug, doc in ledger.docs.items() for task in doc["tasks"]] == [
+        (WATCHED, "promo-900-0")
+    ]
+
+
+def test_independent_repositories_each_retain_their_own_failed_check_intake(linked):
+    store, ledger = linked
+    other = "other-owner"
+    store.create(SwarmConfig(other, "/other-repo", 1, 1))
+    ledger.docs[other] = new_ledger.build_doc({"title": "Other promotion"}, "swarm")
+    observe(store, ledger, WATCHED)
+    observe(store, ledger, other)
+    assert [(slug, task["id"]) for slug, doc in ledger.docs.items() for task in doc["tasks"]] == [
+        (WATCHED, "promo-900-0"),
+        (other, "promo-900-0"),
+    ]
+
+
+def test_a_running_owner_remains_stable_when_a_preferred_watched_swarm_returns(linked, monkeypatch):
+    store, ledger = linked
+    store.update(WATCHED, state="stopped")
+    observe(store, ledger, DOCTOR)
+    store.update(WATCHED, state="running")
+    monkeypatch.setitem(RED, "id", 901)
+    observe(store, ledger, WATCHED, NOW + promotion_watch.REFRESH_MS)
+    observe(store, ledger, DOCTOR, NOW + promotion_watch.REFRESH_MS)
+    assert ledger.docs[WATCHED]["tasks"] == []
+    assert [task["id"] for task in ledger.docs[DOCTOR]["tasks"]] == ["promo-900-0"]
+
+
+def test_initial_owner_prefers_the_watched_swarm_even_when_its_doctor_sorts_first(linked):
+    from scripts.doctor.priming import doctor_slug
+
+    store, _ = linked
+    store.remove(WATCHED)
+    store.remove(DOCTOR)
+    watched = "z" * 48
+    doctor = doctor_slug(watched)
+    assert doctor < watched
+    for slug in (watched, doctor):
+        store.create(SwarmConfig(slug, "/repo", 1, 1))
+    store.set_peer(watched, doctor)
+    store.set_peer(doctor, watched)
+    ledger = SchemaLedger((watched, doctor))
+    observe(store, ledger, doctor)
+    observe(store, ledger, watched)
+    assert ledger.docs[doctor]["tasks"] == []
+    assert [task["id"] for task in ledger.docs[watched]["tasks"]] == ["promo-900-0"]
+
+
+@pytest.mark.parametrize("alias", ["symlink", "worktree"])
+def test_repository_aliases_share_the_same_intake_owner(linked, tmp_path, alias):
+    store, ledger = linked
+    repo, other = tmp_path / "repository", tmp_path / "alias"
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+    if alias == "symlink":
+        other.symlink_to(repo, target_is_directory=True)
+    else:
+        other.mkdir()
+        metadata = repo / ".git" / "worktrees" / "alias"
+        metadata.mkdir(parents=True)
+        (metadata / "commondir").write_text("../..")
+        (metadata / "gitdir").write_text(str(other / ".git"))
+        (metadata / "HEAD").write_text("ref: refs/heads/alias")
+        (other / ".git").write_text(f"gitdir: {metadata}")
+    store.update(WATCHED, repo=str(repo))
+    store.update(DOCTOR, repo=str(other))
+    observe(store, ledger, DOCTOR)
+    observe(store, ledger, WATCHED)
+    assert ledger.docs[DOCTOR]["tasks"] == []
+    assert [task["id"] for task in ledger.docs[WATCHED]["tasks"]] == ["promo-900-0"]
