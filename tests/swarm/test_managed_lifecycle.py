@@ -13,6 +13,12 @@ pytestmark = [pytest.mark.unit, pytest.mark.xdist_group("fakeredis")]
 SLUG = "managed"
 
 
+def _close_only(args):
+    if args[:2] != ["pane", "close"]:
+        raise AssertionError("managed execution must not inspect a pane")
+    return {}
+
+
 @pytest.fixture
 def rig(monkeypatch):
     import fakeredis
@@ -59,7 +65,7 @@ def rig(monkeypatch):
     from scripts import terminate_agent
 
     monkeypatch.setattr(terminate_agent, "sessions", lambda: [])
-    herdr = Mock(side_effect=AssertionError("managed execution must not inspect a pane"))
+    herdr = Mock(side_effect=_close_only)
     runner = runtime.HerdrRuntime(herdr=herdr)
     return SimpleNamespace(
         store=store,
@@ -238,7 +244,7 @@ def test_managed_retirement_uses_the_server_start_identity(rig, tmp_path):
     assert rig.bindings.get(SLUG, rig.agent.execution_id).state == "exited"
     assert rig.bindings.get(SLUG, rig.agent.execution_id).active_turn_id == ""
     assert not rig.store.redis.hgetall(rig.store.key(SLUG, "codex-endpoints"))
-    rig.herdr.assert_not_called()
+    assert [call.args[0] for call in rig.herdr.call_args_list] == [["pane", "close", "viewer"]]
 
 
 def test_managed_retire_process_uses_the_server_instead_of_the_launcher(rig):
@@ -288,3 +294,51 @@ def test_an_unrelated_named_session_survives_managed_retirement(rig, monkeypatch
             finally:
                 server.terminate()
                 unrelated.terminate()
+
+
+def test_managed_retirement_closes_every_recorded_viewer_and_removes_the_runtime_home(rig, tmp_path):
+    from scripts.swarm import reaper
+
+    path = supervisor.socket_path(tmp_path, rig.agent.execution_id)
+    (path.parent / "codex").mkdir()
+    rig.bindings.put(SLUG, replace(rig.record, endpoint_ref=f"unix://{path}", state=CONNECTED))
+    rig.bindings.add_viewer(SLUG, rig.agent.execution_id, "w2:p5")
+    rig.bindings.add_viewer(SLUG, "exe-other", "w2:p6")
+    rig.runner.end = Mock(return_value=reaper.Outcome((123,)))
+    assert rig.runner.retire(rig.agent)
+    assert [call.args[0] for call in rig.herdr.call_args_list] == [
+        ["pane", "close", "viewer"],
+        ["pane", "close", "w2:p5"],
+    ]
+    assert rig.bindings.viewers(SLUG, rig.agent.execution_id) == []
+    assert rig.bindings.viewers(SLUG, "exe-other") == ["w2:p6"]
+    assert not path.parent.exists()
+    assert tmp_path.exists()
+
+
+def test_managed_retirement_keeps_a_folder_outside_the_endpoint_layout(rig, tmp_path):
+    from scripts.swarm import reaper
+
+    foreign = tmp_path / "shared"
+    foreign.mkdir()
+    rig.bindings.put(SLUG, replace(rig.record, endpoint_ref=f"unix://{foreign}/s", state=CONNECTED))
+    rig.runner.end = Mock(return_value=reaper.Outcome((123,)))
+    assert rig.runner.retire(rig.agent)
+    assert foreign.exists()
+
+
+def test_a_viewer_pane_that_will_not_close_refuses_the_retirement(rig):
+    from scripts.swarm import reaper
+
+    rig.herdr.side_effect = RuntimeError("herdr is down")
+    rig.runner.end = Mock(return_value=reaper.Outcome((123,)))
+    assert not rig.runner.retire(rig.agent)
+    assert rig.runner.refusal(rig.agent) == {"process": 123, "refusal": "viewer pane viewer: herdr is down"}
+
+
+def test_a_viewer_pane_already_gone_does_not_refuse_the_retirement(rig):
+    from scripts.swarm import reaper
+
+    rig.herdr.side_effect = RuntimeError("pane viewer not found")
+    rig.runner.end = Mock(return_value=reaper.Outcome((123,)))
+    assert rig.runner.retire(rig.agent)

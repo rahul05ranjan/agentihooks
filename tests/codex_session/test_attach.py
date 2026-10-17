@@ -300,9 +300,13 @@ def test_the_local_terminal_opens_the_viewer_in_the_swarm_workspace(monkeypatch,
     from scripts import herdr_host
 
     config = SimpleNamespace(repo="/home/op/dev/agentihooks", code="323133", slug=slug)
+    from unittest.mock import Mock
+
     store = SimpleNamespace(
         agents=lambda asked: _agents() if asked == slug else [],
         config=lambda asked: config if asked == slug else None,
+        redis=Mock(),
+        key=lambda *parts: ":".join(parts),
     )
     monkeypatch.setattr("scripts.swarm.live_binding.transport", lambda found, seen: RECORD if found is store else None)
     opened = []
@@ -326,6 +330,7 @@ def test_the_local_terminal_opens_the_viewer_in_the_swarm_workspace(monkeypatch,
             environ,
         )
     ]
+    store.redis.hset.assert_called_once_with(f"{slug}:codex-viewers", "w1:p1", "exe-1")
 
 
 def test_the_local_terminal_leaves_other_executions_to_the_worker_terminal(monkeypatch):
