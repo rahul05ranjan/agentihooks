@@ -167,7 +167,15 @@ jobs:
           assert base['outputs'] == head['outputs'], 'Operation or persisted-state outcomes changed'
           assert head['outputs'] != fault['outputs'], 'Dropped stream update escaped the comparison'
           assert fault['peak_rss_kib_after_replay'] > base['peak_rss_kib_after_replay'] * 1.1, 'Retained memory escaped the bound'
+          accepted = sum(1 for output in head['outputs'] if output['reply'].get('applied'))
+          assert accepted, 'No operation in the corpus was accepted'
+          def p95(values):
+              ordered = sorted(values)
+              return ordered[min(len(ordered) - 1, int(0.95 * len(ordered)))]
           print(json.dumps({
+              'accepted': accepted,
+              'base_cpu_seconds_p95': p95(base['cpu_seconds']),
+              'head_cpu_seconds_p95': p95(head['cpu_seconds']),
               'requests': head['requests'],
               'base_cpu_seconds_per_request': base['mean_cpu_seconds'],
               'head_cpu_seconds_per_request': head['mean_cpu_seconds'],
