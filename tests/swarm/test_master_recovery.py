@@ -255,7 +255,7 @@ def test_a_master_hive_back_inside_the_grace_keeps_its_master(store, beat, live,
 
 class FenceRuntime:
     def __init__(self, ok=True):
-        self.ok, self.terminated = ok, []
+        self.ok, self.terminated, self.herdr = ok, [], None
 
     def terminate(self, agent, homes=()):
         from scripts.hive import registry
