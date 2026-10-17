@@ -66,6 +66,8 @@ def computed_mutation_lane(name: str, block: object, jobs: dict, trusted: dict) 
     baseline = trusted.get("jobs") or {}
     if name not in baseline or any(jobs.get(producer) != baseline.get(producer) for producer in ("plan", "refine")):
         return False
+    if any(jobs[name].get(key) != baseline[name].get(key) for key in ("needs", "strategy")):
+        return False
     stage, index, producer, output = stages[name]
     if (baseline.get(producer, {}).get("outputs") or {}).get(output) != "${{ steps.lanes.outputs.lane }}":
         return False
@@ -96,9 +98,19 @@ def problems(workflow: object, baseline: object = None) -> list[str]:
         block = job.get("concurrency", workflow.get("concurrency"))
         base_job = (trusted.get("jobs") or {}).get(name, {})
         base_block = base_job.get("concurrency", trusted.get("concurrency"))
-        if trusted and (name in (trusted.get("jobs") or {}) or base_block is not None) and block == base_block:
-            continue
         if computed_mutation_lane(name, block, jobs, trusted):
+            continue
+        computed = (
+            trusted.get("name") == "Mutation preflight"
+            and name in {"stats", "mutation-shard"}
+            and "needs." in str(block)
+        )
+        if (
+            trusted
+            and (name in (trusted.get("jobs") or {}) or base_block is not None)
+            and block == base_block
+            and not computed
+        ):
             continue
         problem = lane_problem(block)
         if problem:
