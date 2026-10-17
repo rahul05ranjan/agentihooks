@@ -1,6 +1,7 @@
 import shlex
 import sys
 from dataclasses import replace
+from unittest.mock import Mock
 
 import pytest
 
@@ -300,8 +301,6 @@ def test_the_local_terminal_opens_the_viewer_in_the_swarm_workspace(monkeypatch,
     from scripts import herdr_host
 
     config = SimpleNamespace(repo="/home/op/dev/agentihooks", code="323133", slug=slug)
-    from unittest.mock import Mock
-
     store = SimpleNamespace(
         agents=lambda asked: _agents() if asked == slug else [],
         config=lambda asked: config if asked == slug else None,

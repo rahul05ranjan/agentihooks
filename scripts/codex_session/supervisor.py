@@ -121,6 +121,8 @@ def socket_path(root: Path, execution_id: str) -> Path:
 
 def execution_directory(record: TransportRecord) -> Path | None:
     directory = Path(record.endpoint_ref.removeprefix(UNIX)).parent
+    if directory.parent.name != RUNTIME_SUBDIR:
+        return None
     if directory.name != record.execution_id.removeprefix(EXECUTION_PREFIX)[:ENDPOINT_ID_CHARS]:
         return None
     return directory

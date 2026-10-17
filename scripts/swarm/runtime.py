@@ -929,19 +929,25 @@ class HerdrRuntime:
             return False
         bindings = BindingStore(store)
         slug = store.names.slug_of(agent.name)
-        bindings.put(slug, replace(record, state=EXITED, active_turn_id=""))
-        bindings.release(slug, record)
-        viewers = [pane for pane in (agent.pane_id, *bindings.viewers(slug, record.execution_id)) if pane]
+        viewers = [
+            pane for pane in dict.fromkeys((agent.pane_id, *bindings.viewers(slug, record.execution_id))) if pane
+        ]
         for pane in viewers:
             try:
                 self.close_pane(pane)
             except Exception as exc:
                 self.refusals[agent.name] = {"process": record.server_pid, "refusal": f"viewer pane {pane}: {exc}"}
                 return False
-        bindings.forget_viewers(slug, viewers)
         directory = execution_directory(record)
         if directory is not None and directory.exists():
-            shutil.rmtree(directory)
+            try:
+                shutil.rmtree(directory)
+            except OSError as exc:
+                self.refusals[agent.name] = {"process": record.server_pid, "refusal": f"runtime home: {exc}"}
+                return False
+        bindings.put(slug, replace(record, state=EXITED, active_turn_id=""))
+        bindings.release(slug, record)
+        bindings.forget_viewers(slug, viewers)
         self.refusals.pop(agent.name, None)
         return True
 

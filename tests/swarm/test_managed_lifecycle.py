@@ -1,4 +1,5 @@
-from dataclasses import replace
+import json
+from dataclasses import asdict, replace
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -20,9 +21,6 @@ def _close_only(args):
 
 
 def _endpoint(rig, endpoint_ref):
-    import json
-    from dataclasses import asdict
-
     moved = replace(rig.record, endpoint_ref=endpoint_ref, state=CONNECTED)
     rig.store.redis.hset(rig.store.key(SLUG, "codex-transport"), moved.execution_id, json.dumps(asdict(moved)))
 
@@ -307,9 +305,11 @@ def test_an_unrelated_named_session_survives_managed_retirement(rig, monkeypatch
 def test_managed_retirement_closes_every_recorded_viewer_and_removes_the_runtime_home(rig, tmp_path):
     from scripts.swarm import reaper
 
-    path = supervisor.socket_path(tmp_path, rig.agent.execution_id)
+    path = supervisor.socket_path(tmp_path / supervisor.RUNTIME_SUBDIR, rig.agent.execution_id)
     (path.parent / "codex").mkdir()
     _endpoint(rig, f"unix://{path}")
+    rig.bindings.add_viewer(SLUG, rig.agent.execution_id, "w2:p9")
+    rig.bindings.add_viewer(SLUG, rig.agent.execution_id, "viewer")
     rig.bindings.add_viewer(SLUG, rig.agent.execution_id, "w2:p5")
     rig.bindings.add_viewer(SLUG, "exe-other", "w2:p6")
     rig.runner.end = Mock(return_value=reaper.Outcome((123,)))
@@ -317,6 +317,7 @@ def test_managed_retirement_closes_every_recorded_viewer_and_removes_the_runtime
     assert [call.args[0] for call in rig.herdr.call_args_list] == [
         ["pane", "close", "viewer"],
         ["pane", "close", "w2:p5"],
+        ["pane", "close", "w2:p9"],
     ]
     assert rig.bindings.viewers(SLUG, rig.agent.execution_id) == []
     assert rig.bindings.viewers(SLUG, "exe-other") == ["w2:p6"]
@@ -324,11 +325,13 @@ def test_managed_retirement_closes_every_recorded_viewer_and_removes_the_runtime
     assert tmp_path.exists()
 
 
-def test_managed_retirement_keeps_a_folder_outside_the_endpoint_layout(rig, tmp_path):
+@pytest.mark.parametrize(("parent", "name"), [("cx", "shared"), ("shared", "own"), ("shared", "shared")])
+def test_managed_retirement_keeps_a_folder_outside_the_endpoint_layout(rig, tmp_path, parent, name):
     from scripts.swarm import reaper
 
-    foreign = tmp_path / "shared"
-    foreign.mkdir()
+    own = rig.agent.execution_id.removeprefix(supervisor.EXECUTION_PREFIX)[: supervisor.ENDPOINT_ID_CHARS]
+    foreign = tmp_path / parent / (own if name == "own" else name)
+    foreign.mkdir(parents=True)
     _endpoint(rig, f"unix://{foreign}/s")
     rig.runner.end = Mock(return_value=reaper.Outcome((123,)))
     assert rig.runner.retire(rig.agent)
@@ -342,6 +345,25 @@ def test_a_viewer_pane_that_will_not_close_refuses_the_retirement(rig):
     rig.runner.end = Mock(return_value=reaper.Outcome((123,)))
     assert not rig.runner.retire(rig.agent)
     assert rig.runner.refusal(rig.agent) == {"process": 123, "refusal": "viewer pane viewer: herdr is down"}
+    assert rig.bindings.get(SLUG, rig.agent.execution_id).state == CONNECTED
+
+
+def test_a_runtime_home_that_will_not_go_refuses_the_retirement(rig, tmp_path, monkeypatch):
+    from scripts.swarm import reaper
+
+    path = supervisor.socket_path(tmp_path / supervisor.RUNTIME_SUBDIR, rig.agent.execution_id)
+    _endpoint(rig, f"unix://{path}")
+    rig.bindings.add_viewer(SLUG, rig.agent.execution_id, "w2:p5")
+
+    def busy(directory):
+        raise OSError("busy")
+
+    monkeypatch.setattr(runtime.shutil, "rmtree", busy)
+    rig.runner.end = Mock(return_value=reaper.Outcome((123,)))
+    assert not rig.runner.retire(rig.agent)
+    assert rig.runner.refusal(rig.agent) == {"process": 123, "refusal": "runtime home: busy"}
+    assert rig.bindings.get(SLUG, rig.agent.execution_id).state == CONNECTED
+    assert rig.bindings.viewers(SLUG, rig.agent.execution_id) == ["w2:p5"]
 
 
 def test_a_viewer_pane_already_gone_does_not_refuse_the_retirement(rig):
@@ -356,7 +378,7 @@ def test_a_headless_retirement_with_its_runtime_home_already_gone_succeeds(rig, 
     from scripts.swarm import reaper
 
     directory = rig.agent.execution_id.removeprefix(supervisor.EXECUTION_PREFIX)[: supervisor.ENDPOINT_ID_CHARS]
-    _endpoint(rig, f"unix://{tmp_path}/{directory}/s")
+    _endpoint(rig, f"unix://{tmp_path}/{supervisor.RUNTIME_SUBDIR}/{directory}/s")
     headless = replace(rig.agent, pane_id="")
     rig.runner.end = Mock(return_value=reaper.Outcome((123,)))
     assert rig.runner.retire(headless)
