@@ -68,6 +68,7 @@ def test_session_end_queues_one_documentation_task_with_source_and_docs_evidence
     assert len(ledger.added) == 1
     task = ledger.added[0]
     assert (task["profile"], task["lane"], task["kind"]) == ("documentation", "eng", "code")
+    assert task["rank"] == "low"
     assert task["depends_on"] == ["t1"]
     assert task["phase"] == "p1"
     assert "handbook/policy.md" in task["description"]

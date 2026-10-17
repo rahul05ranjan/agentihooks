@@ -624,6 +624,36 @@ def test_a_critical_chain_successor_takes_the_next_seat_ahead_of_operator_urgent
     assert spawned(store, config, ledger, found) == [("eng", "x")]
 
 
+def documentation_wait(store, autonomy, *waiting):
+    from tests.swarm.test_tick import FakeLedger
+
+    config = store.update(SLUG, autonomy=autonomy, max_eng=1)
+    generated = task("doc-s", phase="", profile="documentation", follow_up=True, rank="low", depends_on=["s"])
+    ledger = FakeLedger([task("s", phase="", state="done"), *waiting, generated])
+    found = ledger.state(SLUG)
+    found["_meta"]["stamps"] = {
+        "tasks/s/state": {"by": "engineer@abcdef-0001", "at": NOW - 30_000},
+        "tasks/doc-s/rank": {"by": "swarm"},
+        **{f"tasks/{t['id']}/rank": {"by": MASTER_NAME} for t in waiting if "rank" in t},
+    }
+    return config, ledger, found
+
+
+@pytest.mark.parametrize("autonomy", ["delegate", "full", "assist"])
+@pytest.mark.parametrize("rank", ["urgent", "high"])
+def test_a_free_seat_takes_urgent_or_high_work_over_a_newer_documentation_task(store, autonomy, rank):
+    config, ledger, found = documentation_wait(store, autonomy, task("u", phase="", rank=rank))
+    assert spawned(store, config, ledger, found) == [("eng", "u")]
+    assert "doc-s" not in dispatcher.guarded(found, "")
+
+
+@pytest.mark.parametrize("autonomy", ["delegate", "assist"])
+def test_a_documentation_task_takes_the_seat_when_no_urgent_or_high_task_is_claimable(store, autonomy):
+    waiting = (task("w", phase="", state="claimed"), task("u", phase="", rank="urgent", depends_on=["w"]))
+    config, ledger, found = documentation_wait(store, autonomy, *waiting)
+    assert spawned(store, config, ledger, found) == [("eng", "doc-s")]
+
+
 def chain_of(*ids):
     return [task(task_id, phase="", depends_on=list(ids[index - 1 : index])) for index, task_id in enumerate(ids)]
 
