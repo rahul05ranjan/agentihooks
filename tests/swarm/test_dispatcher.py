@@ -647,7 +647,7 @@ def test_a_free_seat_takes_urgent_or_high_work_over_a_newer_documentation_task(s
     assert "doc-s" not in dispatcher.guarded(found, "")
 
 
-@pytest.mark.parametrize("autonomy", ["delegate", "assist"])
+@pytest.mark.parametrize("autonomy", ["delegate", "full", "assist"])
 def test_a_documentation_task_takes_the_seat_when_no_urgent_or_high_task_is_claimable(store, autonomy):
     waiting = (task("w", phase="", state="claimed"), task("u", phase="", rank="urgent", depends_on=["w"]))
     config, ledger, found = documentation_wait(store, autonomy, *waiting)
