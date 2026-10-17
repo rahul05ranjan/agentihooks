@@ -51,21 +51,23 @@ The live Codex API test, `tests/routing/test_codex_api.py`, runs the real Codex 
 
 | Job | When it needs the CLI | Cache action | On a miss |
 |---|---|---|---|
-| `unit` | Python 3.12, shard 1, the shard runs tests itself | `actions/cache/restore` | downloads the release and runs it; saves nothing |
+| `unit` | Python 3.12 shard 1, when the run does not take its results from an earlier run (`needs.split.outputs.source` empty) | `actions/cache/restore` | downloads the release and runs it; saves nothing |
 | `unit-selected` | Python 3.12 leg whose files name `tests/routing/test_codex_api.py` | `actions/cache/restore` | downloads the release and runs it; saves nothing |
-| Codex cache workflow `seed` | always, on the self-hosted pool | `actions/cache` | downloads the release; the cache action saves it to `main` |
+| Codex cache workflow `seed` | trusted actors, on the self-hosted pool | `actions/cache` | downloads the release; the post step saves it on the ref that ran the seed |
 
-Both test jobs put `~/codex` on `PATH` and set `CODEX_CLI_REQUIRED=1`, so a missing CLI fails the test instead of skipping it.
+When the CLI step runs, the job puts `~/codex` on `PATH` and sets `CODEX_CLI_REQUIRED=1`, so a missing CLI fails the test instead of skipping it. A `unit` run that takes its results from an earlier run sets neither, and the test is not run there.
 
-The cache key is `codex-<runner OS>-<CODEX_RELEASE>`, today `codex-Linux-rust-v0.160.0`, and the path is `~/codex`. The binary is the `codex-x86_64-unknown-linux-musl` asset of that release from `github.com/openai/codex`, about 104 MB.
+The cache key is `codex-<runner OS>-<CODEX_RELEASE>`, today `codex-Linux-rust-v0.160.0`, and the path is `~/codex`. The binary is the `codex-x86_64-unknown-linux-musl` asset of that release from `github.com/openai/codex`; the cache entry is 109,304,501 bytes (about 104 MiB) in the cache list.
 
-Only the Codex cache workflow (`codex-cache.yml`) saves the entry. It runs on every push to `main`, every six hours (`23 */6 * * *`) and on dispatch. A cache entry is visible to runs of the ref that saved it and of the default branch, `main`. Merge queue refs (`gh-readonly-queue/dev/...`), pull request refs and `dev` therefore all restore the one `main` entry, and no merge queue branch stores its own copy. The scheduled run renews the entry so the seven day eviction of unused caches does not drop it between promotions.
+Only the Codex cache workflow (`codex-cache.yml`) saves the entry. It runs on every push to `main`, every six hours (`23 */6 * * *`) and on dispatch, and saves on the ref it runs on: `main` for pushes, the schedule and `gh workflow run codex-cache.yml --ref main`. A cache entry is visible to runs of the ref that saved it and of the default branch, `main`. Merge queue refs (`gh-readonly-queue/dev/...`), pull request refs and `dev` therefore all restore the one `main` entry, and no merge queue branch stores its own copy. Before this workflow, the unit shard saved a copy on each ref it ran on; merge queue refs could not read the `dev` copy, so a queue run logged `Cache not found` and spent 220 seconds in `Install the Codex CLI` (run 38802694821).
 
-The seed job saves only on the self-hosted pool the unit shards restore on. Hosted runners compress the cache with zstd, which produces a cache version the gzip compressed self-hosted unit runners cannot restore. When the trusted actor check routes the job to `ubuntu-latest`, the job warns `Only the self-hosted pool unit shards restore on may save the Codex cache.` and skips every other step.
+On an exact key hit `actions/cache` restores the entry and skips its save. Each scheduled or push restore updates the entry's last access time, which keeps it inside the seven day eviction window for unused caches between promotions.
+
+The seed job saves only on the self-hosted pool the unit shards restore on. The self-hosted unit runners save gzip caches and hosted runners save zstd caches, and the two produce different cache versions, so a hosted save would not be restorable by the unit shards. The proof seed run 38808361430 on the self-hosted pool saved version `9275f631…`, the same version the shards restore. When the trusted actor check routes the job to `ubuntu-latest`, the job warns `Only the self-hosted pool unit shards restore on may save the Codex cache.`, skips every other step and still passes.
 
 ### Changing the Codex release
 
-`CODEX_RELEASE` is set in three places: the `unit` and `unit-selected` job environments in `test.yml` and the `seed` job in `codex-cache.yml`. Change all three in one pull request. The new key does not exist until the next push to `main` or a dispatch of the seed:
+`CODEX_RELEASE` is set in three places: the `unit` and `unit-selected` job environments in `test.yml` and the `seed` job in `codex-cache.yml`. Change all three in one pull request; `tests/test_ci_workflow.py` fails when they differ. The new key does not exist until the next push to `main` or a dispatch of the seed:
 
 ```bash
 gh workflow run codex-cache.yml --ref main
@@ -82,14 +84,21 @@ gh api "repos/the-cloud-clockwork/agentihooks/actions/caches?key=codex-" \
   --jq '.actions_caches[] | [.key, .ref, .size_in_bytes, .last_accessed_at] | @tsv'
 ```
 
-Expect one entry on `refs/heads/main` per release. An entry on any other ref was saved before the seed workflow existed or by a dispatch of the seed on that ref; it is not refreshed and expires seven days after its last use. List the seed runs:
+Expect one entry on `refs/heads/main` per release. An entry on another ref was saved by the unit shard before the seed workflow existed, or by a seed dispatched on that ref; nothing refreshes it and it expires seven days after its last use. On 2026-10-17 the list showed the `main` entry and one `dev` entry created on 2026-10-13, before the seed workflow merged on 2026-10-15.
+
+List the seed runs:
 
 ```bash
 gh run list --workflow codex-cache.yml --limit 5 \
   --json event,headBranch,conclusion,databaseId
 ```
 
-If the Codex shard log shows the `Install the Codex CLI` step running, the restore missed: check that the seed's latest run passed on the self-hosted pool and that its `CODEX_RELEASE` matches `test.yml`.
+| Symptom | Cause | Action |
+|---|---|---|
+| `Install the Codex CLI` runs in the Codex shard | the restore missed: no entry for the current `CODEX_RELEASE` on `main` | dispatch the seed on `main`, then check its run |
+| Seed run passes with the `Only the self-hosted pool ...` warning | the run was routed to `ubuntu-latest` and saved nothing | dispatch it again as a trusted actor |
+| `CODEX_RELEASE` test failure in `tests/test_ci_workflow.py` | the three release values differ | set the same release in all three jobs |
+| `test_codex_api.py` fails rather than skips | `CODEX_CLI_REQUIRED=1` is set but `codex` did not run | read the install step log for the download error |
 
 ## Historical measurements
 
