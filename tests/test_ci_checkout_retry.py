@@ -55,6 +55,7 @@ def _git(directory, *args, env=None, check=True):
     )
 
 
+@pytest.mark.wall_clock
 @pytest.mark.parametrize("stalls", [0, 1, 2])
 def test_promised_blob_checkout_recovers_within_bound_without_old_blobs(tmp_path, stalls):
     attempts = _checkout_steps("unit")
