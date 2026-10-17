@@ -106,6 +106,7 @@ jobs:
         uses: ./.github/actions/input-key/save
         with:
           key: ${{ steps.key.outputs.key }}
+
       - name: Prepare the same load harness for the base implementation
         if: inputs.compare
         run: |

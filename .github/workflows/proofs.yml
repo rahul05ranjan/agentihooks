@@ -57,7 +57,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.base }}
+          ref: ${{ inputs.base == 'origin/dev' && 'dev' || inputs.base }}
           path: base
       - uses: actions/setup-python@v5
         with:
@@ -100,7 +100,7 @@ jobs:
           path: head
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.base }}
+          ref: ${{ inputs.base == 'origin/dev' && 'dev' || inputs.base }}
           path: base
       - uses: actions/setup-python@v5
         with:
