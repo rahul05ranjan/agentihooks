@@ -29,11 +29,12 @@ jobs:
           path: original
           fetch-depth: 0
       - name: Restore the identical baseline
-        uses: actions/cache/restore@v4
+        uses: actions/download-artifact@v4
         with:
+          name: coverage-baseline
           path: ~/coverage-baseline
-          key: coverage-baseline-a5c01618f6e08ec0d6b8c1eeab2384b7c4252472
-          fail-on-cache-miss: true
+          run-id: 38982907091
+          github-token: ${{ github.token }}
       - name: Restore the identical shards
         uses: actions/download-artifact@v4
         with:

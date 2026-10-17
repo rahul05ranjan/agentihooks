@@ -31,12 +31,11 @@ def report(result: Result, missed: dict[str, list[int]], covered: dict[str, int]
     return "\n".join(out) + "\n"
 
 
-def _missed(head: Path, shards: list[Path], out: Path) -> dict[str, list[int]]:
+def _missed(
+    head: Path, shards: list[Path], out: Path, *, measured: dict[str, set[int]] | None = None
+) -> dict[str, list[int]]:
     combined = CoverageData(basename=str(out.resolve() / ".coverage"))
-    for shard in shards:
-        part = CoverageData(basename=str(shard))
-        part.read()
-        combined.update(part)
+    combined.add_lines(executed(shards) if measured is None else measured)
     combined.write()
     coverage = Coverage(data_file=combined.base_filename(), config_file=False)
     coverage.set_option("run:relative_files", True)
@@ -115,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     text = report(
         result,
-        _missed(args.head, head_files, args.out),
+        _missed(args.head, head_files, args.out, measured=head),
         {path: len(lines) for path, lines in head.items()},
         {path: len(lines) for path, lines in base.executed.items()},
     )
