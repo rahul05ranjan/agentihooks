@@ -21,7 +21,7 @@ def _function(page, name):
 
 def _run(script):
     page = page_source()
-    names = ("span", "modelText", "terminalView", "executionView", "agentRows", "agentRow", "remoteControlCell")
+    names = ("span", "modelText", "terminalView", "executionView", "agentRows", "agentRow")
     js = STUBS + "\n".join(_function(page, name) for name in names) + script
     return json.loads(subprocess.check_output(["node", "-e", js], text=True))
 
@@ -52,7 +52,10 @@ console.log(JSON.stringify(agentRows(raw, 0).map((r) => agentRow(r, false)[5])))
 
 
 def test_an_off_master_without_transport_shows_the_reason_alone():
-    cell = _run("console.log(JSON.stringify(remoteControlCell({state: 'off', detail: 'fallback auth'}, null)));")
+    cell = _run("""
+const raw = {agents: [{name: 'm', lane: 'master', remote_control: {state: 'off', detail: 'fallback auth'}}]};
+console.log(JSON.stringify(agentRow(agentRows(raw, 0)[0], false)[5]));
+""")
     assert cell == {
         "tag": "span",
         "attrs": {"data-tip": "Remote Control: off (fallback auth)"},
