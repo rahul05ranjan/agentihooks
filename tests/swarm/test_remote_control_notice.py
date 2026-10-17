@@ -2,6 +2,7 @@ import pytest
 
 from scripts.swarm import remote_control
 from scripts.swarm.store import RedisStore
+from tests.swarm.test_cli import env as env
 
 pytestmark = pytest.mark.xdist_group("fakeredis")
 
@@ -63,3 +64,25 @@ def test_health_rows_carry_the_recorded_failure(store, monkeypatch):
     agents = [AgentRecord("master@a1b2c3-0001", "master", "master"), AgentRecord("engineer@a1b2c3-0002", "eng", "t1")]
     rows = status._health_rows(store, "proof", agents, {}, 10**13)
     assert [row["remote_control_failure"] for row in rows] == [{"message": "Remote Control failed", "at": 7}, None]
+
+
+def test_status_text_and_json_show_the_master_remote_control_line(env, capsys, monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts.swarm import cli, status
+    from scripts.swarm.store import AgentRecord
+
+    monkeypatch.delenv(remote_control.FLAG, raising=False)
+    store, _, rt = env
+    cli.main(["sw", "create", "--repo", "/repo"])
+    master = AgentRecord("master@a1b2c3-0001", "master", "master", harness="claude", route_kind="interactive")
+    engineer = AgentRecord("engineer@a1b2c3-0002", "eng", "t1", harness="claude", route_kind="interactive")
+    store.put_agent("sw", master)
+    store.put_agent("sw", engineer)
+    rt.live = {master.name, engineer.name}
+    shown = {a["name"]: a["remote_control"] for a in status.status_report(store, "sw", {"tasks": []}, rt)["agents"]}
+    assert shown == {master.name: "Remote Control: on (master · sw)", engineer.name: ""}
+    capsys.readouterr()
+    cli.cmd_status(store, SimpleNamespace(slug="sw", json=False))
+    out = capsys.readouterr().out
+    assert "\nRemote Control: on (master · sw)\n" in out and out.count("Remote Control") == 1

@@ -104,6 +104,7 @@ from scripts.swarm import (
     prompt,
     ready,
     reaper,
+    remote_control,
     review_rounds,
     snapshot,
     stack,
@@ -971,6 +972,8 @@ def cmd_status(store, args):
     print(bottleneck_status.line(bottleneck_status.report(store, args.slug, now_ms())))
     print(_snapshot_line(auto_snapshot(config)))
     print(_affinity_line(affinity.report(store, args.slug, config, agents)))
+    for line in filter(None, (remote_control.line(a.__dict__, args.slug, os.environ) for a in agents)):
+        print(line)
     if promotion := tick_master.status_line(tick_master.read(store, args.slug)):
         print(promotion)
     print(
