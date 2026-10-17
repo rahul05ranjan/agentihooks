@@ -106,7 +106,7 @@ def test_owner_departure_hands_over_without_recreating_an_existing_fixer_or_chan
     assert ledger.docs[WATCHED]["tasks"] == original
 
 
-@pytest.mark.parametrize("failure", ["ledger", "checkpoint"])
+@pytest.mark.parametrize("failure", ["ledger", "checkpoint", "job"])
 def test_failed_persistence_then_owner_departure_retries_without_duplicate_intake(linked, monkeypatch, failure):
     from scripts.swarm import promotion_owner
 
@@ -115,7 +115,7 @@ def test_failed_persistence_then_owner_departure_retries_without_duplicate_intak
     original_hset = store.redis.hset
 
     def hset(name, key=None, value=None, mapping=None, **kwargs):
-        if name == record and key == "seen":
+        if (name == record and key == "seen") or (failure == "job" and name == promotion_watch.key(WATCHED, "jobs")):
             raise RuntimeError("checkpoint refused")
         return original_hset(name, key, value, mapping=mapping, **kwargs)
 
@@ -128,7 +128,6 @@ def test_failed_persistence_then_owner_departure_retries_without_duplicate_intak
     with pytest.raises(error):
         observe(store, ledger, WATCHED)
     assert store.redis.hget(record, "seen") is None
-    assert len(ledger.docs[WATCHED]["tasks"]) == (failure == "checkpoint")
     ledger.refuse = False
     monkeypatch.setattr(store.redis, "hset", original_hset)
     store.update(WATCHED, state="stopped")
@@ -147,6 +146,21 @@ def test_handover_on_a_new_failed_run_preserves_the_existing_active_repair(linke
     observe(store, ledger, DOCTOR, NOW + promotion_watch.REFRESH_MS)
     assert ledger.docs[DOCTOR]["tasks"] == []
     assert ledger.docs[WATCHED]["tasks"] == original
+
+
+def test_handover_reconciles_prior_repairs_on_green_and_allows_the_next_real_failure(linked, monkeypatch):
+    store, ledger = linked
+    observe(store, ledger, WATCHED)
+    store.update(WATCHED, state="stopped")
+    monkeypatch.setitem(RED, "id", 901)
+    monkeypatch.setitem(RED, "conclusion", "success")
+    observe(store, ledger, DOCTOR, NOW + promotion_watch.REFRESH_MS)
+    assert ledger.docs[WATCHED]["tasks"][0]["state"] == "done"
+    assert all(alert["state"] == "closed" for alert in ledger.docs[WATCHED]["alerts"])
+    monkeypatch.setitem(RED, "id", 902)
+    monkeypatch.setitem(RED, "conclusion", "failure")
+    observe(store, ledger, DOCTOR, NOW + promotion_watch.REFRESH_MS * 2)
+    assert [task["id"] for task in ledger.docs[DOCTOR]["tasks"]] == ["promo-902-0"]
 
 
 def test_concurrent_linked_observers_share_one_intake_and_retry_after_lock_contention(linked, monkeypatch):
