@@ -821,11 +821,29 @@ jobs:
           - {python-version: "3.11", shard: 11}
           - {python-version: "3.11", shard: 12}
     steps:
-      - uses: actions/checkout@v4
-        with:
+      - &partial-checkout
+        uses: actions/checkout@v4
+        id: checkout
+        continue-on-error: true
+        timeout-minutes: 2
+        env: &checkout-network
+          GIT_CONFIG_COUNT: '2'
+          GIT_CONFIG_KEY_0: http.lowSpeedLimit
+          GIT_CONFIG_VALUE_0: '1024'
+          GIT_CONFIG_KEY_1: http.lowSpeedTime
+          GIT_CONFIG_VALUE_1: '30'
+        with: &partial-checkout-inputs
           ref: ${{ github.sha }}
           fetch-depth: 0
           filter: blob:none
+
+      - &partial-checkout-retry
+        name: Retry the partial checkout after a stalled fetch
+        if: ${{ !cancelled() && steps.checkout.outcome == 'failure' }}
+        uses: actions/checkout@v4
+        timeout-minutes: 2
+        env: *checkout-network
+        with: *partial-checkout-inputs
 
       - *python
 
@@ -1038,11 +1056,9 @@ jobs:
         python-version: ["3.11", "3.12"]
         leg: ${{ fromJSON(needs.select.outputs.legs) }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-          filter: blob:none
+      - *partial-checkout
+
+      - *partial-checkout-retry
 
       - name: Require selected test paths
         run: |
