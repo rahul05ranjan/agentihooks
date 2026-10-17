@@ -88,6 +88,10 @@ def test_items_go_round_robin_across_masters_in_arrival_order(swarm, inbox):
     _masters(swarm, 3)
     items = [inbox.send("swarm", FRONT, f"item {n}") for n in range(6)]
     assert [inbox.get(i.id).address for i in items] == [FRONT, SECOND, THIRD, FRONT, SECOND, THIRD]
+    assert [swarm.redis.zrange(inbox.key("pending", seat), 0, -1) for seat in (FRONT, SECOND, THIRD)] == [
+        [items[n].id, items[n + 3].id] for n in range(3)
+    ]
+    assert swarm.redis.smembers(inbox.key("waiting")) == {FRONT, SECOND, THIRD}
     assert [i.id for i in inbox.pending_mail("sw-master-1")] == [items[0].id, items[3].id]
     assert [i.id for i in inbox.pending_mail("sw-master-2")] == [items[1].id, items[4].id]
     assert [i.id for i in inbox.pending_mail("sw-master-3")] == [items[2].id, items[5].id]
@@ -95,7 +99,6 @@ def test_items_go_round_robin_across_masters_in_arrival_order(swarm, inbox):
     assert [i.id for i in inbox.open_items(FRONT)] == [items[0].id, items[3].id]
     assert [i.id for i in inbox.open_items(SECOND)] == [items[1].id, items[4].id]
     assert swarm.redis.get(f"{POOL}:last") == THIRD
-    assert {FRONT, SECOND, THIRD} <= swarm.redis.smembers(inbox.key("waiting"))
     assert swarm.redis.exists(POOL) == 0
     assert swarm.redis.smembers(POOLS) == {SLUG}
 
