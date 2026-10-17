@@ -957,10 +957,10 @@ class HerdrRuntime:
     def _viewer_panes(self, launch_pane, recorded):
         """A recorded viewer is closed only while herdr still lists its pane on the terminal it was opened with,
         because herdr reuses a closed pane's id."""
-        listed = {}
+        live = []
         if recorded:
             listed = {p["pane_id"]: p.get("terminal_id") for p in self.herdr(["pane", "list"])["panes"]}
-        live = [pane for pane, terminal in recorded.items() if terminal and listed.get(pane) == terminal]
+            live = [pane for pane, terminal in recorded.items() if terminal and listed.get(pane) == terminal]
         return [pane for pane in dict.fromkeys((launch_pane, *live)) if pane]
 
     def retire_process(self, agent, pid, homes=(), start=0):
