@@ -68,10 +68,11 @@ def test_a_failed_probe_is_recorded_and_leaves_the_page_quota_alone(store, fresh
     assert store.redis.get(quota_refresh.page_key(store, "sw")) is None
 
 
-def test_answer_without_a_pending_quota_row_writes_nothing(store, fresh):
+def test_answer_without_a_pending_quota_row_writes_nothing_and_takes_no_lease(store, fresh):
     commands.submit(store, "sw", "swarm", ["pause"])
     assert quota_refresh.answer(store, "sw", lambda slug, row: pytest.fail("ran a row")) == []
     assert store.redis.get(quota_refresh.page_key(store, "sw")) is None
+    assert store.redis.get(store.key("sw", "control-owner")) is None
 
 
 def test_the_newer_probe_wins_and_a_missing_side_yields_the_other():
@@ -110,6 +111,40 @@ def test_a_page_request_reaches_the_status_view_after_one_prober_round(store, fr
     quota_refresh.request(store, "sw")
     assert quota_refresh.answer_all(store, lambda slug, row: "") == ["sw: control quota acknowledged"]
     assert commands.view(store, "sw")["quota"] == fresh
+
+
+def test_claim_accepts_a_pending_row_once(store):
+    row = quota_refresh.request(store, "sw")
+    records = store.key("sw", "commands")
+    claimed = commands.claim(store, records, row["id"], "hive-a", 3)
+    assert (claimed["state"], claimed["owner"], claimed["epoch"]) == ("accepted", "hive-a", 3)
+    assert json.loads(store.redis.hget(records, row["id"])) == claimed
+    assert commands.claim(store, records, row["id"], "hive-b", 3) is None
+
+
+def test_a_row_another_process_accepts_mid_claim_is_left_to_it(store, monkeypatch):
+    row = quota_refresh.request(store, "sw")
+    records = store.key("sw", "commands")
+    real, fired = store.redis.pipeline, []
+
+    def pipeline(*args, **kwargs):
+        pipe = real(*args, **kwargs)
+        read = pipe.hget
+
+        def racing(name, key):
+            value = read(name, key)
+            if not fired:
+                fired.append(key)
+                store.redis.hset(records, key, json.dumps({**json.loads(value), "state": "accepted"}))
+            return value
+
+        pipe.hget = racing
+        return pipe
+
+    monkeypatch.setattr(store.redis, "pipeline", pipeline)
+    assert commands.claim(store, records, row["id"], "hive-a", 1) is None
+    assert fired == [row["id"]]
+    assert json.loads(store.redis.hget(records, row["id"]))["owner"] == ""
 
 
 def test_answer_all_reports_every_swarm_and_carries_on_past_a_refused_one(store, monkeypatch, capsys):

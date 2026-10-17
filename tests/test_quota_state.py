@@ -35,12 +35,13 @@ def test_routing_left_is_the_week_for_codex_and_the_lower_window_for_claude():
 
 
 def test_every_quota_band_becomes_the_shared_state_and_a_diagnostic_state_stays_as_it_is():
-    bands = ("NORMAL", "REDUCE", "DRAIN_SOON", "DRAIN")
+    bands = ("NORMAL", "REDUCE", "DRAIN_SOON", "DRAIN", "BLOCKED")
     assert quota_state.BANDS == frozenset(bands)
-    assert [quota_state.shown(band, 6, 9.0) for band in bands] == ["DRAIN"] * 4
-    assert [quota_state.shown(band, 6, 50.0) for band in bands] == ["OPEN"] * 4
+    assert [quota_state.shown(band, 6, 9.0) for band in bands] == ["DRAIN"] * 5
+    assert [quota_state.shown(band, 6, 50.0) for band in bands] == ["OPEN"] * 5
     assert quota_state.shown("DRAIN", 0, 2.0) == "CLOSED"
-    diagnostic = ("STALE", "SIGNED_OUT", "BLOCKED", "EXPIRED", "ERROR", "MASTERS_ONLY", "OPEN")
+    assert quota_state.shown("BLOCKED", 0, 0.0) == "CLOSED"
+    diagnostic = ("STALE", "SIGNED_OUT", "EXPIRED", "ERROR", "MASTERS_ONLY", "OPEN")
     assert [quota_state.shown(name, 6, 9.0) for name in diagnostic] == list(diagnostic)
 
 
@@ -69,3 +70,12 @@ def test_an_account_with_room_reads_open_everywhere():
     assert capacity._state(balance.cap, "codex", 5.0, 30.0) == "OPEN"
     assert capacity._state(balance.cap, "codex", 50.0, 8.0) == "DRAIN"
     assert capacity._state(0, "claude", 95.0, 30.0) == "CLOSED"
+
+
+def test_balance_reads_a_window_whose_reset_passed_as_full_like_capacity():
+    now = 30_000.0
+    result = ProbeResult("a", "allowed", "DRAIN", 7.0, QuotaWindow(93.0, 29_000), QuotaWindow(40.0, 90_000))
+    [balance] = agents_quota.claude_rows([result], {}, "cached", {"a": now - 60}, now)
+    assert balance.state == capacity._state(balance.cap, "claude", 100.0, 60.0) == "OPEN"
+    [held] = agents_quota.claude_rows([result], {}, "cached", {"a": 27_900.0}, 28_000.0)
+    assert held.state == "DRAIN"

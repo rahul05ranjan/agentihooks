@@ -25,6 +25,8 @@ def page_key(store: RedisStore, slug: str) -> str:
 def answer(store: RedisStore, slug: str, execute: Callable[[str, dict], str]) -> list[str]:
     from scripts import agents_quota
 
+    if not any(row["command"] == COMMAND and row["state"] == "pending" for row in commands.rows(store, slug)):
+        return []
     actions = commands.consume(store, slug, commands.hive_id(), lambda row: execute(slug, row), only=COMMAND)
     if f"control {COMMAND} acknowledged" in actions:
         store.redis.set(page_key(store, slug), json.dumps(agents_quota.page_quota()), ex=PAGE_TTL_S)

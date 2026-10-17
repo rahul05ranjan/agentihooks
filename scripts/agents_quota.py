@@ -101,10 +101,12 @@ def _claude_row(
     result, sessions: dict[str, int], source: str, seen: float | None, now: float, include_fable: bool
 ) -> QuotaRow:
     cap = account_cap(result, now, include_fable) if session_bands.fresh(seen, now) else None
+    five = session_bands.left(result.five_hour.used, result.five_hour.resets_at, now)
+    week = session_bands.left(result.seven_day.used, result.seven_day.resets_at, now)
     row = QuotaRow(
         agent="claude",
         account=result.account,
-        state=quota_state.shown(result.state, cap, result.margin),
+        state=quota_state.shown(result.state, cap, quota_state.routing_left("claude", five, week)),
         sessions=sessions.get(result.account, 0),
         five_hour_left=result.five_hour.remaining,
         seven_day_left=result.seven_day.remaining,
