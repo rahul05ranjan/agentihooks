@@ -11,7 +11,7 @@ from time import process_time
 from mutmut.utils.format_utils import get_mutant_name
 
 from scripts.ci_mutation.killers import KillMemory
-from scripts.ci_mutation.mutant_shards import shard_names
+from scripts.ci_mutation.mutant_shards import shard_names, shard_tests
 from scripts.ci_mutation.report import mutation_lines
 from scripts.ci_mutation.stats import write_part
 
@@ -335,6 +335,10 @@ def run_selected(selection: Path, shard: tuple[int, int], mode: str = "", *stats
             except runner.BadTestExecutionCommandsException:
                 # The stats shards proved these node ids collect, so a usage error here is the forced failure at import.
                 return 1
+        tests = shard_tests(list(tests), mutant_name, shard[0])
+        if mutant_name is not None and not tests:
+            # The mutant's other units run every test it has; this one has none to add.
+            return 0
         return run_tests(self, mutant_name=mutant_name, tests=memory.prepare(mutant_name, tests))
 
     memory = KillMemory(Path.cwd() / "killers")

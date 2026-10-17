@@ -10,8 +10,7 @@ from zipfile import ZipFile
 
 from scripts.ci_mutation.clearances import load_clearances
 from scripts.ci_mutation.measured import refine_plan
-from scripts.ci_mutation.report import evaluate
-from scripts.ci_mutation.runner import mutate_files, record_shard_measurement
+from scripts.ci_mutation.runner import grade_shard_rows, mutate_files, record_shard_measurement, split_plan_names
 from scripts.ci_mutation.stats import SharedStats, stats_key, write_part
 
 ARTIFACTS = {"second": 11756407264, "third": 11758451635}
@@ -79,10 +78,15 @@ def grade(folder: Path, index: int, total: int) -> dict:
     stats = SharedStats(folder / "stats", "retained")
     rows, reason = mutate_files(folder / "source", work, selected, started + 1080, (index, total), stats.group(0))
     cleared = load_clearances(folder / "source")
+    split = split_plan_names(stats)
+    graded = (
+        []
+        if reason
+        else [grade_shard_rows(path, rows[path], lines, cleared, split) for path, (lines, _) in selected.items()]
+    )
     report = {
-        "files": [evaluate(path, rows[path], lines, cleared) for path, (lines, _) in selected.items()]
-        if not reason
-        else [],
+        "files": [result for result, _ in graded],
+        "units": [units for _, units in graded if units["rows"]],
         "not_mutated": [{"path": path, "reason": reason} for path in selected] if reason else [],
     }
     report["failed"] = bool(reason) or any(file["failures"] for file in report["files"])
@@ -98,13 +102,15 @@ def verify(folder: Path) -> dict:
     manifest = json.loads((folder / "manifest.json").read_text())
     plan = json.loads((folder / "stats/plan.json").read_text())
     reports = [json.loads(path.read_text()) for path in sorted((folder / "grades").glob("*/report.json"))]
-    report = merge_reports(reports)
+    report = merge_reports(reports, load_clearances(folder / "source"))
     shards = report.get("shards", [])
+    units = sum(len(assignment) if isinstance(assignment, list) else 1 for assignment in plan["assignments"].values())
     complete = (
         sorted(shard["index"] for shard in shards) == list(range(plan["shards"]))
         and all(shard["complete"] for shard in shards)
-        and sum(shard["expected"] for shard in shards) == manifest["mutants"]
-        and sum(shard["graded"] for shard in shards) == manifest["mutants"]
+        and len(plan["assignments"]) == manifest["mutants"]
+        and sum(shard["expected"] for shard in shards) == units
+        and sum(shard["graded"] for shard in shards) == units
     )
     survivors = sum(row["status"] in {"survived", "no tests"} for file in report["files"] for row in file["failures"])
     proof = {

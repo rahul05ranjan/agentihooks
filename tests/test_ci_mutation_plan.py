@@ -72,9 +72,79 @@ def test_expensive_mutants_are_balanced_before_cheap_names_and_totals_are_preser
         "estimated_worker_seconds": 12,
         "shard_worker_seconds": [9, 3],
         "workers": 4,
+        "splits": {},
     }
     assert plan_shards({"a": 480, "b": 481})["shards"] == 2
     assert plan_shards({str(i): 10000 for i in range(11)})["shards"] == 10
+
+
+def test_a_mutant_whose_tests_outlast_one_slice_runs_the_fast_head_with_each_slice_on_its_own_shard():
+    from scripts.ci_mutation.measured import HEAD_SECONDS, SLICE_SECONDS, measured_costs, measured_splits, plan_shards
+
+    slow = [f"tests/test_s.py::t{i}" for i in range(30)]
+    fast = [f"tests/test_f.py::t{i}" for i in range(10)]
+    durations = {**dict.fromkeys(slow, 20.0), **dict.fromkeys(fast, 1.0), "tests/test_c.py::t": 1.0}
+    results = [
+        {
+            "tests": {"scripts.sample.x_heavy": [*slow, *fast], "scripts.sample.x_light": ["tests/test_c.py::t"]},
+            "durations": durations,
+        }
+    ]
+    names = [f"scripts.sample.x_heavy__mutmut_{i}" for i in range(3)] + ["scripts.sample.x_light__mutmut_1"]
+    splits = measured_splits(names, results, limit=10)
+    assert list(splits) == ["scripts.sample.x_heavy"]
+    split = splits["scripts.sample.x_heavy"]
+    assert split["head"] == sorted(fast) and sum(durations[test] for test in split["head"]) <= HEAD_SECONDS
+    assert len(split["slices"]) == 5 == -(-600 // SLICE_SECONDS)
+    tail = [test for chosen in split["slices"] for test in chosen]
+    assert sorted(tail) == sorted(slow) and len(tail) == len(set(tail))
+    assert all(sum(durations[test] for test in chosen) == 120.0 for chosen in split["slices"])
+    plan = plan_shards(measured_costs(names, results), splits=splits)
+    assert plan["splits"] == splits
+    for name in names[:3]:
+        assert sorted(plan["assignments"][name]) == sorted(set(plan["assignments"][name]))
+        assert len(plan["assignments"][name]) == 5
+        assert plan["costs"][name] == pytest.approx(sum(split["costs"]))
+    assert isinstance(plan["assignments"]["scripts.sample.x_light__mutmut_1"], int)
+    assert plan["shards"] >= 5
+    assert max(plan["shard_worker_seconds"]) - min(plan["shard_worker_seconds"]) <= max(split["costs"])
+    assert len(measured_splits(names, results, limit=3)["scripts.sample.x_heavy"]["slices"]) == 3
+    assert measured_splits(["scripts.sample.x_light__mutmut_1"], results) == {}
+
+
+def test_each_unit_runs_the_head_and_its_own_slice_and_only_on_its_shard(tmp_path, monkeypatch):
+    from scripts.ci_mutation.mutant_shards import shard_names, shard_tests, split_names, unit_cost, unit_tests
+
+    monkeypatch.chdir(tmp_path)
+    split = {"head": ["h"], "slices": [["a"], ["b"]], "costs": [3.0, 4.0]}
+    plan = {
+        "shards": 3,
+        "assignments": {"scripts.s.x_f__mutmut_1": [2, 0], "scripts.s.x_g__mutmut_1": 1},
+        "costs": {"scripts.s.x_f__mutmut_1": 7.0, "scripts.s.x_g__mutmut_1": 5.0},
+        "splits": {"scripts.s.x_f": split},
+    }
+    name = "scripts.s.x_f__mutmut_1"
+    assert unit_tests(plan, name, 2) == {"h", "a"}
+    assert unit_tests(plan, name, 0) == {"h", "b"}
+    assert unit_tests(plan, name, 1) is None
+    assert unit_tests(plan, "scripts.s.x_g__mutmut_1", 1) is None
+    assert (unit_cost(plan, name, 0), unit_cost(plan, name, 2), unit_cost(plan, "scripts.s.x_g__mutmut_1", 1)) == (
+        4.0,
+        3.0,
+        5.0,
+    )
+    assert split_names(plan) == {name}
+    assert shard_tests(["h", "a", "b"], name, 0) == ["h", "a", "b"]
+    (tmp_path / "shard-plan.json").write_text(json.dumps(plan))
+    assert [shard_names(plan["assignments"], (index, 3)) for index in range(3)] == [
+        {name},
+        {"scripts.s.x_g__mutmut_1"},
+        {name},
+    ]
+    assert shard_tests(["b", "h", "a"], name, 0) == ["b", "h"]
+    assert shard_tests(["b", "h", "a"], name, 2) == ["h", "a"]
+    assert shard_tests(["b", "a"], "scripts.s.x_g__mutmut_1", 1) == ["b", "a"]
+    assert shard_tests(["b", "a"], None, 0) == ["b", "a"]
 
 
 @pytest.mark.parametrize("args", [[], ["--bases", "base"], ["--stats", "stats"]])
@@ -229,6 +299,39 @@ def test_reports_distinguish_complete_survivor_grades_from_budget_exhaustion(tmp
     assert report["shard"]["budget_exhausted"] is bool(reason)
     assert report["shard"]["estimated_worker_seconds"] == 10
     assert report["shard"]["wall_seconds"] >= 0
+
+
+def test_a_shard_grades_its_whole_mutants_and_hands_split_units_to_the_merge(tmp_path, monkeypatch):
+    from scripts.ci_mutation.runner import run_gate
+    from scripts.ci_mutation.stats import SharedStats
+
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "scripts/sample.py").write_text("def f():\n    return 1\n")
+    (tmp_path / "tests/test_sample.py").write_text("pass\n")
+    stats = tmp_path / "stats"
+    stats.mkdir()
+    whole, split = "scripts.sample.x_f__mutmut_1", "scripts.sample.x_f__mutmut_2"
+    plan = {
+        "shards": 2,
+        "assignments": {whole: 1, split: [1, 0]},
+        "costs": {whole: 10, split: 7},
+        "splits": {"scripts.sample.x_f": {"head": ["h"], "slices": [["a"], ["b"]], "costs": [3, 4]}},
+    }
+    (stats / "plan.json").write_text(json.dumps(plan))
+    rows = [
+        {"name": whole, "status": "killed", "lines": [], "fingerprint": ""},
+        {"name": split, "status": "survived", "lines": [2], "fingerprint": "abc", "diff": "changed"},
+    ]
+    monkeypatch.setattr("scripts.ci_mutation.runner.mutate_files", lambda *args: ({"scripts/sample.py": rows}, ""))
+    report = run_gate(
+        tmp_path, {"scripts/sample.py": {2}}, tmp_path / "output", 1080, (1, 2), SharedStats(stats, "head")
+    )
+    assert report["failed"] is False
+    assert report["files"][0]["counts"] == {"killed": 1}
+    assert report["units"] == [{"path": "scripts/sample.py", "lines": [2], "rows": [rows[1]]}]
+    assert (report["shard"]["expected"], report["shard"]["graded"]) == (2, 2)
+    assert report["shard"]["estimated_worker_seconds"] == 13
 
 
 @pytest.mark.parametrize(
