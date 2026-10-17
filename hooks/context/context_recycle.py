@@ -71,12 +71,12 @@ def _marker(session_id: str, stage: str) -> Path:
 def _swarm_of(environ, session_id: str = "") -> str:
     if environ.get("AGENTIHOOKS_SWARM_LANE") == naming.OPERATOR:
         return ""
-    name = environ.get("AGENTIHOOKS_AGENT_NAME", "")
-    slug = (naming.legacy_slug(name) or environ.get("AGENTIHOOKS_SWARM", "")) if naming.lane_of(name) else ""
+    name = environ.get("AGENTIHOOKS_AGENT_NAME")
+    slug = (naming.legacy_slug(name) or environ.get("AGENTIHOOKS_SWARM")) if naming.lane_of(name) else ""
     if not session_id:
         return slug
     if not slug:
-        return _pinned_swarm(session_id).get("swarm", "")
+        return _pinned_swarm(session_id).get("swarm")
     _pin_swarm(session_id, slug)
     return slug
 
@@ -92,7 +92,7 @@ def _pin_swarm(session_id: str, slug: str) -> None:
     pin = _marker(session_id, "swarm")
     if not pin.exists():
         pin.parent.mkdir(parents=True, exist_ok=True)
-        pin.write_text(json.dumps({"swarm": slug, "compact_limit": COMPACT_LIMIT}), encoding="utf-8")
+        pin.write_text(json.dumps({"swarm": slug, "compact_limit": COMPACT_LIMIT}))
 
 
 def over_limit(session_id: str, environ=None) -> str | None:

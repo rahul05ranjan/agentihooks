@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 import hooks.context.context_recycle as recycle
@@ -302,8 +304,11 @@ def test_the_session_remembers_its_identity_when_the_usage_folder_already_exists
     (tmp_path / "context_usage").mkdir()
     monkeypatch.setattr(recycle, "used_tokens", lambda session_id: 100_000)
     assert recycle.directive("s1", MASTER) is None
+    assert json.loads((tmp_path / "context_usage" / "s1.swarm").read_text()) == {"swarm": "sw", "compact_limit": 600}
     monkeypatch.setattr(recycle, "used_tokens", lambda session_id: 650_000)
     assert recycle.over_limit("s1", {}) == "sw"
+    assert recycle.directive("s1", {}) is not None
+    assert (tmp_path / "context_usage" / "s1.recycle").exists()
 
 
 def test_a_session_without_an_id_leaves_no_pin(monkeypatch, tmp_path):
