@@ -88,9 +88,15 @@ def test_operation_relay_borrows_the_committed_state(tmp_path, monkeypatch):
     observed = []
 
     def check_borrowed(server, slug, principal, payload):
-        reply = apply(server, slug, principal, payload)
-        relayed = server.relay_to_inbox.call_args.args[1]
-        assert relayed is server.repository.current(slug).state
+        relay = server.relay_to_inbox
+
+        def relay_borrowed(slug, state):
+            assert state is server.repository.current(slug).state
+            return relay(slug, state)
+
+        with monkeypatch.context() as boundary:
+            boundary.setattr(server, "relay_to_inbox", relay_borrowed)
+            reply = apply(server, slug, principal, payload)
         observed.append(reply)
         return reply
 
