@@ -133,6 +133,44 @@ def test_a_nested_test_that_names_a_changed_file_is_selected(repo):
     )
 
 
+SUITE_SPEED = "tests/test_suite_speed.py"
+UNREGISTERED_FAKEREDIS = "import fakeredis\nfrom hooks import sample\n"
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        ["tests/test_store.py"],
+        ["tests/test_other.py"],
+        ["tests/test_gone.py", "tests/test_store.py"],
+        ["tests/swarm/test_store.py"],
+    ],
+)
+def test_a_changed_test_module_selects_the_suite_speed_checks(repo, changed):
+    write(repo, {SUITE_SPEED: "import os\n", "tests/test_store.py": UNREGISTERED_FAKEREDIS})
+    write(repo, {"tests/swarm/test_store.py": UNREGISTERED_FAKEREDIS})
+    scope, legs = decide(repo, changed)
+    assert scope == "selected"
+    assert SUITE_SPEED in set().union(*map(set, legs))
+
+
+def test_a_source_a_fakeredis_test_imports_selects_the_suite_speed_checks(repo):
+    write(repo, {SUITE_SPEED: "import os\n", "tests/test_store.py": UNREGISTERED_FAKEREDIS})
+    scope, legs = decide(repo, ["hooks/sample.py"])
+    assert scope == "selected"
+    assert set().union(*map(set, legs)) == {SUITE_SPEED, "tests/test_sample.py", "tests/test_store.py"}
+
+
+def test_a_source_no_fakeredis_test_imports_leaves_the_suite_speed_checks_out(repo):
+    write(repo, {SUITE_SPEED: "import os\n"})
+    assert decide(repo, ["hooks/sample.py"]) == ("selected", [["tests/test_sample.py"]])
+
+
+def test_a_changed_file_outside_python_leaves_the_suite_speed_checks_out(repo):
+    write(repo, {SUITE_SPEED: "import os\n", "scripts/static/ledger.js": "x\n"})
+    assert decide(repo, ["scripts/static/ledger.js"]) == ("selected", [["tests/test_page.py"]])
+
+
 @pytest.mark.parametrize("name", ["tests/test_spaced name.py", "tests/test_split\nscope=none.py"])
 def test_a_test_file_whose_name_breaks_the_output_line_is_never_selected(repo, name):
     write(repo, {name: "from hooks import sample\n"})
