@@ -67,9 +67,10 @@ def _number(slug: str, address: str) -> int:
 
 
 def held(redis, slug: str, agents: list) -> dict[str, str]:
-    """Each live master seat, in seat order, with its occupant, read from the seat registry: occupied, its occupant
-    neither left nor finished nor retiring nor asked to retire, and the seat not retired. The pool, the fence and the
-    front door all read this, so they agree while a seat changes hands."""
+    """Each live master seat, lead first then by number, with the name holding it. The seat registry decides every
+    seat it has an occupant for: live while that occupant has neither left nor finished nor retired nor been asked to
+    retire. A master record whose seat the registry does not hold yet counts by its record. The pool, the fence and
+    the front door all read this, so they agree while a seat changes hands."""
     from scripts.inbox.seats import SeatRegistry
     from scripts.swarm import master_retire
     from scripts.swarm.store import RedisStore
@@ -77,14 +78,17 @@ def held(redis, slug: str, agents: list) -> dict[str, str]:
     registry, table, store = SeatRegistry(redis), MasterSeats(redis), RedisStore(redis)
     gone = {a.name for a in agents if a.state in GONE}
     retired = set(table.retired(slug))
-    candidates = {*seats(slug, table.count(slug)), *(a.seat for a in agents if a.lane == MASTER and a.seat)}
-    live = {}
-    for address in sorted(candidates - retired, key=lambda seat_id: _number(slug, seat_id)):
-        name = registry.occupant(address).occupant
-        if name and name not in gone and not registry.left(name, address):
-            if not master_retire.reason(store, slug, name):
-                live[address] = name
-    return live
+    records = {a.seat or a.name: a.name for a in agents if a.lane == MASTER and a.name not in gone}
+    found = {}
+    for address in {*seats(slug, table.count(slug)), *records} - retired:
+        occupant = registry.occupant(address).occupant
+        name = occupant or records.get(address, "")
+        if occupant and (occupant in gone or registry.left(occupant, address)):
+            continue
+        if name and not master_retire.reason(store, slug, name):
+            found[address] = name
+    lead = seat_address(slug, MASTER)
+    return dict(sorted(found.items(), key=lambda pair: (pair[0] != lead, _number(slug, pair[0]))))
 
 
 def assign(phases: list[str], seat_list: list[str], previous: dict[str, str], known: list[str]) -> dict[str, str]:
