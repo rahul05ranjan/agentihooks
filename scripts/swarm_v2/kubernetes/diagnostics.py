@@ -1,4 +1,8 @@
+import json
 from typing import Protocol
+
+from scripts.swarm.store import RedisStore
+from scripts.swarm_v2.kubernetes.watch import EXECUTION_LABEL
 
 
 class Logs(Protocol):
@@ -25,3 +29,11 @@ def startup(pod: dict, api: Logs) -> dict | None:
             for entry in terminated
         ],
     }
+
+
+def retain(store: RedisStore, slug: str, pod: dict, captured: dict) -> None:
+    metadata = pod["metadata"]
+    record = {"pod": metadata["name"], "uid": metadata["uid"], "labels": metadata["labels"], "startup": captured}
+    store.redis.hsetnx(
+        store.key(slug, "attempt-startup-diagnostics"), metadata["labels"][EXECUTION_LABEL], json.dumps(record)
+    )
