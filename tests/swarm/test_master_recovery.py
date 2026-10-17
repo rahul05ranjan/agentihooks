@@ -226,8 +226,14 @@ def test_a_lost_master_hive_without_a_live_spare_starts_an_unpinned_successor(st
 
 @pytest.mark.parametrize(
     ("beat", "live", "grace"),
-    [(NOW - GRACE_MS, False, None), (NOW - GRACE_MS - 1, True, None), (0, False, None), (NOW - 400_000, False, 600)],
-    ids=["inside-grace", "seen-live", "never-beat", "longer-grace"],
+    [
+        (NOW - GRACE_MS, False, None),
+        (NOW - GRACE_MS - 1, True, None),
+        (0, False, None),
+        (NOW - 400_000, False, 600),
+        (None, False, None),
+    ],
+    ids=["inside-grace", "seen-live", "never-beat", "longer-grace", "record-gone"],
 )
 def test_a_master_hive_back_inside_the_grace_keeps_its_master(store, beat, live, grace):  # noqa: F811
     from scripts.handoff import transfers
@@ -235,7 +241,8 @@ def test_a_master_hive_back_inside_the_grace_keeps_its_master(store, beat, live,
 
     if grace:
         store.update("sw", master_move_grace=grace)
-    _hive(store, "lost", beat)
+    if beat is not None:
+        _hive(store, "lost", beat)
     _hive(store, "spare", NOW)
     master = _hive_master(store)
     generation = store.seats.occupant("master@sw").generation
@@ -273,7 +280,10 @@ def _beat(store, monkeypatch, runtime):  # noqa: F811
     monkeypatch.setattr(daemon, "execution_report", lambda redis, hive, herdr: {})
     monkeypatch.setattr(orders.Consumer, "local", classmethod(lambda cls, redis, hive: cls(redis, hive, runtime)))
     monkeypatch.setattr(daemon.time, "time", lambda: NOW / 1000 + 5)
+    polled = []
+    monkeypatch.setattr(orders.Consumer, "poll", lambda self: polled.append(self.hive) or 0)
     daemon.beat(store.redis, "lost")
+    return polled
 
 
 @pytest.mark.parametrize("ok", [True, False])
@@ -286,11 +296,12 @@ def test_a_returning_hive_terminates_its_superseded_master_before_it_beats(store
     tick("sw", store, tasks(), RecoveryRuntime(), NOW)
     runtime = FenceRuntime(ok)
 
-    _beat(store, monkeypatch, runtime)
+    polled = _beat(store, monkeypatch, runtime)
 
     assert runtime.terminated == [(master.execution_id, NOW - GRACE_MS - 1)]
     assert registry.show(store.redis, "lost")["heartbeat_at"] == NOW + 5000
     assert store.redis.hexists(master_move.fenced("lost"), master.execution_id) == (not ok)
+    assert polled == (["lost"] if ok else [])
 
 
 def test_a_fence_naming_an_unknown_execution_is_dropped(store, monkeypatch):  # noqa: F811
