@@ -93,6 +93,7 @@ def test_refused_scaffold_leaves_zero_new_folders(cli, options):
     after = set(root.glob("*/tasks/*"))
     assert after - before == set(), (code, output, error, after - before)
     assert code != 0
+    assert "task t1 was not added: " in str(code) + error
     assert '"added"' not in output
     code, output, error = cli("show")
     assert code == 0, error
