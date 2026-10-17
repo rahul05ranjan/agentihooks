@@ -842,6 +842,17 @@ def test_run_accepts_registered_doctor_task_and_files_cut_piece(ask, tmp_path, t
     assert ledger.followups == ["Cut from the plan: a diesel generator"]
 
 
+@pytest.mark.parametrize("task_id", ["fx-8be892c4-code", "promo-38842603017-0"])
+def test_run_accepts_registered_task_identifiers_in_piece_text(ask, tmp_path, task_id):
+    folder = tmp_path / "task"
+    write_plan(folder, f"- fix {task_id} | a | keep the task working\n")
+    ask(0.9)
+    state = {**INTENT, "task ids": [task_id]}
+    record, block = trace_plan.run(folder, state, Ledger(), WHO, "enforce", home=tmp_path / "home")
+    assert record["verdict"] == "pass" and not block
+    assert record["pieces"][0]["what"] == f"fix {task_id}"
+
+
 @pytest.mark.parametrize(
     "text", ["Run 38842603017 failed", "promo-38842603017-1", "promo-38842603017-0 Run 38842603017 failed"]
 )
