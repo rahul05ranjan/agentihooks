@@ -61,7 +61,7 @@ class Scheduler:
         self.machine = machine or socket.gethostname()
 
     def key(self, suffix: str) -> str:
-        return redis_key(f"scheduler:{self.machine}:{suffix}")
+        return redis_key("scheduler", f"{self.machine}:{suffix}")
 
     def get(self, entry_id: str) -> Entry:
         entry = Entry(self, entry_id)
