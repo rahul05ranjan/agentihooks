@@ -615,6 +615,7 @@ def test_main_defaults_to_origin_dev_a_two_minute_target_a_half_minute_stats_buc
 @pytest.mark.parametrize(
     ("ceiling", "shards", "run_id", "expected"),
     [
+        (1, 1, 1000, (1, 0)),
         (30, 3, 1000, (10, 0)),
         (30, 5, 1001, (6, 5)),
         (10, 3, 1002, (3, 0)),
