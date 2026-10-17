@@ -24,7 +24,8 @@ class Signal:
             slot = CallableSlot.from_callback(slot)
         connection_id = uuid.uuid4().hex
         self.scheduler.update(
-            self.entry_id, lambda entry: entry["slots"].append({"id": connection_id, **slot.record()})
+            self.entry_id,
+            lambda entry: entry["slots"].append({"id": connection_id, "signal": self.name, **slot.record()}),
         )
         return connection_id
 
@@ -173,7 +174,7 @@ class Scheduler:
                     "id": uuid.uuid4().hex,
                     "scheduled_at": entry["due"],
                     "fired_at": now,
-                    "slots": entry["slots"],
+                    "slots": [slot for slot in entry["slots"] if slot["signal"] == entry["signal"]],
                     "delivered": [],
                 }
                 entry["state"] = "pending"
@@ -199,6 +200,7 @@ class Scheduler:
                 continue
             slot = dict(connection)
             connection_id = slot.pop("id")
+            slot.pop("signal")
             restore(slot).deliver(event, f"{pending['id']}:{connection_id}", self.redis)
             self.update(entry_id, lambda current: current["pending"]["delivered"].append(connection_id))
         self.update(entry_id, lambda current: self._finish(current, now))

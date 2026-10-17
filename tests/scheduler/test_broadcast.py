@@ -72,3 +72,33 @@ def test_scheduled_broadcast_retains_delivery_and_normal_broadcasts(monkeypatch)
     recovered = next(item for item in messages if item["id"] == scheduled["id"])
     assert recovered["delivered_to"] == ["proof-session"]
     assert {item["message"] for item in messages} == {"ordinary", "scheduled"}
+
+
+def test_broadcast_recovers_a_crash_between_fire_and_publication(monkeypatch):
+    import fakeredis
+
+    from hooks.context import broadcast
+    from scripts.scheduler.core import Scheduler
+    from scripts.scheduler.slots import BroadcastSlot
+
+    redis = fakeredis.FakeRedis(decode_responses=True)
+    scheduler = Scheduler(redis, machine="proof")
+    timer = scheduler.timer(owner="operator", delay=1, payload="recovered", now=100)
+    timer.timeout.connect(BroadcastSlot())
+
+    def crash(*args):
+        raise RuntimeError("crash before publication")
+
+    with monkeypatch.context() as fault:
+        fault.setattr(BroadcastSlot, "deliver", crash)
+        with pytest.raises(RuntimeError, match="^crash before publication$"):
+            scheduler.run_due(now=101)
+    assert broadcast.list_broadcasts() == []
+    restarted = Scheduler(redis, machine="proof")
+    assert restarted.run_due(now=120) == 0
+    messages = broadcast.list_broadcasts()
+    assert len(messages) == 1
+    assert messages[0]["message"] == "recovered"
+    assert timer.state == "fired"
+    assert restarted.run_due(now=130) == 0
+    assert broadcast.list_broadcasts() == messages
