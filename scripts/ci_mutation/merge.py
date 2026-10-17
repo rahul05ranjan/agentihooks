@@ -9,7 +9,7 @@ LISTS = ("failures", "untouched_survivors", "cleared")
 
 
 def combined_grade(rows: list[dict]) -> dict:
-    # One killing unit kills the mutant; it survives only when every unit ran all its tests and survived.
+    # The units partition the mutant's tests: one killing unit kills it, and it survives only when every unit survived.
     return next(
         (row for row in rows if row["status"] == "killed"),
         next((row for row in rows if row["status"] != "survived"), rows[0]),

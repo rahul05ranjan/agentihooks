@@ -109,7 +109,7 @@ def verify(folder: Path) -> dict:
     survivors = sum(row["status"] in {"survived", "no tests"} for file in report["files"] for row in file["failures"])
     proof = {
         "case": manifest["case"],
-        "expected": manifest["mutants"],
+        "expected": unit_count(plan),
         "graded": sum(shard["graded"] for shard in shards),
         "exhausted_shards": sum(shard["budget_exhausted"] for shard in shards),
         "complete": complete,

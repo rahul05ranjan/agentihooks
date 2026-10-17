@@ -246,7 +246,7 @@ def test_replay_verify_counts_every_unit_and_grades_split_survivors_against_the_
     monkeypatch.setattr("sys.argv", ["replay", "verify", "--folder", str(tmp_path)])
     assert replay.main() == (1 if cleared else 0)
     proof = json.loads((tmp_path / "replay-proof.json").read_text())
-    assert proof["complete"] is True
+    assert (proof["complete"], proof["expected"], proof["graded"]) == (True, 2, 2)
     assert proof["survivor_failures"] == (0 if cleared else 1)
     assert [entry["name"] for entry in proof["files"][0]["cleared"]] == (["split"] if cleared else [])
 
