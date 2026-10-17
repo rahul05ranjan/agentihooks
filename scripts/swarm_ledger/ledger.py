@@ -63,6 +63,7 @@ Usage: ledger.py --slug SLUG --as NAME <command> [args]
   task set ID FIELD=VALUE...          set state, claimed_by, issue_url, pr_url, depends_on, territory, kind, rank,
                                       difficulty (S, M or L), artifact (yes or no) or plan_slice of a task;
                                       phase moves it to another phase, from the master or a planner;
+                                      a move naming no slice drops it, into a phase with a plan as a follow up;
                                       plan_slice computes its plan lines from the published plan;
                                       follow_up=yes marks it a follow up and clears its slice and plan lines,
                                       refused while the same write names a plan_slice or slice;
@@ -312,12 +313,15 @@ def op(kind, args, /, **fields):
     return {"op": kind, "id": f"{kind}-{uuid.uuid4().hex[:10]}", "by": args.name, **fields}
 
 
-def refused(state, ops=(), fallback=""):
+def refused(state, ops=(), fallback="", lead=""):
     if rejected := state.get("rejected"):
-        reasons = [w for w in state.get("_meta", {}).get("warnings", []) if not core.size_warning(w)] or [
-            unexplained(o) for o in ops if o["id"] in rejected
-        ]
-        sys.exit("; ".join(reasons) or fallback or f"rejected: {rejected}")
+        warnings = state.get("_meta", {}).get("warnings", [])
+        reasons = [
+            w
+            for w in warnings
+            if not core.size_warning(w) and not (lead and w.startswith(ledger_task_duplicates.UNCHECKED_PREFIX))
+        ] or [unexplained(o) for o in ops if o["id"] in rejected]
+        sys.exit(lead + ("; ".join(reasons) or fallback or f"rejected: {rejected}"))
 
 
 def unexplained(sent):
@@ -340,8 +344,16 @@ def held(state):
 
 def send(args, kind, /, **fields):
     ops = [op(kind, args, **fields)]
-    state = call(args.slug, ops)
-    refused(state, ops)
+    lead = f"task {fields['task']} was not added: " if kind == "task_add" else ""
+    try:
+        state = call(args.slug, ops)
+    except SystemExit as exc:
+        if lead and isinstance(exc.code, str):
+            raise type(exc)(lead + exc.code) from None
+        raise
+    refused(state, ops, lead=lead)
+    if lead and not state.get("applied"):
+        sys.exit(f"{lead}the ledger server did not apply it")
     for warning in state.get("_meta", {}).get("warnings", []):
         if warning.startswith(ledger_task_duplicates.UNCHECKED_PREFIX):
             print(warning, file=sys.stderr)
@@ -970,7 +982,9 @@ def build_parser():
         "--repositories", help="comma separated absolute local repository paths; defaults to the swarm repository"
     )
     task.add_argument("--rank", help="queue rank: urgent, high, normal (default) or low; next means urgent")
-    task.add_argument("--plan-slice", default="", help="task slice anchor; computes its plan lines")
+    task.add_argument(
+        "--plan-slice", default="", help="task slice anchor; computes its plan lines; none uses the task description"
+    )
     task.add_argument(
         "--follow-up", action="store_true", help="a follow up task: no slice in a sliced phase, judged by its text"
     )

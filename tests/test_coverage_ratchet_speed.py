@@ -41,7 +41,7 @@ def test_report_reuses_measured_lines_without_copying_test_contexts(tmp_path, mo
         pytest.fail("the report copied shard contexts after their lines were measured")
 
     monkeypatch.setattr(CoverageData, "update", refuse_context_merge)
-    assert ratchet._missed(tmp_path, shards, tmp_path / "out", measured=measured) == expected
+    assert ratchet._missed(tmp_path, measured, tmp_path / "out") == expected
 
 
 def test_identical_source_is_parsed_once_for_different_measurements(monkeypatch):
