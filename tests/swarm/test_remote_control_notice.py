@@ -138,10 +138,12 @@ def test_status_text_and_json_show_the_master_remote_control_line(env, capsys):
 
     store, _, rt = env
     cli.main(["sw", "create", "--repo", "/repo"])
-    master = AgentRecord("master@a1b2c3-0001", "master", "master", harness="claude", remote_control=ON)
-    engineer = AgentRecord("engineer@a1b2c3-0002", "eng", "t1", harness="claude")
-    store.put_agent("sw", master)
-    store.put_agent("sw", engineer)
+    master = AgentRecord(
+        store.next_name("sw", "master"), "master", "master", seat="master@sw", harness="claude", remote_control=ON
+    )
+    engineer = AgentRecord(store.next_name("sw", "eng"), "eng", "t1", seat="eng-1@sw", harness="claude")
+    master = store.start_execution("sw", master)
+    engineer = store.start_execution("sw", engineer)
     rt.live = {master.name, engineer.name}
     shown = {a["name"]: a["remote_control"] for a in status.status_report(store, "sw", {"tasks": []}, rt)["agents"]}
     assert shown == {master.name: ON, engineer.name: {}}
