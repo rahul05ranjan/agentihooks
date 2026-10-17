@@ -106,6 +106,23 @@ def test_clean_pushed_without_owner_still_waits_for_idle(repo):
     assert (idle.action, idle.reason, idle.immediate) == ("remove", "clean and on a remote", False)
 
 
+def test_throwaway_and_snapshot_verdicts_are_never_immediate(repo):
+    def full(path):
+        finding = classify(path, repo.root(), snap())
+        return finding.action, finding.reason, finding.immediate
+
+    plant = repo.worktree("plant-x")
+    add_holder(plant, "ephemeral", Holder("sess-gone", 1, 1, "gone"), 0.0)
+    age(plant, 60)
+    assert full(plant) == ("keep", "throwaway, recent", False)
+    age(plant, 3 * HOUR)
+    assert full(plant) == ("remove", "throwaway checkout, owner gone", False)
+    dirty = repo.worktree("dirty-x")
+    (dirty / "notes.txt").write_text("unsaved\n")
+    age(dirty, 25 * HOUR)
+    assert full(dirty) == ("snapshot", "unique work, owner gone: push to wip/ then remove", False)
+
+
 def test_ephemeral_worktree_is_removed_without_rescue(repo):
     path = repo.worktree("plant")
     (path / "planted.txt").write_text("fault\n")
