@@ -1,7 +1,9 @@
 import json
 import sys
 import threading
+import uuid
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 
@@ -9,17 +11,16 @@ from scripts.swarm_ledger import ledger, ledger_server, new_ledger
 from scripts.swarm_ledger.api import schemas
 from tests.swarm_ledger import legacy_page
 
-SLUG = "task-add-contract"
-
 
 @pytest.fixture
 def cli(monkeypatch, ledger_port, capsys):
+    slug = f"task-add-{uuid.uuid4().hex}"
     server = ledger_server
     core = server.core
     core.LEDGER_DIR.mkdir(parents=True, exist_ok=True)
     document = new_ledger.build_doc({"title": "Task contract", "phases": [{"title": "Proof"}]})
-    core.paths(SLUG)[0].write_text(legacy_page.render(document, SLUG, ledger_port))
-    core.sync(SLUG, ops=[])
+    core.paths(slug)[0].write_text(legacy_page.render(document, slug, ledger_port))
+    core.sync(slug, ops=[])
     host = f"127.0.0.1:{ledger_port}"
     monkeypatch.setattr(server, "ALLOWED_HOSTS", {host})
     monkeypatch.setattr(ledger, "BASE", f"http://{host}")
@@ -30,7 +31,7 @@ def cli(monkeypatch, ledger_port, capsys):
     monkeypatch.setattr(server, "doctor_phrase", lambda *args: None)
 
     def invoke(*options):
-        monkeypatch.setattr(sys, "argv", ["ledger", "--slug", SLUG, "--as", "liaison", *options])
+        monkeypatch.setattr(sys, "argv", ["ledger", "--slug", slug, "--as", "liaison", *options])
         code = 0
         try:
             ledger.main()
@@ -65,3 +66,59 @@ def test_task_add_client_fields_cross_the_real_server(cli, option, value, field,
     assert code == 0, error
     assert json.loads(output)["tasks"][0][field] == expected
     assert field in schemas.operation_schema("task_add")["properties"]
+
+
+@pytest.mark.parametrize(
+    ("option", "value", "reason"),
+    [
+        ("--overlays", "a,b,c,d", "overlays lists at most 3 overlay names"),
+        ("--repositories", "relative/repo", "repositories must list absolute local repository paths"),
+    ],
+)
+def test_invalid_client_fields_keep_their_domain_validation(cli, option, value, reason):
+    code, output, error = cli("task", "add", "t1", "Invalid contract", option, value)
+    assert code != 0
+    assert reason in str(code) + error
+    assert '"added"' not in output
+    code, output, error = cli("show")
+    assert code == 0, error
+    assert json.loads(output)["tasks"] == []
+
+
+@pytest.mark.parametrize("options", [("--repositories", "relative/repo"), ("--depends-on", "missing")])
+def test_refused_scaffold_leaves_zero_new_folders(cli, options):
+    root = Path.home() / ".agentihooks" / "swarm"
+    before = set(root.glob("*/tasks/*"))
+    code, output, error = cli("task", "add", "t1", "Refused contract", "--scaffold", *options)
+    after = set(root.glob("*/tasks/*"))
+    assert after - before == set(), (code, output, error, after - before)
+    assert code != 0
+    assert '"added"' not in output
+    code, output, error = cli("show")
+    assert code == 0, error
+    assert json.loads(output)["tasks"] == []
+
+
+def test_accepted_scaffold_records_one_workspace_and_retry_keeps_it(cli):
+    root = Path.home() / ".agentihooks" / "swarm"
+    before = set(root.glob("*/tasks/*"))
+    command = ("task", "add", "t1", "Accepted contract", "--scaffold", "--description", "Observe acceptance")
+    code, output, error = cli(*command)
+    assert code == 0, (output, error, code)
+    code, output, error = cli("show")
+    assert code == 0, error
+    task = json.loads(output)["tasks"][0]
+    workspace = Path(task["workspace"])
+    assert set(root.glob("*/tasks/*")) - before == {workspace}
+    assert {p.name for p in workspace.iterdir()} == {"steering.md", "progress.md", "proof.md"}
+    assert "Observe acceptance" in (workspace / "steering.md").read_text()
+    (workspace / "progress.md").write_text("Keep existing evidence")
+    code, output, error = cli(*command)
+    assert code != 0
+    assert set(root.glob("*/tasks/*")) - before == {workspace}
+    assert (workspace / "progress.md").read_text() == "Keep existing evidence"
+    code, output, error = cli("show")
+    assert code == 0, error
+    tasks = json.loads(output)["tasks"]
+    assert len(tasks) == 1
+    assert tasks[0]["workspace"] == str(workspace)
