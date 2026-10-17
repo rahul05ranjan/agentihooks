@@ -169,7 +169,13 @@ ADDRESS_KEYS = {"api-url": "api_url"}
 NO_API_ADDRESS = "api-url takes an http or https address with a host and no credentials"
 TRANSPORT_KEYS = {"codex-inbox-transport": "codex_inbox_transport"}
 ON_OFF = {"on": True, "off": False}
-CONFIG_KEYS = {**SCALING_KEYS, **ADDRESS_KEYS, **default_models.KEYS, **TRANSPORT_KEYS}
+CONFIG_KEYS = {
+    **SCALING_KEYS,
+    **ADDRESS_KEYS,
+    **default_models.KEYS,
+    **TRANSPORT_KEYS,
+    master_claude_login.KEY: master_claude_login.FIELD,
+}
 GATE_KEYS = {f"{name}-gate": name for name in catalog.defaults()}
 GATE_MODES = modes.MODES
 RETIRES_MASTER = frozenset({"stop now", "close ledger"})
@@ -780,6 +786,8 @@ def _on_off(key, value):
 
 
 def config_value(key, value):
+    if key == master_claude_login.KEY:
+        return _on_off(key, value)
     if key in default_models.KEYS or key in TRANSPORT_KEYS:
         return value
     return api_address(value) if key in ADDRESS_KEYS else scaling_value(key, value)
@@ -826,9 +834,6 @@ def cmd_set(store, args):
             continue
         if key in CONFIG_KEYS:
             changes[CONFIG_KEYS[key]] = config_value(key, value)
-            continue
-        if key == master_claude_login.KEY:
-            changes[master_claude_login.FIELD] = _on_off(key, value)
             continue
         if key in GATE_KEYS:
             changes["gates"] = {**store.config(args.slug).gates, **gate_mode(key, value)}

@@ -5441,6 +5441,9 @@ def _write_route_report(path: str, **fields: str) -> None:
     os.replace(temporary, target)
 
 
+ROUTE_LAUNCHERS = {"interactive": "scripts.routing.interactive", "master-login": "scripts.master_claude_login"}
+
+
 def _claude_command(claude_bin: str, extra_args: list[str]) -> list[str]:
     # --dangerously-skip-permissions overrides a named --permission-mode; the allow form keeps bypass reachable.
     named = any(arg == "--permission-mode" or arg.startswith("--permission-mode=") for arg in extra_args)
@@ -5491,14 +5494,8 @@ def cmd_claude(extra_args: list[str]) -> None:
     route_lock = route_lock_path.open("a+", encoding="utf-8")
     fcntl.flock(route_lock, fcntl.LOCK_EX)
     try:
-        if route == "interactive":
-            from scripts.routing import interactive
-
-            return interactive.launch_claude(claude_bin, extra_args, os.environ, report)
-        if route == "master-login":
-            from scripts import master_claude_login
-
-            return master_claude_login.launch_claude(claude_bin, extra_args, os.environ, report)
+        if route in ROUTE_LAUNCHERS:
+            return import_module(ROUTE_LAUNCHERS[route]).launch_claude(claude_bin, extra_args, os.environ, report)
         decision = (
             forced(os.environ, route)
             if route
