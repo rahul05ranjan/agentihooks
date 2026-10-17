@@ -265,34 +265,47 @@ def test_only_a_local_app_server_execution_reopens_in_a_native_terminal(executio
 def test_reopen_resumes_the_recorded_thread_and_never_starts_a_server(monkeypatch):
     from types import SimpleNamespace
 
-    store, agent = SimpleNamespace(), _agents()[1]
+    written = []
+    store, agent = SimpleNamespace(put_agent=lambda *put: written.append(put)), _agents()[1]
     monkeypatch.setattr(
         "scripts.swarm.live_binding.transport",
         lambda found, seen: RECORD if (found, seen) == (store, agent) else None,
     )
     opened = []
     placed = SimpleNamespace(pane_id="w9:p4")
-    result = attach.reopen(store, agent, lambda title, argv: opened.append((title, argv)) or placed, "/bin/codex")
+    result = attach.reopen(store, "sw", agent, lambda title, argv: opened.append((title, argv)) or placed, "/bin/codex")
     assert opened == [("sw-master-1", ["/bin/codex", "resume", "--remote", RECORD.endpoint_ref, "thread-1"])]
     assert not {"app-server", "serve", "scripts.codex_session"} & set(opened[0][1])
     assert result == {"agent": "sw-master-1", "thread": "thread-1", "pane": "w9:p4"}
+    assert written == [("sw", replace(agent, pane_id="w9:p4"))]
 
 
-@pytest.mark.parametrize("record", [None, replace(RECORD, state=STARTING), replace(RECORD, thread_id="")])
+def test_reopen_refused_by_the_viewer_records_no_pane(monkeypatch):
+    from types import SimpleNamespace
+
+    written = []
+    store = SimpleNamespace(put_agent=lambda *put: written.append(put))
+    monkeypatch.setattr("scripts.swarm.live_binding.transport", lambda found, seen: RECORD)
+
+    def refuse(title, argv):
+        raise RuntimeError("herdr refused the pane")
+
+    with pytest.raises(RuntimeError):
+        attach.reopen(store, "sw", _agents()[1], refuse, "codex")
+    assert written == []
+
+
 def test_reopen_refuses_an_execution_with_no_connected_thread(monkeypatch, record):
     from types import SimpleNamespace
 
     monkeypatch.setattr("scripts.swarm.live_binding.transport", lambda found, seen: record)
     opened = []
     with pytest.raises(attach.AttachError) as refused:
-        attach.reopen(SimpleNamespace(), _agents()[1], lambda title, argv: opened.append(argv), "codex")
+        attach.reopen(SimpleNamespace(), "sw", _agents()[1], lambda title, argv: opened.append(argv), "codex")
     assert str(refused.value) == "sw-master-1 has no connected thread to reopen"
     assert opened == []
 
 
-@pytest.mark.parametrize(
-    ("slug", "workspace"), [("proof-323133-cxc8-1", "proof-323133-cxc8-1"), ("sw", "agentihooks-323133")]
-)
 def test_the_local_terminal_opens_the_viewer_in_the_swarm_workspace(monkeypatch, slug, workspace):
     from pathlib import Path
     from types import SimpleNamespace
@@ -300,9 +313,11 @@ def test_the_local_terminal_opens_the_viewer_in_the_swarm_workspace(monkeypatch,
     from scripts import herdr_host
 
     config = SimpleNamespace(repo="/home/op/dev/agentihooks", code="323133", slug=slug)
+    written = []
     store = SimpleNamespace(
         agents=lambda asked: _agents() if asked == slug else [],
         config=lambda asked: config if asked == slug else None,
+        put_agent=lambda *put: written.append(put),
     )
     monkeypatch.setattr("scripts.swarm.live_binding.transport", lambda found, seen: RECORD if found is store else None)
     opened = []
@@ -326,6 +341,7 @@ def test_the_local_terminal_opens_the_viewer_in_the_swarm_workspace(monkeypatch,
             environ,
         )
     ]
+    assert written == [(slug, replace(_agents()[1], pane_id="w1:p1"))]
 
 
 def test_the_local_terminal_leaves_other_executions_to_the_worker_terminal(monkeypatch):
