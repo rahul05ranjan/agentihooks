@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import threading
 import urllib.error
 
@@ -7,7 +8,7 @@ import pytest
 
 from scripts.swarm_ledger.api import client as api_client
 from tests.swarm_ledger.test_api_v1 import authority_live, live  # noqa: F401
-from tests.swarm_ledger.test_ledger_authority import SLUG
+from tests.swarm_ledger.test_ledger_authority import MUTATION_TRACE_FACTOR, SLUG
 
 pytestmark = pytest.mark.xdist_group("fakeredis")
 
@@ -194,7 +195,7 @@ TITLES = [
 
 class Crowded(api_client.ResourceClient):
     def __init__(self, base, credentials, barrier, conflicts):
-        super().__init__(base, credentials)
+        super().__init__(base, credentials, 10 * (MUTATION_TRACE_FACTOR if os.environ.get("MUTANT_UNDER_TEST") else 1))
         self.barrier, self.conflicts = barrier, conflicts
 
     def request(self, slug, path, payload=None):
