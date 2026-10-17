@@ -73,7 +73,17 @@ def test_declared_preparatory_pull_request_uses_its_contract_with_the_whole_task
 
 
 @pytest.mark.parametrize(
-    "body", ["", "This is tests-first", "Task part: implementation", "> " + DECLARATION, DECLARATION + " later"]
+    "body",
+    [
+        "",
+        "This is tests-first",
+        "Task part: implementation",
+        "> " + DECLARATION,
+        DECLARATION + " later",
+        "> Tests-first prerequisite for #3880.",
+        "Tests-first prerequisite #3861 must merge first.",
+        "Tests-first compatibility prerequisite #3947 is queued ahead of this change.",
+    ],
 )
 def test_ordinary_and_later_pull_requests_keep_the_whole_task_contract(body):
     value = state(body)
