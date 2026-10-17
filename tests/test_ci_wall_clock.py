@@ -119,16 +119,29 @@ def test_keeps_functional_result_checks_separate_from_elapsed_return_values(tmp_
     assert main(["--root", str(tmp_path)]) == 0
 
 
-def test_follows_imported_test_helpers_without_importing_the_test_code(tmp_path, capsys):
+@pytest.mark.parametrize("clock_import", ["import time\nclock = time.monotonic", "from time import monotonic as clock"])
+def test_follows_imported_test_helpers_without_importing_the_test_code(tmp_path, capsys, clock_import):
     from scripts.ci_wall_clock import main
 
     directory = tmp_path / "tests"
     directory.mkdir()
     (directory / "measurement.py").write_text(
-        "import time\ndef measured():\n    start = time.monotonic()\n    return 'ok', time.monotonic() - start\n"
+        clock_import + "\ndef measured():\n    start = clock()\n    return 'ok', clock() - start\n"
     )
     (directory / "test_budget.py").write_text(
         "from tests.measurement import measured\nraise RuntimeError('must not import')\ndef test_budget():\n    assert measured()[1] < 1\n"
+    )
+    assert main(["--root", str(tmp_path)]) == 1
+    assert "test_budget requires pytest.mark.wall_clock" in capsys.readouterr().out
+
+
+def test_follows_clock_arguments_into_elapsed_helpers(tmp_path, capsys):
+    from scripts.ci_wall_clock import main
+
+    directory = tmp_path / "tests"
+    directory.mkdir()
+    (directory / "test_budget.py").write_text(
+        "import time\ndef elapsed(start):\n    return time.monotonic() - start\ndef test_budget():\n    start = time.monotonic()\n    assert elapsed(start) < 1\n"
     )
     assert main(["--root", str(tmp_path)]) == 1
     assert "test_budget requires pytest.mark.wall_clock" in capsys.readouterr().out
