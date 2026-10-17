@@ -156,7 +156,7 @@ def test_handover_reconciles_prior_repairs_on_green_and_allows_the_next_real_fai
     monkeypatch.setitem(RED, "conclusion", "success")
     observe(store, ledger, DOCTOR, NOW + promotion_watch.REFRESH_MS)
     assert ledger.docs[WATCHED]["tasks"][0]["state"] == "done"
-    assert all(alert["state"] == "closed" for alert in ledger.docs[WATCHED]["alerts"])
+    assert all(alert["state"] == "done" for alert in ledger.docs[WATCHED]["alerts"])
     monkeypatch.setitem(RED, "id", 902)
     monkeypatch.setitem(RED, "conclusion", "failure")
     observe(store, ledger, DOCTOR, NOW + promotion_watch.REFRESH_MS * 2)
