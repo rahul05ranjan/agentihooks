@@ -892,8 +892,6 @@ are refused. The tick lock prevents two ticks in the same epoch and lets a highe
 
 ### Stalled activity findings
 
-{% documentation_build_negative_control %}
-
 A `stalled` health finding means a pane reports `working` while its recorded
 tool activity has been quiet for at least `AGENTIHOOKS_HEALTH_STALLED_MINUTES`
 (default **10**). A pane that is not working, or an agent with no recorded
