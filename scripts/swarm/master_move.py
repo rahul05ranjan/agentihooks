@@ -116,10 +116,11 @@ def _withdraw(store, slug):
         InboxStore(store.redis).close(found["item"], "operator", "cancel", "the master move was replaced")
 
 
-def pinned(store, slug, task, predecessor):
-    """The successor task pinned to the move's hive, only when it follows the master the move named."""
+def pinned(store, slug, task, transfer):
+    """The successor task pinned to the move's hive, only when its transfer follows the master the move named."""
     found = pending(store, slug)
-    return {**task, "hive": found["to"]} if found and found["to"] and found["master"] == predecessor else task
+    follows = found and transfer and found["master"] == transfer["predecessor"]
+    return {**task, "hive": found["to"]} if follows and found["to"] else task
 
 
 def placed(store, slug):
