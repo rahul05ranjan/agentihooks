@@ -286,3 +286,57 @@ def test_newer_local_checkpoint_survives_an_older_shared_checkpoint(linked, monk
     assert observe(store, ledger, WATCHED) == []
     assert ledger.docs[WATCHED]["tasks"] == []
     assert store.redis.hget(record, "seen") == "901"
+
+
+def test_real_git_repositories_remain_independent_with_bounded_identity_reads(linked, tmp_path, monkeypatch):
+    store, ledger = linked
+    run = subprocess.run
+
+    def bounded(argv, **kwargs):
+        if "rev-parse" in argv:
+            assert kwargs["timeout"] == 10
+        return run(argv, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", bounded)
+    for slug in (WATCHED, DOCTOR):
+        repo = tmp_path / slug
+        subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+        store.update(slug, repo=str(repo))
+    observe(store, ledger, WATCHED)
+    observe(store, ledger, DOCTOR)
+    assert [task["id"] for task in ledger.docs[WATCHED]["tasks"]] == ["promo-900-0"]
+    assert [task["id"] for task in ledger.docs[DOCTOR]["tasks"]] == ["promo-900-0"]
+
+
+def test_only_doctors_remaining_elect_one_stable_owner_instead_of_the_current_observer(linked):
+    from scripts.doctor.priming import doctor_slug
+
+    store, _ = linked
+    store.remove(WATCHED)
+    store.remove(DOCTOR)
+    watchers = ("a-watch", "z-watch")
+    doctors = tuple(doctor_slug(watched) for watched in watchers)
+    for watched, doctor in zip(watchers, doctors, strict=True):
+        store.create(SwarmConfig(watched, "/repo", 1, 1, state="stopped"))
+        store.create(SwarmConfig(doctor, "/repo", 1, 1))
+        store.set_peer(doctor, watched)
+        store.set_peer(watched, doctor)
+    ledger = SchemaLedger((*watchers, *doctors))
+    observe(store, ledger, doctors[1])
+    observe(store, ledger, doctors[0])
+    assert ledger.docs[doctors[1]]["tasks"] == []
+    assert [task["id"] for task in ledger.docs[doctors[0]]["tasks"]] == ["promo-900-0"]
+
+
+def test_proof_swarm_cannot_own_intake_that_it_is_exempt_from_running(linked):
+    store, _ = linked
+    store.remove(WATCHED)
+    store.remove(DOCTOR)
+    proof, watched = "proof-323133-cxc9", "z-watch"
+    for slug in (proof, watched):
+        store.create(SwarmConfig(slug, "/repo", 1, 1))
+    ledger = SchemaLedger((proof, watched))
+    observe(store, ledger, proof)
+    observe(store, ledger, watched)
+    assert ledger.docs[proof]["tasks"] == []
+    assert [task["id"] for task in ledger.docs[watched]["tasks"]] == ["promo-900-0"]
