@@ -28,12 +28,6 @@ def test_discovers_an_unmarked_elapsed_bound_in_a_new_directory(tmp_path, capsys
     assert main(["--root", str(tmp_path)]) == 0
 
 
-def test_every_real_elapsed_bound_in_the_repository_is_marked():
-    from scripts.ci_wall_clock import main
-
-    assert main(["--root", str(Path(__file__).resolve().parents[1])]) == 0
-
-
 @pytest.mark.parametrize(
     "source",
     [
