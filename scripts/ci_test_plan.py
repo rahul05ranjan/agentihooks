@@ -41,7 +41,8 @@ def find_record(repository: str, before: str) -> tuple[dict, dict] | None:
             continue
         artifacts = json.loads(_api(f"{actions}/runs/{run['id']}/artifacts?per_page=100"))["artifacts"]
         kept = [item for item in artifacts if item["name"] == "dep-manifest" and not item["expired"]]
-        if not kept or not COVERAGE <= {item["name"] for item in artifacts if not item["expired"]}:
+        live = {item["name"] for item in artifacts if not item["expired"]}
+        if not kept or any(name not in live for name in COVERAGE):
             continue
         jobs = read_jobs(f"{actions}/runs/{run['id']}/attempts/{run['run_attempt']}/jobs")
         if not UNIT_JOBS <= {job["name"] for job in jobs if job["conclusion"] == "success"}:
