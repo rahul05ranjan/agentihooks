@@ -250,21 +250,23 @@ def test_only_the_push_preflight_reports_the_check_that_proves_a_commit_graded()
     assert proofs["mutation"]["uses"] == "./.github/workflows/mutation-preflight.yml"
 
 
-def test_push_preflight_fails_when_a_test_the_branch_touches_fails():
+def test_touched_tests_job_selects_and_runs_the_tests_the_branch_touches():
     job = _workflow()["jobs"]["touched-tests"]
     assert job["needs"] == "pull-request"
     assert job["if"] == "${{ needs.pull-request.outputs.open == 'false' }}"
     assert job["timeout-minutes"] == 15
-    steps = {step.get("name"): step for step in job["steps"]}
-    select = steps["Select the tests the branch touches"]
+    steps, names = _steps(job)
+    select = steps[names.index("Select the tests the branch touches")]
     assert select["id"] == "touched"
     assert 'changed_files(root, "origin/dev", "HEAD")' in select["run"]
-    assert "is_test(path)" in select["run"]
-    browser = steps["Install the browser that page tests drive"]
+    assert "if is_test(path) and (root / path).is_file()" in select["run"]
+    browser = steps[names.index("Install the browser that page tests drive")]
     assert browser["if"] == "steps.touched.outputs.browser == 'true'"
-    run = steps["Run the tests the branch touches"]
+    run = steps[names.index("Run the tests the branch touches")]
     assert run["if"] == "steps.touched.outputs.files != ''"
     assert run["env"]["FILES"] == "${{ steps.touched.outputs.files }}"
-    assert "python -m pytest" in run["run"]
-    assert "|| true" not in run["run"]
-    assert not any(step.get("continue-on-error") for step in job["steps"])
+    assert run["run"] == (
+        'read -ra files <<< "$FILES"\n'
+        'python -m pytest "${files[@]}" -n auto --reruns 2 --tb=short -p no:cacheprovider\n'
+    )
+    assert not any(step.get("continue-on-error") for step in steps)
