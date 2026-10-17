@@ -254,7 +254,7 @@ def test_push_preflight_fails_when_a_test_the_branch_touches_fails():
     job = _workflow()["jobs"]["touched-tests"]
     assert job["needs"] == "pull-request"
     assert job["if"] == "${{ needs.pull-request.outputs.open == 'false' }}"
-    assert job["timeout-minutes"] == 1
+    assert job["timeout-minutes"] == 15
     steps = {step.get("name"): step for step in job["steps"]}
     select = steps["Select the tests the branch touches"]
     assert select["id"] == "touched"
