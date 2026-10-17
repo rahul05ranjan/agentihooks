@@ -48,6 +48,25 @@ def test_string_dictionary_prefixes_use_the_direct_path_comparison():
     assert not rows._dict_paths_match({}, {1: 2})
 
 
+def test_list_diff_keeps_the_direct_path_comparison(monkeypatch):
+    old = [{"id": "one", "value": 1}]
+    new = [*old, {"id": "two", "value": 2}]
+    match = rows._child_paths_match
+    encode = Mock(wraps=rows.encode)
+
+    def compare(left, right, old_children, new_children):
+        calls = encode.call_count
+        result = match(left, right, old_children, new_children)
+        assert encode.call_count == calls
+        return result
+
+    monkeypatch.setattr(rows, "encode", encode)
+    monkeypatch.setattr(rows, "_child_paths_match", compare)
+    before, after = rows.diff(old, new)
+    assert not before
+    assert after
+
+
 def test_dictionary_field_edits_do_not_enumerate_unchanged_subtrees(monkeypatch):
     shared = {"nested": [1, 2, 3]}
     old = {"keep": shared, "change": 1}
