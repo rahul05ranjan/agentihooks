@@ -6,8 +6,8 @@ from dataclasses import replace
 from scripts.handoff import transfers
 from scripts.hive import placement, registry
 from scripts.inbox.store import CLOSED, InboxStore
+from scripts.swarm import affinity
 from scripts.swarm.store import MASTER, SwarmError
-from scripts.swarm_v2 import masters
 
 LOST = "hive-lost"
 RECOVERY = """## Intent
@@ -52,10 +52,6 @@ def pending(store, slug):
     return json.loads(raw) if raw else None
 
 
-def _live_master(store, slug):
-    return next((a for a in store.agents(slug) if masters.is_lead(slug, a) and a.state != "finished"), None)
-
-
 def quiet_for(store, config, master, now_ms) -> int:
     """Milliseconds the master's hive has been quiet past the grace, 0 while it beats or never beat."""
     record = registry.show(store.redis, master.hive) if master.hive else None
@@ -65,16 +61,14 @@ def quiet_for(store, config, master, now_ms) -> int:
 
 
 def target(store, config, master, now_ms, to=""):
-    hives = [
-        {**hive, "agents": 0}
-        for hive in registry.hives(store.redis)
-        if hive["id"] != master.hive and to in ("", hive["id"])
-    ]
+    from scripts.hive.launch import loaded_hives
+
+    hives = [hive for hive in loaded_hives(store) if hive["id"] != master.hive and to in ("", hive["id"])]
     return placement.place(MASTER, master.harness, master.account, master.route_kind, config.repo, hives, now_ms)
 
 
 def fail_over(slug, config, store, runtime, now_ms):
-    master = _live_master(store, slug)
+    master = affinity.live_master(store, slug)
     if master is None or master.name in runtime.live_names():
         return []
     age = quiet_for(store, config, master, now_ms)
@@ -96,15 +90,20 @@ def fail_over(slug, config, store, runtime, now_ms):
 
 def order(store, slug, to, now_ms):
     """Order the live master to hand off so its successor starts on hive to."""
-    master = _live_master(store, slug)
+    master = affinity.live_master(store, slug)
     if master is None:
         raise SwarmError("no live master to move")
+    if to == master.hive:
+        raise SwarmError(f"the master already runs on hive {to}")
+    record = registry.show(store.redis, to)
+    if record is None or not registry.live(record, now_ms):
+        raise SwarmError(f"hive {to} is not live")
     chosen = target(store, store.config(slug), master, now_ms, to)
     if isinstance(chosen, placement.Wait):
         raise SwarmError(f"the master cannot move to hive {to}: {chosen.reason}")
     _withdraw(store, slug)
     text = ORDER.format(to=to, current=master.hive or "this machine", slug=slug)
-    item = InboxStore(store.redis).send("operator", master.seat, text)
+    item = InboxStore(store.redis).send("operator", master.seat or master.name, text)
     found = {"from": master.hive, "to": to, "master": master.name, "item": item.id, "state": "ordered"}
     found.update(reason="", at=now_ms)
     store.redis.set(_key(store, slug), json.dumps(found))
@@ -117,9 +116,10 @@ def _withdraw(store, slug):
         InboxStore(store.redis).close(found["item"], "operator", "cancel", "the master move was replaced")
 
 
-def pinned(store, slug, task):
+def pinned(store, slug, task, predecessor):
+    """The successor task pinned to the move's hive, only when it follows the master the move named."""
     found = pending(store, slug)
-    return {**task, "hive": found["to"]} if found and found["to"] else task
+    return {**task, "hive": found["to"]} if found and found["to"] and found["master"] == predecessor else task
 
 
 def placed(store, slug):

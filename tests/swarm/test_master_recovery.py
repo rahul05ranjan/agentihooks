@@ -290,7 +290,7 @@ def test_a_returning_hive_terminates_its_superseded_master_before_it_beats(store
 
     assert runtime.terminated == [(master.execution_id, NOW - GRACE_MS - 1)]
     assert registry.show(store.redis, "lost")["heartbeat_at"] == NOW + 5000
-    assert store.redis.hexists(master_move.fenced("lost"), master.execution_id) is not ok
+    assert store.redis.hexists(master_move.fenced("lost"), master.execution_id) == (not ok)
 
 
 def test_a_fence_naming_an_unknown_execution_is_dropped(store, monkeypatch):  # noqa: F811
@@ -307,6 +307,7 @@ def test_a_fence_naming_an_unknown_execution_is_dropped(store, monkeypatch):  # 
 
 
 def test_master_move_orders_a_handoff_and_pins_the_successor_to_the_hive(store):  # noqa: F811
+    from scripts.handoff import transfers
     from scripts.swarm import cli, master_move
 
     _hive(store, "home", NOW)
@@ -332,6 +333,7 @@ def test_master_move_orders_a_handoff_and_pins_the_successor_to_the_hive(store):
     }
     assert master_move.pending(store, "sw") == found
     current = next(a for a in store.agents("sw") if a.name == master.name)
+    transfers.record(store, "sw", current, "operator", "", NOW)
     store.put_agent("sw", replace(current, state="finished"))
     runtime = RecoveryRuntime()
 
@@ -346,10 +348,10 @@ def test_master_move_orders_a_handoff_and_pins_the_successor_to_the_hive(store):
 @pytest.mark.parametrize(
     ("to", "reason"),
     [
-        ("home", "no UI hive live"),
-        ("dead", "no UI hive live"),
-        ("absent", "no UI hive live"),
-        ("bare", "no hive for master advertises the claude slot one"),
+        ("home", "the master already runs on hive home"),
+        ("dead", "hive dead is not live"),
+        ("absent", "hive absent is not live"),
+        ("bare", "the master cannot move to hive bare: no hive for master advertises the claude slot one"),
     ],
 )
 def test_master_move_refuses_a_hive_that_cannot_take_the_master(store, to, reason):  # noqa: F811
@@ -366,8 +368,59 @@ def test_master_move_refuses_a_hive_that_cannot_take_the_master(store, to, reaso
     with pytest.raises(SwarmError) as refused:
         master_move.order(store, "sw", to, NOW)
 
-    assert str(refused.value) == f"the master cannot move to hive {to}: {reason}"
+    assert str(refused.value) == reason
     assert master_move.pending(store, "sw") is None
+
+
+def test_an_ordered_move_never_pins_a_master_that_left_without_handing_off(store):  # noqa: F811
+    from scripts.swarm import master_move
+
+    _hive(store, "home", NOW)
+    _hive(store, "spare", NOW)
+    master = _hive_master(store, "home")
+    master_move.order(store, "sw", "spare", NOW)
+    current = next(a for a in store.agents("sw") if a.name == master.name)
+    store.put_agent("sw", replace(current, state="finished"))
+    runtime = RecoveryRuntime()
+
+    tick("sw", store, tasks(), runtime, NOW + 1)
+
+    [(_, task)] = runtime.masters
+    assert "hive" not in task
+
+
+def test_the_lost_hive_move_places_the_master_on_the_hive_with_room(store):  # noqa: F811
+    from scripts.hive import registry
+
+    _hive(store, "lost", NOW - GRACE_MS - 1)
+    for hive, most in (("big", 8), ("small", 2)):
+        _hive(store, hive, NOW)
+        store.redis.hset(registry.key(hive), "max_agents", most)
+    store.redis.set(f"{registry.key('big')}:sessions", json.dumps({"claude:one": 8}))
+    _hive_master(store)
+    runtime = RecoveryRuntime()
+
+    tick("sw", store, tasks(), runtime, NOW)
+
+    [(_, task)] = runtime.masters
+    assert task["hive"] == "small"
+
+
+def test_a_failed_successor_launch_keeps_the_recovery_handoff_awaiting(store):  # noqa: F811
+    from scripts.handoff import transfers
+    from scripts.swarm import master_move
+
+    _hive(store, "lost", NOW - GRACE_MS - 1)
+    master = _hive_master(store)
+    runtime = RecoveryRuntime(fail=True)
+
+    tick("sw", store, tasks(), runtime, NOW)
+
+    rows = [row for row in transfers.list_transfers(store, "sw") if row["reason"] == master_move.LOST]
+    assert [row["binding"]["state"] for row in rows] == ["absent", "pending"]
+    assert rows[-1]["successor"] == ""
+    assert rows[-1]["predecessor"] == master.name
+    assert rows[-1]["continuity"] == {"state": "pending"}
 
 
 def test_master_move_without_a_live_master_is_refused(store):  # noqa: F811

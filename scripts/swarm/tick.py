@@ -1194,7 +1194,7 @@ def _master(slug, config, store, runtime, now_ms):
                 {"id": MASTER, "handoff": store.handoff(slug, MASTER), "peer": store.peer(slug), "transfer": transfer},
             )
         )
-        task = master_move.pinned(store, slug, task)
+        task = master_move.pinned(store, slug, task, (transfer or {}).get("predecessor", ""))
         master_start.begin(store, slug, record.name, task, now_ms)
         affinity.handed_off(store, slug)
         return task
