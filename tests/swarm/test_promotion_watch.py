@@ -11,7 +11,7 @@ from scripts.swarm.store import PREFIX, RedisStore, SwarmConfig
 pytestmark = pytest.mark.xdist_group("fakeredis")
 
 RUNS = "repos/{owner}/{repo}/actions/workflows/test.yml/runs?branch=dev&event=push&status=completed&per_page=20"
-JOBS_JQ = ".jobs[] | {name, conclusion} | @json"
+JOBS_JQ = ".jobs[] | {name, conclusion, check_run_url, steps} | @json"
 SHA = "c0ffee" + "0" * 34
 RED = {"id": 900, "conclusion": "failure", "head_sha": SHA, "html_url": "https://github.com/o/r/actions/runs/900"}
 GREEN = {
@@ -98,6 +98,7 @@ def sonar_run(message, extra_jobs=(), extra_steps=()):
         "check_run_url": "https://api.github.com/repos/o/r/check-runs/123",
         "steps": [
             {"name": "Check dev still points at this commit", "conclusion": "failure"},
+            {"name": "SonarQube scan", "conclusion": "skipped"},
             *extra_steps,
         ],
     }
@@ -113,7 +114,11 @@ def sonar_run(message, extra_jobs=(), extra_steps=()):
                 "--jq",
                 ".[] | {annotation_level, message} | @json",
             ]
-            body = [{"annotation_level": "failure", "message": message}]
+            body = [
+                {"annotation_level": "warning", "message": "Node.js 20 actions are deprecated."},
+                {"annotation_level": "failure", "message": "Process completed with exit code 1."},
+                {"annotation_level": "failure", "message": message},
+            ]
         elif "/jobs" in argv[2]:
             fields = argv[-1].split("{", 1)[1].split("}", 1)[0].replace(" ", "").split(",")
             body = [{key: job.get(key) for key in fields} for job in found]
