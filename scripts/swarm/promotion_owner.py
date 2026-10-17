@@ -23,8 +23,12 @@ def select(slug: str, repo: str, store: RedisStore) -> str:
         return previous
     preferred = [name for name in candidates if doctor_slug(store.peer(name) or "") != name]
     owner = min(preferred or candidates or [slug])
-    store.redis.hset(record, mapping={"owner": owner, "previous": previous or ""})
+    store.redis.hset(record, mapping={"owner": owner, "previous": previous or "", f"swarm:{owner}": owner})
     return owner
+
+
+def history(repo: str, redis) -> set[str]:
+    return {value for field, value in redis.hgetall(key(repo)).items() if field.startswith("swarm:")}
 
 
 @contextmanager

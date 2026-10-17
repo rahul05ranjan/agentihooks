@@ -94,9 +94,13 @@ def _held_jobs(redis, slug: str, doc: dict) -> set[str]:
     return {job for task_id, job in filed.items() if task_id in live}
 
 
-def _red(slug, redis, ledger, doc, last, failed):
+def _red(slug, redis, ledger, doc, last, failed, repo):
     run_id, sha, url = last["id"], last["head_sha"], last["html_url"]
     held, present = _held_jobs(redis, slug, doc), {t["id"] for t in doc.get("tasks", [])}
+    from scripts.swarm import promotion_owner
+
+    for previous in promotion_owner.history(repo, redis) - {slug}:
+        held.update(_held_jobs(redis, previous, ledger.state(previous)))
     actions = []
     for n, job in enumerate(failed):
         task_id = f"{TASK_PREFIX}{run_id}-{n}"
@@ -159,7 +163,7 @@ def _refresh(
     if stale:
         actions = [f"dev push run {last['id']} was superseded before Sonar analysis"]
     elif last["conclusion"] == "failure":
-        actions = _red(slug, redis, ledger, doc, last, failed)
+        actions = _red(slug, redis, ledger, doc, last, failed, config.repo)
     else:
         actions = _green(slug, ledger, doc, last)
     redis.set(key(slug, "seen"), last["id"])
