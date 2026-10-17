@@ -1,4 +1,6 @@
-from hooks.lifecycle.lease import add_holder, admin_dir
+import json
+
+from hooks.lifecycle.lease import add_holder, admin_dir, lease_path
 from hooks.lifecycle.model import Holder, Root
 from hooks.lifecycle.worktrees import classify, discover, nested_worktrees
 
@@ -67,6 +69,41 @@ def test_resumed_session_keeps_its_worktree(repo):
     age(path, 30 * HOUR)
     assert verdict(repo, path, sessions={900: "sess-1"}) == ("keep", "owner session alive")
     assert verdict(repo, path, sessions={900: "sess-2"})[0] == "remove"
+
+
+def test_departed_owner_frees_clean_pushed_worktree_at_once(repo):
+    path = repo.worktree("left")
+    add_holder(path, "worktree", Holder("sess-gone", 4242, 77, "boot-1"), 0.0)
+    age(path, 60)
+    finding = classify(path, repo.root(), snap())
+    assert (finding.action, finding.reason, finding.immediate) == ("remove", "clean and on a remote, owner left", True)
+    live = classify(path, repo.root(), snap(table={4242: process(4242, start=77)}))
+    assert (live.action, live.reason, live.immediate) == ("keep", "owner session alive", False)
+    (path / "notes.txt").write_text("unsaved\n")
+    age(path, 60)
+    dirty = classify(path, repo.root(), snap())
+    assert (dirty.action, dirty.reason, dirty.immediate) == ("keep", "unique work, recent", False)
+
+
+def test_departed_owner_unpushed_commit_stays_kept(repo):
+    path = repo.worktree("left-local")
+    add_holder(path, "worktree", Holder("sess-gone", 4242, 77, "boot-1"), 0.0)
+    (path / "a.txt").write_text("a\n")
+    git(path, "add", "a.txt")
+    git(path, "commit", "-q", "-m", "local")
+    age(path, 60)
+    assert verdict(repo, path) == ("keep", "unique work, recent")
+
+
+def test_clean_pushed_without_owner_still_waits_for_idle(repo):
+    path = repo.worktree("unowned")
+    lease_path(path, "worktree").write_text(json.dumps({"kind": "worktree", "created_at": 0.0, "holders": []}))
+    age(path, 60)
+    finding = classify(path, repo.root(), snap())
+    assert (finding.action, finding.reason, finding.immediate) == ("keep", "clean, recent", False)
+    age(path, 3 * HOUR)
+    idle = classify(path, repo.root(), snap())
+    assert (idle.action, idle.reason, idle.immediate) == ("remove", "clean and on a remote", False)
 
 
 def test_ephemeral_worktree_is_removed_without_rescue(repo):
