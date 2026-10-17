@@ -1,6 +1,7 @@
 import pytest
 
 import hooks.context.context_recycle as recycle
+from hooks.context import swarm_pin
 from scripts.codex_context import CodexContext
 
 pytestmark = pytest.mark.unit
@@ -229,3 +230,56 @@ def test_the_gate_resolves_read_first_addresses_in_the_agents_swarm(monkeypatch,
     monkeypatch.setattr(recycle, "_resolver", lambda slug: asked.append(slug) or (lambda address: False))
     reason = _gate("Bash", _handoff_command(tmp_path, VALID))
     assert asked == ["my-swarm"] and "does not resolve" in reason
+
+
+MASTER = {
+    "AGENTIHOOKS_AGENT_NAME": "master@323133-0175",
+    "AGENTIHOOKS_SWARM": "sw",
+    "AGENTIHOOKS_SWARM_LANE": "master",
+    "AGENTIHOOKS_SWARM_TASK": "master",
+    "AGENTIHOOKS_SWARM_LAUNCHER": "10",
+}
+
+
+def _orphaned_master(tmp_path):
+    root = tmp_path / "proc"
+    for pid, comm, ppid in ((10, "bash", 1), (50, "claude", 1), (51, "sh", 50), (52, "python3", 51), (70, "codex", 1)):
+        folder = root / str(pid)
+        folder.mkdir(parents=True)
+        (folder / "comm").write_text(comm + "\n")
+        (folder / "stat").write_text(f"{pid} ({comm}) S {ppid} 0 10\n")
+    return root
+
+
+def test_a_master_whose_identity_is_stripped_mid_life_still_gets_preparation_and_the_gate(monkeypatch, tmp_path):
+    environ = dict(MASTER)
+    monkeypatch.setattr(recycle, "used_tokens", lambda session_id: 100_000)
+    assert recycle.directive("s1", environ) is None
+    assert swarm_pin.unpin(environ, 52, _orphaned_master(tmp_path))
+    monkeypatch.setattr(recycle, "used_tokens", lambda session_id: 600_000)
+    assert "HANDOFF PREPARATION" in recycle.directive("s1", environ)
+    monkeypatch.setattr(recycle, "used_tokens", lambda session_id: 650_000)
+    assert "agentihooks swarm sw handoff" in recycle.directive("s1", environ)
+    assert recycle.over_limit("s1", environ) == "sw"
+    assert "BLOCKED" in recycle.gate("Bash", {"command": "git commit"}, "s1", environ)
+    assert recycle.directive("s2", environ) is None
+    assert recycle.over_limit("s2", environ) is None
+
+
+def test_an_operator_lane_session_is_never_remembered_as_a_swarm_session(monkeypatch):
+    operator = {**MASTER, "AGENTIHOOKS_SWARM_LANE": "operator"}
+    monkeypatch.setattr(recycle, "used_tokens", lambda session_id: 100_000)
+    assert recycle.directive("s1", operator) is None
+    monkeypatch.setattr(recycle, "used_tokens", lambda session_id: 900_000)
+    assert recycle.directive("s1", operator) is None
+    assert recycle.directive("s1", {}) is None
+    assert recycle.over_limit("s1", {}) is None
+
+
+def test_an_unmarked_overrun_reports_the_tokens_until_a_marker_exists(monkeypatch):
+    monkeypatch.setattr(recycle, "used_tokens", lambda session_id: 650_000 if session_id == "s1" else None)
+    assert recycle.unmarked_overrun("s1", 600) == 650_000
+    assert recycle.unmarked_overrun("s1", 601) is None
+    assert recycle.unmarked_overrun("other", 600) is None
+    assert recycle.directive("s1", _swarm_env()) is not None
+    assert recycle.unmarked_overrun("s1", 600) is None
