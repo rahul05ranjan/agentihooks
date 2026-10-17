@@ -52,6 +52,7 @@ def container(monkeypatch):
     monkeypatch.setattr(proof, "ready", lambda _: {"root": "/home/worker/attempts/fixture/run/supervision/incarnation"})
     monkeypatch.setattr(proof, "state", lambda _: {"Running": observed.running, "Pid": observed.pid})
     monkeypatch.setattr(proof.time, "sleep", lambda _: None)
+
     def monotonic():
         observed.now += observed.clock_step
         return observed.now
