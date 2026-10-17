@@ -153,7 +153,7 @@ jobs:
             load-evidence/*/server.log
 
       - name: Compare stream publication CPU on identical base and head workloads
-        if: ${{ inputs.streams && !inputs.compare }}
+        if: inputs.streams
         run: |
           git worktree add --detach "$RUNNER_TEMP/ledger-load-base" FETCH_HEAD
           "$HOME/venv/bin/python" -m tests.ledger_load.streams \
@@ -162,7 +162,7 @@ jobs:
             --folder "$RUNNER_TEMP/ledger-streams"
 
       - name: Preserve both stream CPU measurements and server logs
-        if: ${{ always() && inputs.streams && !inputs.compare }}
+        if: ${{ always() && inputs.streams }}
         uses: actions/upload-artifact@v4
         with:
           name: ledger-stream-cpu
