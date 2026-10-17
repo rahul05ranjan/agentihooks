@@ -145,9 +145,14 @@ function agentRows(sw, now) {
 }
 
 function agentRow(a, remote) {
-  return withId(cells(a.remoteControl ? h("span", {}, idCell(a.name), h("span", { class: "sw-sub", text: a.remoteControl })) : idCell(a.name), a.lane, a.profile, a.overlays, a.model, transportCell(a.transport), a.task ? h("a", { href: `#item-tasks-${a.task}`, text: a.task }) : "—",
+  return withId(cells(idCell(a.name), a.lane, a.profile, a.overlays, a.model, a.remoteControl ? remoteControlCell(a.remoteControl) : transportCell(a.transport), a.task ? h("a", { href: `#item-tasks-${a.task}`, text: a.task }) : "—",
     a.promoted ? h("span", { class: "sw-promoted", "data-tip": `${a.state} · promoted` }, label(a.state), label("promoted")) : label(a.state),
     ...(remote ? [executionCell(a.execution), terminalCell(a.terminal, a.execution)] : []), a.age, a.finished ? h("span") : agentActions(a, pending, swarmReadError)), `agent-${a.name}`);
+}
+
+function remoteControlCell(line) {
+  const [, state, detail] = line.match(/^Remote Control: (on|off) \((.*)\)$/) || [, "off", line];
+  return h("span", { "data-tip": line }, label(`remote control ${state}`, state), h("span", { class: "sw-sub", text: detail }));
 }
 
 const transportCell = (c) => c ? h("span", { class: "sw-transport", "data-tip": `${c.push_inbox ? "push" : "no push"} · ${c.native_terminal_attach ? "native terminal" : "no native terminal"}` },
