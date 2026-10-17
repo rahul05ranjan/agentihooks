@@ -1,8 +1,9 @@
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from hashlib import sha256
 from pathlib import Path
+from uuid import uuid4
 
 from redis import Redis
 
@@ -11,8 +12,8 @@ from scripts.swarm import naming
 from scripts.swarm.store import PREFIX, RedisStore
 
 
-def repository(repo: str) -> str:
-    result = subprocess.run(
+def repository(repo: str, run: Callable = subprocess.run) -> str:
+    result = run(
         ["git", "-C", repo, "rev-parse", "--path-format=absolute", "--git-common-dir"],
         capture_output=True,
         text=True,
@@ -50,11 +51,12 @@ def history(repo: str, redis: Redis) -> set[str]:
 
 @contextmanager
 def intake(slug: str, repo: str, store: RedisStore) -> Iterator[str | None]:
-    lock = store.redis.lock(f"{key(repo)}:lock", timeout=300)
-    if not lock.acquire(blocking=False):
+    lock, token = f"{key(repo)}:lock", uuid4().hex
+    if not store.redis.set(lock, token, nx=True, ex=300):
         yield None
         return
     try:
         yield select(slug, repo, store)
     finally:
-        lock.release()
+        if store.redis.get(lock) == token:
+            store.redis.delete(lock)

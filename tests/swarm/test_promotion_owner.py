@@ -289,15 +289,17 @@ def test_newer_local_checkpoint_survives_an_older_shared_checkpoint(linked, monk
 
 
 def test_real_git_repositories_remain_independent_with_bounded_identity_reads(linked, tmp_path, monkeypatch):
+    from scripts.swarm import promotion_owner
+
     store, ledger = linked
-    run = subprocess.run
+    run, reads = subprocess.run, []
 
     def bounded(argv, **kwargs):
-        if "rev-parse" in argv:
-            assert kwargs["timeout"] == 10
+        assert kwargs["timeout"] == 10
+        reads.append(argv[-1])
         return run(argv, **kwargs)
 
-    monkeypatch.setattr(subprocess, "run", bounded)
+    monkeypatch.setattr(promotion_owner.repository, "__defaults__", (bounded,))
     for slug in (WATCHED, DOCTOR):
         repo = tmp_path / slug
         subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
@@ -306,6 +308,23 @@ def test_real_git_repositories_remain_independent_with_bounded_identity_reads(li
     observe(store, ledger, DOCTOR)
     assert [task["id"] for task in ledger.docs[WATCHED]["tasks"]] == ["promo-900-0"]
     assert [task["id"] for task in ledger.docs[DOCTOR]["tasks"]] == ["promo-900-0"]
+    assert reads and set(reads) == {"--git-common-dir"}
+
+
+def test_intake_leaves_patched_subprocess_and_lua_scripts_untouched(linked, monkeypatch):
+    store, ledger = linked
+
+    def refused(*args, **kwargs):
+        raise AssertionError(f"intake reached the patched subprocess with {args}")
+
+    monkeypatch.setattr(subprocess, "run", refused)
+    monkeypatch.setattr(store.redis, "lock", refused)
+    monkeypatch.setattr(store.redis, "evalsha", refused)
+    observe(store, ledger, DOCTOR)
+    observe(store, ledger, WATCHED)
+    assert [(slug, task["id"]) for slug, doc in ledger.docs.items() for task in doc["tasks"]] == [
+        (WATCHED, "promo-900-0")
+    ]
 
 
 def test_only_doctors_remaining_elect_one_stable_owner_instead_of_the_current_observer(linked):
