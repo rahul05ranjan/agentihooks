@@ -142,7 +142,7 @@ jobs:
           path.write_text(source.replace(needle, 'if True:\n        return True'))
           path = Path('fault/tests/swarm_ledger/operations_cpu_replay.py')
           source = path.read_text()
-          needle = 'recorded = corpus()'
+          needle = 'memory_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss'
           assert source.count(needle) == 1
           path.write_text(source.replace(needle, needle + '\n    memory_fault = bytearray(b"x") * (128 * 1024 * 1024)'))
           PY
@@ -167,6 +167,9 @@ jobs:
           assert base['outputs'] == head['outputs'], 'Operation or persisted-state outcomes changed'
           assert head['outputs'] != fault['outputs'], 'Dropped stream update escaped the comparison'
           assert fault['peak_rss_kib_after_replay'] > base['peak_rss_kib_after_replay'] * 1.1, 'Retained memory escaped the bound'
+          fault_growth = fault['peak_rss_kib_after_replay'] - fault['peak_rss_kib_before_replay']
+          base_growth = base['peak_rss_kib_after_replay'] - base['peak_rss_kib_before_replay']
+          assert fault_growth > max(base_growth, 1) * 1.1, 'Retained replay memory escaped the growth bound'
           accepted = sum(1 for output in head['outputs'] if output['reply'].get('applied'))
           assert accepted, 'No operation in the corpus was accepted'
           def p95(values):
@@ -186,7 +189,10 @@ jobs:
           }, indent=2))
           assert head['mean_cpu_seconds'] <= base['mean_cpu_seconds'] / 2
           assert head['peak_rss_kib_after_replay'] <= base['peak_rss_kib_after_replay'] * 1.1
-          growth = {side: run['peak_rss_kib_after_replay'] - run['peak_rss_kib_before_replay'] for side, run in (('base', base), ('head', head))}
+          growth = {
+              side: run['peak_rss_kib_after_replay'] - run['peak_rss_kib_before_replay']
+              for side, run in (('base', base), ('head', head))
+          }
           print(json.dumps({'peak_rss_growth_kib': growth}))
           assert growth['head'] <= max(growth['base'], 1) * 1.1, 'Replay memory growth exceeded base by more than ten percent'
           PY
