@@ -64,6 +64,31 @@ def test_tags_reads_the_origin_tags(origin):
     assert release_wait.tags(str(origin)) == ["v2.17.1"]
 
 
+def test_tags_asks_origin_for_tag_refs_with_a_bounded_wait(monkeypatch):
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(args, 0, "abc\trefs/tags/v1.0.0\ndef\trefs/tags/v1.0.1\n", "")
+
+    monkeypatch.setattr(release_wait.subprocess, "run", run)
+    assert release_wait.tags("/repo") == ["v1.0.0", "v1.0.1"]
+    assert calls == [
+        (
+            ["git", "-C", "/repo", "ls-remote", "--tags", "--refs", "origin"],
+            {"capture_output": True, "text": True, "timeout": 30},
+        )
+    ]
+
+
+def test_tags_is_empty_when_the_lookup_times_out(monkeypatch):
+    def run(args, **kwargs):
+        raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+
+    monkeypatch.setattr(release_wait.subprocess, "run", run)
+    assert release_wait.tags("/repo") == []
+
+
 def test_tags_is_empty_when_the_repository_has_no_origin(tmp_path):
     assert release_wait.tags(str(tmp_path)) == []
 

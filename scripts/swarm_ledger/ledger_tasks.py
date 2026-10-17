@@ -330,7 +330,6 @@ def _add(doc, op, ctx):
         "repository_branches",
         "slice",
         "follow_up",
-        "after_release",
     ):
         if key in op:
             task[key] = op[key]

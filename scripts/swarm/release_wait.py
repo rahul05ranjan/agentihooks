@@ -30,7 +30,7 @@ def tags(repo: str) -> list[str]:
         return []
     if found.returncode:
         return []
-    return [line.split("refs/tags/", 1)[1] for line in found.stdout.splitlines() if "refs/tags/" in line]
+    return [ref.removeprefix("refs/tags/") for _, ref in (line.split("\t") for line in found.stdout.splitlines())]
 
 
 def checker(repo: str) -> Callable[[dict], bool]:
