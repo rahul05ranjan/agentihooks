@@ -152,6 +152,7 @@ SETTABLE = {
     "max-eng-agents": "max_eng",
     "max-ci-agents": "max_ci",
     "max-plan-agents": "max_plan",
+    "masters-step": "masters_step",
     "compact-limit": "compact_limit",
     "snapshot-minutes": "snapshot_minutes",
 }
@@ -852,6 +853,7 @@ def cmd_set(store, args):
                 "max_eng": config.max_eng,
                 "max_ci": config.max_ci,
                 "max_plan": config.max_plan,
+                "masters_step": config.masters_step,
                 "compact_limit": config.compact_limit,
                 "autonomy": config.autonomy,
                 "snapshot_minutes": config.snapshot_minutes,

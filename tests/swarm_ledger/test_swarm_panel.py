@@ -410,6 +410,8 @@ class SwarmPanel(unittest.TestCase):
             "ci_up",
             "plan_down",
             "plan_up",
+            "masters_down",
+            "masters_up",
             "compact_down",
             "compact_up",
             "apply",

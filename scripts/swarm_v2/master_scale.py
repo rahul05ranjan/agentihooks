@@ -19,6 +19,7 @@ OFF = "off"
 PER_HIVE = "hive"
 RULE = "per"
 BELOW = "below"
+BELOW_WANT = "below-want"
 RETIRING = "retiring"
 RETIRE_SECONDS = "retire-seconds"
 TABLE = metrics_outbox.Table("master_scaling", (("metric", "String"), ("value", "Int64"), ("seat", "String")))
@@ -66,13 +67,17 @@ def wanted(rule: str, agents: list) -> int:
     return max(1, -(-len(found) // int(rule)))
 
 
+def stepped(step: int, agents: list) -> int:
+    return 1 + len(working(agents)) // step
+
+
 def run(slug: str, config, store, runtime, doc: dict, now_ms: int) -> list[str]:
     seats, found = masters.MasterSeats(store.redis), rule(store.redis, slug)
-    if not found or config.state in ENDED:
+    if not (found or config.masters_step) or config.state in ENDED:
         store.redis.hdel(seats.key(slug), masters.RETIRED)
         return master_fill.run(slug, config, store, runtime, doc, now_ms)
     agents = [a for a in store.agents(slug) if a.state != "finished"]
-    want = wanted(found, agents)
+    want = wanted(found, agents) if found else stepped(config.masters_step, agents)
     actions = _resize(slug, store, doc, agents, seats.count(slug), want, now_ms)
     return actions + master_fill.run(slug, config, store, runtime, doc, now_ms, min(seats.count(slug), want))
 
@@ -83,12 +88,12 @@ def _resize(slug, store, doc, agents, count, want, now_ms):
     masters.MasterSeats(store.redis).keep_retired(slug, want, count)
     if want >= count:
         _withdraw_asks(store, retiring)
-        store.redis.hdel(key, BELOW, RETIRING)
+        store.redis.hdel(key, BELOW, BELOW_WANT, RETIRING)
         return _recount(slug, store, doc, agents, count, want, now_ms) if want > count else []
-    below = int(store.redis.hget(key, BELOW) or 0)
-    if not below:
-        store.redis.hset(key, BELOW, now_ms)
-    if now_ms - (below or now_ms) < HOLD_MS:
+    wanted_again = {_address(slug, index) for index in range(2, want + 1)} & retiring.keys()
+    _withdraw_asks(store, {address: retiring.pop(address) for address in wanted_again})
+    store.redis.hset(key, RETIRING, json.dumps(retiring))
+    if now_ms - _below_since(store.redis, key, want, now_ms) < HOLD_MS:
         return []
     occupied = {a.seat: a for a in agents if a.lane == MASTER}
     actions = _ask(slug, store, occupied, retiring, range(count, want, -1), want, now_ms)
@@ -101,6 +106,15 @@ def _resize(slug, store, doc, agents, count, want, now_ms):
             actions.append(_retire_early(slug, store, doc, address, retiring.pop(address), now_ms))
     store.redis.hset(key, RETIRING, json.dumps(retiring))
     return actions + (_recount(slug, store, doc, agents, count, keep, now_ms) if keep < count else [])
+
+
+def _below_since(redis, key: str, want: int, now_ms: int) -> int:
+    """The cool off restarts whenever the wanted count rises, even while it stays below the seat count."""
+    since, last = int(redis.hget(key, BELOW) or 0), int(redis.hget(key, BELOW_WANT) or want)
+    if not since or want > last:
+        since = now_ms
+    redis.hset(key, mapping={BELOW: since, BELOW_WANT: want})
+    return since
 
 
 def _address(slug: str, index: int) -> str:
