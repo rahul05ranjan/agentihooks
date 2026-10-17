@@ -48,7 +48,7 @@ def test_thousand_task_collection_bounds_page_encodes(tmp_path, monkeypatch):
     query, rows, pages = {"limit": 100}, [], 0
     started = time.process_time()
     profiler.enable()
-    while True:
+    for _ in range(50):
         reply = ledger_read(host, "cpu", "tasks", query)
         rows.extend(reply["data"])
         pages += 1
@@ -56,6 +56,7 @@ def test_thousand_task_collection_bounds_page_encodes(tmp_path, monkeypatch):
             break
         query["cursor"] = reply["next_cursor"]
     profiler.disable()
+    assert reply["next_cursor"] is None
     cpu = time.process_time() - started
     output = io.StringIO()
     pstats.Stats(profiler, stream=output).sort_stats("cumulative").print_stats(15)

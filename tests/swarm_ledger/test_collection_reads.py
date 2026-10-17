@@ -87,12 +87,13 @@ def test_collection_reads_one_snapshot_while_writes_land(live, monkeypatch, path
     snapshot = snapshots[0]
     expected = []
     query = {"limit": 100}
-    while True:
+    for _ in range(50):
         page = resources.read(snapshot, path, query)
         expected.extend(page["data"])
         if page["next_cursor"] is None:
             break
         query["cursor"] = page["next_cursor"]
+    assert page["next_cursor"] is None
     assert rows == expected
     assert len({row["revision"] for row in rows}) == len(rows)
     if path == "tasks":
