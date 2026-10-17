@@ -13,8 +13,12 @@ FAILURES = "remote-control-failures"
 FALLBACK = "fallback auth"
 GATEWAY = "gateway"
 OFF = "flag"
-SUBJECT = "Remote Control"
-FAILURE_WORDS = ("failed", "disconnected", "stopped", "expired")
+FAILURES_SAID = (
+    "Remote Control failed",
+    "Remote Control disconnected",
+    "Remote Control stopped",
+    "Remote Control session expired",
+)
 RECOVERY = "Remote Control back on"
 
 
@@ -61,7 +65,7 @@ def line(agent: Mapping) -> str:
 
 
 def failure(message: str) -> bool:
-    return SUBJECT in message and any(word in message for word in FAILURE_WORDS)
+    return any(said in message for said in FAILURES_SAID)
 
 
 def record(store: RedisStore, slug: str, name: str, message: str, at: int) -> None:

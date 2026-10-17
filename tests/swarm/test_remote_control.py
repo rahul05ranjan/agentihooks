@@ -188,6 +188,7 @@ def test_placement_records_the_decision_and_keeps_it_when_a_relaunch_has_none():
         ("Remote Control session expired", True),
         ("Remote Control back on", False),
         ("Upload failed", False),
+        ("Remote Control on. Upload failed", False),
         ("Claude needs your permission to use Bash", False),
         ("", False),
     ],
