@@ -248,3 +248,22 @@ def test_only_the_push_preflight_reports_the_check_that_proves_a_commit_graded()
     assert "strategy" in _workflow()["jobs"]["mutation-shard"]
     proofs = yaml.safe_load((_ROOT / ".github/workflows/proofs.yml").read_text())["jobs"]
     assert proofs["mutation"]["uses"] == "./.github/workflows/mutation-preflight.yml"
+
+
+def test_push_preflight_fails_when_a_test_the_branch_touches_fails():
+    job = _workflow()["jobs"]["touched-tests"]
+    assert job["needs"] == "pull-request"
+    assert job["if"] == "${{ needs.pull-request.outputs.open == 'false' }}"
+    steps = {step.get("name"): step for step in job["steps"]}
+    select = steps["Select the tests the branch touches"]
+    assert select["id"] == "touched"
+    assert 'changed_files(root, "origin/dev", "HEAD")' in select["run"]
+    assert "is_test(path)" in select["run"]
+    browser = steps["Install the browser that page tests drive"]
+    assert browser["if"] == "steps.touched.outputs.browser == 'true'"
+    run = steps["Run the tests the branch touches"]
+    assert run["if"] == "steps.touched.outputs.files != ''"
+    assert run["env"]["FILES"] == "${{ steps.touched.outputs.files }}"
+    assert "python -m pytest" in run["run"]
+    assert "|| true" not in run["run"]
+    assert not any(step.get("continue-on-error") for step in job["steps"])
