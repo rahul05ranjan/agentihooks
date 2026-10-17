@@ -51,6 +51,14 @@ def test_a_still_queued_job_uses_now_and_remains_visible_after_its_creation_wind
     assert finding.kind == "ci runner wait" and finding.measure == 301
 
 
+@pytest.mark.parametrize("status", ["queued", "pending", "waiting"])
+def test_unstarted_jobs_ignore_placeholder_start_timestamps(status):
+    waiting = job(0, queued=True, created=-301)
+    waiting.update(status=status, started_at=waiting["created_at"])
+    [finding] = ci_speed.findings([record([waiting])], NOW - 60000, NOW)
+    assert finding.measure == 301
+
+
 def test_a_previously_started_job_outside_the_pass_window_is_not_counted_again():
     assert ci_speed.findings([record([job(301)])], NOW - 60000, NOW) == []
 

@@ -7,7 +7,7 @@ TIERS = {"pull_request": "pull request", "merge_group": "queue"}
 
 def _wait(run, job, since_ms, now_ms):
     created = iso_ms(job["created_at"])
-    queued = job["status"] == "queued"
+    queued = job["status"] not in {"in_progress", "completed"}
     started = iso_ms(job["started_at"]) if job.get("started_at") and not queued else now_ms
     if not queued and created < since_ms and started < since_ms:
         return []

@@ -38,7 +38,7 @@ def test_every_timer_tick_reads_speed_and_sends_each_crossing_to_both_masters_on
     second = cli.timer(store, DOCTOR, NOW + 60000, False)
     assert calls == [(NOW - 60000, NOW, None), (NOW, NOW + 60000, [7])]
     for slug in [DOCTOR, WATCHED]:
-        [item] = InboxStore(store.redis).items(f"master@{slug}", now_ms=NOW + 60000)
+        [item] = InboxStore(store.redis).inbox(f"master@{slug}")
         assert "run 7" in item.text and "anton-oss" in item.text and "301 seconds" in item.text
     assert any("1 runs" in action and "1 jobs" in action and "7 API calls" in action for action in first)
     assert any("CI speed" in action for action in second)
@@ -60,7 +60,7 @@ def test_an_api_failure_reports_incomplete_counts_and_preserves_the_window_for_r
     cli.timer(store, DOCTOR, NOW + 120000, False)
     assert calls == [(NOW - 60000, None), (NOW, []), (NOW, [])]
     assert any("incomplete" in action and "API unavailable" in action for action in actions)
-    [item] = InboxStore(store.redis).items(f"master@{WATCHED}", now_ms=NOW + 120000)
+    [item] = InboxStore(store.redis).inbox(f"master@{WATCHED}")
     assert "API unavailable" in item.text
 
 

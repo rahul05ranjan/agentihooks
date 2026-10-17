@@ -2,6 +2,7 @@ import json
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from urllib.parse import urlencode
@@ -48,7 +49,7 @@ def read(
     now_ms: int,
     pending: list[int] | None = None,
     *,
-    run=subprocess.run,
+    run: Callable = subprocess.run,
     max_calls: int = 60,
     max_seconds: int = 25,
 ) -> dict:
