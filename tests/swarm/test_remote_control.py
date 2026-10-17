@@ -136,8 +136,16 @@ def test_the_flag_turns_remote_control_off_at_resume(tmp_path, monkeypatch):
     assert placed.remote_control == {"state": "off", "detail": "flag"}
 
 
-def test_the_session_name_uses_the_seat_role_and_the_slug():
-    assert remote_control.session_name("master@proof", "proof") == "master · proof"
+def test_an_on_decision_names_the_master_seat_role_and_the_slug():
+    assert remote_control.decision("master", "claude", "interactive", "rig", {}) == {
+        "state": "on",
+        "detail": "master · rig",
+    }
+
+
+def test_an_unset_or_other_flag_value_keeps_remote_control_on():
+    assert remote_control.off_reason("interactive", {}) == ""
+    assert remote_control.off_reason("interactive", {remote_control.FLAG: "none"}) == ""
 
 
 @pytest.mark.parametrize("value", ["0", "false", "FALSE", "off"])
@@ -222,6 +230,14 @@ def test_a_failure_since_the_master_started_is_a_master_rc_finding():
 )
 def test_old_missing_or_worker_failures_raise_no_finding(row):
     assert findings.master_rc([row]) == []
+
+
+def test_a_skipped_row_does_not_hide_a_later_master_failure():
+    rows = [
+        {**_master(remote_control_failure={"message": "m", "at": 5_000}), "lane": "eng", "name": "e"},
+        _master(remote_control_failure={"message": "Remote Control failed", "at": 2_000}),
+    ]
+    assert [f.id for f in findings.master_rc(rows)] == ["master-rc/master@proof"]
 
 
 def test_a_master_without_a_seat_or_start_is_named_by_agent():

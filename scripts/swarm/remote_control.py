@@ -5,7 +5,6 @@ import os
 import time
 from collections.abc import Mapping
 
-from scripts.inbox.seats import seat_address
 from scripts.swarm.store import MASTER, RedisStore, connect
 
 FLAG = "AGENTIHOOKS_MASTER_REMOTE_CONTROL"
@@ -26,10 +25,6 @@ def now_ms() -> int:
     return int(time.time() * 1000)
 
 
-def session_name(seat: str, slug: str) -> str:
-    return f"{seat.partition('@')[0]} · {slug}"
-
-
 def name_prefix() -> str:
     from scripts.swarm.commands import hive_id
 
@@ -37,7 +32,7 @@ def name_prefix() -> str:
 
 
 def off_reason(route_kind: str, environ: Mapping[str, str]) -> str:
-    if environ.get(FLAG, "").lower() in ("0", "false", "off"):
+    if str(environ.get(FLAG)).lower() in ("0", "false", "off"):
         return OFF
     if route_kind == "api":
         return GATEWAY
@@ -50,7 +45,7 @@ def decision(lane: str, harness: str, route_kind: str, slug: str, environ: Mappi
     reason = off_reason(route_kind, environ)
     if reason:
         return {"state": "off", "detail": reason}
-    return {"state": "on", "detail": session_name(seat_address(slug, MASTER), slug)}
+    return {"state": "on", "detail": f"{MASTER} · {slug}"}
 
 
 def arguments(decided: Mapping) -> list[str]:
@@ -78,7 +73,7 @@ def failures(store: RedisStore, slug: str) -> dict[str, dict]:
 
 def on_notification(payload: Mapping, environ: Mapping[str, str] = os.environ) -> bool:
     slug, name = environ.get("AGENTIHOOKS_SWARM"), environ.get("AGENTIHOOKS_AGENT_NAME")
-    message = str(payload.get("message") or "")
+    message = str(payload.get("message"))
     recovered = RECOVERY in message
     if not slug or not name or environ.get("AGENTIHOOKS_SWARM_LANE") != MASTER or not (recovered or failure(message)):
         return False

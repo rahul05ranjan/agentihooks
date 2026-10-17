@@ -1,7 +1,7 @@
 import pytest
 
 from hooks import hook_manager
-from scripts.swarm import remote_control
+from scripts.swarm import execution, remote_control
 from scripts.swarm.store import RedisStore
 from tests.swarm.test_cli import env as env
 
@@ -94,6 +94,7 @@ def test_the_decision_lives_on_the_execution_and_stays_out_of_the_legacy_project
     name = store.next_name("fixture", "master")
     master = AgentRecord(name, "master", "master", seat="master@fixture", started_at=1, remote_control=ON)
     current = store.start_execution("fixture", master)
+    assert "remote_control" in execution.PROJECTION_OMITTED
     assert "remote_control" not in json.loads(store.redis.hget(store.key("fixture", "agents"), name))
     assert store.agents("fixture")[0].remote_control == ON
     store.put_agent("fixture", replace(current, remote_control={"state": "off", "detail": "flag"}))
@@ -148,6 +149,12 @@ def test_status_text_and_json_show_the_master_remote_control_line(env, capsys):
     shown = {a["name"]: a["remote_control"] for a in status.status_report(store, "sw", {"tasks": []}, rt)["agents"]}
     assert shown == {master.name: ON, engineer.name: {}}
     assert cli._remote_control_text([master, engineer]) == "Remote Control: on (master · sw)\n"
+    second = AgentRecord("m2", "master", "master", remote_control={"state": "off", "detail": "flag"})
+    assert cli._remote_control_text([master, second]) == (
+        "Remote Control: on (master · sw)\nRemote Control: off (flag)\n"
+    )
     capsys.readouterr()
     cli.cmd_status(store, SimpleNamespace(slug="sw", json=False))
-    assert "\nRemote Control: on (master · sw)\n" in capsys.readouterr().out
+    lines = capsys.readouterr().out.splitlines()
+    at = lines.index("Remote Control: on (master · sw)")
+    assert lines[at - 1].startswith("master affinity") and lines[at + 1] != ""
