@@ -6,7 +6,7 @@ adding third-party code to the system. A package's README or post-install
 script can inject prompts into the agent's next tool output — surfacing
 every install lets the operator audit the supply chain.
 
-Runs as PreToolUse. Does not block — only announces.
+Runs as PreToolUse. Does not block; it only announces.
 """
 
 import re
