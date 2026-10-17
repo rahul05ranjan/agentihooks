@@ -288,7 +288,7 @@ def test_newer_local_checkpoint_survives_an_older_shared_checkpoint(linked, monk
     assert store.redis.hget(record, "seen") == "901"
 
 
-def test_real_git_repositories_remain_independent_with_bounded_identity_reads(linked, tmp_path, monkeypatch):
+def test_real_git_repositories_remain_independent_with_bounded_identity_reads(linked, tmp_path):
     from scripts.swarm import promotion_owner
 
     store, ledger = linked
@@ -299,16 +299,16 @@ def test_real_git_repositories_remain_independent_with_bounded_identity_reads(li
         reads.append(argv[-1])
         return run(argv, **kwargs)
 
-    monkeypatch.setattr(promotion_owner.repository, "__defaults__", (bounded,))
     for slug in (WATCHED, DOCTOR):
         repo = tmp_path / slug
         subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
         store.update(slug, repo=str(repo))
+        assert promotion_owner.repository(str(repo), bounded) == str((repo / ".git").resolve())
     observe(store, ledger, WATCHED)
     observe(store, ledger, DOCTOR)
     assert [task["id"] for task in ledger.docs[WATCHED]["tasks"]] == ["promo-900-0"]
     assert [task["id"] for task in ledger.docs[DOCTOR]["tasks"]] == ["promo-900-0"]
-    assert reads and set(reads) == {"--git-common-dir"}
+    assert reads == ["--git-common-dir", "--git-common-dir"]
 
 
 def test_intake_leaves_patched_subprocess_and_lua_scripts_untouched(linked, monkeypatch):
