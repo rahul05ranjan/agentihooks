@@ -178,6 +178,36 @@ def test_standing_finding_groups_each_slow_stage_with_count_worst_time_and_run_l
     assert standing.read(store.redis, "doctor") == {}
 
 
+def test_slow_run_samples_older_than_the_window_leave_the_cache_and_the_links(swarm):
+    store, config = swarm
+    cache = defects.key("sw", "stages")
+    old = {"at": NOW_MS - defects.WINDOW_S * 1000, "stages": {"lint": 400}, "url": URL.format(99)}
+    store.redis.hset(cache, "99", json.dumps(old))
+    defects.refresh("sw", config, store, NOW_MS, run=_gh([]))
+    assert store.redis.hget(cache, "99") is None
+    assert {"label": "Slow run 99", "url": URL.format(99)} not in _found(store)["links"]
+
+
+def test_a_slow_run_sample_keeps_only_stages_strictly_over_a_budget_and_the_run_link(swarm, monkeypatch):
+    store, config = swarm
+    monkeypatch.setitem(
+        JOBS,
+        8,
+        [
+            _job("mutation (1)", "01:00", "09:00", 8),
+            _job("docs", "00:00", "16:40", 8),
+            _job("lint", "00:00", "05:00", 8),
+            _job("Gate — Required", "17:00", "17:00", 8),
+        ],
+    )
+    run_url = "https://github.com/o/r/actions/runs/8"
+    defects.refresh("sw", config, store, NOW_MS, run=_gh([], [{**_run(8, "00:00", "17:00"), "html_url": run_url}]))
+    sample = json.loads(store.redis.hget(defects.key("sw", "stages"), "8"))
+    gate_ms = round(datetime(2026, 10, 9, 7, 17, tzinfo=UTC).timestamp() * 1000)
+    assert sample == {"at": gate_ms, "stages": {"lint": 300}, "url": run_url}
+    assert _found(store)["links"] == [{"label": "Slow run 8", "url": run_url}]
+
+
 def test_github_is_read_from_the_repository_over_the_window(swarm):
     store, config = swarm
     calls = []
