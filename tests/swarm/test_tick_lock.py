@@ -110,7 +110,9 @@ def test_an_unreadable_pid_namespace_names_no_host(monkeypatch):
     assert controller._host() == ""
 
 
-@pytest.mark.parametrize(("host", "stat", "holder"), [("h", STAT, True), ("h", EXACT, True), ("", STAT, False), ("h", SHORT, False)])
+@pytest.mark.parametrize(
+    ("host", "stat", "holder"), [("h", STAT, True), ("h", EXACT, True), ("", STAT, False), ("h", SHORT, False)]
+)
 def test_a_holder_is_recorded_only_with_its_host_and_start(monkeypatch, host, stat, holder):
     pid = controller.os.getpid()
     monkeypatch.setattr(controller, "_host", lambda: host)
