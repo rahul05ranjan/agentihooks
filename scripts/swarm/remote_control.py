@@ -7,7 +7,6 @@ from collections.abc import Mapping
 
 from scripts.swarm.store import MASTER, RedisStore, connect
 
-FLAG = "AGENTIHOOKS_MASTER_REMOTE_CONTROL"
 FAILURES = "remote-control-failures"
 FALLBACK = "fallback auth"
 GATEWAY = "gateway"
@@ -31,18 +30,18 @@ def name_prefix() -> str:
     return hive_id()
 
 
-def off_reason(route_kind: str, environ: Mapping[str, str]) -> str:
-    if str(environ.get(FLAG)).lower() in ("0", "false", "off"):
+def off_reason(route_kind: str, login: bool) -> str:
+    if not login:
         return OFF
     if route_kind == "api":
         return GATEWAY
     return "" if route_kind == "interactive" else FALLBACK
 
 
-def decision(lane: str, harness: str, route_kind: str, slug: str, environ: Mapping[str, str]) -> dict:
+def decision(lane: str, harness: str, route_kind: str, slug: str, login: bool) -> dict:
     if lane != MASTER or harness != "claude":
         return {}
-    reason = off_reason(route_kind, environ)
+    reason = off_reason(route_kind, login)
     if reason:
         return {"state": "off", "detail": reason}
     return {"state": "on", "detail": f"{MASTER} · {slug}"}

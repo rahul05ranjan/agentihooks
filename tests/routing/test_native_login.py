@@ -5,7 +5,6 @@ from unittest.mock import Mock
 
 import pytest
 
-from scripts.profiles import master_login
 from scripts.routing import envs, native_login
 
 
@@ -35,7 +34,7 @@ def test_status_is_redacted_and_uses_native_environment(monkeypatch, binary):
     assert proof == {"command": "claude auth status --text", "status": "Login method: Claude account"}
     run.assert_called_once_with(
         [binary or "claude", "auth", "status", "--text"],
-        env={**envs.claude_interactive_child(source, "master"), "CLAUDE_CONFIG_DIR": str(master_login.directory())},
+        env=envs.claude_interactive_child(source, "master"),
         capture_output=True,
         text=True,
         timeout=30,

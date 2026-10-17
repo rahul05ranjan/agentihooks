@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts import init_agent
+from scripts import init_agent, master_claude_login
 from scripts.swarm import remote_control
 from scripts.swarm.health import findings
 from scripts.swarm.runtime import HerdrRuntime
@@ -23,11 +23,22 @@ def hive(monkeypatch):
     from scripts.routing import native_login
 
     monkeypatch.setenv("SWARM_HIVE_ID", "hive-a")
-    monkeypatch.delenv(remote_control.FLAG, raising=False)
     monkeypatch.setattr(native_login, "check", lambda *_: {"loggedIn": True, "authMethod": "claude.ai"})
 
 
-def _spawn(tmp_path, lane, harness, kind):
+def _config(tmp_path, lane, harness, login):
+    return SimpleNamespace(
+        slug="proof",
+        repo=str(tmp_path),
+        code="a1b2c3",
+        compact_limit=0,
+        lanes={lane: {"agent": harness}},
+        autonomy="delegate",
+        master_claude_login=login,
+    )
+
+
+def _spawn(tmp_path, lane, harness, kind, login=True):
     seen = []
 
     def run(argv, **kwargs):
@@ -35,15 +46,8 @@ def _spawn(tmp_path, lane, harness, kind):
         return SimpleNamespace(returncode=0, stdout=validated(argv, "status=started\nroute_status=routed\n"), stderr="")
 
     runtime = HerdrRuntime(home=tmp_path, run=run, choose=lambda *_: (harness, "requested"))
-    config = SimpleNamespace(
-        slug="proof",
-        repo=str(tmp_path),
-        code="a1b2c3",
-        compact_limit=0,
-        lanes={lane: {"agent": harness}},
-        autonomy="delegate",
-    )
-    placed = runtime.spawn(config, lane, "agent", {"id": lane, "title": "proof", "route_kind": kind})
+    task = {"id": lane, "title": "proof", "route_kind": kind}
+    placed = runtime.spawn(_config(tmp_path, lane, harness, login), lane, "agent", task)
     return _passed(seen[0]), placed
 
 
@@ -54,34 +58,41 @@ def _rc(passed):
     return passed[at : at + 4]
 
 
-def test_an_interactive_claude_master_spawns_with_remote_control_after_its_route(tmp_path):
-    passed, placed = _spawn(tmp_path, "master", "claude", "interactive")
-    assert passed[:6] == ["--route", "interactive", *RC]
-    assert placed.remote_control == ON
-
-
-@pytest.mark.parametrize(
-    ("kind", "decided"),
-    [("subscription", {"state": "off", "detail": "fallback auth"}), ("api", {"state": "off", "detail": "gateway"})],
-)
-def test_token_and_api_masters_spawn_without_remote_control_and_record_why(tmp_path, kind, decided):
+@pytest.mark.parametrize("kind", ["interactive", "subscription", "api"])
+def test_a_master_with_the_login_on_spawns_on_its_own_route_with_remote_control(tmp_path, kind):
     passed, placed = _spawn(tmp_path, "master", "claude", kind)
-    assert _rc(passed) == []
-    assert placed.remote_control == decided
+    assert passed[:6] == ["--route", "master-login", *RC]
+    assert (placed.route_kind, placed.remote_control) == ("interactive", ON)
 
 
-@pytest.mark.parametrize(("lane", "harness"), [("master", "codex"), ("eng", "claude")])
-def test_codex_masters_and_engineers_spawn_without_remote_control_or_a_record(tmp_path, lane, harness):
+@pytest.mark.parametrize(("kind", "route"), [("interactive", ["--route", "interactive"]), ("subscription", [])])
+def test_a_master_with_the_login_off_spawns_as_today_without_remote_control(tmp_path, kind, route):
+    passed, placed = _spawn(tmp_path, "master", "claude", kind, login=False)
+    assert passed[: len(route)] == route
+    assert "master-login" not in passed and "--settings" not in passed and _rc(passed) == []
+    assert (placed.route_kind, placed.remote_control) == (kind, {"state": "off", "detail": "flag"})
+
+
+@pytest.mark.parametrize(("lane", "harness"), [("master", "codex"), ("eng", "claude"), ("ci", "claude")])
+def test_codex_masters_and_workers_never_take_the_master_login(tmp_path, lane, harness):
     passed, placed = _spawn(tmp_path, lane, harness, "interactive")
-    assert _rc(passed) == []
+    assert "master-login" not in passed and _rc(passed) == []
     assert placed.remote_control == {}
 
 
-def test_the_flag_turns_remote_control_off_at_spawn(tmp_path, monkeypatch):
-    monkeypatch.setenv(remote_control.FLAG, "false")
-    passed, placed = _spawn(tmp_path, "master", "claude", "interactive")
-    assert _rc(passed) == []
-    assert placed.remote_control == {"state": "off", "detail": "flag"}
+def test_a_config_without_the_setting_keeps_the_login_off(tmp_path):
+    config = _config(tmp_path, "master", "claude", True)
+    del config.master_claude_login
+    assert master_claude_login.enabled(config, "master", "claude") is False
+    assert master_claude_login.route(False) == []
+
+
+@pytest.mark.parametrize(("lane", "harness"), [("master", "claude"), ("eng", "claude"), ("master", "codex")])
+def test_the_login_off_never_reaches_the_master_login_home(tmp_path, monkeypatch, lane, harness):
+    for name in ("build", "claim", "prepare", "publish", "restore"):
+        monkeypatch.setattr(master_claude_login, name, lambda *_: pytest.fail("master login touched"))
+    passed, _ = _spawn(tmp_path, lane, harness, "subscription", login=False)
+    assert not {"--settings", "master-login", "--remote-control"} & set(passed)
 
 
 def test_a_master_placed_on_the_api_route_records_gateway(tmp_path):
@@ -90,67 +101,49 @@ def test_a_master_placed_on_the_api_route_records_gateway(tmp_path):
         return SimpleNamespace(returncode=0, stdout=validated(argv, output), stderr="")
 
     runtime = HerdrRuntime(home=tmp_path, run=run, choose=lambda *_: ("claude", "requested"))
-    config = SimpleNamespace(
-        slug="proof",
-        repo=str(tmp_path),
-        code="a1b2c3",
-        compact_limit=0,
-        lanes={"master": {"agent": "claude"}},
-        autonomy="delegate",
-    )
-    placed = runtime.spawn(config, "master", "agent", {"id": "master", "title": "proof"})
+    task = {"id": "master", "title": "proof"}
+    placed = runtime.spawn(_config(tmp_path, "master", "claude", True), "master", "agent", task)
     assert (placed.route_kind, placed.remote_control) == ("api", {"state": "off", "detail": "gateway"})
 
 
-def _resumed(tmp_path, lane, harness, kind):
+def _resumed(tmp_path, lane, harness, kind, login=True):
     runtime, config, agent, seen = _resuming(tmp_path, "c0ffee", harness)
     config.slug = "proof"
+    config.master_claude_login = login
     placed = runtime.resume(config, replace(agent, lane=lane, task=lane, route_kind=kind), "resume")
     return _passed(seen["runs"][0]), placed
 
 
-def test_an_interactive_claude_master_resumes_with_remote_control_after_its_route(tmp_path):
+def test_a_master_with_the_login_on_resumes_on_its_own_route_with_remote_control(tmp_path):
     passed, placed = _resumed(tmp_path, "master", "claude", "interactive")
-    assert passed[:6] == ["--route", "interactive", *RC]
+    assert passed[:6] == ["--route", "master-login", *RC]
     assert placed.remote_control == ON
 
 
 @pytest.mark.parametrize(
-    ("lane", "harness", "kind", "decided"),
+    ("lane", "harness", "login", "decided"),
     [
-        ("master", "claude", "subscription", {"state": "off", "detail": "fallback auth"}),
-        ("master", "codex", "interactive", {}),
-        ("eng", "claude", "interactive", {}),
+        ("master", "claude", False, {"state": "off", "detail": "flag"}),
+        ("master", "codex", True, {}),
+        ("eng", "claude", True, {}),
     ],
 )
-def test_token_codex_and_engineer_resumes_carry_no_remote_control(tmp_path, lane, harness, kind, decided):
-    passed, placed = _resumed(tmp_path, lane, harness, kind)
-    assert _rc(passed) == []
+def test_other_resumes_keep_their_route_and_carry_no_remote_control(tmp_path, lane, harness, login, decided):
+    passed, placed = _resumed(tmp_path, lane, harness, "interactive", login)
+    assert passed[:2] == ["--route", "interactive"] and _rc(passed) == []
     assert placed.remote_control == decided
 
 
-def test_the_flag_turns_remote_control_off_at_resume(tmp_path, monkeypatch):
-    monkeypatch.setenv(remote_control.FLAG, "off")
-    passed, placed = _resumed(tmp_path, "master", "claude", "interactive")
-    assert _rc(passed) == []
-    assert placed.remote_control == {"state": "off", "detail": "flag"}
-
-
 def test_an_on_decision_names_the_master_seat_role_and_the_slug():
-    assert remote_control.decision("master", "claude", "interactive", "rig", {}) == {
+    assert remote_control.decision("master", "claude", "interactive", "rig", True) == {
         "state": "on",
         "detail": "master · rig",
     }
 
 
-def test_an_unset_or_other_flag_value_keeps_remote_control_on():
-    assert remote_control.off_reason("interactive", {}) == ""
-    assert remote_control.off_reason("interactive", {remote_control.FLAG: "none"}) == ""
-
-
-@pytest.mark.parametrize("value", ["0", "false", "FALSE", "off"])
-def test_each_off_value_of_the_flag_reports_flag(value):
-    assert remote_control.off_reason("interactive", {remote_control.FLAG: value}) == "flag"
+@pytest.mark.parametrize("kind", ["interactive", "api", "subscription"])
+def test_the_login_off_always_reports_flag(kind):
+    assert remote_control.off_reason(kind, False) == "flag"
 
 
 @pytest.mark.parametrize(
@@ -158,7 +151,7 @@ def test_each_off_value_of_the_flag_reports_flag(value):
     [("interactive", ""), ("api", "gateway"), ("subscription", "fallback auth"), ("", "fallback auth")],
 )
 def test_off_reason_by_route_kind(kind, reason):
-    assert remote_control.off_reason(kind, {remote_control.FLAG: "on"}) == reason
+    assert remote_control.off_reason(kind, True) == reason
 
 
 def test_only_an_on_decision_produces_launch_arguments():

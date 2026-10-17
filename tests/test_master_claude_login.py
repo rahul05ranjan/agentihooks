@@ -1,0 +1,425 @@
+import json
+import os
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from scripts import master_claude_login as login
+from scripts import openbao_kv
+from scripts.profiles import binding
+
+OPERATOR_ACCOUNT = {"emailAddress": "operator@example.com"}
+MASTER_ACCOUNT = {"emailAddress": "master@example.com"}
+GRANT = {"accessToken": "access", "refreshToken": "refresh", "expiresAt": 2000}
+
+
+@pytest.fixture
+def ah(tmp_path, monkeypatch):
+    monkeypatch.setattr(login.hooks_config, "AGENTIHOOKS_HOME", str(tmp_path / "ah"))
+    return tmp_path / "ah"
+
+
+@pytest.fixture
+def rendered(tmp_path):
+    operator = tmp_path / "operator"
+    operator.mkdir()
+    (operator / ".credentials.json").write_text("operator login")
+    (operator / "projects").mkdir()
+    profile = tmp_path / "profiles" / "master"
+    out = profile / "claude"
+    out.mkdir(parents=True)
+    (out / "settings.json").write_text('{"hooks": {"Stop": []}}')
+    (out / "CLAUDE.md").write_text("persona")
+    (out / ".claude.json").write_text(json.dumps({"mcpServers": {"a": {}}, login.ACCOUNT: OPERATOR_ACCOUNT}))
+    (out / binding.FILE).write_text(json.dumps({"profile": "master", "home": str(out)}))
+    (out / ".credentials.json").symlink_to(operator / ".credentials.json")
+    (out / "projects").symlink_to(operator / "projects")
+    (out / "skills").mkdir()
+    (out / "skills" / "one.md").write_text("skill")
+    (profile / "claude.sources.json").write_text("[]")
+    (profile / "claude.mounts.json").write_text("{}")
+    return out
+
+
+def _login(target, account=MASTER_ACCOUNT, grant=GRANT):
+    (target / login.CREDENTIALS).write_text(json.dumps({login.GRANT: grant}))
+    config = json.loads((target / login.CONFIG).read_text())
+    (target / login.CONFIG).write_text(json.dumps({**config, login.ACCOUNT: account}))
+
+
+def test_the_login_is_on_only_for_a_claude_master_whose_swarm_set_it():
+    on, off = SimpleNamespace(master_claude_login=True), SimpleNamespace(master_claude_login=False)
+    assert login.enabled(on, "master", "claude") is True
+    assert login.enabled(off, "master", "claude") is False
+    assert login.enabled(on, "master", "codex") is False
+    assert login.enabled(on, "eng", "claude") is False
+    assert login.enabled(SimpleNamespace(master_claude_login="True"), "master", "claude") is False
+    assert login.enabled(SimpleNamespace(), "master", "claude") is False
+    assert login.route(True) == ["--route", "master-login"]
+    assert login.route(False) == []
+
+
+def test_the_private_home_lives_under_the_agentihooks_home_per_swarm(ah):
+    assert login.root("rig") == ah / "master-claude" / "rig"
+    assert login.home("rig") == ah / "master-claude" / "rig" / "claude"
+
+
+def test_build_copies_the_rendered_master_home_without_the_shared_credential_link(ah, rendered):
+    target = login.build("rig", rendered)
+    assert target == login.home("rig")
+    assert not (target / login.CREDENTIALS).exists() and not (target / login.CREDENTIALS).is_symlink()
+    assert (target / "settings.json").read_bytes() == (rendered / "settings.json").read_bytes()
+    assert (target / "skills" / "one.md").read_text() == "skill"
+    assert (target / "projects").is_symlink() and (target / "projects").readlink() == (rendered / "projects").readlink()
+    assert json.loads((target / login.CONFIG).read_text()) == {"mcpServers": {"a": {}}}
+    assert json.loads((target / binding.FILE).read_text()) == {"profile": "master", "home": str(target.resolve())}
+    assert (login.root("rig") / "claude.sources.json").read_text() == "[]"
+    assert (login.root("rig") / "claude.mounts.json").read_text() == "{}"
+    assert target.stat().st_mode & 0o777 == login.root("rig").stat().st_mode & 0o777 == 0o700
+    assert (target / login.CONFIG).stat().st_mode & 0o777 == 0o600
+    assert not (login.root("rig") / "staging").exists()
+    assert (rendered / login.CREDENTIALS).is_symlink()
+    assert (rendered / login.CREDENTIALS).read_text() == "operator login"
+
+
+def test_a_rebuild_keeps_the_master_login_and_takes_new_rendered_files(ah, rendered):
+    _login(login.build("rig", rendered))
+    (rendered / "settings.json").write_text('{"hooks": {}}')
+    target = login.build("rig", rendered)
+    assert json.loads((target / login.CREDENTIALS).read_text()) == {login.GRANT: GRANT}
+    assert (target / login.CREDENTIALS).stat().st_mode & 0o777 == 0o600
+    assert not (target / login.CREDENTIALS).is_symlink()
+    assert json.loads((target / login.CONFIG).read_text())[login.ACCOUNT] == MASTER_ACCOUNT
+    assert (target / "settings.json").read_text() == '{"hooks": {}}'
+    assert (rendered.parent.parent.parent / "operator" / ".credentials.json").read_text() == "operator login"
+
+
+def test_a_rebuild_never_keeps_a_symlinked_credential_file(ah, rendered, tmp_path):
+    target = login.build("rig", rendered)
+    (target / login.CREDENTIALS).symlink_to(tmp_path / "operator" / ".credentials.json")
+    assert not (login.build("rig", rendered) / login.CREDENTIALS).exists()
+
+
+def test_build_rehomes_the_launch_report_and_only_when_one_is_given(ah, rendered, monkeypatch):
+    seen = []
+    monkeypatch.setattr(binding, "rehome", lambda report, home: seen.append((report, home)))
+    login.build("rig", rendered)
+    assert seen == []
+    target = login.build("rig", rendered, "/run/report")
+    assert seen == [(Path("/run/report"), target)]
+
+
+def test_build_without_manifests_or_binding_still_builds(ah, tmp_path):
+    out = tmp_path / "bare" / "claude"
+    out.mkdir(parents=True)
+    target = login.build("rig", out)
+    assert json.loads((target / binding.FILE).read_text()) == {"home": str(target.resolve())}
+    assert json.loads((target / login.CONFIG).read_text()) == {}
+    assert sorted(path.name for path in login.root("rig").iterdir()) == ["claude"]
+
+
+def _settings(path, doc):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(doc))
+
+
+@pytest.mark.parametrize("where", ["managed", "home", "project", "local"])
+@pytest.mark.parametrize(
+    ("doc", "said"),
+    [
+        ({"apiKeyHelper": "/bin/key"}, "sets apiKeyHelper"),
+        (
+            {"env": {"ANTHROPIC_BASE_URL": "x", "CLAUDE_CODE_USE_BEDROCK": "1"}},
+            "sets ANTHROPIC_BASE_URL, CLAUDE_CODE_USE_BEDROCK",
+        ),
+        ({"env": {"CLAUDE_SECURESTORAGE_CONFIG_DIR": "/elsewhere"}}, "sets CLAUDE_SECURESTORAGE_CONFIG_DIR"),
+        ({"env": {"AH_CC_TOKEN_one": "x"}}, "sets AH_CC_TOKEN_one"),
+        ({"forceLoginMethod": "console"}, "sets forceLoginMethod console"),
+    ],
+)
+def test_settings_that_reintroduce_a_credential_or_another_login_refuse(tmp_path, where, doc, said):
+    target, cwd, managed = tmp_path / "home", tmp_path / "repo", tmp_path / "managed.json"
+    path = {
+        "managed": managed,
+        "home": target / "settings.json",
+        "project": cwd / ".claude" / "settings.json",
+        "local": cwd / ".claude" / "settings.local.json",
+    }[where]
+    _settings(path, doc)
+    assert login.refusal(target, cwd, managed) == f"{path} {said}"
+
+
+def test_ordinary_settings_and_missing_files_pass(tmp_path):
+    target = tmp_path / "home"
+    _settings(
+        target / "settings.json", {"env": {"ANTHROPIC_MODEL": "opus", "HOME_X": "1"}, "forceLoginMethod": "claudeai"}
+    )
+    assert login.refusal(target, tmp_path / "repo", tmp_path / "managed.json") == ""
+    assert login.MANAGED == Path("/etc/claude-code/managed-settings.json")
+
+
+def test_the_master_account_needs_its_own_login(tmp_path):
+    target = tmp_path / "home"
+    target.mkdir()
+    (target / login.CONFIG).write_text(json.dumps({login.ACCOUNT: MASTER_ACCOUNT}))
+    with pytest.raises(
+        login.LoginRefused, match="^no master claude ai login for swarm rig: run agentihooks claude login --master rig$"
+    ):
+        login.account("rig", target, {"AH_CC_TOKEN_w": "x"})
+    (target / login.CONFIG).write_text("{}")
+    (target / login.CREDENTIALS).write_text("{}")
+    with pytest.raises(login.LoginRefused, match="^no master claude ai login"):
+        login.account("rig", target, {"AH_CC_TOKEN_w": "x"})
+
+
+def test_the_master_account_must_differ_from_every_worker_token_and_workers_need_tokens(tmp_path):
+    target = tmp_path / "home"
+    target.mkdir()
+    (target / login.CONFIG).write_text(json.dumps({login.ACCOUNT: MASTER_ACCOUNT}))
+    (target / login.CREDENTIALS).write_text("{}")
+    with pytest.raises(
+        login.LoginRefused, match="^the master login account masteratexample_com is also a worker quota token$"
+    ):
+        login.account("rig", target, {"AH_CC_TOKEN_masteratexample_com": "x"})
+    with pytest.raises(
+        login.LoginRefused, match="^the master claude ai login needs workers on quota tokens; none is set$"
+    ):
+        login.account("rig", target, {"ANTHROPIC_BASE_URL": "https://gateway"})
+    assert login.account("rig", target, {"AH_CC_TOKEN_workeratexample_com": "x"}) == "masteratexample_com"
+
+
+def test_the_child_drops_routed_and_api_credentials_and_pins_both_selectors(tmp_path):
+    inherited = {
+        "HOME": "/home/op",
+        "ANTHROPIC_MODEL": "opus",
+        "AGENTIHOOKS_PROFILE_REPORT": "/run/report",
+        "CLAUDE_CODE_OAUTH_TOKEN": "x",
+        "ANTHROPIC_API_KEY": "x",
+        "ANTHROPIC_AUTH_TOKEN": "x",
+        "ANTHROPIC_BASE_URL": "x",
+        "ANTHROPIC_BEDROCK_BASE_URL": "x",
+        "ANTHROPIC_CUSTOM_HEADERS": "x",
+        "ANTHROPIC_VERTEX_PROJECT_ID": "x",
+        "ANTHROPIC_FOUNDRY_API_KEY": "x",
+        "AWS_BEARER_TOKEN_BEDROCK": "x",
+        "CLAUDE_CODE_USE_BEDROCK": "1",
+        "AH_CC_TOKEN_worker": "x",
+        "AH_ROUTE_API": "1",
+        "AH_ROUTE_INTERACTIVE_old": "1",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        "DISABLE_GROWTHBOOK": "1",
+        "CLAUDE_CONFIG_DIR": "/home/op/.claude",
+        "CLAUDE_SECURESTORAGE_CONFIG_DIR": "",
+    }
+    child = login.child(inherited, tmp_path / "home", "masteratexample_com")
+    home = str(tmp_path / "home")
+    assert child == {
+        "HOME": "/home/op",
+        "ANTHROPIC_MODEL": "opus",
+        "AGENTIHOOKS_PROFILE_REPORT": "/run/report",
+        "AH_ROUTE_INTERACTIVE_masteratexample_com": "1",
+        "CLAUDE_CONFIG_DIR": home,
+        "CLAUDE_SECURESTORAGE_CONFIG_DIR": home,
+    }
+    assert login.child({"HOME": "/h"}, tmp_path) == {
+        "HOME": "/h",
+        "CLAUDE_CONFIG_DIR": str(tmp_path),
+        "CLAUDE_SECURESTORAGE_CONFIG_DIR": str(tmp_path),
+    }
+
+
+def test_the_first_owner_takes_epoch_one_and_the_same_name_takes_the_next(ah):
+    assert login.claim("rig", "master@a-1", 10, lambda pid: True) == 1
+    assert login.claim("rig", "master@a-1", 11, lambda pid: True) == 2
+    owner = login.root("rig") / login.OWNER
+    assert json.loads(owner.read_text()) == {"owner": "master@a-1", "pid": 11, "epoch": 2}
+    assert owner.stat().st_mode & 0o777 == 0o600
+
+
+def test_a_live_predecessor_fences_another_owner_out_and_a_dead_one_does_not(ah):
+    login.claim("rig", "master@a-1", 10, lambda pid: True)
+    with pytest.raises(
+        login.LoginRefused, match="^the master login of swarm rig is held by master@a-1, still running$"
+    ):
+        login.claim("rig", "master@a-2", 20, lambda pid: pid == 10)
+    assert login.claim("rig", "master@a-2", 20, lambda pid: False) == 2
+    assert json.loads((login.root("rig") / login.OWNER).read_text())["owner"] == "master@a-2"
+
+
+def test_a_process_is_alive_only_by_its_integer_pid():
+    assert login._alive(os.getpid()) is True
+    assert login._alive(str(os.getpid())) is False
+    assert login._alive(None) is False
+    assert login._alive(2**22 + 7) is False
+
+
+class FakeBao:
+    def __init__(self, stored=None):
+        self.stored = dict(stored or {})
+        self.writes = []
+
+    def install(self, monkeypatch):
+        monkeypatch.setattr(
+            openbao_kv, "read", lambda bao, path: (self.stored if path == "agentihooks/master-claude/rig" else {}, 3)
+        )
+        monkeypatch.setattr(openbao_kv, "merge", lambda bao, path, entries: self.writes.append((path, dict(entries))))
+        return self
+
+
+def _home(tmp_path, grant=GRANT):
+    target = tmp_path / "home"
+    target.mkdir()
+    (target / login.CONFIG).write_text("{}")
+    _login(target, grant=grant)
+    return target
+
+
+def test_publish_stores_only_the_native_grant_and_account_with_its_epoch(tmp_path, monkeypatch):
+    bao = FakeBao().install(monkeypatch)
+    assert login.publish("bao", "rig", _home(tmp_path), 4) is True
+    assert bao.writes == [
+        (
+            "agentihooks/master-claude/rig",
+            {"grant": json.dumps(GRANT), "account": json.dumps(MASTER_ACCOUNT), "epoch": "4", "generation": "2000"},
+        )
+    ]
+
+
+@pytest.mark.parametrize(("epoch", "generation"), [("5", "0"), ("4", "2000"), ("4", "3000")])
+def test_publish_never_replaces_a_newer_or_equal_copy(tmp_path, monkeypatch, epoch, generation):
+    bao = FakeBao({"epoch": epoch, "generation": generation}).install(monkeypatch)
+    assert login.publish("bao", "rig", _home(tmp_path), 4) is False
+    assert bao.writes == []
+
+
+def test_publish_replaces_an_older_generation_of_the_same_epoch(tmp_path, monkeypatch):
+    bao = FakeBao({"epoch": "4", "generation": "1999"}).install(monkeypatch)
+    assert login.publish("bao", "rig", _home(tmp_path), 4) is True
+    assert len(bao.writes) == 1
+
+
+def test_publish_skips_a_home_without_a_refresh_token(tmp_path, monkeypatch):
+    bao = FakeBao().install(monkeypatch)
+    assert login.publish("bao", "rig", _home(tmp_path, {"accessToken": "a"}), 1) is False
+    assert bao.writes == []
+
+
+def test_restore_writes_the_stored_grant_into_a_home_without_one(tmp_path, monkeypatch):
+    FakeBao({"grant": json.dumps(GRANT), "account": json.dumps(MASTER_ACCOUNT)}).install(monkeypatch)
+    target = tmp_path / "home"
+    target.mkdir()
+    (target / login.CONFIG).write_text('{"mcpServers": {}}')
+    assert login.restore("bao", "rig", target) is True
+    assert json.loads((target / login.CREDENTIALS).read_text()) == {login.GRANT: GRANT}
+    assert (target / login.CREDENTIALS).stat().st_mode & 0o777 == 0o600
+    assert json.loads((target / login.CONFIG).read_text()) == {"mcpServers": {}, login.ACCOUNT: MASTER_ACCOUNT}
+
+
+def test_restore_keeps_a_live_login_and_skips_an_empty_store(tmp_path, monkeypatch):
+    FakeBao({"grant": json.dumps({"accessToken": "old"}), "account": "{}"}).install(monkeypatch)
+    target = _home(tmp_path)
+    assert login.restore("bao", "rig", target) is False
+    assert json.loads((target / login.CREDENTIALS).read_text()) == {login.GRANT: GRANT}
+    FakeBao().install(monkeypatch)
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert login.restore("bao", "rig", empty) is False
+    assert not (empty / login.CREDENTIALS).exists()
+
+
+def _environ(rendered, **extra):
+    return {
+        "AGENTIHOOKS_SWARM": "rig",
+        "AGENTIHOOKS_AGENT_NAME": "master@a-1",
+        "CLAUDE_CONFIG_DIR": str(rendered),
+        "AH_CC_TOKEN_workeratexample_com": "x",
+        **extra,
+    }
+
+
+def _seed(rendered):
+    _login(login.build("rig", rendered))
+
+
+def test_prepare_claims_builds_checks_and_publishes(ah, rendered, tmp_path, monkeypatch):
+    _seed(rendered)
+    calls = []
+    monkeypatch.setattr(openbao_kv, "from_env", lambda environ: "bao" if environ.get("OPENBAO_URL") else None)
+    monkeypatch.setattr(login, "restore", lambda bao, slug, target: calls.append(("restore", bao, slug)))
+    monkeypatch.setattr(login, "publish", lambda bao, slug, target, epoch: calls.append(("publish", bao, slug, epoch)))
+    target, found = login.prepare(_environ(rendered, OPENBAO_URL="u"), tmp_path)
+    assert (target, found) == (login.home("rig"), "masteratexample_com")
+    assert calls == [("restore", "bao", "rig"), ("publish", "bao", "rig", 1)]
+    assert json.loads((login.root("rig") / login.OWNER).read_text())["pid"] == os.getpid()
+    calls.clear()
+    login.prepare(_environ(rendered), tmp_path)
+    assert calls == []
+
+
+def test_prepare_reports_a_failed_recovery_copy_and_still_launches(ah, rendered, tmp_path, monkeypatch, capsys):
+    _seed(rendered)
+    monkeypatch.setattr(openbao_kv, "from_env", lambda environ: "bao")
+    monkeypatch.setattr(login, "restore", lambda *_: False)
+
+    def refuse(*_):
+        raise openbao_kv.OpenBaoError(503, "sealed")
+
+    monkeypatch.setattr(login, "publish", refuse)
+    assert login.prepare(_environ(rendered), tmp_path)[1] == "masteratexample_com"
+    assert capsys.readouterr().err == "master login recovery copy not stored: OpenBao HTTP 503: sealed\n"
+
+
+def test_prepare_refuses_incompatible_settings_before_reading_the_account(ah, rendered, tmp_path, monkeypatch):
+    monkeypatch.setattr(openbao_kv, "from_env", lambda environ: None)
+    _settings(tmp_path / ".claude" / "settings.json", {"apiKeyHelper": "/bin/key"})
+    with pytest.raises(login.LoginRefused, match="sets apiKeyHelper$"):
+        login.prepare(_environ(rendered), tmp_path)
+
+
+def test_launch_execs_native_claude_in_the_private_home_with_the_session_setting(
+    ah, rendered, tmp_path, monkeypatch, capsys
+):
+    from scripts import install
+
+    _seed(rendered)
+    monkeypatch.setattr(openbao_kv, "from_env", lambda environ: None)
+    monkeypatch.chdir(tmp_path)
+    executed = []
+    monkeypatch.setattr(login.os, "execvpe", lambda binary, argv, env: executed.append((binary, argv, env)))
+    report = tmp_path / "route"
+    login.launch_claude(
+        "/opt/claude", ["--model", "opus"], _environ(rendered, CLAUDE_CODE_OAUTH_TOKEN="x"), str(report)
+    )
+    binary, argv, env = executed[0]
+    assert binary == "/opt/claude"
+    assert argv == install._claude_command(
+        "/opt/claude", ["--settings", '{"forceLoginMethod":"claudeai"}', "--model", "opus"]
+    )
+    assert env["CLAUDE_CONFIG_DIR"] == env["CLAUDE_SECURESTORAGE_CONFIG_DIR"] == str(login.home("rig"))
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in env and "AH_CC_TOKEN_workeratexample_com" not in env
+    assert env["AH_ROUTE_INTERACTIVE_masteratexample_com"] == "1"
+    assert report.read_text().splitlines() == ["status=routed", "account=masteratexample_com", "placement=forced"]
+    assert capsys.readouterr().out == "[agenti] account=masteratexample_com route=master-login\n"
+
+
+def test_launch_turns_a_refusal_into_a_routing_error(ah, rendered, tmp_path, monkeypatch):
+    from scripts.claude_quota_balancer import RoutingError
+
+    monkeypatch.setattr(openbao_kv, "from_env", lambda environ: None)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(RoutingError, match="^no master claude ai login for swarm rig"):
+        login.launch_claude("/opt/claude", [], _environ(rendered), "")
+
+
+def test_the_claude_launcher_hands_the_master_login_route_to_this_module(tmp_path, monkeypatch):
+    from scripts import install
+
+    seen = []
+    monkeypatch.setattr(install, "_load_claude_runtime_env", lambda: None)
+    monkeypatch.setattr("scripts.deps_preflight.ensure", lambda: None)
+    monkeypatch.setattr("scripts.claude_quota_balancer._cache_path", lambda _: tmp_path / "quota.json")
+    monkeypatch.setattr(install.shutil, "which", lambda name: f"/opt/{name}")
+    monkeypatch.setattr(login, "launch_claude", lambda *args: seen.append(args))
+    install.cmd_claude(["--route", "master-login", "--agentihooks-report", str(tmp_path / "r"), "--version"])
+    assert seen == [("/opt/claude", ["--version"], install.os.environ, str(tmp_path / "r"))]

@@ -5495,6 +5495,10 @@ def cmd_claude(extra_args: list[str]) -> None:
             from scripts.routing import interactive
 
             return interactive.launch_claude(claude_bin, extra_args, os.environ, report)
+        if route == "master-login":
+            from scripts import master_claude_login
+
+            return master_claude_login.launch_claude(claude_bin, extra_args, os.environ, report)
         decision = (
             forced(os.environ, route)
             if route
