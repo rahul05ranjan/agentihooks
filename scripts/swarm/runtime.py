@@ -930,7 +930,12 @@ class HerdrRuntime:
         bindings = BindingStore(store)
         slug = store.names.slug_of(agent.name)
         recorded = bindings.viewers(slug, record.execution_id)
-        for pane in self._viewer_panes(agent.pane_id, recorded):
+        try:
+            viewers = self._viewer_panes(agent.pane_id, recorded)
+        except Exception as exc:
+            self.refusals[agent.name] = {"process": record.server_pid, "refusal": f"pane list: {exc}"}
+            return False
+        for pane in viewers:
             try:
                 self.close_pane(pane)
             except Exception as exc:

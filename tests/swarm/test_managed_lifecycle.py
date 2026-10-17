@@ -354,6 +354,18 @@ def test_a_viewer_pane_that_will_not_close_refuses_the_retirement(rig):
     assert rig.bindings.get(SLUG, rig.agent.execution_id).state == CONNECTED
 
 
+def test_a_pane_list_that_fails_refuses_the_retirement(rig):
+    from scripts.swarm import reaper
+
+    rig.bindings.add_viewer(SLUG, rig.agent.execution_id, "w2:p5", "t5")
+    rig.herdr.side_effect = RuntimeError("herdr is down")
+    rig.runner.end = Mock(return_value=reaper.Outcome((123,)))
+    assert not rig.runner.retire(rig.agent)
+    assert rig.runner.refusal(rig.agent) == {"process": 123, "refusal": "pane list: herdr is down"}
+    assert rig.bindings.get(SLUG, rig.agent.execution_id).state == CONNECTED
+    assert rig.bindings.viewers(SLUG, rig.agent.execution_id) == {"w2:p5": "t5"}
+
+
 def test_a_runtime_home_that_will_not_go_refuses_the_retirement(rig, tmp_path, monkeypatch):
     from scripts.swarm import reaper
 
