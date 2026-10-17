@@ -132,7 +132,7 @@ def _green(slug, ledger, doc, last):
     return actions
 
 
-def refresh(
+def _refresh(
     slug: str,
     config: SwarmConfig,
     store: RedisStore,
@@ -164,3 +164,22 @@ def refresh(
         actions = _green(slug, ledger, doc, last)
     redis.set(key(slug, "seen"), last["id"])
     return actions
+
+
+def refresh(
+    slug: str,
+    config: SwarmConfig,
+    store: RedisStore,
+    ledger: LedgerClient,
+    doc: dict,
+    now_ms: int,
+    run: Callable = subprocess.run,
+) -> list[str]:
+    from scripts.swarm import promotion_owner
+
+    if naming.PROOF_RE.fullmatch(slug):
+        return []
+    with promotion_owner.intake(slug, config.repo, store) as owner:
+        if owner != slug:
+            return []
+        return _refresh(slug, config, store, ledger, doc, now_ms, run)
