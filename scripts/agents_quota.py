@@ -411,6 +411,14 @@ def _unprobed(account: str) -> ProbeResult:
     return ProbeResult(account, "", "UNKNOWN", None, QuotaWindow(), QuotaWindow())
 
 
+def _observed(results: list, now: float, fable: bool) -> dict[str, float]:
+    """When each result was read: its router cache entry, else now for a result the cache does not hold."""
+    from scripts.claude_quota_balancer import cached_observations
+
+    cached = {result.account: at for at, result in cached_observations(include_fable=fable)}
+    return {result.account: cached.get(result.account, now) for result in results}
+
+
 def balance_table(
     results: list,
     sessions: dict[str, int],
@@ -421,7 +429,7 @@ def balance_table(
 ) -> str:
     from scripts.routing.claude_api import ClaudeApiSource
 
-    observed = {result.account: now for result in results} if observed is None else observed
+    observed = _observed(results, now, fable) if observed is None else observed
     claude = claude_rows(results, sessions, observed=observed, now=now, include_fable=fable)
     claude = with_masters(claude + api_rows(ClaudeApiSource(sessions), "claude", now), _masters("claude"), sessions)
     return _render_live(claude + ([] if fable else _codex(now)), sessions, now, fable, current)

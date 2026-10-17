@@ -976,6 +976,35 @@ def test_balance_table_defaults_to_the_codex_rows_at_its_own_time_and_counts_mas
     assert any(row[1:3] == ["codex", "personal"] for row in cells)
 
 
+@pytest.mark.parametrize("fable", [False, True])
+def test_balance_ages_each_claude_row_from_its_router_cache_entry_and_a_live_read_from_now(monkeypatch, fable):
+    from hooks.context import account_sessions
+    from scripts import claude_quota_balancer
+
+    asked = []
+    window = QuotaWindow(20.0, 10**10)
+    cached = ProbeResult("alpha", "allowed", "NORMAL", 80.0, window, window, window)
+    live = ProbeResult("beta", "allowed", "NORMAL", 80.0, window, window, window)
+    monkeypatch.setattr(
+        claude_quota_balancer,
+        "cached_observations",
+        lambda include_fable=False: (
+            asked.append(include_fable)
+            or [(19_880.0, cached), (100.0, ProbeResult("gone", "", "", 0.0, window, window))]
+        ),
+    )
+    monkeypatch.setattr(agents_quota, "_codex", lambda now, force=False: [])
+    monkeypatch.setattr(agents_quota, "_masters", lambda harness="": {})
+    monkeypatch.setattr(agents_quota, "api_rows", lambda source, harness, now: [])
+    monkeypatch.setattr(account_sessions, "codex_sessions_by_account", lambda: {})
+    table = agents_quota.balance_table([cached, live], {}, 20_000.0, fable).splitlines()
+    assert asked == [fable]
+    assert sorted((line.split()[2], line.split()[-1 - 2 * fable]) for line in table[2:]) == [
+        ("alpha", "2m"),
+        ("beta", "0m"),
+    ]
+
+
 def test_quota_json_is_indented_two_spaces(monkeypatch, capsys):
     row = agents_quota.QuotaRow("codex", "alpha", "NORMAL", 0, None, 80.0, None, "log")
     monkeypatch.setattr(agents_quota, "_claude", lambda refresh, timeout: [])
