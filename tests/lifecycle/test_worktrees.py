@@ -1,7 +1,8 @@
 import json
+import time
 
 from hooks.lifecycle.lease import add_holder, admin_dir, lease_path
-from hooks.lifecycle.model import Holder, Root
+from hooks.lifecycle.model import Finding, Holder, Root
 from hooks.lifecycle.worktrees import classify, discover, nested_worktrees
 
 from .conftest import age, git, process, snap
@@ -76,7 +77,11 @@ def test_departed_owner_frees_clean_pushed_worktree_at_once(repo):
     add_holder(path, "worktree", Holder("sess-gone", 4242, 77, "boot-1"), 0.0)
     age(path, 60)
     finding = classify(path, repo.root(), snap())
-    assert (finding.action, finding.reason, finding.immediate) == ("remove", "clean and on a remote, owner left", True)
+    touched = finding.last_touch
+    assert finding == Finding(
+        str(path), "worktrees", "worktree", "remove", "clean and on a remote, owner left", touched, immediate=True
+    )
+    assert abs(touched - (time.time() - 60)) < 30
     live = classify(path, repo.root(), snap(table={4242: process(4242, start=77)}))
     assert (live.action, live.reason, live.immediate) == ("keep", "owner session alive", False)
     (path / "notes.txt").write_text("unsaved\n")
