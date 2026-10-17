@@ -127,6 +127,7 @@ def test_build_without_manifests_or_binding_still_builds(ah, tmp_path):
     assert json.loads((target / binding.FILE).read_text()) == {"home": str(target.resolve())}
     assert json.loads((target / login.CONFIG).read_text()) == {}
     assert sorted(path.name for path in login.root("rig").iterdir()) == ["claude"]
+    assert login.root("rig").stat().st_mode & 0o777 == 0o700
 
 
 def _settings(path, doc):
@@ -395,7 +396,8 @@ def test_keep_publishes_and_reports_a_failed_write(tmp_path, monkeypatch, capsys
     bao = FakeBao().install(monkeypatch)
     target = _home(tmp_path)
     assert login.keep(None, "rig", target, 1) is False
-    assert login.keep("bao", "rig", target, 1) is True and len(bao.writes) == 1
+    assert login.keep("bao", "rig", target, 1) is True
+    assert [path for path, _ in bao.writes] == ["agentihooks/master-claude/rig"]
 
     def sealed(*_):
         raise openbao_kv.OpenBaoError(503, "sealed")
@@ -456,6 +458,15 @@ def test_prepare_claims_above_the_stored_epoch_builds_restores_and_keeps(ah, ren
     calls.clear()
     login.prepare(_environ(rendered), tmp_path)
     assert calls == [("restore", {}, target), ("keep", None, "rig", target, 7)]
+
+
+def test_prepare_without_a_stored_epoch_takes_epoch_one(ah, rendered, tmp_path, monkeypatch):
+    _seed(rendered)
+    monkeypatch.setattr(openbao_kv, "from_env", lambda environ: "bao")
+    monkeypatch.setattr(login, "stored", lambda bao, slug: {})
+    monkeypatch.setattr(login, "keep", lambda *_: True)
+    login.prepare(_environ(rendered), tmp_path)
+    assert json.loads((login.root("rig") / login.OWNER).read_text())["epoch"] == 1
 
 
 def test_prepare_refuses_incompatible_settings_before_touching_the_lease_or_home(ah, rendered, tmp_path, monkeypatch):
