@@ -771,7 +771,7 @@ def cmd_task(args):
         if args.scaffold:
             task = {"id": args.id, "title": title, "description": args.description, "phase": args.phase, **lists}
             doc = call(args.slug) if args.kind == "plan" else None
-            lists["workspace"] = str(ledger_workspace.scaffold(args.slug, task, doc))
+            lists["workspace"] = str(ledger_workspace.folder(args.slug, args.id))
         send(
             args,
             "task_add",
@@ -782,6 +782,8 @@ def cmd_task(args):
             description=args.description,
             **lists,
         )
+        if args.scaffold:
+            ledger_workspace.scaffold(args.slug, task, doc)
         print(json.dumps({"task": args.id, "added": title}))
         return
     if args.action in TASK_LISTS:
