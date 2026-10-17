@@ -1365,7 +1365,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && github.ref_name != 'dev'
         env:
           REF_NAME: ${{ github.ref_name }}
-        run: echo "args=-Dsonar.pullrequest.key=dispatch-${REF_NAME//\//-} -Dsonar.pullrequest.branch=$REF_NAME -Dsonar.pullrequest.base=dev" >> "$GITHUB_OUTPUT"
+        run: echo "args=-Dsonar.branch.name=$REF_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Wait for the coverage merge
         if: always() && needs.select.outputs.scope != 'none'
