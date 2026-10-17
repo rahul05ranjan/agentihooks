@@ -29,6 +29,10 @@ def test_tick_selects_and_records_codex_transport(tmp_path, monkeypatch, transpo
     calls, admitted = [], []
 
     def run(argv, **kwargs):
+        from scripts.routing import native_login
+
+        if argv[1:] == list(native_login.COMMAND):
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
         calls.append(argv)
         name = argv[argv.index("--name") + 1]
         fake.live.add(name)
