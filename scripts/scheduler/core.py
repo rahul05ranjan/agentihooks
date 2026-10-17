@@ -2,9 +2,10 @@ import json
 import socket
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 from hooks._redis import redis_key
+from scripts.scheduler.model import Schedule, next_due
 from scripts.scheduler.slots import Slot, restore
 
 
@@ -102,7 +103,9 @@ class Scheduler:
                     change(entry)
                     pipe.multi()
                     pipe.hset(key, entry_id, json.dumps(entry))
-                    if entry["state"] != "active":
+                    if entry["state"] == "active":
+                        pipe.zadd(self.key("due"), {entry_id: entry["due"]})
+                    else:
                         pipe.zrem(self.key("due"), entry_id)
                     pipe.execute()
                     return
@@ -118,32 +121,35 @@ class Scheduler:
         if delay is not None and delay < 0:
             raise ValueError("delay must not be negative")
         due = at if at is not None else now + delay
-        return self._new("timer", owner, payload, due, now)
+        return self._new(Schedule("timer", owner, payload, due, now))
 
     def stopwatch(self, *, owner: str, payload: str, limit: float, now: float | None = None) -> Entry:
         now = time.time() if now is None else now
         if limit < 0:
             raise ValueError("limit must not be negative")
-        return self._new("stopwatch", owner, payload, now + limit, now)
+        return self._new(Schedule("stopwatch", owner, payload, now + limit, now))
 
-    def _new(self, kind: str, owner: str, payload: str, due: float, now: float) -> Entry:
-        if not owner or not payload.strip():
+    def cron(
+        self, *, owner: str, payload: str, expression: str, timezone: str = "UTC", now: float | None = None
+    ) -> Entry:
+        now = time.time() if now is None else now
+        due = next_due(expression, timezone, now)
+        return self._new(Schedule("cron", owner, payload, due, now, expression, timezone))
+
+    def _new(self, schedule: Schedule) -> Entry:
+        if not schedule.owner or not schedule.payload.strip():
             raise ValueError("a schedule needs an owner and payload")
         entry_id = uuid.uuid4().hex
         entry = {
+            **asdict(schedule),
             "id": entry_id,
-            "kind": kind,
-            "owner": owner,
-            "payload": payload,
-            "due": due,
-            "started_at": now,
             "state": "active",
-            "signal": "limit_reached" if kind == "stopwatch" else "timeout",
+            "signal": "limit_reached" if schedule.kind == "stopwatch" else "timeout",
             "slots": [],
         }
         with self.redis.pipeline() as pipe:
             pipe.hset(self.key("entries"), entry_id, json.dumps(entry))
-            pipe.zadd(self.key("due"), {entry_id: due})
+            pipe.zadd(self.key("due"), {entry_id: schedule.due})
             pipe.execute()
         return Entry(self, entry_id)
 
@@ -174,7 +180,7 @@ class Scheduler:
             except WatchError:
                 return None
 
-    def _deliver(self, entry_id: str) -> None:
+    def _deliver(self, entry_id: str, now: float) -> None:
         entry = self.get(entry_id).record
         pending = entry["pending"]
         event = {
@@ -190,12 +196,15 @@ class Scheduler:
             connection_id = slot.pop("id")
             restore(slot).deliver(event, f"{pending['id']}:{connection_id}", self.redis)
             self.update(entry_id, lambda current: current["pending"]["delivered"].append(connection_id))
-        self.update(entry_id, self._finish)
+        self.update(entry_id, lambda current: self._finish(current, now))
         self.redis.srem(self.key("pending"), entry_id)
 
     @staticmethod
-    def _finish(entry: dict) -> None:
+    def _finish(entry: dict, now: float) -> None:
         entry["state"] = "fired"
+        if entry["kind"] == "cron":
+            entry["state"] = "active"
+            entry["due"] = next_due(entry["expression"], entry["timezone"], now)
         entry.pop("pending")
 
     def run_due(self, *, now: float | None = None) -> int:
@@ -213,7 +222,7 @@ class Scheduler:
                     raise RuntimeError("scheduler lost its dispatch lock")
                 entry = self.get(entry_id).record
                 if "pending" in entry:
-                    self._deliver(entry_id)
+                    self._deliver(entry_id, now)
                 else:
                     self.redis.srem(self.key("pending"), entry_id)
             return fired
