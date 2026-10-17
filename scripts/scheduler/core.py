@@ -48,6 +48,25 @@ class Entry:
     def timeout(self) -> Signal:
         return Signal(self.scheduler, self.id, "timeout")
 
+    @property
+    def limit_reached(self) -> Signal:
+        return Signal(self.scheduler, self.id, "limit_reached")
+
+    def elapsed(self, *, now: float | None = None) -> float:
+        now = time.time() if now is None else now
+        entry = self.record
+        end = entry.get("stopped_at", entry["due"] if entry["state"] == "fired" else now)
+        return max(0, end - entry["started_at"])
+
+    def stop(self, *, now: float | None = None) -> None:
+        now = time.time() if now is None else now
+
+        def change(entry):
+            entry["state"] = "stopped"
+            entry["stopped_at"] = now
+
+        self.scheduler.update(self.id, change)
+
     def cancel(self) -> None:
         def change(entry):
             entry["state"] = "cancelled"
@@ -83,7 +102,7 @@ class Scheduler:
                     change(entry)
                     pipe.multi()
                     pipe.hset(key, entry_id, json.dumps(entry))
-                    if entry["state"] == "cancelled":
+                    if entry["state"] != "active":
                         pipe.zrem(self.key("due"), entry_id)
                     pipe.execute()
                     return
@@ -98,19 +117,28 @@ class Scheduler:
             raise ValueError("a timer needs either delay or at")
         if delay is not None and delay < 0:
             raise ValueError("delay must not be negative")
+        due = at if at is not None else now + delay
+        return self._new("timer", owner, payload, due, now)
+
+    def stopwatch(self, *, owner: str, payload: str, limit: float, now: float | None = None) -> Entry:
+        now = time.time() if now is None else now
+        if limit < 0:
+            raise ValueError("limit must not be negative")
+        return self._new("stopwatch", owner, payload, now + limit, now)
+
+    def _new(self, kind: str, owner: str, payload: str, due: float, now: float) -> Entry:
         if not owner or not payload.strip():
             raise ValueError("a schedule needs an owner and payload")
         entry_id = uuid.uuid4().hex
-        due = at if at is not None else now + delay
         entry = {
             "id": entry_id,
-            "kind": "timer",
+            "kind": kind,
             "owner": owner,
             "payload": payload,
             "due": due,
             "started_at": now,
             "state": "active",
-            "signal": "timeout",
+            "signal": "limit_reached" if kind == "stopwatch" else "timeout",
             "slots": [],
         }
         with self.redis.pipeline() as pipe:
