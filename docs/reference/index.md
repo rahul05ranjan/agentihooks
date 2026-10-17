@@ -18,6 +18,7 @@ See [Focused proof CPU worker limits](../ci-timing.md#focused-proof-cpu-worker-l
 | [Deployed swarm host capacity](../pillars/swarm.md#deployed-host-capacity) | Worker namespace quota and pool budgets, autoscale inspection, configuration and disabled host pressure alerts |
 | [CLI Commands](cli-commands.md) | All `agentihooks` subcommands and flags: init, uninstall, claude, ignore |
 | [Developer account login](account-login.md) | Claude and Codex login, managed shell tokens, OpenBao paths and key names, refresh authority and token stores |
+| [Master Claude AI login proof](../pillars/swarm.md#proving-the-master-claude-ai-login-with-the-operator) | Operator login, swarm configuration, Remote Control listing, phone reply, evidence and recovery |
 | [Task scope authorizations](../pillars/swarm.md#task-scope-authorizations) | Record master or operator scope, retrace a plan, interpret authorized pieces and configure enforcement |
 | [Decision classifier](classifier.md) | `hooks.classifier`: typed questions to the LiteLLM decision models, failover, down cache, decision log, `classify` and `classifier stats` |
 | [Observability with Langfuse](observability-langfuse.md) | Every telemetry path and where it goes, turning Langfuse on per profile, other OTLP backends, checking a trace arrived, how the Doctor reads traces |

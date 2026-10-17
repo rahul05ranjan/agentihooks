@@ -85,6 +85,96 @@ retired and its successor starts from the document; one that does not is retired
 the tick never held (an empty harness, profile, model, effort or account) is not compared with the live process:
 `swarm status` flags it as a live binding finding, and it never retires the agent.
 
+### Proving the master Claude AI login with the operator
+
+The optional `master-claude-login` setting lets the Claude front door master
+use an interactive Claude AI login with Remote Control. It defaults to `off`
+for each swarm. Engineers, CI agents, planners and Codex masters keep their own
+routes. The [developer account login reference](../reference/account-login.md)
+explains the private master home, login ownership and OpenBao recovery copy.
+
+This proof needs the merged master login build installed on the host that
+launches the master, a Claude master, and the operator available to complete
+browser sign in and send a phone message. The master arranges the session with
+the operator by email after the build merges. An email or a successful CLI
+login alone does not prove Remote Control delivery.
+
+#### Login and enable the swarm
+
+Use the same swarm slug for the login and the setting. The operator completes
+this interactive command in a terminal on the master host:
+
+```bash
+agentihooks claude login \
+  --master rig-grade-swarm
+```
+
+Master mode runs native `claude auth login` in the swarm's private execution
+home. It differs from the subscription token setup used for worker routing.
+Complete the browser sign in and any code prompt in that terminal; keep login
+screens and credential contents out of agent transcripts and screenshots.
+`--openbao` requests storage of the recovery copy without a confirmation
+prompt; `--no-openbao` skips that login-time storage step. Native Claude remains
+the refresher.
+
+After the command succeeds, the master enables the setting for this swarm:
+
+```bash
+agentihooks swarm rig-grade-swarm set master-claude-login=on
+```
+
+The setting changes the Claude master's next spawn or resume. Coordinate a
+normal master handoff with the master so its successor takes the login route;
+changing the flag alone does not change a running process's authentication.
+Do not run a second master against the same private login while its owner is
+still active.
+
+#### Verify the listing and a phone reply
+
+Read the swarm status after the master launches:
+
+```bash
+agentihooks swarm rig-grade-swarm status
+agentihooks swarm rig-grade-swarm status --json
+```
+
+Check the live master identity and its Remote Control status. An enabled
+launch uses route `master-login`; status and the ledger master row report
+`Remote Control: on (...)` or an off reason. The launch requests the Remote
+Control label `master · <slug>` with the hive identifier as its session name
+prefix. Compare the actual Claude Code listing with the swarm's master seat
+and execution; a similarly named session is insufficient evidence.
+
+On the operator's phone, open `https://claude.ai/code` in the account used for
+the master login. Locate the front door master, record its displayed name and
+seat identity, then send a distinct nonsecret message, such as “Reply with
+phone proof received.” Confirm the intended master receives it and its reply
+appears on the phone. For this proof, verify that the master is listed under
+its seat name; record a different visible name as an unmet requirement.
+
+Record the installed build or merged pull request, successful login exit,
+setting command and readback, master identity, displayed session name, message
+and reply, and a screenshot showing the listing or exchange without login
+material. Attach the evidence to the source task. Leave
+`master-claude-login=on` for this swarm after a successful proof and verify the
+final setting again with `status --json`: `config.master_claude_login` must
+be `true`. This is a stored boolean; the CLI accepts `on` and `off`.
+
+#### Failure handling and evidence limits
+
+| Observation | Action |
+|---|---|
+| Login help has no `--master` option | Install the merged master login build on the host before attempting the proof. |
+| Login fails or browser sign in is unfinished | Complete or retry the operator login; do not record it as successful or enable the proof on an unverified grant. |
+| A live owner holds the private login | Coordinate the existing master's handoff before another launch or login. |
+| Launch refuses effective settings | Resolve the reported credential, provider or login method conflict through the normal configuration workflow; retain `forceLoginMethod=claudeai`. |
+| Status reports Remote Control off | Read the reported reason and confirm the flag and the live execution; an enabled config alone is insufficient. |
+| The phone shows no matching master, or no reply arrives | Keep the proof open, record the failed step and reconcile the listing, account and execution with the master. |
+
+The live proof is separate from implementation tests. A successful build proves
+neither the visible seat name nor delivery from the operator's phone. Report
+those outcomes only after observing them with the operator.
+
 ### Master outage and promotion
 
 When a swarm has had no live master (none whose hook reported) for `AGENTIHOOKS_MASTER_DOWN_MINUTES` (default 5),
