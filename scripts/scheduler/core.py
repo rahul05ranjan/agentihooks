@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Callable
 
 from hooks._redis import redis_key
 from scripts.scheduler.model import Schedule, next_due
-from scripts.scheduler.slots import Slot, restore
+from scripts.scheduler.slots import CallableSlot, Slot, restore
 
 if TYPE_CHECKING:
     from redis import Redis
@@ -19,7 +19,9 @@ class Signal:
     entry_id: str
     name: str
 
-    def connect(self, slot: Slot) -> str:
+    def connect(self, slot: Slot | Callable) -> str:
+        if callable(slot):
+            slot = CallableSlot.from_callback(slot)
         connection_id = uuid.uuid4().hex
         self.scheduler.update(
             self.entry_id, lambda entry: entry["slots"].append({"id": connection_id, **slot.record()})
@@ -189,7 +191,6 @@ class Scheduler:
         pending = entry["pending"]
         event = {
             **entry,
-            "signal": entry["signal"],
             "scheduled_at": pending["scheduled_at"],
             "fired_at": pending["fired_at"],
         }

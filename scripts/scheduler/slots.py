@@ -1,4 +1,7 @@
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from importlib import import_module
+from types import FunctionType
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
@@ -9,6 +12,28 @@ class Slot(Protocol):
     def record(self) -> dict: ...
 
     def deliver(self, event: dict, delivery_id: str, redis: "Redis") -> None: ...
+
+
+@dataclass(frozen=True)
+class CallableSlot:
+    reference: str
+
+    @classmethod
+    def from_callback(cls, callback: Callable) -> "CallableSlot":
+        if (
+            not isinstance(callback, FunctionType)
+            or callback.__module__ == "__main__"
+            or not callback.__qualname__.isidentifier()
+        ):
+            raise ValueError("a slot must be an importable module function")
+        return cls(f"{callback.__module__}:{callback.__qualname__}")
+
+    def record(self) -> dict:
+        return {"kind": "callable", **asdict(self)}
+
+    def deliver(self, event: dict, delivery_id: str, redis: "Redis") -> None:
+        module, name = self.reference.split(":")
+        getattr(import_module(module), name)(event, delivery_id, redis)
 
 
 @dataclass(frozen=True)
@@ -43,4 +68,4 @@ class BroadcastSlot:
 def restore(record: dict) -> Slot:
     fields = dict(record)
     kind = fields.pop("kind")
-    return {"inbox": InboxSlot, "broadcast": BroadcastSlot}[kind](**fields)
+    return {"inbox": InboxSlot, "broadcast": BroadcastSlot, "callable": CallableSlot}[kind](**fields)
