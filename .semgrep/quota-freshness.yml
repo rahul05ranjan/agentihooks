@@ -5,8 +5,9 @@ rules:
     message: >-
       A drain or cap decision reads a quota value in a function that never checks the reading's freshness.
       Check it first with quota_freshness.stale or session_bands.fresh, or decide on a fleet reading from
-      self.reading whose UNKNOWN state already marks a stale one. codex_router.account_cap checks its own
-      configured reading window, so its callers are not matched.
+      self.reading whose UNKNOWN state marks one past the freshness window (a fleet reading from before a
+      passed reset reads as full room, since that path has no provider probe). codex_router.account_cap
+      checks its own configured reading window, so its callers are not matched.
     paths:
       exclude:
         - scripts/session_bands.py
