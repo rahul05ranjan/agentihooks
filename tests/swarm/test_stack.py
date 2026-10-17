@@ -499,6 +499,77 @@ def test_park_on_another_repository_refuses_when_a_command_fails(parked, capsys,
     _refused(parked, capsys, f"{says}: boom")
 
 
+PULL = "https://github.com/o/r/pull/9"
+DEV = "c" * 40
+GONE = "fatal: couldn't find remote ref eng-a"
+
+
+def _gone_branch(parked, monkeypatch, repo, *, listed="", state="MERGED\n", viewed=0):
+    _, ledger, _, shell, _ = parked
+    ledger.rows["a"].update({"branch_repo": repo, "pr_url": PULL})
+    fetch = ["git", "fetch", "--", OTHER, "eng-a"] if repo else ["git", "fetch", "origin", "eng-a"]
+    answers = {
+        tuple(fetch): (128, "", GONE),
+        ("git", "ls-remote", "--heads", "--", repo or "origin", "eng-a"): (0, listed, ""),
+        ("gh", "pr", "view", PULL, "--json", "state", "--jq", ".state"): (viewed, state, ""),
+        ("git", "merge-base", "HEAD", "origin/dev"): (0, DEV + "\n", ""),
+    }
+
+    def answer(argv):
+        if tuple(argv) not in answers:
+            return shell(argv)
+        shell.calls.append(argv)
+        code, out, err = answers[tuple(argv)]
+        return subprocess.CompletedProcess(argv, code, stdout=out, stderr=err + "\n")
+
+    monkeypatch.setattr(stack, "shell", answer)
+    return fetch
+
+
+@pytest.mark.parametrize("repo", ["", OTHER])
+def test_park_stacks_on_dev_when_a_merged_dependency_branch_is_gone(parked, monkeypatch, repo):
+    _, ledger, _, shell, doc = parked
+    fetch = _gone_branch(parked, monkeypatch, repo)
+    assert park(doc) == 0
+    assert ledger.rows["t1"]["parked_on"] == ["a"] and ledger.rows["t1"]["stacked_base"] == DEV
+    start = shell.calls.index(fetch)
+    assert shell.calls[start : start + 6] == [
+        fetch,
+        ["git", "ls-remote", "--heads", "--", repo or "origin", "eng-a"],
+        ["gh", "pr", "view", PULL, "--json", "state", "--jq", ".state"],
+        ["git", "fetch", "origin", "dev"],
+        ["git", "merge-base", "HEAD", "origin/dev"],
+        ["git", "rev-list", "--count", DEV],
+    ]
+    assert ["git", "merge-base", "HEAD", "origin/eng-a"] not in shell.calls
+
+
+@pytest.mark.parametrize("repo", ["", OTHER])
+@pytest.mark.parametrize(
+    "case",
+    [
+        {"listed": f"{HEAD}\trefs/heads/eng-a\n"},
+        {"state": "OPEN\n"},
+        {"state": "CLOSED\n"},
+        {"state": "", "viewed": 1},
+    ],
+)
+def test_park_refuses_a_gone_dependency_branch_whose_pull_request_did_not_merge(
+    parked, monkeypatch, capsys, repo, case
+):
+    _gone_branch(parked, monkeypatch, repo, **case)
+    where = f" from {OTHER}" if repo else ""
+    _refused(parked, capsys, f"cannot fetch eng-a{where}: {GONE}")
+
+
+def test_park_refuses_a_gone_dependency_branch_without_a_pull_request(parked, monkeypatch, capsys):
+    _, _, _, shell, _ = parked
+    _gone_branch(parked, monkeypatch, "")
+    parked[1].rows["a"]["pr_url"] = ""
+    _refused(parked, capsys, f"cannot fetch eng-a: {GONE}")
+    assert [c for c in shell.calls if c[:2] == ["gh", "pr"]] == []
+
+
 @pytest.mark.parametrize(
     ("url", "key"),
     [
