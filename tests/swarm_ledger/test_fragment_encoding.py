@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from scripts.swarm_ledger.repository.fragments import document, encoded
+from scripts.swarm_ledger.repository.fragments import document, encoded, leaf
 from scripts.swarm_ledger.repository.rows import encode
 
 
@@ -136,3 +136,11 @@ def test_a_reordered_mapping_with_the_same_rows_is_rebuilt():
     assert list(second.value["_meta"]["stamps"]) == ["b", "a"]
     assert encoded(second) == encode(state)
     assert second.value["_meta"]["stamps"]["a"] is first.value["_meta"]["stamps"]["a"]
+
+
+def test_a_leaf_keeps_a_distinct_signature_and_shares_an_equal_one_with_its_text():
+    distinct = leaf(1e-7)
+    assert distinct.text == "1e-07"
+    assert distinct.signature == "1e-7"
+    equal = leaf("same")
+    assert equal.signature is equal.text
