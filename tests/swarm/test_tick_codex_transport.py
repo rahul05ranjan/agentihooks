@@ -103,6 +103,10 @@ def test_failed_transport_admission_retires_the_launched_pane(tmp_path, monkeypa
     ended = []
 
     def run(argv, **kwargs):
+        from scripts.routing import native_login
+
+        if argv[1:] == list(native_login.COMMAND):
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
         name = argv[argv.index("--name") + 1]
         fake.live.add(name)
         output = "status=started\nroute_status=routed\npane_id=w1:p2\nagent=codex\n"
