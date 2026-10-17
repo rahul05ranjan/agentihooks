@@ -92,12 +92,13 @@ def test_active_runs_are_discovered_even_when_they_predate_the_window():
     assert len(calls) == 7
 
 
-def test_api_requests_use_the_exact_repository_window_and_safe_subprocess_options(monkeypatch):
+@pytest.mark.parametrize("max_seconds", [25, 100])
+def test_api_requests_use_the_exact_repository_window_and_safe_subprocess_options(monkeypatch, max_seconds):
     from scripts.doctor import ci_speed_read
 
     monkeypatch.setattr(ci_speed_read.time, "monotonic", lambda: 100)
     run, calls = api()
-    result = ci_speed_read.read(NOW - 60000, NOW, run=run)
+    result = ci_speed_read.read(NOW - 60000, NOW, run=run, max_seconds=max_seconds)
     assert result == {"complete": True, "runs": [], "api_calls": 6, "discovered_runs": 0}
     first_args, _ = calls[0]
     assert first_args[:2] == ["gh", "api"]

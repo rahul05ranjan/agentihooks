@@ -128,3 +128,13 @@ def test_persisted_notifications_suppress_a_crossing_after_a_process_restart(sto
     cli.timer(store, DOCTOR, NOW, False)
     for slug in (DOCTOR, WATCHED):
         assert InboxStore(store.redis).inbox(f"master@{slug}") == []
+
+
+def test_a_new_speed_crossing_resets_quiet_time_between_regular_detector_passes(store, monkeypatch):
+    outcomes = [snapshot(), snapshot([record([job(0, queued=True, created=-301)])])]
+    monkeypatch.setattr(ci_speed_read, "read", lambda *args, **kwargs: outcomes.pop(0))
+    cli.timer(store, DOCTOR, NOW, False)
+    cli.timer(store, DOCTOR, NOW + 60000, False)
+    assert int(store.redis.hget(store.key(DOCTOR, "doctor-timer"), "last_new")) == NOW + 60000
+    [item] = InboxStore(store.redis).inbox(f"master@{WATCHED}")
+    assert "361 seconds" in item.text
