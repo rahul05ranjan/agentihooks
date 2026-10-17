@@ -268,6 +268,13 @@ def test_cancel_keeps_waiting_while_a_matching_run_still_runs(monkeypatch):
     assert stops == [2, 2]
 
 
+def test_an_accepted_cancel_ends_the_wait_while_the_run_still_shows_running(monkeypatch):
+    monkeypatch.setattr(lanes, "api", lambda *a: {"workflow_runs": [_run(1, "a.yml")]})
+    monkeypatch.setattr(lanes, "stop", lambda *a: True)
+    monkeypatch.setattr(lanes.time, "sleep", lambda *a: pytest.fail("the cancel was accepted"))
+    assert lanes.cancel("o/r", "abc", {"a.yml"}, 60) == {1}
+
+
 @pytest.mark.parametrize("code, stopped", [(0, True), (1, False)])
 def test_stop_reports_whether_github_accepted_the_cancel(monkeypatch, code, stopped):
     seen = []
