@@ -19,14 +19,14 @@ BACKOFF = 0.25
 class ResourceClient:
     def __init__(self, base: str, credentials: dict, timeout: float = 10) -> None:
         self.base = base
-        self.credentials = credentials
+        self.credentials = {**ledger_link.access_headers(), **credentials}
         self.timeout = timeout
 
     def request(self, slug: str, path: str, payload: dict | None = None) -> dict:
         request = urllib.request.Request(
             f"{self.base}/api/v1/ledgers/{quote(slug, safe='')}/{path}",
             data=None if payload is None else json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json", **ledger_link.access_headers(), **self.credentials},
+            headers={"Content-Type": "application/json", **self.credentials},
             method="GET" if payload is None else "POST",
         )
         with urllib.request.urlopen(request, timeout=self.timeout) as response:
