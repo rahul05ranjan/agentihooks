@@ -292,11 +292,13 @@ LIGHT_BOOTSTRAP = (
 )
 
 
-def run_unit(run_tests, runner, mutant_name: str | None, tests: list[str], memory: KillMemory) -> int:
-    if mutant_name is not None and not tests:
+def run_unit(
+    run_tests, runner, mutant_name: str | None, tests: list[str], chosen: list[str], memory: KillMemory
+) -> int:
+    if tests and not chosen:
         # Each unit runs the head and one slice and together they cover every test, so a unit with none votes survived.
         return 0
-    return run_tests(runner, mutant_name=mutant_name, tests=memory.prepare(mutant_name, tests))
+    return run_tests(runner, mutant_name=mutant_name, tests=memory.prepare(mutant_name, chosen))
 
 
 def run_selected(selection: Path, shard: tuple[int, int], mode: str = "", *stats: str) -> None:
@@ -365,7 +367,8 @@ def run_selected(selection: Path, shard: tuple[int, int], mode: str = "", *stats
             except runner.BadTestExecutionCommandsException:
                 # The stats shards proved these node ids collect, so a usage error here is the forced failure at import.
                 return 1
-        return run_unit(run_tests, self, mutant_name, shard_tests(list(tests), mutant_name, shard[0]), memory)
+        tests = list(tests)
+        return run_unit(run_tests, self, mutant_name, tests, shard_tests(tests, mutant_name, shard[0]), memory)
 
     memory = KillMemory(Path.cwd() / "killers")
 

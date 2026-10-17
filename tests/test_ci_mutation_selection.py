@@ -145,9 +145,10 @@ def _assert_units_run_their_own_tests(monkeypatch, selection, runner, test_calls
         planned.setattr(selection, "shard_tests", shard_tests)
         assert runner.PytestRunner().run_tests(mutant_name=unit, tests=["a"]) == 0
         runner.PytestRunner().run_tests(mutant_name=unit, tests=("h", "a", "b"))
-    assert units == [(["a"], unit, 1), (["h", "a", "b"], unit, 1)]
-    assert test_calls[-1] == (unit, ["h", "b"])
-    assert len(test_calls) == 5
+        assert runner.PytestRunner().run_tests(mutant_name="unsplit", tests=[]) == 9
+    assert units == [(["a"], unit, 1), (["h", "a", "b"], unit, 1), ([], "unsplit", 1)]
+    assert test_calls[-2:] == [(unit, ["h", "b"]), ("unsplit", [])]
+    assert len(test_calls) == 6
 
 
 @pytest.mark.parametrize(
