@@ -111,8 +111,8 @@ def _red(slug, redis, ledger, doc, last, failed, repo):
             "the swarm closes this task when a later dev push run passes."
         )
         fields = {"task": task_id, "title": title(job), "lane": "ci", "kind": "ci", "rank": "urgent"}
-        ledger.add_task(slug, {**fields, "description": description, "not_duplicate": NOT_DUPLICATE}, SENDER)
         redis.hset(key(slug, "jobs"), task_id, job)
+        ledger.add_task(slug, {**fields, "description": description, "not_duplicate": NOT_DUPLICATE}, SENDER)
         actions.append(f"filed {task_id} for the failed dev job {job}")
     if not _live_alerts(doc):
         where = f" in {', '.join(failed)}" if failed else ""
@@ -133,6 +133,15 @@ def _green(slug, ledger, doc, last):
     for alert in _live_alerts(doc):
         ledger.close_alert(slug, alert["id"], f"Dev push run {run_id} of Tests passed.")
         actions.append(f"cleared the promotion alert, dev push run {run_id} passed")
+    return actions
+
+
+def _recover(slug, redis, ledger, doc, last, repo):
+    from scripts.swarm import promotion_owner
+
+    actions = _green(slug, ledger, doc, last)
+    for previous in promotion_owner.history(repo, redis) - {slug}:
+        actions.extend(_green(previous, ledger, ledger.state(previous), last))
     return actions
 
 
@@ -165,7 +174,7 @@ def _refresh(
     elif last["conclusion"] == "failure":
         actions = _red(slug, redis, ledger, doc, last, failed, config.repo)
     else:
-        actions = _green(slug, ledger, doc, last)
+        actions = _recover(slug, redis, ledger, doc, last, config.repo)
     redis.set(key(slug, "seen"), last["id"])
     return actions
 
