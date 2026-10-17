@@ -185,6 +185,9 @@ class InboxStore:
             self.redis.zrem(self.key("open", address), *closed)
         return sorted((item for item in items if item.state not in CLOSED), key=_order)
 
+    def open_mail(self, receiver: str) -> list[Item]:
+        return self._with_seat(receiver, self.open_items)
+
     def quiet(self, addresses: list[str]) -> set[str]:
         """Addresses whose open index is current and holds nothing; any other needs open_items to tell."""
         with self.redis.pipeline(transaction=False) as pipe:
@@ -235,6 +238,25 @@ class InboxStore:
 
     def mailbox(self, me):
         return self._with_seat(me, self.inbox)
+
+    def unsettled(self, receiver: str, before: int) -> list[Item]:
+        return [
+            item
+            for item in self._with_seat(receiver, lambda address: self._due_open(address, before))
+            if not item.fyi and item.state in ("read", "confirmed") and item.updated_at <= before
+        ]
+
+    def _due_open(self, address, before):
+        with self.redis.pipeline() as pipe:
+            pipe.sismember(self.key("open-indexed"), address)
+            pipe.get(self.key("open-size", address))
+            pipe.zcard(self.key("address", address))
+            pipe.zrangebyscore(self.key("open", address), "-inf", before)
+            indexed, size, total, ids = pipe.execute()
+        if not _index_current(indexed, size, total):
+            self._index_open(address)
+            ids = self.redis.zrangebyscore(self.key("open", address), "-inf", before)
+        return [self.get(item_id) for item_id in ids]
 
     def pending_mail(self, me):
         return self._with_seat(me, self.pending_items)
@@ -398,6 +420,8 @@ class InboxStore:
             raise InboxError(f"message {item_id} is closed: {item.reason}")
         self.redis.hsetnx(key, field, answer_id or new_item_id())
         reply_id = self.redis.hget(key, field)
+        if answer_id == reply_id and self.redis.hget(self.key("item", reply_id), "state") == "cancelled":
+            raise InboxError(f"answer {reply_id} to message {item_id} was refused")
         if entry := self.entry_of(item_id):
             self.about(reply_id, entry)
         try:
@@ -427,6 +451,37 @@ class InboxStore:
             item = self.get(item_id)
             if (item.state, item.reason) != expected:
                 raise
+
+    def reopen(self, answer, by, reason):
+        """Open the item a refused answer closed, with its answer slot cleared so the next reply is a new message."""
+        from redis.exceptions import WatchError
+
+        for _ in range(MOVE_ATTEMPTS):
+            try:
+                return self._try_reopen(answer, by, reason)
+            except WatchError:
+                continue
+        raise Contended(f"message {answer.ref} changed meanwhile; run the command again")
+
+    def _try_reopen(self, answer, by, reason):
+        key = self.key("item", answer.ref)
+        with self.redis.pipeline() as pipe:
+            pipe.watch(key)
+            raw = pipe.hgetall(key)
+            if not raw:
+                return None
+            item = _item(raw, answer.ref)
+            if (item.state, item.reason) != close_reason("done", replied(answer.id)):
+                return None
+            moved = replace(item, state="read", updated_at=now_ms(), reason=reason)
+            pipe.multi()
+            pipe.hset(key, mapping=_fields(moved))
+            pipe.hdel(key, f"reply:{answer.sender}")
+            pipe.zadd(self.key("open", item.address), {item.id: item.created_at})
+            pipe.rpush(self.key("history", item.id), _entry("read", by, reason, moved.updated_at))
+            pipe.publish(NOTIFY, item.address)
+            pipe.execute()
+            return moved
 
     def about(self, item_id, entry):
         """Name the ledger entry an item is about, before the item is written."""
@@ -629,6 +684,8 @@ class InboxStore:
                 return None
             if item.state in CLOSED:
                 raise InboxError(f"message {item_id} is closed: {item.reason}")
+            if item.fyi and state in ("read", "confirmed"):
+                state, reason = "done", "done: information received"
             if state == "done" and not item.fyi and reason == "done":
                 raise InboxError("done needs an outcome naming where the work went")
             if item.state == state:

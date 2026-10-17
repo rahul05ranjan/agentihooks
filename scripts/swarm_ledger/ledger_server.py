@@ -57,7 +57,7 @@ from scripts.swarm_ledger.events.publishing import publishing  # noqa: E402
 from scripts.swarm_ledger.repository import legacy  # noqa: E402
 from scripts.swarm_ledger.repository import repository as stored  # noqa: E402
 from scripts.swarm_ledger.server_code import CODE_DIRS, code_stamp  # noqa: E402
-from scripts.swarm_v2 import ledger_writer, master_fence  # noqa: E402
+from scripts.swarm_v2 import front_door, ledger_writer, master_fence  # noqa: E402
 
 HOST, PORT = ledger_link.address()
 BASE = f"http://{HOST}:{PORT}"
@@ -103,7 +103,12 @@ def publish_ledger(slug, state):
         HUB.publish(slug, "ledger", ledger_view(state))
 
 
-repository = publishing(stored, publish_ledger)
+def publish_snapshot(slug: str, state: dict) -> None:
+    if HUB.has(slug):
+        HUB.publish_snapshot(slug, "ledger", ledger_view(state))
+
+
+repository = publishing(stored, publish_snapshot)
 
 
 def all_summaries():
@@ -509,9 +514,14 @@ def relay_to_inbox(slug, state):
         from scripts.inbox.store import connect
         from scripts.swarm import operator_mail
         from scripts.swarm.store import RedisStore
+        from scripts.swarm_ledger import chat_receipts
+        from scripts.swarm_v2 import masters
 
         inbox = connect()
-        sent = operator_mail.relay(inbox, RedisStore(inbox.redis), slug, state, events, watch_ledger.line)
+        store = RedisStore(inbox.redis)
+        sent = operator_mail.relay(inbox, store, slug, state, events, watch_ledger.line)
+        addresses = [operator_mail.master_address(slug, []), *masters.live_seats(store.agents(slug))]
+        chat_receipts.post(repository, inbox, slug, events, addresses)
     except Exception as exc:  # the ledger write stands whatever the inbox does
         sys.stderr.write(f"inbox relay for {slug}: {exc}\n")
         unrelayed_on(RELAY, slug, meta["rev"])
@@ -686,8 +696,8 @@ def workspace_tails(slug, task_id):
 
 
 def write_gate(slug):
-    """Every op write: masters fenced to the items they own, inside the talk budget."""
-    return master_fence.Fence(slug, talk.Budget(slug))
+    """Every op write: masters fenced to the items they own, page chat to the front door, inside the talk budget."""
+    return master_fence.Fence(slug, front_door.Door(slug, talk.Budget(slug)))
 
 
 def sample_streams():
@@ -755,12 +765,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get("Origin") not in (None, FILE_ORIGIN, *ALLOWED_ORIGINS):
             return self.send(403, "origin not allowed", "text/plain") or True
         if slug is not None:
-            self.principal = authority.principal(
-                repository.token(slug),
-                slug,
-                self.headers.get("X-Ledger-Token"),
-                self.headers.get("X-Ledger-Agent"),
-            )
+            self.principal = authority.caller(self.headers, repository.token(slug), slug)
             if self.principal is None:
                 return self.send(403, "missing or wrong ledger token", "text/plain") or True
         return False

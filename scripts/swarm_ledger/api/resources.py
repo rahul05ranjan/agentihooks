@@ -42,6 +42,9 @@ def metadata(doc: dict) -> dict:
 
 
 def resource_revision(doc: dict, path: str) -> str:
+    if path == "tasks":
+        meta = doc.get("_meta", {})
+        return f"{meta.get('task_revision', meta.get('rev', 0)):064x}"
     raw = value(doc, path)
     if path == "metadata":
         raw = {**raw, "_meta": {key: item for key, item in raw["_meta"].items() if key not in ("rev", "updated_at")}}
@@ -74,13 +77,15 @@ def collection_revisions(rows: list) -> tuple[str, list]:
 def read(doc: dict, path: str, query: dict | None = None, cache: dict | None = None) -> dict:
     raw = value(doc, path)
     if isinstance(raw, list):
+        hash_page = path == "tasks"
         if cache is None:
-            return page(raw, resource_revision(doc, path), query or {})
+            return page(raw, resource_revision(doc, path), query or {}, hash_page=hash_page)
         key = (collection_revisions, path)
         if key not in cache:
             cache[key] = collection_revisions(raw)
-        rev, items = cache[key]
-        return page(raw, rev, query or {}, items)
+        digest, items = cache[key]
+        rev = resource_revision(doc, path) if hash_page else digest
+        return page(raw, rev, query or {}, items, hash_page)
     return bounded({"data": project(raw), "revision": resource_revision(doc, path)})
 
 
@@ -98,6 +103,8 @@ COLLECTIONS = (
     "sources",
     "alerts",
     "freezes",
+    "plans",
+    "slices",
 )
 THREADS = {
     "tasks": ("comments",),
@@ -148,7 +155,7 @@ def project(raw: object) -> object:
     return result
 
 
-def page(rows: list, rev: str, query: dict, revisions: list | None = None) -> dict:
+def page(rows: list, rev: str, query: dict, revisions: list | None = None, hash_page: bool = False) -> dict:
     from .schemas import PAGINATION, validate
 
     validate(PAGINATION, query)
@@ -160,7 +167,10 @@ def page(rows: list, rev: str, query: dict, revisions: list | None = None) -> di
             raise APIError(409, "revision_conflict", "Collection changed; restart pagination")
         offset = int(offset_text)
     selected = []
-    size = reply_size({"data": [], "revision": rev, "next_cursor": None})
+    envelope = {"data": [], "revision": rev, "next_cursor": None}
+    if hash_page:
+        envelope["page_hash"] = revision([])
+    size = reply_size(envelope)
     for row in rows[offset : offset + query.get("limit", 50)]:
         item = project(row)
         end = offset + len(selected) + 1
@@ -178,6 +188,8 @@ def page(rows: list, rev: str, query: dict, revisions: list | None = None) -> di
     end = offset + len(selected)
     next_cursor = f"{rev}:{end}" if end < len(rows) else None
     reply = {"data": selected, "revision": rev, "next_cursor": next_cursor}
+    if hash_page:
+        reply["page_hash"] = revision(selected)
     return reply if selected else bounded(reply)
 
 
