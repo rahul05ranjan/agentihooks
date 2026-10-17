@@ -297,6 +297,18 @@ def test_selection_passes_exact_lines_before_generation_and_reloads_source_packa
             (None, ["tests/test_x.py::t"]),
             ("m", ["tests/test_y.py::t"]),
         ]
+        unit = "scripts.s.x_f__mutmut_1"
+        split = {"head": ["h"], "slices": [["a"], ["b"]]}
+        with monkeypatch.context() as planned:
+            planned.chdir(tmp_path)
+            (tmp_path / "shard-plan.json").write_text(
+                json.dumps({"assignments": {unit: [0, 1]}, "splits": {"scripts.s.x_f": split}})
+            )
+            assert runner.PytestRunner().run_tests(mutant_name=unit, tests=["a"]) == 0
+            runner.PytestRunner().run_tests(mutant_name=unit, tests=["h", "a", "b"])
+            (tmp_path / "shard-plan.json").unlink()
+        assert test_calls[-1] == (unit, ["h", "b"])
+        assert len(test_calls) == 5
         data.exit_code_by_key = {}
         with pytest.raises(SystemExit) as empty:
             runner.collect_or_load_stats(test_runner)

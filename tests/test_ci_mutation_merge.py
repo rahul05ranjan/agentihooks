@@ -169,6 +169,10 @@ def test_a_split_mutant_is_killed_by_any_unit_and_survives_only_when_every_unit_
     assert merged["failed"] is True
     cleared = {"scripts/a.py:m2:f2": {"reader": "r", "reason": "equivalent"}}
     assert [row["name"] for row in merge.merge_reports(reports, cleared)["files"][0]["cleared"]] == ["m2"]
+    lone = merge.merge_reports([_units(_unit("m5", "survived", "f5"))])["files"][0]
+    assert [row["name"] for row in lone["failures"]] == ["m5"]
+    either = merge.merge_reports([_units(_unit("m4", "timeout", "f4")), _units(_unit("m4", "killed"))])["files"][0]
+    assert either["counts"] == {"killed": 1}
     green = [_units(_unit("m1", "killed")), _units(_unit("m1", "survived", "f1"))]
     assert merge.merge_reports(green) == {
         "files": [_file("scripts/a.py", {"killed": 1})],

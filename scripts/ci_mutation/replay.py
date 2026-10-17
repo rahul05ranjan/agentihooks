@@ -10,6 +10,7 @@ from zipfile import ZipFile
 
 from scripts.ci_mutation.clearances import load_clearances
 from scripts.ci_mutation.measured import refine_plan
+from scripts.ci_mutation.mutant_shards import unit_count
 from scripts.ci_mutation.runner import grade_shard_rows, mutate_files, record_shard_measurement, split_plan_names
 from scripts.ci_mutation.stats import SharedStats, stats_key, write_part
 
@@ -99,14 +100,11 @@ def verify(folder: Path) -> dict:
     reports = [json.loads(path.read_text()) for path in sorted((folder / "grades").glob("*/report.json"))]
     report = merge_reports(reports, load_clearances(folder / "source"))
     shards = report.get("shards", [])
-    units = manifest["mutants"] + sum(
-        len(names) - 1 for names in plan.get("assignments", {}).values() if isinstance(names, list)
-    )
     complete = (
         sorted(shard["index"] for shard in shards) == list(range(plan["shards"]))
         and all(shard["complete"] for shard in shards)
-        and sum(shard["expected"] for shard in shards) == units
-        and sum(shard["graded"] for shard in shards) == units
+        and sum(shard["expected"] for shard in shards) == unit_count(plan)
+        and sum(shard["graded"] for shard in shards) == unit_count(plan)
     )
     survivors = sum(row["status"] in {"survived", "no tests"} for file in report["files"] for row in file["failures"])
     proof = {

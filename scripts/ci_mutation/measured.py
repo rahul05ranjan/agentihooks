@@ -8,6 +8,7 @@ from pathlib import Path
 
 from mutmut.utils.format_utils import get_mutant_name
 
+from scripts.ci_mutation.mutant_shards import function_name
 from scripts.ci_mutation.plan import MUTANT_SECONDS, WORKERS, shard_count
 from scripts.ci_mutation.scope import discover_changes, select_tests
 from scripts.ci_mutation.selection import selected_mutants
@@ -25,7 +26,7 @@ def function_tests(results: list[dict]) -> tuple[dict[str, set[str]], dict[str, 
             tests.setdefault(function, set()).update(nodes)
         for node, seconds in result["durations"].items():
             durations[node] = max(durations.get(node, 0.0), seconds)
-    return tests, durations, max(MUTANT_SECONDS, max(durations.values(), default=0.0))
+    return tests, durations, max(MUTANT_SECONDS, *durations.values())
 
 
 def measured_costs(names: list[str], results: list[dict]) -> dict[str, float]:
@@ -59,7 +60,7 @@ def split_tests(nodes: set[str], seconds: dict[str, float], limit: int) -> dict 
 def measured_splits(names: list[str], results: list[dict], limit: int = 10) -> dict[str, dict]:
     tests, durations, missing = function_tests(results)
     splits = {}
-    for function in sorted({name.rpartition("__mutmut_")[0] for name in names} & tests.keys()):
+    for function in sorted({function_name(name) for name in names} & tests.keys()):
         seconds = {node: durations.get(node, missing) for node in tests[function]}
         if split := split_tests(tests[function], seconds, limit):
             splits[function] = split
@@ -68,9 +69,7 @@ def measured_splits(names: list[str], results: list[dict], limit: int = 10) -> d
 
 def plan_shards(costs: dict[str, float], target: float = 240, limit: int = 10, splits: dict | None = None) -> dict:
     splits = splits or {}
-    units = {
-        name: splits[function]["costs"] for name in costs if (function := name.rpartition("__mutmut_")[0]) in splits
-    }
+    units = {name: splits[function]["costs"] for name in costs if (function := function_name(name)) in splits}
     costs = {name: sum(units[name]) if name in units else cost for name, cost in costs.items()}
     items = [(cost, name, None) for name, cost in costs.items() if name not in units]
     items += [(cost, name, position) for name, unit in units.items() for position, cost in enumerate(unit)]
@@ -79,7 +78,7 @@ def plan_shards(costs: dict[str, float], target: float = 240, limit: int = 10, s
     count = max(min(limit, widest), shard_count(seconds, len(items), target, limit))
     loads = [0.0] * count
     assignments = {name: [None] * len(unit) for name, unit in units.items()}
-    for cost, name, position in sorted(items, key=lambda item: (-item[0], item[1], item[2] or 0)):
+    for cost, name, position in sorted(items, key=lambda item: (-item[0], item[1])):
         taken = assignments[name] if position is not None else []
         index = min((index for index in range(count) if index not in taken), key=lambda index: (loads[index], index))
         if position is None:
@@ -89,15 +88,13 @@ def plan_shards(costs: dict[str, float], target: float = 240, limit: int = 10, s
         loads[index] += cost
     return {
         "shards": count,
-        "assignments": {name: assignments[name] for name in sorted(costs, key=lambda name: (-costs[name], name))},
+        "assignments": assignments,
         "costs": costs,
         "units": "worker seconds",
         "estimated_worker_seconds": seconds,
         "shard_worker_seconds": loads,
         "workers": WORKERS,
-        "splits": {
-            function: splits[function] for function in sorted({name.rpartition("__mutmut_")[0] for name in units})
-        },
+        "splits": {function: splits[function] for function in sorted({function_name(name) for name in units})},
     }
 
 
