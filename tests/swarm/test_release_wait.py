@@ -89,6 +89,7 @@ def test_newer_compares_stable_versions(tags, floor, expected):
 def test_version_parses_three_numbers():
     assert release_wait.version("v10.2.33") == (10, 2, 33)
     assert release_wait.version("v1.2") is None
+    assert release_wait.version("v1.2.3\n") is None
 
 
 def test_checker_reads_tags_once_and_passes_tasks_without_the_field(monkeypatch):

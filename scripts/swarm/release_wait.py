@@ -9,7 +9,7 @@ VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
 
 
 def version(tag: str) -> tuple[int, ...] | None:
-    match = VERSION_RE.match(tag)
+    match = VERSION_RE.fullmatch(tag)
     return tuple(int(part) for part in match.groups()) if match else None
 
 
@@ -34,14 +34,15 @@ def tags(repo: str) -> list[str]:
 
 
 def checker(repo: str) -> Callable[[dict], bool]:
-    seen: list[list[str]] = []
+    known: list[str] | None = None
 
     def released(task: dict) -> bool:
+        nonlocal known
         floor = task.get(FIELD)
         if not floor:
             return True
-        if not seen:
-            seen.append(tags(repo))
-        return newer(seen[0], floor)
+        if known is None:
+            known = tags(repo)
+        return newer(known, floor)
 
     return released

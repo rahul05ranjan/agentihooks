@@ -182,7 +182,11 @@ def check_stack(fields):
         raise ValueError("stacked_base must be a lowercase commit hash of 7 to 64 characters, or empty to clear it")
     if not all(ID_RE.match(task_id) for task_id in fields.get("parked_on", [])):
         raise ValueError("parked_on must list task ids")
-    if not (isinstance(fields.get("after_release", ""), str) and RELEASE_RE.match(fields.get("after_release", ""))):
+
+
+def check_release(fields):
+    value = fields.get("after_release", "")
+    if not (isinstance(value, str) and RELEASE_RE.fullmatch(value)):
         raise ValueError("after_release must be a release tag such as v2.17.1, or empty to clear it")
 
 
@@ -264,6 +268,7 @@ def check_task(task):
         raise ValueError(f"tasks/{task.get('id')}/state must be one of {STATES}")
     check_lists(task)
     check_stack(task)
+    check_release(task)
     check_urls(task)
     check_profile(task)
     check_rank(task)
