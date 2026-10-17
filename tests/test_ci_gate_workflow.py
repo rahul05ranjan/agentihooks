@@ -192,7 +192,9 @@ def test_semgrep_grades_registry_pack_findings_new_against_the_base_in_parallel(
     scan = yaml.safe_load((_ROOT / ".github/workflows/semgrep.yml").read_text())["jobs"]["scan"]
     assert scan["steps"][0]["with"]["fetch-depth"] == 0
     command = scan["steps"][-1]["run"].split()
-    assert {"p/ci", "p/secrets", "p/python"} == {command[i + 1] for i, a in enumerate(command) if a == "--config"}
+    assert {"p/ci", "p/secrets", "p/python", ".semgrep/agentihooks-rules.yml"} == {
+        command[i + 1] for i, a in enumerate(command) if a == "--config"
+    }
     baseline = scan["steps"][-2]
     assert baseline["env"]["BASE"] == "${{ inputs.base }}"
     assert baseline["run"] == 'sha="$(git merge-base "$BASE" HEAD)"\necho "sha=$sha" >> "$GITHUB_OUTPUT"\n'

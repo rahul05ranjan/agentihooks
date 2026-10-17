@@ -32,3 +32,6 @@ testsuite/
 
 # Helm templates are Go templates, not YAML; the strict scan cannot parse them
 deploy/helm/*/templates/
+
+# Semgrep rule fixtures carry the findings their rules must report
+.semgrep/
