@@ -104,3 +104,46 @@ def test_owner_departure_hands_over_without_recreating_an_existing_fixer_or_chan
     observe(store, ledger, DOCTOR, NOW + promotion_watch.REFRESH_MS)
     assert ledger.docs[DOCTOR]["tasks"] == []
     assert ledger.docs[WATCHED]["tasks"] == original
+
+
+@pytest.mark.parametrize("failure", ["ledger", "checkpoint"])
+def test_failed_persistence_then_owner_departure_retries_without_duplicate_intake(linked, monkeypatch, failure):
+    from scripts.swarm import promotion_owner
+
+    store, ledger = linked
+    record = promotion_owner.key("/repo")
+    original_hset = store.redis.hset
+
+    def hset(name, key=None, value=None, mapping=None, **kwargs):
+        if name == record and key == "seen":
+            raise RuntimeError("checkpoint refused")
+        return original_hset(name, key, value, mapping=mapping, **kwargs)
+
+    if failure == "ledger":
+        ledger.refuse = True
+        error = LedgerRefused
+    else:
+        monkeypatch.setattr(store.redis, "hset", hset)
+        error = RuntimeError
+    with pytest.raises(error):
+        observe(store, ledger, WATCHED)
+    assert store.redis.hget(record, "seen") is None
+    assert len(ledger.docs[WATCHED]["tasks"]) == (failure == "checkpoint")
+    ledger.refuse = False
+    monkeypatch.setattr(store.redis, "hset", original_hset)
+    store.update(WATCHED, state="stopped")
+    observe(store, ledger, DOCTOR, NOW + promotion_watch.REFRESH_MS)
+    assert sum(len(doc["tasks"]) for doc in ledger.docs.values()) == 1
+    assert store.redis.hget(record, "seen") == "900"
+
+
+def test_handover_on_a_new_failed_run_preserves_the_existing_active_repair(linked, monkeypatch):
+    store, ledger = linked
+    observe(store, ledger, WATCHED)
+    ledger.docs[WATCHED]["tasks"][0]["proof"] = {"run": "retained proof"}
+    original = deepcopy(ledger.docs[WATCHED]["tasks"])
+    store.update(WATCHED, state="stopped")
+    monkeypatch.setitem(RED, "id", 901)
+    observe(store, ledger, DOCTOR, NOW + promotion_watch.REFRESH_MS)
+    assert ledger.docs[DOCTOR]["tasks"] == []
+    assert ledger.docs[WATCHED]["tasks"] == original
