@@ -305,8 +305,10 @@ def test_a_returning_hive_terminates_its_superseded_master_before_it_beats(store
 
 
 def test_a_fence_naming_an_unknown_execution_is_dropped(store, monkeypatch):  # noqa: F811
+    from scripts.hive import registry
     from scripts.swarm import master_move
 
+    assert master_move.fenced("lost") == f"{registry.key('lost')}:fenced"
     _hive(store, "lost", NOW)
     store.redis.hset(master_move.fenced("lost"), "exe-gone", json.dumps({"slug": "sw", "generation": 2, "at": 1}))
     runtime = FenceRuntime()
@@ -314,6 +316,21 @@ def test_a_fence_naming_an_unknown_execution_is_dropped(store, monkeypatch):  # 
     _beat(store, monkeypatch, runtime)
 
     assert runtime.terminated == []
+    assert store.redis.hlen(master_move.fenced("lost")) == 0
+
+
+def test_an_unknown_fence_does_not_stop_the_fences_after_it(store, monkeypatch):  # noqa: F811
+    from scripts.swarm import master_move
+
+    _hive(store, "lost", NOW - GRACE_MS - 1)
+    store.redis.hset(master_move.fenced("lost"), "exe-gone", json.dumps({"slug": "sw", "generation": 2, "at": 1}))
+    master = _hive_master(store)
+    tick("sw", store, tasks(), RecoveryRuntime(), NOW)
+    runtime = FenceRuntime()
+
+    _beat(store, monkeypatch, runtime)
+
+    assert runtime.terminated == [(master.execution_id, NOW - GRACE_MS - 1)]
     assert store.redis.hlen(master_move.fenced("lost")) == 0
 
 
@@ -442,6 +459,29 @@ def test_master_move_without_a_live_master_is_refused(store):  # noqa: F811
     with pytest.raises(SwarmError) as refused:
         master_move.order(store, "sw", "spare", NOW)
     assert str(refused.value) == "no live master to move"
+
+
+def test_master_move_keeps_an_interactive_master_on_a_hive_holding_its_login(store):  # noqa: F811
+    from scripts.hive import registry
+    from scripts.swarm import master_move
+    from scripts.swarm.store import SwarmError
+
+    _hive(store, "spare", NOW)
+    _hive(store, "login", NOW)
+    store.redis.hset(registry.key("login"), "interactive", json.dumps({"claude": "one", "codex": ""}))
+    name = store.next_name("sw", MASTER)
+    store.put_agent(
+        "sw",
+        AgentRecord(name, MASTER, MASTER, harness="claude", account="one", seat="master@sw", route_kind="interactive"),
+    )
+
+    with pytest.raises(SwarmError) as refused:
+        master_move.order(store, "sw", "spare", NOW)
+
+    assert (
+        str(refused.value) == "the master cannot move to hive spare: no hive for master holds the claude login for one"
+    )
+    assert master_move.order(store, "sw", "login", NOW)["to"] == "login"
 
 
 def test_master_move_from_the_command_line_replaces_an_earlier_order(store, capsys, monkeypatch):  # noqa: F811
