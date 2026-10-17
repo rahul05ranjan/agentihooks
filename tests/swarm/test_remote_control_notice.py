@@ -81,6 +81,25 @@ def test_a_worker_back_on_notice_clears_nothing(store):
     assert list(remote_control.failures(store, "proof")) == ["master@a1b2c3-0001"]
 
 
+def test_the_decision_lives_on_the_execution_and_stays_out_of_the_legacy_projection():
+    import json
+    from dataclasses import replace
+
+    import fakeredis
+
+    from scripts.swarm.store import AgentRecord, SwarmConfig
+
+    store = RedisStore(fakeredis.FakeRedis(decode_responses=True))
+    store.create(SwarmConfig("fixture", "agentihooks", 1, 0))
+    name = store.next_name("fixture", "master")
+    master = AgentRecord(name, "master", "master", seat="master@fixture", started_at=1, remote_control=ON)
+    current = store.start_execution("fixture", master)
+    assert "remote_control" not in json.loads(store.redis.hget(store.key("fixture", "agents"), name))
+    assert store.agents("fixture")[0].remote_control == ON
+    store.put_agent("fixture", replace(current, remote_control={"state": "off", "detail": "flag"}))
+    assert store.agents("fixture")[0].remote_control == {"state": "off", "detail": "flag"}
+
+
 def test_the_notification_hook_hands_its_payload_to_the_recorder(monkeypatch):
     seen = []
     monkeypatch.setattr(remote_control, "on_notification", lambda payload: seen.append(payload))
