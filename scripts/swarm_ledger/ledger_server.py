@@ -103,7 +103,12 @@ def publish_ledger(slug, state):
         HUB.publish(slug, "ledger", ledger_view(state))
 
 
-repository = publishing(stored, publish_ledger)
+def publish_snapshot(slug: str, state: dict) -> None:
+    if HUB.has(slug):
+        HUB.publish_snapshot(slug, "ledger", ledger_view(state))
+
+
+repository = publishing(stored, publish_snapshot)
 
 
 def all_summaries():
@@ -760,12 +765,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get("Origin") not in (None, FILE_ORIGIN, *ALLOWED_ORIGINS):
             return self.send(403, "origin not allowed", "text/plain") or True
         if slug is not None:
-            self.principal = authority.principal(
-                repository.token(slug),
-                slug,
-                self.headers.get("X-Ledger-Token"),
-                self.headers.get("X-Ledger-Agent"),
-            )
+            self.principal = authority.caller(self.headers, repository.token(slug), slug)
             if self.principal is None:
                 return self.send(403, "missing or wrong ledger token", "text/plain") or True
         return False

@@ -344,6 +344,77 @@ def test_a_numbered_second_worktree_in_another_repo_is_pushed_too(rig):
     assert git(rig.seed, "ls-remote", str(rig.origin), f"refs/heads/{BRANCH}-2")
 
 
+PREDECESSOR = "engineer-100001-0009"
+
+
+def continuing(rig, ref=f"origin/{PREDECESSOR}"):
+    rig.ledger.task.update(
+        branch=BRANCH, handoff_envelope={"continue_from": ref}, pr_url="https://github.com/o/r/pull/7"
+    )
+
+
+def remote(rig, branch):
+    return git(rig.seed, "ls-remote", str(rig.origin), f"refs/heads/{branch}").split("\t")[0]
+
+
+def test_a_continuation_pushes_its_head_to_the_retained_pull_request_branch_not_its_own_name(rig):
+    rig.commit("before")
+    git(rig.tree, "push", "origin", f"HEAD:refs/heads/{PREDECESSOR}")
+    continuing(rig)
+    head = rig.commit()
+    assert rig.stop().allowed
+    assert remote(rig, PREDECESSOR) == head
+    assert rig.remote_head() == ""
+    assert git(rig.tree, "rev-parse", "--abbrev-ref", "@{upstream}") == f"origin/{PREDECESSOR}"
+    assert rig.ledger.comments == [
+        ("demo", "t1", record_text("https://github.com/o/r.git", PREDECESSOR, head), "swarm")
+    ]
+
+
+def test_a_retained_branch_head_does_not_descend_from_is_left_alone_and_its_own_branch_is_pushed(rig):
+    (rig.seed / "elsewhere").write_text("elsewhere")
+    git(rig.seed, "add", "elsewhere")
+    git(rig.seed, "commit", "-m", "elsewhere")
+    git(rig.seed, "push", "origin", f"HEAD:refs/heads/{PREDECESSOR}")
+    unrelated = git(rig.seed, "rev-parse", "HEAD")
+    continuing(rig)
+    head = rig.commit()
+    assert rig.stop().allowed
+    assert rig.remote_head() == head
+    assert remote(rig, PREDECESSOR) == unrelated
+
+
+def test_the_push_gets_the_time_left_plus_the_reserve_less_the_floor(monkeypatch, rig):
+    budgets = []
+    monkeypatch.setattr(push_stop, "push", lambda tree, branch, seconds: budgets.append(seconds) or True)
+    monkeypatch.setattr(rig.gate, "left", lambda: 10.0)
+    rig.ledger.task["pr_url"] = "https://github.com/o/r/pull/7"
+    rig.commit()
+    rig.stop()
+    assert budgets == [10.0 + RESERVE_S - FLOOR_S]
+
+
+def test_a_retained_branch_deleted_from_origin_is_not_recreated(rig):
+    rig.commit("before")
+    git(rig.tree, "push", "origin", f"HEAD:refs/heads/{PREDECESSOR}")
+    git(rig.seed, "push", str(rig.origin), "--delete", PREDECESSOR)
+    continuing(rig)
+    rig.commit()
+    assert rig.stop().reason == TEMPLATE
+    assert remote(rig, PREDECESSOR) == ""
+    assert rig.remote_head() == ""
+
+
+@pytest.mark.parametrize("ref", ["origin/dev", "fresh", ""])
+def test_a_protected_or_fresh_continuation_pushes_its_own_branch(rig, ref):
+    dev = remote(rig, "dev")
+    continuing(rig, ref)
+    head = rig.commit()
+    assert rig.stop().allowed
+    assert rig.remote_head() == head
+    assert remote(rig, "dev") == dev
+
+
 def test_a_worktree_on_dev_or_main_is_never_pushed(rig):
     rig.ledger.task["pr_url"] = "https://github.com/o/r/pull/7"
     dev = git(rig.seed, "rev-parse", "origin/dev")
@@ -609,6 +680,7 @@ def slow_origin(rig, seconds):
     hook.chmod(0o755)
 
 
+@pytest.mark.wall_clock
 def test_under_a_slow_push_a_later_gate_is_killed_with_the_reserve_left_inside_the_stop_condition(monkeypatch, rig):
     rig.ledger.task["pr_url"] = "https://github.com/o/r/pull/7"
     second_tree_with_work(rig)
@@ -635,6 +707,7 @@ def test_under_a_slow_push_a_later_gate_is_killed_with_the_reserve_left_inside_t
     assert 2 <= took <= timeout - RESERVE_S + 0.5
 
 
+@pytest.mark.wall_clock
 def test_under_a_slow_push_a_later_gate_with_less_than_the_floor_left_never_starts(monkeypatch, rig):
     rig.ledger.task["pr_url"] = "https://github.com/o/r/pull/7"
     second_tree_with_work(rig)
@@ -703,6 +776,7 @@ def test_the_hook_start_is_read_when_the_gate_is_built():
     assert PushStop(clock=lambda: 7.0).started == 7.0
 
 
+@pytest.mark.wall_clock
 def test_a_passing_gate_followed_by_a_slow_push_and_ledger_write_ends_inside_the_stop_condition(monkeypatch, rig):
     rig.ledger.task["pr_url"] = "https://github.com/o/r/pull/7"
     log = install_gate(rig, 0, before="import time\ntime.sleep(1.5)\n")
@@ -755,6 +829,7 @@ def test_a_passing_gate_is_followed_by_the_push_time_check(monkeypatch, rig):
     assert rig.remote_head() == ""
 
 
+@pytest.mark.wall_clock
 def test_under_a_slow_push_a_later_worktree_without_a_gate_is_not_pushed_past_the_stop_condition(monkeypatch, rig):
     rig.ledger.task["pr_url"] = "https://github.com/o/r/pull/7"
     second_tree_with_work(rig)
@@ -790,6 +865,7 @@ def test_a_pushed_head_with_dirty_files_never_runs_the_gate(rig):
 
 
 @pytest.mark.parametrize("with_gate", [False, True])
+@pytest.mark.wall_clock
 def test_a_push_slower_than_the_budget_is_cut_off_inside_the_stop_condition(monkeypatch, rig, with_gate):
     rig.ledger.task["pr_url"] = "https://github.com/o/r/pull/7"
     if with_gate:
@@ -808,6 +884,7 @@ def test_a_push_slower_than_the_budget_is_cut_off_inside_the_stop_condition(monk
     assert rig.ledger.comments == []
 
 
+@pytest.mark.wall_clock
 def test_a_second_push_is_cut_off_by_the_budget_the_first_push_left(monkeypatch, rig):
     rig.ledger.task["pr_url"] = "https://github.com/o/r/pull/7"
     second_tree_with_work(rig)
@@ -836,7 +913,7 @@ def test_push_keeps_the_normal_cap_and_uses_a_shorter_remaining_budget(monkeypat
     process = SimpleNamespace(wait=lambda timeout: waits.append(timeout) or 0)
     monkeypatch.setattr(push_stop.subprocess, "Popen", lambda *args, **kwargs: process)
     tree = push_stop.Tree(Path("/worktree"), BRANCH, False, 1, 1)
-    assert push_stop.push(tree, seconds)
+    assert push_stop.push(tree, BRANCH, seconds)
     assert waits == [expected]
 
 
@@ -876,7 +953,7 @@ def test_a_checked_wait_on_an_open_task_lets_a_refused_push_stop(rig, state):
 
 
 def test_a_checked_wait_on_an_open_task_lets_an_unpushed_commit_stop(rig, monkeypatch):
-    monkeypatch.setattr(push_stop, "push", lambda tree, seconds: False)
+    monkeypatch.setattr(push_stop, "push", lambda tree, branch, seconds: False)
     rig.ledger.task["pr_url"] = "https://github.com/o/r/pull/7"
     rig.commit()
     with_task(rig, "claimed")

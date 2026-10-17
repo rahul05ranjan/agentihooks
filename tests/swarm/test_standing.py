@@ -56,6 +56,13 @@ def test_a_first_reading_creates_one_finding_with_its_numbers(redis):
     ]
 
 
+def test_evidence_without_links_is_still_kept_on_the_finding(redis):
+    found = standing.Reading(2.5, 1.0, "task hours in the window", "e1", evidence=("mutation: 1 run over budget.",))
+    standing.fire(redis, "sw", "ci_overrun", found, NOW)
+    row = standing.read(redis, "sw")["ci_overrun"]
+    assert (row["evidence"], row["links"]) == (["mutation: 1 run over budget."], [])
+
+
 def test_a_repeat_of_the_same_episode_updates_numbers_without_counting_again(redis):
     standing.fire(redis, "sw", "ci_overrun", reading(2.5), NOW)
     row = standing.fire(redis, "sw", "ci_overrun", reading(3.0), NOW + 60_000)
@@ -194,6 +201,29 @@ def test_a_judged_ci_budget_finding_does_not_return_when_the_detector_recreates_
     assert _returns(store, redis, later + HOUR_MS) == [], "returned on the change from minutes to task hours alone"
     _detected(redis, 0.9, "d3", later + 2 * HOUR_MS)
     assert _returns(store, redis, later + 2 * HOUR_MS) == ["bottleneck-stage/ci_overrun"]
+
+
+def test_the_detector_does_not_keep_an_old_ci_budget_run_time_fresh(redis):
+    _overran(redis, 17.4, "run-1", NOW)
+    _detected(redis, 0.4, "d1", NOW + 5 * HOUR_MS)
+    row = standing.read(redis, "sw")["ci_overrun"]
+    assert (row["value"], row["unit"], row["updated_at"]) == (17.4, MINUTES, NOW)
+    assert standing.findings(redis, "sw", NOW + standing.STALE_MS) == []
+
+
+def test_the_detector_refreshes_an_alert_counted_in_the_same_task_hours(redis):
+    standing.fire(redis, "sw", "ci_overrun", reading(1.5, episode="alert-1"), NOW)
+    _detected(redis, 0.4, "d1", NOW + HOUR_MS)
+    assert standing.read(redis, "sw")["ci_overrun"]["updated_at"] == NOW + HOUR_MS
+
+
+def test_the_detector_takes_over_a_stale_ci_budget_finding_in_task_hours(redis):
+    standing.fire(redis, "sw", "ci_overrun", reading(17.4, "run-1", "Slowest stage mutation", 15.0, MINUTES), NOW)
+    later = NOW + standing.STALE_MS
+    _detected(redis, 0.4, "d1", later)
+    row = standing.read(redis, "sw")["ci_overrun"]
+    assert (row["value"], row["unit"], row["detail"], row["updated_at"]) == (0.4, "task hours", "", later)
+    assert [found.measure for found in standing.findings(redis, "sw", later)] == [0.4]
 
 
 def _legacy(redis, fired):
