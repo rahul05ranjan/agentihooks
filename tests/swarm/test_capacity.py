@@ -2250,12 +2250,13 @@ def test_aggregate_capacity_uses_the_codex_week_rule(monkeypatch, harness, five_
     monkeypatch.setattr(aggregate, "current", lambda now: {"a": record})
     rows = capacity.accounts({"AGENTIHOOKS_RUNTIME_BACKEND": "kubernetes"}, 100, refresh=False)
     assert len(rows) == 1
-    assert (rows[0].harness, rows[0].name, rows[0].state, rows[0].sessions, rows[0].cap) == (
+    assert (rows[0].harness, rows[0].name, rows[0].state, rows[0].sessions, rows[0].cap, rows[0].observed_at) == (
         harness,
         "a",
         state,
         2,
         cap,
+        100,
     )
 
 

@@ -4,8 +4,9 @@ rules:
     severity: ERROR
     message: >-
       A drain or cap decision reads a quota value in a function that never checks the reading's freshness.
-      Check it first with quota_freshness.stale or session_bands.fresh, or decide on a fleet reading whose
-      UNKNOWN state already marks a stale one.
+      Check it first with quota_freshness.stale or session_bands.fresh, or decide on a fleet reading from
+      self.reading whose UNKNOWN state already marks a stale one. codex_router.account_cap checks its own
+      configured reading window, so its callers are not matched.
     paths:
       exclude:
         - scripts/session_bands.py
@@ -30,6 +31,8 @@ rules:
               ...
       - pattern-not-inside: |
           def $F(...):
+              ...
+              $READING = self.reading(...)
               ...
               <... $READING.state == UNKNOWN ...>
               ...

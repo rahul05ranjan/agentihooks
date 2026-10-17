@@ -48,8 +48,16 @@ def drain_after_the_freshness_check(account, limits, now):
     return account["week_left"] <= limits.drain_left
 
 
-def fleet_cap_on_a_graded_reading(reading):
+def fleet_cap_on_a_graded_reading(self, account):
+    reading = self.reading(account)
     if reading.state == UNKNOWN:
         return 0
     # ok: quota-decision-without-freshness
     return session_bands.cap(reading.five_left, reading.week_left)
+
+
+def cap_on_any_unknown_state(row):
+    if row.state == UNKNOWN:
+        return 0
+    # ruleid: quota-decision-without-freshness
+    return session_bands.cap(row.five_left, row.week_left)
