@@ -299,7 +299,7 @@ def _cell(value):
 
 
 def table(found):
-    names = list(found["windows"])
+    names = [*found["windows"]]
     lines = [f"window {n} {_when(w['start'])} to {_when(w['end'])}" for n, w in found["windows"].items()]
     lines.append(f"ledger events kept from {_when(found['events from'])}")
     rows = [("failure", "number", *names)]
