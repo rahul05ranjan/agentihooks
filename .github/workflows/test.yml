@@ -1921,7 +1921,7 @@ jobs:
           destination: ./_site
 
       - name: Retain the rendered documentation
-        if: steps.docs.outputs.build == 'true'
+        if: ${{ !cancelled() && steps.docs.outputs.build == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: documentation-site
