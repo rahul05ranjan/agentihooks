@@ -47,7 +47,7 @@ class MastersChannel:
         )
         registry, inbox = SeatRegistry(self.redis), InboxStore(self.redis)
         for seat in seats(slug, MasterSeats(self.redis).count(slug)):
-            if seat != posted.seat and registry.occupant(seat):
+            if seat != posted.seat and registry.occupant(seat).occupant:
                 inbox.send(name, seat, notice, fyi=True)
         return posted
 
