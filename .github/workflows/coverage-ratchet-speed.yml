@@ -10,6 +10,11 @@ permissions:
   contents: read
   actions: read
 
+concurrency:
+  group: ${{ format('hosted-lane-{0}', ((endsWith(github.run_id, '0') || endsWith(github.run_id, '1') || endsWith(github.run_id, '2')) && 'a') || ((endsWith(github.run_id, '3') || endsWith(github.run_id, '4') || endsWith(github.run_id, '5')) && 'b') || 'c') }}
+  queue: max
+  cancel-in-progress: false
+
 jobs:
   replay:
     runs-on: ubuntu-latest
