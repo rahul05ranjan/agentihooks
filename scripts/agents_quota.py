@@ -103,10 +103,11 @@ def _claude_row(
     cap = account_cap(result, now, include_fable) if session_bands.fresh(seen, now) else None
     five = session_bands.left(result.five_hour.used, result.five_hour.resets_at, now)
     week = session_bands.left(result.seven_day.used, result.seven_day.resets_at, now)
+    routing = quota_state.routing_left("claude", five, week)
     row = QuotaRow(
         agent="claude",
         account=result.account,
-        state=quota_state.shown(result.state, cap, quota_state.routing_left("claude", five, week)),
+        state=quota_state.shown(result.state, cap, routing),
         sessions=sessions.get(result.account, 0),
         five_hour_left=result.five_hour.remaining,
         seven_day_left=result.seven_day.remaining,
@@ -115,7 +116,7 @@ def _claude_row(
         five_hour_resets_at=result.five_hour.resets_at,
         observed_at=seen,
         cap=cap,
-        routing_left=result.margin,
+        routing_left=routing,
         fable_left=result.fable.remaining,
         fable_resets_at=result.fable.resets_at,
     )

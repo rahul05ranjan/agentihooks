@@ -77,5 +77,6 @@ def test_balance_reads_a_window_whose_reset_passed_as_full_like_capacity():
     result = ProbeResult("a", "allowed", "DRAIN", 7.0, QuotaWindow(93.0, 29_000), QuotaWindow(40.0, 90_000))
     [balance] = agents_quota.claude_rows([result], {}, "cached", {"a": now - 60}, now)
     assert balance.state == capacity._state(balance.cap, "claude", 100.0, 60.0) == "OPEN"
+    assert balance.routing_left == 60.0
     [held] = agents_quota.claude_rows([result], {}, "cached", {"a": 27_900.0}, 28_000.0)
     assert held.state == "DRAIN"
