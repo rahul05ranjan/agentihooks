@@ -332,7 +332,7 @@ def test_proof_swarm_cannot_own_intake_that_it_is_exempt_from_running(linked):
     store, _ = linked
     store.remove(WATCHED)
     store.remove(DOCTOR)
-    proof, watched = "proof-323133-cxc9", "z-watch"
+    proof, watched = "proof-323133-cxc9-1", "z-watch"
     for slug in (proof, watched):
         store.create(SwarmConfig(slug, "/repo", 1, 1))
     ledger = SchemaLedger((proof, watched))
