@@ -58,7 +58,7 @@ def test_master_mode_reports_a_failed_login_and_stores_nothing(ah, monkeypatch, 
 
 
 def test_master_mode_refuses_while_another_master_holds_the_login(ah, monkeypatch, capsys):
-    login.claim("rig", "master@a-1", os.getpid())
+    login.claim("rig", "master@a-1", os.getppid())
     runs = []
     assert claude_login.master("rig", False, {}, _deps(ah, runs)) == 1
     assert runs == []
