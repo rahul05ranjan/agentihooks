@@ -5606,7 +5606,11 @@ def cmd_balance(
         timeout=timeout,
         claude_bin=shutil.which("claude") or "claude",
     )
-    print(balance_table(results, live, time.time(), include_fable))
+    now = time.time()
+    names = {result.account for result in results}
+    observed = {result.account: now for result in results}
+    observed.update({r.account: at for at, r in cached_observations(include_fable=include_fable) if r.account in names})
+    print(balance_table(results, live, now, include_fable, observed=observed))
     return 0 if any(is_routable(result) for result in results) else 1
 
 

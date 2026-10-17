@@ -1,5 +1,6 @@
 """Agents still working on a draining account past their quota handoff warning, a health finding for the master."""
 
+from scripts import quota_freshness
 from scripts.inbox.store import InboxError, InboxStore
 from scripts.swarm import capacity, quota_view
 from scripts.swarm.health.findings import MINUTE_MS, Finding, Limits
@@ -8,7 +9,9 @@ from scripts.swarm.store import RedisStore
 CLOSED = "CLOSED"
 
 
-def draining(account: dict, limits: Limits) -> bool:
+def draining(account: dict, limits: Limits, now: float) -> bool:
+    if quota_freshness.stale(account.get("observed_at"), (), now):
+        return False
     left = quota_view.routing_left(account)
     return account["state"] == CLOSED or (left is not None and left <= limits.drain_left)
 
@@ -33,7 +36,7 @@ def findings(store: RedisStore, slug: str, limits: Limits, now_ms: int) -> list[
         account = accounts.get((agent.harness, agent.account))
         if agent.state != "working" or agent.idle_ticks or agent.name not in warned:
             continue
-        if account is None or not draining(account, limits):
+        if account is None or not draining(account, limits, now_ms / 1000):
             continue
         try:
             warned_at = inbox.get(warned[agent.name]).created_at
