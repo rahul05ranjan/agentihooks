@@ -372,7 +372,9 @@ class HerdrRuntime:
     def _quota_preferring(self, requirements):
         from scripts.swarm.capacity import free_seats
 
-        room = {h: sum(free_seats(row) for row in self._quota_open("") if row.harness == h) for h in agent_choice.AGENTS}
+        room = {
+            h: sum(free_seats(row) for row in self._quota_open("") if row.harness == h) for h in agent_choice.AGENTS
+        }
         for choice in (choice for options in requirements.values() for choice in options if len(choice) == 1):
             room[choice[0]] -= 1
         narrowed = {lane: list(options) for lane, options in requirements.items()}
