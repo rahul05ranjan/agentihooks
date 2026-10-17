@@ -23,7 +23,7 @@ def is_master(chain: Sequence[str]) -> bool:
 
 def link(home: Path, chain: Sequence[str]) -> None:
     if is_master(chain):
-        directory().mkdir(mode=0o700, parents=True, exist_ok=True)
+        directory().mkdir(mode=0o700, exist_ok=True)
         (home / CREDENTIALS).symlink_to(credentials())
 
 
