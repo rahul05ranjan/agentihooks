@@ -89,3 +89,18 @@ def test_linked_swarms_file_one_fixer_in_the_watched_ledger_even_when_doctor_obs
         (WATCHED, "ci", "ci")
     ]
     assert ledger.docs[DOCTOR].get("alerts", []) == []
+
+
+@pytest.mark.parametrize("departure", ["stopped", "removed"])
+def test_owner_departure_hands_over_without_recreating_an_existing_fixer_or_changing_its_proof(linked, departure):
+    store, ledger = linked
+    observe(store, ledger, WATCHED)
+    ledger.docs[WATCHED]["tasks"][0]["proof"] = {"run": "existing repair proof"}
+    original = deepcopy(ledger.docs[WATCHED]["tasks"])
+    if departure == "removed":
+        store.remove(WATCHED)
+    else:
+        store.update(WATCHED, state="stopped")
+    observe(store, ledger, DOCTOR, NOW + promotion_watch.REFRESH_MS)
+    assert ledger.docs[DOCTOR]["tasks"] == []
+    assert ledger.docs[WATCHED]["tasks"] == original
