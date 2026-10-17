@@ -1,3 +1,4 @@
+import subprocess
 from contextlib import contextmanager
 from hashlib import sha256
 from pathlib import Path
@@ -6,8 +7,18 @@ from scripts.doctor.priming import doctor_slug
 from scripts.swarm.store import PREFIX, RedisStore
 
 
+def repository(repo: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", repo, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    return str(Path(result.stdout.strip()).resolve()) if result.returncode == 0 else str(Path(repo).resolve())
+
+
 def key(repo: str) -> str:
-    identity = sha256(str(Path(repo).resolve()).encode()).hexdigest()
+    identity = sha256(repository(repo).encode()).hexdigest()
     return f"{PREFIX}:promotion-owner:{identity}"
 
 
@@ -15,7 +26,7 @@ def select(slug: str, repo: str, store: RedisStore) -> str:
     candidates = {
         name: config
         for name in store.slugs()
-        if (config := store.config(name)).state == "running" and Path(config.repo).resolve() == Path(repo).resolve()
+        if (config := store.config(name)).state == "running" and repository(config.repo) == repository(repo)
     }
     record = key(repo)
     previous = store.redis.hget(record, "owner")
