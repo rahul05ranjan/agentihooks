@@ -1,5 +1,6 @@
 import pytest
 
+from tests.swarm_ledger import test_client_conflict_retry as conflict_retry
 from tests.swarm_ledger import test_ledger_authority as authority
 
 
@@ -36,3 +37,9 @@ def test_http_transport_compensates_only_mutation_instrumentation(monkeypatch, m
         "application/json",
     )
     assert observed == [expected]
+
+
+@pytest.mark.parametrize("mutant, expected", [("", 10), ("stats", 70), ("scripts.sample.x_value__mutmut_1", 70)])
+def test_concurrent_add_writers_compensate_only_mutation_instrumentation(monkeypatch, mutant, expected):
+    monkeypatch.setenv("MUTANT_UNDER_TEST", mutant)
+    assert conflict_retry.Crowded("http://127.0.0.1:1234", {}, None, []).timeout == expected
