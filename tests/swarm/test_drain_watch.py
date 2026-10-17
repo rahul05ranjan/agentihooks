@@ -35,12 +35,11 @@ def _drain_swarm(
     slug=SLUG,
     week=7.5,
     started_at=0,
-    read_at=FRESH_AT,
 ):
     store = store or _store()
     store.redis.set(
         store.key(slug, "quota-capacity"),
-        json.dumps({**DECISION, "accounts": [_read(row("alpha", state, 1, 40.0, week, harness), read_at)]}),
+        json.dumps({**DECISION, "accounts": [_read(row("alpha", state, 1, 40.0, week, harness), FRESH_AT)]}),
     )
     store.put_agent(
         slug,
@@ -92,8 +91,11 @@ def test_a_stored_reading_past_the_freshness_window_or_never_read_is_not_drainin
     assert drain_watch.draining(_read(closed, 100.0), Limits(), 100.0 + 900)
     assert not drain_watch.draining(_read(closed, 100.0), Limits(), 100.0 + 901)
     assert not drain_watch.draining(closed, Limits(), 100.0)
-    found = drain_watch.findings(_drain_swarm(read_at=1_000.0), SLUG, Limits(), 1_000_000 + 16 * MINUTE)
-    assert found == []
+    store = _drain_swarm()
+    old = {**DECISION, "accounts": [_read(row("alpha", "CLOSED", 1, 40.0, 7.5), 1_000.0)]}
+    store.redis.set(store.key(SLUG, "quota-capacity"), json.dumps(old))
+    assert drain_watch.findings(store, SLUG, Limits(), 1_000_000 + 15 * MINUTE)
+    assert drain_watch.findings(store, SLUG, Limits(), 1_000_000 + 16 * MINUTE) == []
 
 
 def test_a_closed_codex_account_counts_as_draining():

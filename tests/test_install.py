@@ -439,6 +439,7 @@ class TestClaudeRouting:
         from scripts import claude_quota_balancer as balancer
         from scripts.routing import place
         from scripts.routing.settings import FileSettings
+        from tests.test_agents_quota import HEADER
 
         credential = balancer.Credential("AH_CC_TOKEN_ALPHA", "secret")
         result = balancer.ProbeResult(
@@ -465,27 +466,7 @@ class TestClaudeRouting:
         assert install.cmd_balance(include_fable=False, refresh=False, timeout=10) == 0
         assert nows == [77.0]
         lines = capsys.readouterr().out.splitlines()
-        assert lines[0].split() == [
-            "#",
-            "HARNESS",
-            "ACCOUNT",
-            "KIND",
-            "STATE",
-            "SESSIONS",
-            "WEIGHT",
-            "CAP",
-            "ROUTING",
-            "LEFT",
-            "5H",
-            "LEFT",
-            "5H",
-            "RESET",
-            "7D",
-            "LEFT",
-            "7D",
-            "RESET",
-            "AGE",
-        ]
+        assert lines[0].split() == HEADER
         assert lines[2].split() == [
             "1",
             "claude",
