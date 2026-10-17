@@ -45,6 +45,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- `terminate-agent --stand-down` reports a Redis error with whether the
+  conversation is fenced, names a process with unregistered conversations as
+  unknown, refuses to fence a conversation that exited after its plan, refuses
+  `--type claude` and prints one JSON report with `--json`.
 - The quota usage banner test passes in any test order: tests that change the
   banner cadence restore it, and a regression test runs them before it.
 - Launch checks report unavailable process observations without inventing profile,
