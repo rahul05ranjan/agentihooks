@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 from playwright import sync_api
 
+from tests import mutation_trace
 from tests.swarm_ledger import test_client_conflict_retry as conflict_retry
 from tests.swarm_ledger import test_ledger_authority as authority
 
@@ -49,7 +50,12 @@ def test_concurrent_add_writers_compensate_only_mutation_instrumentation(monkeyp
 
 
 @pytest.mark.parametrize(
-    "mutant, expected", [("", 1500), ("stats", 10500), ("scripts.sample.x_value__mutmut_1", 10500)]
+    "mutant, expected",
+    [
+        ("", 1500),
+        ("stats", 1500 * mutation_trace.MUTATION_TRACE_FACTOR),
+        ("scripts.sample.x_value__mutmut_1", 1500 * mutation_trace.MUTATION_TRACE_FACTOR),
+    ],
 )
 @pytest.mark.parametrize("owner", [sync_api.Page, sync_api.BrowserContext])
 @pytest.mark.parametrize("setter", ["set_default_timeout", "set_default_navigation_timeout"])
