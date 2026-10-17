@@ -1,6 +1,7 @@
 import asyncio
 import subprocess
 import sys
+from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -49,7 +50,7 @@ def test_supervisor_restarts_an_exited_runner_without_machine_timers(monkeypatch
         [sys.executable, "-m", "scripts.scheduler.service", "run"],
         [sys.executable, "-m", "scripts.scheduler.service", "run"],
     ]
-    assert all(call.kwargs == {} for call in spawn.call_args_list)
+    assert all(call.kwargs == {"cwd": Path(service.__file__).resolve().parents[2]} for call in spawn.call_args_list)
     assert [call.args for call in stop.wait.call_args_list] == [(1,), (1,)]
     assert all(not child.terminate.called for child in children)
 
