@@ -10,6 +10,7 @@ PROTECTED = {"dev", "main", "master"}
 CLEAN_IDLE = 2 * 3600
 DIRTY_IDLE = 24 * 3600
 NESTED_DEPTH = 8
+OWNER_LEFT = "clean and on a remote, owner left"
 
 
 def _is_worktree(path: Path) -> bool:
@@ -90,6 +91,8 @@ def _idle_verdict(state: TreeState, lease: Lease | None, idle: float) -> tuple[s
     if lease and lease.kind == "ephemeral":
         return ("remove", "throwaway checkout, owner gone") if idle >= CLEAN_IDLE else ("keep", "throwaway, recent")
     if not state.dirty and not state.unpushed:
+        if lease and lease.holders:
+            return "remove", OWNER_LEFT
         return ("remove", "clean and on a remote") if idle >= CLEAN_IDLE else ("keep", "clean, recent")
     if idle >= DIRTY_IDLE:
         return "snapshot", "unique work, owner gone: push to wip/ then remove"
@@ -105,4 +108,4 @@ def classify(path: Path, root: Root, snap: Snapshot) -> Finding:
     action, reason = ("keep", held) if held else _idle_verdict(state, lease, snap.now - state.last_touch)
     if state.busy and held == f"git {state.busy} in progress":
         action = "skip"
-    return Finding(str(path), root.id, "worktree", action, reason, state.last_touch)
+    return Finding(str(path), root.id, "worktree", action, reason, state.last_touch, immediate=reason == OWNER_LEFT)

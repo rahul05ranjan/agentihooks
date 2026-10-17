@@ -59,7 +59,7 @@ def test_live_owner_and_boot_grace_hold_the_worktree(repo):
     add_holder(path, "worktree", Holder("", 4242, 77, "boot-1"), 0.0)
     age(path, 30 * HOUR)
     assert verdict(repo, path, table={4242: process(4242, start=77)}) == ("keep", "owner session alive")
-    assert verdict(repo, path, table={4242: process(4242, start=78)}) == ("remove", "clean and on a remote")
+    assert verdict(repo, path, table={4242: process(4242, start=78)}) == ("remove", "clean and on a remote, owner left")
     assert verdict(repo, path, uptime=600) == ("keep", "boot grace")
 
 
