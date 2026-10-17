@@ -9,7 +9,6 @@ from urllib.parse import urlsplit
 import pytest
 import yaml
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
