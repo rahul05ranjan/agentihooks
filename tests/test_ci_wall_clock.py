@@ -163,3 +163,98 @@ def test_lint_checks_the_head_tree_with_the_protected_timing_grader():
     assert 'cd "$RUNNER_TEMP/grader"' in step["run"]
     assert 'python -m scripts.ci_wall_clock --root "$GITHUB_WORKSPACE"' in step["run"]
     assert "lint" in workflow["jobs"]["gate-required"]["needs"]
+
+
+@pytest.mark.parametrize("assertion", ["assertLess", "assertLessEqual", "assertGreater", "assertGreaterEqual"])
+def test_discovers_each_unittest_elapsed_comparison(tmp_path, assertion, capsys):
+    from scripts.ci_wall_clock import main
+
+    directory = tmp_path / "tests"
+    directory.mkdir()
+    (directory / "test_budget.py").write_text(
+        "import time\nclass TestBudget:\n    def test_budget(self):\n        started = time.monotonic()\n"
+        f"        self.{assertion}(time.monotonic() - started, 1)\n"
+    )
+    assert main(["--root", str(tmp_path)]) == 1
+    assert "TestBudget.test_budget requires pytest.mark.wall_clock" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import time\ndef measured(start):\n    return time.monotonic() - start, 0\ndef test_budget():\n    sample = measured(time.monotonic())\n    alias = sample\n    assert alias[0] < 1",
+        "import time\ndef measured(start):\n    return time.monotonic() - start, 0\ndef test_budget():\n    sample = measured(start=time.monotonic())\n    assert sample[-2] < 1",
+        "import time\nstarts = []\ndef test_budget():\n    starts.append(time.monotonic())\n    assert time.monotonic() - starts[0] < 1",
+        "import time\ndef test_budget():\n    clock = time.monotonic\n    now = clock\n    started = now()\n    assert now() - started < 1",
+        "import time\ndef test_budget():\n    clock = time.monotonic\n    clock = clock\n    started = clock()\n    assert clock() - started < 1",
+    ],
+)
+def test_discovers_aliased_samples_and_clock_functions(tmp_path, source, capsys):
+    from scripts.ci_wall_clock import main
+
+    directory = tmp_path / "tests"
+    directory.mkdir()
+    (directory / "test_budget.py").write_text(source)
+    assert main(["--root", str(tmp_path)]) == 1
+    assert "test_budget requires pytest.mark.wall_clock" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "def test_result():\n    choose = lambda: 1\n    value = choose()\n    assert value < 2",
+        "import time\ndef test_stamp():\n    value = 1\n    value = value\n    assert time.monotonic() - value > 0",
+        "import os\nimport time\ndef test_stamp():\n    assert time.monotonic() - os.getpid() > 0",
+        "import time\ndef action():\n    pass\ndef test_stamp():\n    assert time.monotonic() - (action() or 0) > 0",
+        "import time\nclass TestBudget:\n    def test_timestamp(self):\n        self.assertLess(time.time(), 9999999999)",
+    ],
+)
+def test_does_not_treat_functional_values_as_clock_measurements(tmp_path, source):
+    from scripts.ci_wall_clock import main
+
+    directory = tmp_path / "tests"
+    directory.mkdir()
+    (directory / "test_result.py").write_text(source)
+    assert main(["--root", str(tmp_path)]) == 0
+
+
+def test_follows_transitive_helpers_and_stops_an_import_cycle(tmp_path, capsys):
+    from scripts.ci_wall_clock import main
+
+    directory = tmp_path / "tests"
+    directory.mkdir()
+    (directory / "first.py").write_text("from tests.second import measured\n")
+    (directory / "second.py").write_text(
+        "from tests.first import measured\nimport time\ndef measured(start):\n    return time.monotonic() - start\n"
+    )
+    (directory / "test_budget.py").write_text(
+        "import time\nfrom tests.first import measured\ndef test_budget():\n    assert measured(time.monotonic()) < 1\n"
+    )
+    assert main(["--root", str(tmp_path)]) == 1
+    assert "test_budget requires pytest.mark.wall_clock" in capsys.readouterr().out
+
+
+def test_reports_every_bound_and_continues_after_a_parse_error(tmp_path, capsys, monkeypatch):
+    from scripts.ci_wall_clock import main
+
+    directory = tmp_path / "tests"
+    directory.mkdir()
+    (directory / "test_a_broken.py").write_text("def test_broken(")
+    (directory / "test_b_budget.py").write_text(
+        "import time\ndef test_one():\n    start = time.monotonic()\n    assert time.monotonic() - start < 1\n"
+        "def test_two():\n    start = time.monotonic()\n    assert time.monotonic() - start < 2\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    assert main([]) == 1
+    output = capsys.readouterr().out
+    assert "Wall clock markers: 2 files, 2 elapsed bounds, 3 problems" in output
+    assert "test_a_broken.py: cannot parse:" in output
+    assert "test_one requires pytest.mark.wall_clock" in output
+    assert "test_two requires pytest.mark.wall_clock" in output
+
+
+def test_reports_an_empty_tree_with_an_actionable_error(tmp_path, capsys):
+    from scripts.ci_wall_clock import main
+
+    assert main(["--root", str(tmp_path)]) == 1
+    assert "::error::No Python test files found" in capsys.readouterr().out
