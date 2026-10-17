@@ -654,6 +654,16 @@ def test_a_documentation_task_takes_the_seat_when_no_urgent_or_high_task_is_clai
     assert spawned(store, config, ledger, found) == [("eng", "doc-s")]
 
 
+@pytest.mark.parametrize("autonomy", ["assist", "delegate"])
+def test_a_swarm_low_task_that_unblocks_work_is_never_proposed_or_put_at_the_queue_head(store, home, shipped, autonomy):
+    store.update(SLUG, autonomy=autonomy, max_eng=3)
+    ledger, found = Ledger(), stamped(ladder(), {"a": "swarm"}, rank="low")
+    actions = dispatcher.rank_pass(SLUG, store.config(SLUG), store, ledger, found, NOW)
+    assert proposed(actions) == (["b", "c"] if autonomy == "assist" else [])
+    assert "a" not in {task_id for task_id, _, _ in ledger.comments}
+    assert ledger.comments
+
+
 def chain_of(*ids):
     return [task(task_id, phase="", depends_on=list(ids[index - 1 : index])) for index, task_id in enumerate(ids)]
 

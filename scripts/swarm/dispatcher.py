@@ -2,10 +2,11 @@
 
 Each tick it orders every claimable task in focus, leaves included, by the longest open dependency chain behind it,
 then the open work it unblocks, the bottleneck lane, focus order and ledger position. A rank the master or the swarm
-set is a default it reorders; only an operator rank, set by him or relayed with his quoted words, orders ahead of or
-behind that queue, and work the swarm generated at rank low, such as documentation tasks, waits behind it. At delegate and full the tick claims from this queue, resumed work first within a rank band and
-clear territory before overlapping, and the dispatcher writes no rank: it comments on a task only when the task
-enters the head of its lane's queue, as many tasks as the lane has seats among those that unblock work or carry an
+set is a default it reorders; only an operator rank, set by him or relayed with his quoted words, orders ahead of
+that queue, and an operator rank or a low rank the swarm set on work it generated, such as documentation tasks,
+orders behind it; that low work never leads the head, the chain guard or a proposal. At delegate and full the tick
+claims from this queue, resumed work first within a rank band and clear territory before overlapping, and the
+dispatcher writes no rank: it comments on a task only when the task enters the head of its lane's queue, as many tasks as the lane has seats among those that unblock work or carry an
 operator rank, or leaves it while still open; a lane with no seats keeps its head until seats return. When a task on
 the critical chain of the work no freeze or focus holds merges, its claimable successor heads the queue ahead of every
 band and takes the next free seat in its lane, and the dispatcher reports the seconds from that merge to the claim on
@@ -184,7 +185,12 @@ def rank_pass(slug, config, store, ledger, doc, now_ms):
     known, named = {t["id"]: t for t in doc["tasks"]}, bottleneck.read(store, slug).get("bottleneck")
     graph, fix = hierarchy.project(doc)[0], freeze.fix_phase(config)
     released = release_wait.checker(config.repo)
-    claimable = {task_id for task_id, t in known.items() if tick.ready(t, known, doc, graph, fix) and released(t)}
+    deferred = _deferred(doc)
+    claimable = {
+        task_id
+        for task_id, t in known.items()
+        if task_id not in deferred and tick.ready(t, known, doc, graph, fix) and released(t)
+    }
     scores, fixed = leverage(doc), _fixed(doc)
     if config.autonomy in APPLIES:
         before = _saved_heads(store, slug)
