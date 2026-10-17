@@ -79,6 +79,7 @@ def test_scheduled_broadcast_retains_delivery_and_normal_broadcasts(monkeypatch)
 def test_broadcast_recovers_a_crash_between_fire_and_publication(monkeypatch):
     import fakeredis
 
+    import hooks.context.scheduled_broadcasts as scheduled_broadcasts
     from hooks.context import broadcast
     from scripts.scheduler.core import Scheduler
     from scripts.scheduler.slots import BroadcastSlot
@@ -93,7 +94,7 @@ def test_broadcast_recovers_a_crash_between_fire_and_publication(monkeypatch):
         raise RuntimeError("crash before publication")
 
     with monkeypatch.context() as fault:
-        fault.setattr(BroadcastSlot, "deliver", crash)
+        fault.setattr(scheduled_broadcasts, "publish", crash)
         with pytest.raises(RuntimeError, match="^crash before publication$"):
             scheduler.run_due(now=101)
     assert broadcast.list_broadcasts() == []

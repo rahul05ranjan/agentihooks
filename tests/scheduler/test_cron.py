@@ -33,9 +33,11 @@ def test_cron_uses_standard_weekday_and_explicit_timezone():
     import fakeredis
 
     from scripts.scheduler.core import Scheduler
+    from scripts.scheduler.model import next_due
 
     scheduler = Scheduler(fakeredis.FakeRedis(decode_responses=True), machine="proof")
     cron = scheduler.cron(owner="operator", expression="0 9 * * 0", payload="Sunday", timezone="Europe/Madrid", now=0)
+    assert next_due("0 9 * * 0", "Europe/Madrid", 0) == 288000
     assert cron.record["due"] == 288000
     assert cron.record["expression"] == "0 9 * * 0"
     assert cron.record["timezone"] == "Europe/Madrid"
