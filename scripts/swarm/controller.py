@@ -4,6 +4,7 @@ import os
 import sys
 import time
 import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from scripts.swarm import lease
@@ -116,17 +117,48 @@ class FencedRuntime:
             return runtime.spawn(config, lane, name, {**task, "controller_epoch": self.held.epoch})
 
 
+def _read(path: str) -> str:
+    try:
+        return Path(path).read_text().strip()
+    except OSError:
+        return ""
+
+
+def _host() -> str:
+    boot = _read("/proc/sys/kernel/random/boot_id")
+    try:
+        return f"{boot}:{os.readlink('/proc/self/ns/pid')}" if boot else ""
+    except OSError:
+        return ""
+
+
+def _started(pid) -> str:
+    fields = _read(f"/proc/{pid}/stat").rsplit(")", 1)[-1].split()
+    return fields[19] if len(fields) > 19 and fields[0] != "Z" else ""
+
+
+def _holder() -> dict:
+    host, start = _host(), _started(os.getpid())
+    return {"host": host, "pid": os.getpid(), "start": start} if host and start else {}
+
+
+def _dead(raw: str) -> bool:
+    held = json.loads(raw) if raw.startswith("{") else {}
+    host = _host()
+    return bool(host and held.get("start")) and held.get("host") == host and _started(held.get("pid")) != held["start"]
+
+
 def take_tick_lock(store: RedisStore, slug: str, held: lease.Lease, ttl_ms: int) -> str | None:
     from redis.exceptions import WatchError
 
     key = store.key(slug, "tick-lock")
-    token = json.dumps({"epoch": held.epoch, "token": uuid.uuid4().hex})
+    token = json.dumps({"epoch": held.epoch, "token": uuid.uuid4().hex, **_holder()})
     with store.redis.pipeline() as pipe:
         try:
             pipe.watch(key, store.key(slug, "control-owner"))
             lease.require(store, slug, held)
             raw = pipe.get(key)
-            if raw and (not raw.startswith("{") or json.loads(raw)["epoch"] == held.epoch):
+            if raw and (not raw.startswith("{") or json.loads(raw)["epoch"] == held.epoch) and not _dead(raw):
                 return None
             pipe.multi()
             pipe.set(key, token, px=ttl_ms)

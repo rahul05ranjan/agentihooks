@@ -1,6 +1,7 @@
 import json
 import subprocess
 from types import SimpleNamespace
+from unittest.mock import ANY
 
 import pytest
 
@@ -570,6 +571,7 @@ class TestCheckPass:
             "at": NOW,
             "phase": "p8",
             "inputs": intent._fingerprint(DOC, DOC["tasks"][0]),
+            "persisted_at": ANY,
         }
         assert got.viewed == [URL]
         assert got.ledger.updates == [(SLUG, TASK, {"state": "claimed"}, "swarm")]
@@ -639,6 +641,7 @@ class TestCheckPass:
             "at": NOW,
             "phase": "p8",
             "inputs": intent._fingerprint(DOC, DOC["tasks"][0]),
+            "persisted_at": ANY,
         }
         assert (got.ledger.updates, got.mail.sent, rows(tmp_path)) == ([], [], [])
         assert got.actions == [f"task {TASK} intent check pass"]

@@ -78,3 +78,65 @@ def test_a_lock_without_a_verifiable_holder_is_not_stolen(locked_store, original
     store.redis.set(store.key("sw", "tick-lock"), original, px=600_000)
     assert controller.take_tick_lock(store, "sw", held, 600_000) is None
     assert store.redis.get(store.key("sw", "tick-lock")) == original
+
+
+STAT = "7 (tick (x)) " + " ".join(["S", *map(str, range(4, 52))])
+SHORT = "7 (x) " + " ".join(["S", *map(str, range(4, 22))])
+
+
+def test_the_holder_start_is_the_process_start_field(monkeypatch):
+    stats = {"/proc/7/stat": STAT, "/proc/8/stat": STAT.replace(") S ", ") Z "), "/proc/9/stat": SHORT}
+    monkeypatch.setattr(controller, "_read", lambda path: stats.get(path, ""))
+    assert controller._started(7) == "22"
+    assert controller._started(8) == ""
+    assert controller._started(9) == ""
+    assert controller._started(10) == ""
+
+
+def test_the_host_names_the_boot_and_the_pid_namespace(monkeypatch):
+    monkeypatch.setattr(controller, "_read", lambda path: "boot" if path == "/proc/sys/kernel/random/boot_id" else "")
+    monkeypatch.setattr(controller.os, "readlink", lambda path: f"ns of {path}")
+    assert controller._host() == "boot:ns of /proc/self/ns/pid"
+    monkeypatch.setattr(controller, "_read", lambda path: "")
+    assert controller._host() == ""
+
+
+def test_an_unreadable_pid_namespace_names_no_host(monkeypatch):
+    def refused(path):
+        raise PermissionError(path)
+
+    monkeypatch.setattr(controller, "_read", lambda path: "boot")
+    monkeypatch.setattr(controller.os, "readlink", refused)
+    assert controller._host() == ""
+
+
+@pytest.mark.parametrize(("host", "start", "holder"), [("h", "s", True), ("", "s", False), ("h", "", False)])
+def test_a_holder_is_recorded_only_with_its_host_and_start(monkeypatch, host, start, holder):
+    monkeypatch.setattr(controller, "_host", lambda: host)
+    monkeypatch.setattr(controller, "_started", lambda pid: start)
+    expected = {"host": host, "pid": controller.os.getpid(), "start": start} if holder else {}
+    assert controller._holder() == expected
+
+
+@pytest.mark.parametrize(
+    ("host", "lock", "dead"),
+    [
+        ("h", {"host": "h", "pid": 7, "start": "old"}, True),
+        ("h", {"host": "h", "pid": 7, "start": "now"}, False),
+        ("h", {"host": "other", "pid": 7, "start": "old"}, False),
+        ("h", {"host": "h", "pid": 7}, False),
+        ("", {"host": "", "pid": 7, "start": "old"}, False),
+    ],
+)
+def test_only_a_local_holder_whose_process_is_gone_is_dead(monkeypatch, host, lock, dead):
+    monkeypatch.setattr(controller, "_host", lambda: host)
+    monkeypatch.setattr(controller, "_started", lambda pid: "now" if pid == 7 else "")
+    assert controller._dead(json.dumps({"epoch": 1, "token": "t", **lock})) is dead
+    assert controller._dead("legacy") is False
+
+
+def test_read_strips_a_file_and_reads_a_missing_one_as_empty(tmp_path):
+    path = tmp_path / "boot_id"
+    path.write_text("abc\n")
+    assert controller._read(str(path)) == "abc"
+    assert controller._read(str(tmp_path / "missing")) == ""

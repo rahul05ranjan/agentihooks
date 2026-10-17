@@ -802,6 +802,7 @@ class Check:
             "inputs": judgment.inputs,
             **_pending(pr),
             **_split_fields(task, task["pr_url"]),
+            "persisted_at": int(time.time() * 1000),
         }
         record = verdicts.write(task["id"], verdict, reason, self.now_ms, **fields)
         self._save_pull(task, {**record, "head": head, "url": task["pr_url"]})
@@ -851,6 +852,7 @@ class Check:
             coach_rounds=previous["coach_rounds"],
             head=previous["head"],
             phase=task.get("phase"),
+            persisted_at=previous.get("persisted_at"),
             **{"url": task["pr_url"], **_split_fields(task, task["pr_url"])},
         )
 
