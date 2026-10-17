@@ -376,3 +376,29 @@ def test_syntax_errors_name_the_source_that_failed_to_parse(tmp_path, capsys):
     with pytest.raises(SyntaxError) as error:
         main(["--root", str(tmp_path)])
     assert error.value.filename == str(helper)
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        (
+            "def measured(start):\n    return (0, time.monotonic() - start)\ndef test_budget():\n    started = time.monotonic()\n    assert measured(started)[1] < 1",
+            1,
+        ),
+        (
+            "def measured():\n    start = time.monotonic()\n    return (time.monotonic() - start, 0)\ndef test_result():\n    result = measured()\n    assert result[1] < 1",
+            0,
+        ),
+        (
+            "from unittest import TestCase\nclass TestBudget(TestCase):\n    def test_budget(self):\n        self.case = self\n        started = time.monotonic()\n        self.case.assertLess(time.monotonic() - started, 1)",
+            1,
+        ),
+    ],
+)
+def test_keeps_indexed_helper_origins_and_nested_unittest_receivers(tmp_path, body, expected):
+    from scripts.ci_wall_clock import main
+
+    directory = tmp_path / "tests"
+    directory.mkdir()
+    (directory / "test_budget.py").write_text("import time\n" + body)
+    assert main(["--root", str(tmp_path)]) == expected
