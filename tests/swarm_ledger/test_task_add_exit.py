@@ -1,4 +1,5 @@
 import json
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -82,6 +83,29 @@ def test_a_task_add_the_server_neither_applied_nor_rejected_exits_nonzero(monkey
     assert capsys.readouterr().out == ""
 
 
+@pytest.mark.parametrize("kind", [SystemExit, ledger.Missing])
+def test_a_task_add_the_server_refused_over_http_says_it_was_not_added(monkeypatch, kind):
+    sent = []
+
+    def call(slug, ops):
+        sent.extend(ops)
+        raise kind("server refused: 400 schema_invalid")
+
+    monkeypatch.setattr(ledger, "call", call)
+    with pytest.raises(kind) as exit_:
+        add("t9", "Fix", "--phase", "p2")
+    assert str(exit_.value) == "task t9 was not added: server refused: 400 schema_invalid"
+    assert [op["task"] for op in sent] == ["t9"]
+
+
+def test_a_refused_task_add_leaves_out_the_unchecked_duplicate_notice(monkeypatch, doc):
+    unchecked = f"{ledger.ledger_task_duplicates.UNCHECKED_PREFIX} for t9"
+    serve(monkeypatch, doc, {"rejected": ["x"], "_meta": {"warnings": [unchecked, "no room"]}})
+    with pytest.raises(SystemExit) as exit_:
+        add("t9", "Fix", "--phase", "p2")
+    assert str(exit_.value) == "task t9 was not added: no room"
+
+
 def test_a_task_add_the_server_applied_prints_its_id_and_returns(monkeypatch, doc, capsys):
     sent = serve(monkeypatch, doc)
     add("t9", "Fix", "--phase", "p2")
@@ -95,7 +119,19 @@ def test_other_ops_keep_their_refusal_text_and_need_no_applied_list(monkeypatch)
     sent = serve(monkeypatch, {}, {"_meta": {}})
     assert ledger.send(args, "comment", item="tasks/t1", text="Note") == {"_meta": {}}
     assert [(op["op"], op["item"], op["text"]) for op in sent] == [("comment", "tasks/t1", "Note")]
-    serve(monkeypatch, {}, {"rejected": ["x"], "_meta": {"warnings": ["no such item"]}})
+    unchecked = f"{ledger.ledger_task_duplicates.UNCHECKED_PREFIX} for t1"
+    serve(monkeypatch, {}, {"rejected": ["x"], "_meta": {"warnings": [unchecked, "no such item"]}})
     with pytest.raises(SystemExit) as exit_:
         ledger.send(args, "comment", item="tasks/t1", text="Note")
-    assert str(exit_.value) == "no such item"
+    assert str(exit_.value) == f"{unchecked}; no such item"
+    monkeypatch.setattr(ledger, "call", lambda slug, ops: sys.exit("server refused: 404 gone"))
+    with pytest.raises(SystemExit) as exit_:
+        ledger.send(args, "comment", item="tasks/t1", text="Note")
+    assert str(exit_.value) == "server refused: 404 gone"
+
+
+def test_a_task_add_keeps_a_numeric_exit_code(monkeypatch):
+    monkeypatch.setattr(ledger, "call", lambda slug, ops: sys.exit(3))
+    with pytest.raises(SystemExit) as exit_:
+        add("t9", "Fix", "--phase", "p2")
+    assert exit_.value.code == 3

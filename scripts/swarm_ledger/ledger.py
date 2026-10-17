@@ -314,9 +314,12 @@ def op(kind, args, /, **fields):
 
 def refused(state, ops=(), fallback="", lead=""):
     if rejected := state.get("rejected"):
-        reasons = [w for w in state.get("_meta", {}).get("warnings", []) if not core.size_warning(w)] or [
-            unexplained(o) for o in ops if o["id"] in rejected
-        ]
+        warnings = state.get("_meta", {}).get("warnings", [])
+        reasons = [
+            w
+            for w in warnings
+            if not core.size_warning(w) and not (lead and w.startswith(ledger_task_duplicates.UNCHECKED_PREFIX))
+        ] or [unexplained(o) for o in ops if o["id"] in rejected]
         sys.exit(lead + ("; ".join(reasons) or fallback or f"rejected: {rejected}"))
 
 
@@ -340,8 +343,13 @@ def held(state):
 
 def send(args, kind, /, **fields):
     ops = [op(kind, args, **fields)]
-    state = call(args.slug, ops)
     lead = f"task {fields['task']} was not added: " if kind == "task_add" else ""
+    try:
+        state = call(args.slug, ops)
+    except SystemExit as exc:
+        if lead and isinstance(exc.code, str):
+            raise type(exc)(lead + exc.code) from None
+        raise
     refused(state, ops, lead=lead)
     if lead and not state.get("applied"):
         sys.exit(f"{lead}the ledger server did not apply it")
