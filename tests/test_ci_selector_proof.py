@@ -20,7 +20,8 @@ def test_selector_proof_is_unprivileged_and_restricted_to_plants():
     assert proof[True]["push"]["branches"] == ["diffcheck/selector-*"]
     assert proof["permissions"] == {"contents": "read"}
     job = proof["jobs"]["selection"]
-    assert job["runs-on"] == "ubuntu-latest"
+    assert "'anton-oss-light'" in job["runs-on"]
+    assert job["runs-on"].endswith("|| 'ubuntu-latest' }}")
     assert "Gate — Required" not in json.dumps(proof)
     assert "secrets." not in json.dumps(proof)
     checkouts = [step for step in job["steps"] if step.get("uses", "").startswith("actions/checkout@")]
