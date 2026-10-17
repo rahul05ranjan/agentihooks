@@ -70,6 +70,7 @@ def test_refinement_selects_names_without_rendering_mutant_source(tmp_path, monk
     )
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("mutmut.configuration._config", None)
+    _project(tmp_path, {})
     (tmp_path / "sample.py").write_text(source)
     selected = {"sample.py": (changed, ["tests/test_sample.py"])}
     stats = SharedStats(tmp_path / "stats", "head")
