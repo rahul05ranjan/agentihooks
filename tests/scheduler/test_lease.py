@@ -50,11 +50,13 @@ def test_dispatch_lease_renews_until_stopped_and_joins_before_release(monkeypatc
 
 
 @pytest.mark.parametrize("decode", [False, True])
-def test_fenced_dispatch_accepts_both_redis_response_encodings(decode):
+def test_fenced_dispatch_accepts_both_redis_response_encodings(monkeypatch, decode):
     import fakeredis
 
+    from scripts.scheduler import lease
     from scripts.scheduler.core import Scheduler
 
+    monkeypatch.setattr(lease, "Thread", Mock())
     scheduler = Scheduler(fakeredis.FakeRedis(decode_responses=decode), machine="proof")
     timer = scheduler.timer(owner="operator", payload="notice", delay=1, now=0)
     timer.start(now=0)
