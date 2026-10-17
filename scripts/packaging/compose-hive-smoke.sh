@@ -20,7 +20,19 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=$run" -addext "subj
 cp "$tls/cert.pem" "$tls/ca.pem"
 chmod 0755 "$tls"
 chmod 0644 "$tls"/*.pem
-bash scripts/packaging/pull-runtime-image.sh mirror.gcr.io/library/redis:7
+shim="$(mktemp -d)"
+real="$(command -v docker)"
+cat > "$shim/docker" <<EOF
+#!/usr/bin/env bash
+if [[ " \$* " == *" pull "* && ! -e "$shim/stalled" ]]; then
+  touch "$shim/stalled"
+  echo "planted mirror stall on the first redis pull" >&2
+  exec sleep 600
+fi
+exec "$real" "\$@"
+EOF
+chmod +x "$shim/docker"
+PATH="$shim:$PATH" PULL_ATTEMPT_SECONDS=30 bash scripts/packaging/pull-runtime-image.sh mirror.gcr.io/library/redis:7
 build=(--build)
 if [[ -n "${SWARM_SMOKE_IMAGE:-}" ]]; then
   docker tag "$SWARM_SMOKE_IMAGE" ghcr.io/the-cloud-clockwork/agentihooks-swarm:dev
