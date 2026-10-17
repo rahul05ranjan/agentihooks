@@ -70,6 +70,15 @@ def parse_fields(text):
     return dict(line.split("=", 1) for line in text.splitlines() if "=" in line and not line.startswith(" "))
 
 
+def _ledger_token(slug, name):
+    secret = os.environ.get("SWARM_SECRET")
+    if not secret:
+        return {}
+    from scripts.swarm_ledger.ledger_authority import agent_token
+
+    return {"AGENTIHOOKS_LEDGER_AGENT_TOKEN": agent_token(secret, slug, name)}
+
+
 def _set(value):
     return "" if value in (None, "", AUTO) else value
 
@@ -741,8 +750,9 @@ class HerdrRuntime:
                 text=True,
                 timeout=SPAWN_TIMEOUT_S,
                 env={
-                    **{key: value for key, value in os.environ.items() if key != PREDECESSOR},
+                    **{key: value for key, value in os.environ.items() if key not in (PREDECESSOR, "SWARM_SECRET")},
                     **({PREDECESSOR: predecessor} if predecessor else {}),
+                    **_ledger_token(config.slug, name),
                     "AGENTIHOOKS_SWARM": config.slug,
                     "AGENTIHOOKS_SWARM_LANE": lane,
                     "AGENTIHOOKS_SWARM_TASK": task_id,
