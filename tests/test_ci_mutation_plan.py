@@ -407,11 +407,11 @@ def test_a_shard_grades_its_whole_mutants_and_hands_split_units_to_the_merge(tmp
     (tmp_path / "tests/test_sample.py").write_text("pass\n")
     stats = tmp_path / "stats"
     stats.mkdir()
-    whole, split, unchecked = (f"scripts.sample.x_f__mutmut_{index}" for index in (1, 2, 3))
+    whole, split, unchecked, killed = (f"scripts.sample.x_f__mutmut_{index}" for index in (1, 2, 3, 4))
     plan = {
         "shards": 2,
-        "assignments": {whole: 1, split: [1, 0], unchecked: [0, 1]},
-        "costs": {whole: 10, split: 7, unchecked: 7},
+        "assignments": {whole: 1, split: [1, 0], unchecked: [0, 1], killed: [1, 0]},
+        "costs": {whole: 10, split: 7, unchecked: 7, killed: 7},
         "splits": {"scripts.sample.x_f": {"head": ["h"], "slices": [["a"], ["b"]], "costs": [3, 4]}},
     }
     (stats / "plan.json").write_text(json.dumps(plan))
@@ -419,6 +419,7 @@ def test_a_shard_grades_its_whole_mutants_and_hands_split_units_to_the_merge(tmp
         {"name": whole, "status": "killed", "lines": [], "fingerprint": ""},
         {"name": split, "status": "survived", "lines": [2], "fingerprint": "abc", "diff": "changed"},
         {"name": unchecked, "status": "not checked", "lines": [2], "fingerprint": "def", "diff": "changed"},
+        {"name": killed, "status": "killed", "lines": [], "fingerprint": ""},
     ]
     monkeypatch.setattr("scripts.ci_mutation.runner.mutate_files", lambda *args: ({"scripts/sample.py": rows}, ""))
     report = run_gate(
@@ -427,8 +428,8 @@ def test_a_shard_grades_its_whole_mutants_and_hands_split_units_to_the_merge(tmp
     assert report["failed"] is False
     assert report["files"][0]["counts"] == {"killed": 1}
     assert report["units"] == [{"path": "scripts/sample.py", "lines": [2], "rows": rows[1:]}]
-    assert (report["shard"]["expected"], report["shard"]["graded"]) == (3, 2)
-    assert report["shard"]["estimated_worker_seconds"] == 17
+    assert (report["shard"]["expected"], report["shard"]["graded"]) == (4, 3)
+    assert report["shard"]["estimated_worker_seconds"] == 20
 
 
 @pytest.mark.parametrize(
