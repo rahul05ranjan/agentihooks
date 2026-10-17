@@ -9,7 +9,7 @@ class Schedule:
     owner: str
     payload: str
     due: float
-    started_at: float
+    delay: float | None
     expression: str = ""
     timezone: str = "UTC"
 

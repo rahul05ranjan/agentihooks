@@ -18,7 +18,7 @@ def test_a_module_function_connects_as_a_durable_named_slot():
     scheduler = Scheduler(redis, machine="proof")
     timer = scheduler.timer(owner="operator", delay=5, payload="call slot", now=100)
     timer.timeout.connect(capture_signal)
-    timer.start()
+    timer.start(now=100)
     assert timer.timeout.name == "timeout"
     restarted = Scheduler(redis, machine="proof")
     assert restarted.run_due(now=110) == 1

@@ -57,6 +57,6 @@ def test_fenced_dispatch_accepts_both_redis_response_encodings(decode):
 
     scheduler = Scheduler(fakeredis.FakeRedis(decode_responses=decode), machine="proof")
     timer = scheduler.timer(owner="operator", payload="notice", delay=1, now=0)
-    timer.start()
+    timer.start(now=0)
     assert scheduler.run_due(now=1) == 1
     assert timer.state == "fired"

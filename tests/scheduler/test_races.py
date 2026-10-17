@@ -38,11 +38,11 @@ def test_due_now_timer_waits_until_connections_are_ready(scheduler):
     assert scheduler.run_due(now=100) == 0
     timer.timeout.connect(InboxSlot("proof-session"))
     assert scheduler.run_due(now=101) == 0
-    timer.start()
+    timer.start(now=102)
     assert scheduler.run_due(now=102) == 1
     assert [item.text for item in InboxStore(scheduler.redis).pending_items("proof-session")] == ["ready"]
     with pytest.raises(ValueError, match="^only a ready schedule can be started$"):
-        timer.start()
+        timer.start(now=100)
 
 
 @pytest.mark.parametrize("kind", ["timer", "stopwatch"])
@@ -53,11 +53,11 @@ def test_cancel_or_stop_discards_a_claimed_but_undelivered_signal(monkeypatch, s
     if kind == "timer":
         entry = scheduler.timer(owner="operator", payload="cancelled", delay=1, now=100)
         entry.timeout.connect(InboxSlot("proof-session"))
-        entry.start()
+        entry.start(now=100)
     else:
         entry = scheduler.stopwatch(owner="operator", payload="cancelled", limit=1, now=100)
         entry.limit_reached.connect(InboxSlot("proof-session"))
-        entry.start()
+        entry.start(now=100)
 
     def crash(*args):
         raise RuntimeError("crash before transport")
@@ -84,7 +84,7 @@ def test_cron_cancelled_inside_a_slot_never_reactivates_or_calls_later_slots(mon
     cron = scheduler.cron(owner="operator", payload="tick", expression="* * * * *", now=0)
     cron.timeout.connect(InboxSlot("first-slot"))
     cron.timeout.connect(InboxSlot("later-slot"))
-    cron.start()
+    cron.start(now=0)
     original = InboxSlot.deliver
 
     def cancel_after_acceptance(self, event, delivery_id, redis):
@@ -106,7 +106,7 @@ def test_lost_lease_cannot_acknowledge_accepted_delivery(monkeypatch, scheduler)
 
     timer = scheduler.timer(owner="operator", payload="once", delay=1, now=100)
     timer.timeout.connect(InboxSlot("proof-session"))
-    timer.start()
+    timer.start(now=100)
     original = InboxSlot.deliver
     lock_key = scheduler.key("dispatch-lock")
 
@@ -127,7 +127,7 @@ def test_lost_lease_cannot_acknowledge_accepted_delivery(monkeypatch, scheduler)
 
 def test_lease_loss_before_claim_commit_keeps_the_entry_unclaimed(monkeypatch, scheduler):
     timer = scheduler.timer(owner="operator", payload="notice", delay=1, now=100)
-    timer.start()
+    timer.start(now=100)
     pipeline = scheduler.redis.pipeline
     stolen = []
     lock_key = scheduler.key("dispatch-lock")

@@ -27,7 +27,7 @@ def test_default_clock_and_machine_namespace(monkeypatch):
     scheduler = core.Scheduler(redis)
     timer = scheduler.timer(owner="operator", payload="notice", delay=0)
     timer.timeout.connect(InboxSlot("proof-session"))
-    timer.start()
+    timer.start(now=100)
     assert timer.record["kind"] == "timer"
     assert timer.record["started_at"] == 100
     assert timer.record["due"] == 100
@@ -45,7 +45,7 @@ def test_named_signals_only_call_their_own_connected_slots(scheduler):
     timer = scheduler.timer(owner="operator", payload="timeout", delay=1, now=100)
     timer.limit_reached.connect(InboxSlot("wrong-signal"))
     timer.timeout.connect(InboxSlot("right-signal"))
-    timer.start()
+    timer.start(now=100)
     assert scheduler.run_due(now=101) == 1
     inbox = InboxStore(scheduler.redis)
     assert inbox.pending_items("wrong-signal") == []
@@ -60,14 +60,14 @@ def test_signal_disconnect_and_timer_cancel(scheduler):
     connection = timer.timeout.connect(InboxSlot("disconnected"))
     timer.timeout.connect(InboxSlot("connected"))
     timer.timeout.disconnect(connection)
-    timer.start()
+    timer.start(now=100)
     assert scheduler.run_due(now=101) == 1
     inbox = InboxStore(scheduler.redis)
     assert inbox.pending_items("disconnected") == []
     assert [item.text for item in inbox.pending_items("connected")] == ["notice"]
     cancelled = scheduler.timer(owner="operator", payload="cancelled", at=110, now=100)
     cancelled.timeout.connect(InboxSlot("cancelled"))
-    cancelled.start()
+    cancelled.start(now=100)
     cancelled.cancel()
     assert cancelled.state == "cancelled"
     assert scheduler.run_due(now=120) == 0
@@ -83,7 +83,7 @@ def test_inbox_slot_delivers_to_a_seat_after_its_occupant_changes(scheduler):
     inbox.seats.occupy(seat, "first-session", 1)
     timer = scheduler.timer(owner="operator", payload="seat notice", delay=5, now=100)
     timer.timeout.connect(InboxSlot(seat))
-    timer.start()
+    timer.start(now=100)
     inbox.seats.occupy(seat, "next-session", 2)
     assert scheduler.run_due(now=105) == 1
     items = inbox.pending_items(seat)
@@ -100,7 +100,7 @@ def test_inbox_retry_after_transport_acceptance_keeps_one_item(monkeypatch, sche
 
     timer = scheduler.timer(owner="operator", payload="once", delay=1, now=100)
     timer.timeout.connect(InboxSlot("proof-session"))
-    timer.start()
+    timer.start(now=100)
     original = InboxSlot.deliver
 
     def crash(self, event, delivery_id, redis):
@@ -121,7 +121,7 @@ def test_inbox_retry_after_transport_acceptance_keeps_one_item(monkeypatch, sche
 
 def test_dispatch_lock_refuses_a_competing_drain_without_losing_work(scheduler):
     timer = scheduler.timer(owner="operator", payload="notice", delay=1, now=100)
-    timer.start()
+    timer.start(now=100)
     lock = scheduler.redis.lock(scheduler.key("dispatch-lock"), timeout=30)
     assert lock.acquire(blocking=False)
     try:
@@ -156,7 +156,7 @@ def test_stopwatch_default_clock_and_negative_limit(monkeypatch, scheduler):
     clock = [100]
     monkeypatch.setattr(core, "time", SimpleNamespace(time=lambda: clock[0]))
     watch = scheduler.stopwatch(owner="operator", payload="limit", limit=10)
-    watch.start()
+    watch.start(now=100)
     clock[0] = 104
     assert watch.elapsed() == 4
     watch.stop()

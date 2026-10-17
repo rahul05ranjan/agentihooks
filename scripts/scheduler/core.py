@@ -54,10 +54,17 @@ class Entry:
     def state(self) -> str:
         return self.record["state"]
 
-    def start(self) -> None:
+    def start(self, *, now: float | None = None) -> None:
+        now = time.time() if now is None else now
+
         def change(entry):
             if entry["state"] != "ready":
                 raise ValueError("only a ready schedule can be started")
+            entry["started_at"] = now
+            if entry["kind"] == "cron":
+                entry["due"] = next_due(entry["expression"], entry["timezone"], now)
+            elif entry["delay"] is not None:
+                entry["due"] = now + entry["delay"]
             entry["state"] = "active"
 
         self.scheduler.update(self.id, change)
@@ -73,6 +80,8 @@ class Entry:
     def elapsed(self, *, now: float | None = None) -> float:
         now = time.time() if now is None else now
         entry = self.record
+        if entry["started_at"] is None:
+            return 0
         end = entry.get("stopped_at", entry["due"] if entry["state"] == "fired" else now)
         return max(0, end - entry["started_at"])
 
@@ -147,20 +156,20 @@ class Scheduler:
         if delay is not None and delay < 0:
             raise ValueError("delay must not be negative")
         due = at if at is not None else now + delay
-        return self._new(Schedule("timer", owner, payload, due, now))
+        return self._new(Schedule("timer", owner, payload, due, delay))
 
     def stopwatch(self, *, owner: str, payload: str, limit: float, now: float | None = None) -> Entry:
         now = time.time() if now is None else now
         if limit < 0:
             raise ValueError("limit must not be negative")
-        return self._new(Schedule("stopwatch", owner, payload, now + limit, now))
+        return self._new(Schedule("stopwatch", owner, payload, now + limit, limit))
 
     def cron(
         self, *, owner: str, payload: str, expression: str, timezone: str = "UTC", now: float | None = None
     ) -> Entry:
         now = time.time() if now is None else now
         due = next_due(expression, timezone, now)
-        return self._new(Schedule("cron", owner, payload, due, now, expression, timezone))
+        return self._new(Schedule("cron", owner, payload, due, None, expression, timezone))
 
     def _new(self, schedule: Schedule) -> Entry:
         if not schedule.owner or not schedule.payload.strip():
@@ -170,6 +179,7 @@ class Scheduler:
             **asdict(schedule),
             "id": entry_id,
             "state": "ready",
+            "started_at": None,
             "signal": "limit_reached" if schedule.kind == "stopwatch" else "timeout",
             "slots": [],
         }
