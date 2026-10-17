@@ -23,6 +23,19 @@ def statements(node: ast.AST) -> Iterator[ast.AST]:
             yield from statements(child)
 
 
+def aliases_for(tree: ast.Module) -> dict[str, str]:
+    aliases = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            aliases.update((name.asname or name.name, name.name) for name in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            aliases.update((name.asname or name.name, f"{node.module}.{name.name}") for name in node.names)
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and (value := qualified(node.value)):
+            aliases.update((target.id, value) for target in node.targets if isinstance(target, ast.Name))
+    return aliases
+
+
 def bindings_for(function: ast.AST) -> dict:
     bindings = {}
     for node in ast.walk(function):
@@ -54,13 +67,9 @@ def bindings_for(function: ast.AST) -> dict:
 class Timing:
     def __init__(self, tree: ast.Module, helpers: dict) -> None:
         self.functions = {node.name: node for node in ast.walk(tree) if isinstance(node, FUNCTIONS)}
-        self.functions.update(helpers)
-        self.aliases = {}
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                self.aliases.update((name.asname or name.name, name.name) for name in node.names)
-            elif isinstance(node, ast.ImportFrom):
-                self.aliases.update((name.asname or name.name, f"{node.module}.{name.name}") for name in node.names)
+        self.functions.update((name, node) for name, (node, _) in helpers.items())
+        self.aliases = aliases_for(tree)
+        self.helper_aliases = {node: aliases for node, aliases in helpers.values()}
         self.bindings = {}
 
     def bindings_for(self, function: ast.AST) -> dict:
@@ -68,12 +77,25 @@ class Timing:
             self.bindings[function] = bindings_for(function)
         return self.bindings[function]
 
+    def arguments(self, call: ast.Call, helper: ast.AST, caller: ast.AST, seen: frozenset) -> frozenset:
+        positional = [*helper.args.posonlyargs, *helper.args.args]
+        arguments = {parameter.arg: value for parameter, value in zip(positional, call.args)}
+        arguments.update((keyword.arg, keyword.value) for keyword in call.keywords if keyword.arg)
+        return frozenset((helper, name, self.value(value, caller, seen)) for name, value in arguments.items())
+
     def value(self, node: ast.AST, function: ast.AST, seen: frozenset = frozenset()) -> int:
         key = (node, function)
         if key in seen:
             return 0
         seen = seen | {key}
         if isinstance(node, ast.Name):
+            arguments = [
+                item[2]
+                for item in seen
+                if len(item) == 3 and item[0] is function and item[1] == node.id and isinstance(item[2], int)
+            ]
+            if arguments:
+                return max(arguments)
             return max(
                 (self.value(value, function, seen) for value in self.bindings_for(function).get(node.id, [])), default=0
             )
@@ -83,7 +105,8 @@ class Timing:
         if isinstance(node, ast.Call):
             name = qualified(node.func)
             first, _, rest = name.partition(".")
-            name = self.aliases.get(first, first) + (f".{rest}" if rest else "")
+            aliases = self.helper_aliases.get(function, self.aliases)
+            name = aliases.get(first, first) + (f".{rest}" if rest else "")
             if any(name.endswith(f"time.{clock}") for clock in CLOCKS):
                 return 1
             if qualified(node.func) in self.bindings_for(function):
@@ -101,6 +124,7 @@ class Timing:
                 )
             helper = self.functions.get(qualified(node.func))
             if helper is not None:
+                seen = seen | self.arguments(node, helper, function, seen)
                 return max(
                     (
                         self.value(item.value, helper, seen)
@@ -125,6 +149,7 @@ class Timing:
                 default=0,
             )
         if isinstance(node, ast.Call) and (helper := self.functions.get(qualified(node.func))):
+            seen = seen | self.arguments(node, helper, function, seen)
             return max(
                 (
                     self.indexed(item.value, index, helper, seen)
