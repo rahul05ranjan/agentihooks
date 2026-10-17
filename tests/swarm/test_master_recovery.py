@@ -202,6 +202,7 @@ def test_a_lost_master_hive_moves_the_master_to_a_live_hive(store):  # noqa: F81
     assert moved["handoff"].count("unknown:") == 3
     fence = json.loads(store.redis.hget(master_move.fenced("lost"), master.execution_id))
     assert fence == {"slug": "sw", "generation": generation + 1, "at": NOW}
+    assert {"generation": generation + 1, "occupant": master.name, "at": NOW} in store.seats.history("master@sw")
     [(successor, task)] = runtime.masters
     assert task["hive"] == "spare"
     assert moved["successor"] == successor
@@ -344,6 +345,8 @@ def test_master_move_orders_a_handoff_and_pins_the_successor_to_the_hive(store):
     inbox = InboxStore(store.redis)
     args = cli.build_parser().parse_args(["sw", "master", "move", "--to", "spare"])
     assert (args.action, args.to) == ("move", "spare")
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["sw", "master", "move"])
 
     found = master_move.order(store, "sw", "spare", NOW)
 
@@ -360,6 +363,7 @@ def test_master_move_orders_a_handoff_and_pins_the_successor_to_the_hive(store):
         "at": NOW,
     }
     assert master_move.pending(store, "sw") == found
+    assert json.loads(store.redis.get(store.key("sw", "master-move"))) == found
     current = next(a for a in store.agents("sw") if a.name == master.name)
     transfers.record(store, "sw", current, "operator", "", NOW)
     store.put_agent("sw", replace(current, state="finished"))
@@ -370,7 +374,7 @@ def test_master_move_orders_a_handoff_and_pins_the_successor_to_the_hive(store):
     [(_, task)] = runtime.masters
     assert task["hive"] == "spare"
     assert master_move.pending(store, "sw") is None
-    assert inbox.get(item.id).state == "done"
+    assert (inbox.get(item.id).state, inbox.get(item.id).reason) == ("done", "done: the master moved to its hive")
 
 
 @pytest.mark.parametrize(
@@ -449,6 +453,14 @@ def test_a_failed_successor_launch_keeps_the_recovery_handoff_awaiting(store):  
     assert rows[-1]["successor"] == ""
     assert rows[-1]["predecessor"] == master.name
     assert rows[-1]["continuity"] == {"state": "pending"}
+    assert master_move.pending(store, "sw") == {
+        "from": "lost",
+        "to": "",
+        "master": master.name,
+        "state": "moving",
+        "at": NOW,
+    }
+    assert (store.handoff("sw", MASTER), store.handoff_seat("sw", MASTER)) == (rows[0]["handoff"], "master@sw")
 
 
 def test_master_move_without_a_live_master_is_refused(store):  # noqa: F811
