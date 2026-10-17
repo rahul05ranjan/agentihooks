@@ -9,9 +9,17 @@ from .rows import encode
 @dataclass(frozen=True, slots=True)
 class Fragment:
     value: object
-    text: str
+    text: str | None
     parts: dict | tuple | None = None
     signature: str | None = None
+
+
+def encoded(fragment: Fragment) -> str:
+    if fragment.text is not None:
+        return fragment.text
+    if isinstance(fragment.parts, tuple):
+        return "[" + ",".join(encoded(item) for item in fragment.parts) + "]"
+    return "{" + ",".join(encode(key) + ":" + encoded(item) for key, item in fragment.parts.items()) + "}"
 
 
 def leaf(value: object, previous: Fragment | None = None) -> Fragment:
@@ -26,23 +34,23 @@ def leaf(value: object, previous: Fragment | None = None) -> Fragment:
 
 
 def sequence(value: list, previous: Fragment | None = None) -> Fragment:
-    old = previous.parts if previous is not None and isinstance(previous.parts, tuple) else ()
-    parts = tuple(leaf(item, old[index] if index < len(old) else None) for index, item in enumerate(value))
-    text = "[" + ",".join(item.text for item in parts) + "]"
-    if previous is not None and previous.text == text:
+    old = previous.parts if previous is not None and isinstance(previous.parts, tuple) else None
+    known = old or ()
+    parts = tuple(leaf(item, known[index] if index < len(known) else None) for index, item in enumerate(value))
+    if old is not None and len(parts) == len(old) and all(new is kept for new, kept in zip(parts, old)):
         return previous
-    return Fragment([item.value for item in parts], text, parts)
+    return Fragment([item.value for item in parts], None, parts)
 
 
 def mapping(
     value: dict, previous: Fragment | None, make: Callable[[str, object, Fragment | None], Fragment]
 ) -> Fragment:
-    old = previous.parts if previous is not None and isinstance(previous.parts, dict) else {}
-    parts = {key: make(key, item, old.get(key)) for key, item in value.items()}
-    text = "{" + ",".join(encode(key) + ":" + item.text for key, item in parts.items()) + "}"
-    if previous is not None and previous.text == text:
+    old = previous.parts if previous is not None and isinstance(previous.parts, dict) else None
+    known = old or {}
+    parts = {key: make(key, item, known.get(key)) for key, item in value.items()}
+    if old is not None and list(parts) == list(old) and all(parts[key] is old[key] for key in parts):
         return previous
-    return Fragment({key: item.value for key, item in parts.items()}, text, parts)
+    return Fragment({key: item.value for key, item in parts.items()}, None, parts)
 
 
 def meta_part(key: str, value: object, previous: Fragment | None) -> Fragment:
@@ -62,4 +70,5 @@ def document_part(key: str, value: object, previous: Fragment | None) -> Fragmen
 
 
 def document(state: dict, previous: Fragment | None = None) -> Fragment:
-    return mapping(state, previous, document_part)
+    root = mapping(state, previous, document_part)
+    return root if root is previous else Fragment(root.value, encoded(root), root.parts)

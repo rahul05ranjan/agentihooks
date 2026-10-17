@@ -188,6 +188,7 @@ jobs:
           assert head['peak_rss_kib_after_replay'] <= base['peak_rss_kib_after_replay'] * 1.1
           growth = {side: run['peak_rss_kib_after_replay'] - run['peak_rss_kib_before_replay'] for side, run in (('base', base), ('head', head))}
           print(json.dumps({'peak_rss_growth_kib': growth}))
+          assert growth['head'] <= max(growth['base'], 1) * 1.1, 'Replay memory growth exceeded base by more than ten percent'
           PY
       - name: Retain the CPU profile and every outcome
         if: always()
