@@ -181,11 +181,11 @@ def test_standing_finding_groups_each_slow_stage_with_count_worst_time_and_run_l
 def test_slow_run_samples_older_than_the_window_leave_the_cache_and_the_links(swarm):
     store, config = swarm
     cache = defects.key("sw", "stages")
-    old = {"at": NOW_MS - defects.WINDOW_S * 1000, "stages": {"lint": 400}, "url": URL.format(99)}
-    store.redis.hset(cache, "99", json.dumps(old))
+    old = {"at": NOW_MS - defects.WINDOW_S * 1000, "stages": {"lint": 400}, "url": URL.format(0)}
+    store.redis.hset(cache, "0", json.dumps(old))
     defects.refresh("sw", config, store, NOW_MS, run=_gh([]))
-    assert store.redis.hget(cache, "99") is None
-    assert {"label": "Slow run 99", "url": URL.format(99)} not in _found(store)["links"]
+    assert store.redis.hget(cache, "0") is None
+    assert _found(store)["links"] == [{"label": "Slow run 1", "url": URL.format(1)}]
 
 
 def test_a_slow_run_sample_keeps_only_stages_strictly_over_a_budget_and_the_run_link(swarm, monkeypatch):

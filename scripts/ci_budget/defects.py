@@ -93,7 +93,7 @@ def _stage_evidence(redis, slug: str, item: dict, jobs: list[dict], now_ms: int)
         "stages": {
             stage: spent
             for stage, spent in ci_budget.stages(jobs).items()
-            if stage != "gate-required" and spent > ci_budget.BUDGETS.get(stage, float("inf"))
+            if stage != "gate-required" and stage in ci_budget.BUDGETS and spent > ci_budget.BUDGETS[stage]
         },
         "url": item.get("html_url") or gate["html_url"],
     }
@@ -110,11 +110,10 @@ def _stage_evidence(redis, slug: str, item: dict, jobs: list[dict], now_ms: int)
             continue
         links.append({"label": f"Slow run {run_id}", "url": row["url"]})
         for stage, spent in row["stages"].items():
-            count, worst = groups.get(stage, (0, 0))
-            groups[stage] = (count + 1, max(worst, spent))
+            groups.setdefault(stage, []).append(spent)
     evidence = tuple(
-        f"{stage}: {count} {'run' if count == 1 else 'runs'} over budget; worst {_spoken(worst)}."
-        for stage, (count, worst) in sorted(groups.items())
+        f"{stage}: {len(spents)} {'run' if len(spents) == 1 else 'runs'} over budget; worst {_spoken(max(spents))}."
+        for stage, spents in sorted(groups.items())
     )
     return evidence, tuple(links)
 
