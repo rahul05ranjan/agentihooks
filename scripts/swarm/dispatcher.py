@@ -351,7 +351,8 @@ def _banded(doc):
 
 def _deferred(doc):
     low = {t["id"] for t in doc["tasks"] if t.get("rank") == ledger_rank.RANKS[-1]}
-    return _ranked_by(doc, SWARM) & low
+    unranked = {t["id"] for t in doc["tasks"] if "rank" not in t and ledger_rank.generated(t)}
+    return (_ranked_by(doc, SWARM) & low) | unranked
 
 
 def _ranked_by(doc, author):

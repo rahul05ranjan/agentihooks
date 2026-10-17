@@ -139,7 +139,7 @@ def _queue(ledger: LedgerClient, row: dict, source: dict, evidence: dict, verdic
             "description": description,
             **TASK_DEFAULTS,
             "phase": source.get("phase", ""),
-            "depends_on": [row["task"]] if row["task"] else [],
+            "depends_on": [row["task"]] if source else [],
         },
         by="swarm",
     )
