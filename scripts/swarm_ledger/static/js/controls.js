@@ -275,7 +275,7 @@ export function wireSwarm() {
     const btn = event.target.closest("button[data-swarm]");
     if (!btn || btn.disabled) return;
     const action = btn.dataset.swarm;
-    const step = action.match(/^(eng|ci|plan|compact|effort_min|effort_max)_(up|down)$/);
+    const step = action.match(/^(eng|ci|plan|masters|compact|effort_min|effort_max)_(up|down)$/);
     if (step) {
       const change = capStep(capCurrent(), step[1], step[2] === "up");
       Object.assign(capDraft, change);
