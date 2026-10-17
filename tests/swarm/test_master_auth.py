@@ -126,3 +126,20 @@ def test_finished_fallback_master_raises_no_finding_and_unseated_master_uses_its
     assert [f.id for f in found] == ["master-fallback-auth/master-agent"]
     agent["state"] = "finished"
     assert not [f for f in findings({}, [agent], {}, Limits()) if f.kind == "master-fallback-auth"]
+
+
+def test_desired_interactive_route_survives_storage_and_legacy_records_default_empty():
+    import json
+
+    import fakeredis
+
+    from scripts.swarm.store import AgentRecord, RedisStore
+
+    store = RedisStore(fakeredis.FakeRedis(decode_responses=True))
+    record = AgentRecord("agent", "master", "master", route_kind="subscription", desired_route_kind="interactive")
+    store.put_agent("proof", record)
+    assert store.agents("proof")[0].desired_route_kind == "interactive"
+    raw = json.loads(store.redis.hget(store.key("proof", "agents"), "agent"))
+    del raw["desired_route_kind"]
+    store.redis.hset(store.key("proof", "agents"), "agent", json.dumps(raw))
+    assert store.agents("proof")[0].desired_route_kind == ""
