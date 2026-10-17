@@ -14,8 +14,14 @@ def test_discovers_an_unmarked_elapsed_bound_in_a_new_directory(tmp_path, capsys
         "    assert elapsed < 0.005\n"
     )
     assert main(["--root", str(tmp_path)]) == 1
-    assert "tests/new_area/test_new_budget.py:5: test_new_budget requires pytest.mark.wall_clock" in capsys.readouterr().out
-    target.write_text("import pytest\n" + target.read_text().replace("def test_new_budget", "@pytest.mark.wall_clock\ndef test_new_budget"))
+    assert (
+        "tests/new_area/test_new_budget.py:5: test_new_budget requires pytest.mark.wall_clock"
+        in capsys.readouterr().out
+    )
+    target.write_text(
+        "import pytest\n"
+        + target.read_text().replace("def test_new_budget", "@pytest.mark.wall_clock\ndef test_new_budget")
+    )
     assert main(["--root", str(tmp_path)]) == 0
 
 
