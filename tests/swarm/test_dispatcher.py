@@ -624,16 +624,18 @@ def test_a_critical_chain_successor_takes_the_next_seat_ahead_of_operator_urgent
     assert spawned(store, config, ledger, found) == [("eng", "x")]
 
 
-def documentation_wait(store, autonomy, *waiting):
+def documentation_wait(store, autonomy, *waiting, ranked=True):
     from tests.swarm.test_tick import FakeLedger
 
     config = store.update(SLUG, autonomy=autonomy, max_eng=1)
-    generated = task("doc-s", phase="", profile="documentation", follow_up=True, rank="low", depends_on=["s"])
-    ledger = FakeLedger([task("s", phase="", state="done"), *waiting, generated])
+    low = {"rank": "low"} if ranked else {}
+    generated = task("doc-s", phase="", profile="documentation", follow_up=True, depends_on=["s"], **low)
+    rows = [*waiting, generated] if ranked else [generated, *waiting]
+    ledger = FakeLedger([task("s", phase="", state="done"), *rows])
     found = ledger.state(SLUG)
     found["_meta"]["stamps"] = {
         "tasks/s/state": {"by": "engineer@abcdef-0001", "at": NOW - 30_000},
-        "tasks/doc-s/rank": {"by": "swarm"},
+        **({"tasks/doc-s/rank": {"by": "swarm"}} if ranked else {}),
         **{f"tasks/{t['id']}/rank": {"by": MASTER_NAME} for t in waiting if "rank" in t},
     }
     return config, ledger, found
@@ -645,6 +647,14 @@ def test_a_free_seat_takes_urgent_or_high_work_over_a_newer_documentation_task(s
     config, ledger, found = documentation_wait(store, autonomy, task("u", phase="", rank=rank))
     assert spawned(store, config, ledger, found) == [("eng", "u")]
     assert "doc-s" not in dispatcher.guarded(found, "")
+
+
+@pytest.mark.parametrize("autonomy", ["delegate", "full", "assist"])
+def test_an_unranked_older_documentation_task_sorts_low_behind_urgent_work(store, autonomy):
+    config, ledger, found = documentation_wait(store, autonomy, task("u", phase="", rank="urgent"), ranked=False)
+    assert spawned(store, config, ledger, found) == [("eng", "u")]
+    assert "doc-s" not in dispatcher.guarded(found, "")
+    assert dispatcher.queue(found, "")[-1] == "doc-s"
 
 
 @pytest.mark.parametrize("autonomy", ["delegate", "full", "assist"])
