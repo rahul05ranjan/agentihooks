@@ -33,6 +33,7 @@ class Account:
     weight: int | None = None
     five_resets_at: int | None = None
     reserved: str = ""
+    unreserved_cap: int | None = None
 
 
 def _left(window: balancer.QuotaWindow, now: float) -> float | None:
@@ -172,12 +173,19 @@ def reserve(rows: list[Account], held: "Reservation | None") -> list[Account]:
     if held is None:
         return rows
     return [
-        replace(row, state=_state(0), cap=0, reserved=held.reason)
+        replace(row, state=_state(0), cap=0, reserved=held.reason, unreserved_cap=row.cap)
         if row.harness == held.harness
         and row.kind != API
         and row.week_left is not None
         and held.closes(row.name, 100 - row.week_left)
         else row
+        for row in rows
+    ]
+
+
+def unreserved(rows: list[Account]) -> list[Account]:
+    return [
+        replace(row, state=_state(row.unreserved_cap), cap=row.unreserved_cap, reserved="") if row.reserved else row
         for row in rows
     ]
 
