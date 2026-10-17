@@ -1,6 +1,14 @@
 name: Deploy GitHub Pages
 
 on:
+  pull_request:
+    branches: [dev]
+    paths:
+      - "docs/**"
+      - "index.md"
+      - "_config.yml"
+      - "assets/**"
+      - ".github/workflows/pages.yml"
   push:
     branches: [main]
     paths:
@@ -17,7 +25,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: "pages"
+  group: pages-${{ github.event_name == 'pull_request' && github.event.number || 'production' }}
   cancel-in-progress: false
 
 jobs:
@@ -40,6 +48,7 @@ jobs:
         uses: actions/upload-pages-artifact@v3
 
   deploy:
+    if: github.event_name != 'pull_request'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
