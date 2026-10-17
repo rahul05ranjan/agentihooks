@@ -3,7 +3,8 @@
 A larger swarm raises the count at once and master_fill launches a master in each empty seat. A smaller one, once it has
 stayed smaller for the hold window, asks each extra seat's master to hand off; the count falls only past seats whose
 master has left, so no seat is cut mid answer. Each count change rebalances phase ownership by code and posts the new
-owners on the masters channel. Without a rule the count stays the manual one and the tick still fills its seats.
+owners on the masters channel. Without a rule the swarm's masters step sizes the count; with step 0 the count stays the
+manual one and the tick still fills its seats.
 """
 
 import json
@@ -90,9 +91,7 @@ def _resize(slug, store, doc, agents, count, want, now_ms):
         _withdraw_asks(store, retiring)
         store.redis.hdel(key, BELOW, BELOW_WANT, RETIRING)
         return _recount(slug, store, doc, agents, count, want, now_ms) if want > count else []
-    wanted_again = {_address(slug, index) for index in range(2, want + 1)} & retiring.keys()
-    _withdraw_asks(store, {address: retiring.pop(address) for address in wanted_again})
-    store.redis.hset(key, RETIRING, json.dumps(retiring))
+    _withdraw_wanted_again(slug, store, key, retiring, want)
     if now_ms - _below_since(store.redis, key, want, now_ms) < HOLD_MS:
         return []
     occupied = {a.seat: a for a in agents if a.lane == MASTER}
@@ -172,6 +171,13 @@ def _withdraw_asks(store, retiring):
     inbox = InboxStore(store.redis)
     for address, (_, ask_id) in retiring.items():
         inbox.withdraw(ask_id, SENDER, f"the swarm grew again, so seat {address} stays", expected_address=address)
+
+
+def _withdraw_wanted_again(slug, store, key, retiring, want):
+    wanted_again = {_address(slug, index) for index in range(2, want + 1)} & retiring.keys()
+    if wanted_again:
+        _withdraw_asks(store, {address: retiring.pop(address) for address in wanted_again})
+        store.redis.hset(key, RETIRING, json.dumps(retiring))
 
 
 def _measure(slug, metric, value, seat, now_ms):
