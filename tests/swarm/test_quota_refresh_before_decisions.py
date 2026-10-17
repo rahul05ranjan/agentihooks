@@ -50,7 +50,7 @@ def test_a_stale_claude_reading_is_read_live_before_the_cap_and_drain_decisions(
     balancer._write_cache(tmp_path / "claude-router-cache.json", cache)
     probed = []
     monkeypatch.setattr(balancer, "probe_credentials", lambda found, *args: probed.extend(found) or [live])
-    monkeypatch.setattr(capacity.account_sessions, "sessions_by_account", lambda: {})
+    monkeypatch.setattr(capacity.account_sessions, "sessions_by_account", lambda **_: {})
     monkeypatch.setattr(capacity, "_api", lambda *args: [])
     [row] = capacity._claude(env, NOW)
     assert [credential.account for credential in probed] == ["alpha"]
