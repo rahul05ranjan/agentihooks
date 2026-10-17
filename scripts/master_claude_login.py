@@ -100,7 +100,7 @@ def _private(target: Path) -> Path | None:
     return path if path.is_file() and not path.is_symlink() else None
 
 
-def build(slug: str, rendered: Path, report: str = "") -> Path:
+def build(slug: str, rendered: Path, report: str | None = None) -> Path:
     target, staging = home(slug), root(slug) / "staging"
     root(slug).mkdir(mode=PRIVATE_DIR, parents=True, exist_ok=True)
     kept = _private(target)
@@ -243,7 +243,7 @@ def prepare(environ: Mapping[str, str], cwd: Path) -> tuple[Path, str]:
     bao = openbao_kv.from_env(environ)
     copy = stored(bao, slug)
     epoch = claim(slug, environ["AGENTIHOOKS_AGENT_NAME"], os.getpid(), floor=int(copy.get("epoch", 0)))
-    target = build(slug, rendered, environ.get(binding.REPORT, ""))
+    target = build(slug, rendered, environ.get(binding.REPORT))
     restore(copy, target)
     found = account(slug, target, environ)
     keep(bao, slug, target, epoch)

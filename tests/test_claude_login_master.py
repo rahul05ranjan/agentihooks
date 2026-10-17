@@ -49,7 +49,8 @@ def test_master_mode_runs_the_native_login_in_the_private_home_only(ah, capsys):
     assert (login.home("rig") / "settings.json").read_text() == "{}"
     out = capsys.readouterr().out
     assert f"Sign in to the master claude ai account in the browser; the login stays in {home}" in out
-    assert json.loads((login.root("rig") / login.OWNER).read_text())["owner"] == claude_login.PROG
+    owner = json.loads((login.root("rig") / login.OWNER).read_text())
+    assert (owner["owner"], owner["pid"]) == (claude_login.PROG, os.getpid())
 
 
 def test_master_mode_reports_a_failed_login_and_stores_nothing(ah, monkeypatch, capsys):
@@ -89,11 +90,11 @@ def test_master_mode_stores_the_recovery_copy_when_asked(ah, monkeypatch, capsys
         openbao_step,
         "target",
         lambda choice, environ, console, opener: (
-            "bao" if (choice, console, opener) == (True, deps.console, "opener") else None
+            "bao" if (choice, environ, console, opener) == (True, {"A": "1"}, deps.console, "opener") else None
         ),
     )
     monkeypatch.setattr(login, "publish", lambda bao, slug, target, epoch: stored.append((bao, slug, target, epoch)))
-    assert claude_login.master("rig", True, {}, deps) == 0
+    assert claude_login.master("rig", True, {"A": "1"}, deps) == 0
     assert stored == [("bao", "rig", login.home("rig"), 1)]
     assert "Storing the master login recovery copy in OpenBao" in capsys.readouterr().out
 

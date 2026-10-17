@@ -72,7 +72,10 @@ def test_the_private_home_lives_under_the_agentihooks_home_per_swarm(ah):
 
 
 def test_build_copies_the_rendered_master_home_without_the_shared_credential_link(ah, rendered):
+    (login.root("rig") / "staging").mkdir(parents=True)
+    (login.root("rig") / "staging" / "left-over").write_text("old")
     target = login.build("rig", rendered)
+    assert not (target / "left-over").exists()
     assert target == login.home("rig")
     assert not (target / login.CREDENTIALS).exists() and not (target / login.CREDENTIALS).is_symlink()
     assert (target / "settings.json").read_bytes() == (rendered / "settings.json").read_bytes()
@@ -242,6 +245,7 @@ def test_the_first_owner_takes_epoch_one_and_each_claim_takes_the_next(ah):
     owner = login.root("rig") / login.OWNER
     assert json.loads(owner.read_text()) == {"owner": "master@a-1", "pid": 11, "epoch": 2}
     assert owner.stat().st_mode & 0o777 == 0o600
+    assert login.root("rig").stat().st_mode & 0o777 == 0o700
 
 
 def test_a_live_holder_fences_every_other_process_out_whatever_its_name(ah):
@@ -290,7 +294,11 @@ class FakeBao:
             "read",
             lambda bao, path: (self.stored if (bao, path) == ("bao", "agentihooks/master-claude/rig") else {}, 3),
         )
-        monkeypatch.setattr(openbao_kv, "merge", lambda bao, path, entries: self.writes.append((path, dict(entries))))
+        monkeypatch.setattr(
+            openbao_kv,
+            "merge",
+            lambda bao, path, entries: self.writes.append((path, dict(entries))) if bao == "bao" else None,
+        )
         return self
 
 
@@ -399,7 +407,7 @@ def test_keep_publishes_and_reports_a_failed_write(tmp_path, monkeypatch, capsys
 def test_a_checkpoint_publishes_only_from_the_master_login_home(ah, rendered, monkeypatch):
     kept = []
     monkeypatch.setattr(login, "keep", lambda bao, slug, target, epoch: kept.append((bao, slug, target, epoch)) or True)
-    monkeypatch.setattr(openbao_kv, "from_env", lambda environ: "bao")
+    monkeypatch.setattr(openbao_kv, "from_env", lambda environ: "bao" if environ.get("AGENTIHOOKS_SWARM") else None)
     _seed(rendered)
     master = {"AGENTIHOOKS_SWARM": "rig", "CLAUDE_CONFIG_DIR": str(login.home("rig"))}
     assert login.checkpoint(master) is True
@@ -442,7 +450,8 @@ def test_prepare_claims_above_the_stored_epoch_builds_restores_and_keeps(ah, ren
         ("restore", {"epoch": "5"}, target),
         ("keep", "bao", "rig", target, 6),
     ]
-    assert json.loads((login.root("rig") / login.OWNER).read_text())["pid"] == os.getpid()
+    owner = json.loads((login.root("rig") / login.OWNER).read_text())
+    assert (owner["owner"], owner["pid"]) == ("master@a-1", os.getpid())
     calls.clear()
     login.prepare(_environ(rendered), tmp_path)
     assert calls == [("restore", {}, target), ("keep", None, "rig", target, 7)]
