@@ -93,3 +93,69 @@ def test_agentihooks_starts_one_detached_supervisor_when_redis_is_configured(mon
         with pytest.raises(service.AlreadyRunning, match="^scheduler supervisor is already running$"):
             service.supervise()
     assert spawn.call_count == 1
+
+
+def test_service_entrypoint_runs_the_configured_redis_scheduler(monkeypatch):
+    from scripts.scheduler import service
+
+    redis = object()
+    received = []
+    monkeypatch.setattr("scripts.swarm.store.redis_client", lambda: redis)
+
+    async def run(scheduler):
+        received.append(scheduler.redis)
+
+    monkeypatch.setattr(service, "run", run)
+    assert service.main(["run"]) == 0
+    assert received == [redis]
+
+
+def test_service_entrypoint_reports_a_duplicate_runner(monkeypatch, capsys):
+    from scripts.scheduler import service
+
+    monkeypatch.setattr("scripts.swarm.store.redis_client", object)
+
+    async def duplicate(scheduler):
+        raise service.AlreadyRunning("scheduler runner is already running")
+
+    monkeypatch.setattr(service, "run", duplicate)
+    assert service.main(["run"]) == 2
+    assert capsys.readouterr().err == "scheduler runner is already running\n"
+
+
+def test_supervisor_entrypoint_stops_on_signals_and_restores_handlers(monkeypatch):
+    from scripts.scheduler import service
+
+    handlers = {15: object(), 2: object()}
+    previous = dict(handlers)
+
+    def wire(number, handler):
+        handlers[number] = handler
+
+    monkeypatch.setattr(service, "signal", SimpleNamespace(SIGTERM=15, SIGINT=2, getsignal=handlers.get, signal=wire))
+    calls = []
+
+    def supervise(stop):
+        assert stop.is_set() is False
+        handlers[15](15, None)
+        assert stop.is_set() is True
+        stop.clear()
+        handlers[2](2, None)
+        assert stop.is_set() is True
+        calls.append("supervised")
+
+    monkeypatch.setattr(service, "supervise", supervise)
+    assert service.main(["supervise"]) == 0
+    assert calls == ["supervised"]
+    assert handlers == previous
+
+
+def test_machine_lock_directory_is_shared_across_profile_configurations(monkeypatch):
+    from scripts.scheduler import service
+
+    directory = service.runtime_dir()
+    monkeypatch.setenv("GH_CONFIG_DIR", str(Path.home() / ".config" / "gh"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", "/proof/one")
+    monkeypatch.setenv("AGENTIHOOKS_HOME", "/proof/two")
+    assert service.runtime_dir() == directory
+    assert directory.relative_to(Path.home()).parts == (".cache", "agentihooks", "scheduler")
