@@ -26,6 +26,8 @@ REDELIVERER = "inbox"
 CLOSED = ("done", "blocked", "handed_off", "cancelled")
 CLOSE_KINDS = {"done": "done", "handoff": "handed_off", "blocked": "blocked", "cancel": "cancelled"}
 NEEDS_DETAIL = {"handoff": "the address the work went to", "blocked": "what it is blocked on"}
+POOL_HOLDER = "pool_holder"
+POOL_SKIP = "pool_skip"
 
 
 class InboxError(RuntimeError):
