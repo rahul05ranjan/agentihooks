@@ -62,10 +62,11 @@ swarm whose workers carry no quota token. The master gets `--remote-control`.
 Engineers, CI agents, planners and Codex masters never take this route.
 
 `agentihooks claude login --master <slug>` runs `claude auth login` once in that
-home. Native Claude is the only refresher of the login. One owner holds it at a
-time: a launch refuses while another master that holds it is still running. With
-`--openbao`, and on each master launch where `OPENBAO_URL` and `OPENBAO_TOKEN`
-are set, the latest grant native Claude saved is copied to
+home. Native Claude is the only refresher of the login. One process holds it at
+a time: a launch refuses while the process that holds it is still running, and
+each claim takes an epoch above the one stored in OpenBao. With `--openbao`, and
+at each master launch and Stop where `OPENBAO_URL` and `OPENBAO_TOKEN` are set,
+the latest grant native Claude saved is copied to
 `secret/agentihooks/master-claude/<slug>` with its owner epoch, never replacing
 a newer copy; a launch whose home has no login restores it from there.
 

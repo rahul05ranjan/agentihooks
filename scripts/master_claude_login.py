@@ -1,5 +1,4 @@
-"""The optional claude ai login of a swarm's front door master: a private execution home, an owner lease and an
-OpenBao recovery copy. Native Claude is the only OAuth refresher; this module never asks for a grant."""
+"""Native Claude is the only refresher of the master login; this module never asks for an OAuth grant."""
 
 import fcntl
 import json
@@ -31,7 +30,7 @@ CREDS = "agentihooks/master-claude"
 MANAGED = Path("/etc/claude-code/managed-settings.json")
 SELECTORS = ("CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR")
 REINTRODUCED = (
-    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_BASE_URL",
@@ -60,6 +59,7 @@ API_HELPER = "{path} sets apiKeyHelper"
 SETS = "{path} sets {names}"
 FORCED = "{path} sets forceLoginMethod {value}"
 PUBLISH_FAILED = "master login recovery copy not stored: {error}"
+RECOVERY_FAILED = "master login recovery copy not read: {error}"
 
 
 class LoginRefused(RuntimeError):
@@ -101,7 +101,6 @@ def _private(target: Path) -> Path | None:
 
 
 def build(slug: str, rendered: Path, report: str = "") -> Path:
-    """The private home: the rendered master home without its shared credential link, keeping the master's own login."""
     target, staging = home(slug), root(slug) / "staging"
     root(slug).mkdir(mode=PRIVATE_DIR, parents=True, exist_ok=True)
     kept = _private(target)
@@ -129,9 +128,9 @@ def build(slug: str, rendered: Path, report: str = "") -> Path:
     return target
 
 
-def refusal(target: Path, cwd: Path, managed: Path = MANAGED) -> str:
+def refusal(target: Path, cwd: Path, managed: Path | None = None) -> str:
     for path in (
-        managed,
+        managed or MANAGED,
         target / "settings.json",
         cwd / ".claude" / "settings.json",
         cwd / ".claude" / "settings.local.json",
@@ -169,16 +168,15 @@ def _alive(pid: object) -> bool:
     return isinstance(pid, int) and Path(f"/proc/{pid}").exists()
 
 
-def claim(slug: str, name: str, pid: int, alive: Callable[[object], bool] = _alive) -> int:
-    """One owner per grant: a predecessor still running fences every other name out."""
+def claim(slug: str, name: str, pid: int, alive: Callable[[object], bool] = _alive, floor: int = 0) -> int:
     folder = root(slug)
     folder.mkdir(mode=PRIVATE_DIR, parents=True, exist_ok=True)
     with (folder / LOCK).open("a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         held = _read(folder / OWNER)
-        if held.get("owner", name) != name and alive(held.get("pid")):
-            raise LoginRefused(HELD.format(slug=slug, owner=held["owner"]))
-        epoch = int(held.get("epoch", 0)) + 1
+        if held.get("pid", pid) != pid and alive(held["pid"]):
+            raise LoginRefused(HELD.format(slug=slug, owner=held.get("owner")))
+        epoch = max(int(held.get("epoch", 0)), floor) + 1
         _write(folder / OWNER, {"owner": name, "pid": pid, "epoch": epoch})
     return epoch
 
@@ -201,33 +199,54 @@ def publish(bao: openbao_kv.OpenBao, slug: str, target: Path, epoch: int) -> boo
     return True
 
 
-def restore(bao: openbao_kv.OpenBao, slug: str, target: Path) -> bool:
-    if (target / CREDENTIALS).exists():
-        return False
-    stored, _ = openbao_kv.read(bao, f"{CREDS}/{slug}")
-    if not stored.get("grant"):
+def restore(stored: Mapping[str, str], target: Path) -> bool:
+    if (target / CREDENTIALS).exists() or not stored.get("grant"):
         return False
     _write(target / CREDENTIALS, {GRANT: json.loads(stored["grant"])})
     _write(target / CONFIG, {**_read(target / CONFIG), ACCOUNT: json.loads(stored["account"])})
     return True
 
 
+def stored(bao: openbao_kv.OpenBao | None, slug: str) -> dict[str, str]:
+    if bao is None:
+        return {}
+    try:
+        return openbao_kv.read(bao, f"{CREDS}/{slug}")[0]
+    except openbao_kv.OpenBaoError as exc:
+        print(RECOVERY_FAILED.format(error=exc), file=sys.stderr)
+        return {}
+
+
+def keep(bao: openbao_kv.OpenBao | None, slug: str, target: Path, epoch: int) -> bool:
+    if bao is None:
+        return False
+    try:
+        return publish(bao, slug, target, epoch)
+    except openbao_kv.OpenBaoError as exc:
+        print(PUBLISH_FAILED.format(error=exc), file=sys.stderr)
+        return False
+
+
+def checkpoint(environ: Mapping[str, str]) -> bool:
+    slug = environ.get("AGENTIHOOKS_SWARM", "")
+    if not slug or environ.get("CLAUDE_CONFIG_DIR") != str(home(slug)):
+        return False
+    epoch = int(_read(root(slug) / OWNER).get("epoch", 0))
+    return keep(openbao_kv.from_env(environ), slug, home(slug), epoch)
+
+
 def prepare(environ: Mapping[str, str], cwd: Path) -> tuple[Path, str]:
-    slug = environ["AGENTIHOOKS_SWARM"]
-    epoch = claim(slug, environ["AGENTIHOOKS_AGENT_NAME"], os.getpid())
-    target = build(slug, Path(environ["CLAUDE_CONFIG_DIR"]), environ.get(binding.REPORT, ""))
-    bao = openbao_kv.from_env(environ)
-    if bao:
-        restore(bao, slug, target)
-    refused = refusal(target, cwd)
+    slug, rendered = environ["AGENTIHOOKS_SWARM"], Path(environ["CLAUDE_CONFIG_DIR"])
+    refused = refusal(rendered, cwd)
     if refused:
         raise LoginRefused(refused)
+    bao = openbao_kv.from_env(environ)
+    copy = stored(bao, slug)
+    epoch = claim(slug, environ["AGENTIHOOKS_AGENT_NAME"], os.getpid(), floor=int(copy.get("epoch", 0)))
+    target = build(slug, rendered, environ.get(binding.REPORT, ""))
+    restore(copy, target)
     found = account(slug, target, environ)
-    if bao:
-        try:
-            publish(bao, slug, target, epoch)
-        except openbao_kv.OpenBaoError as exc:
-            print(PUBLISH_FAILED.format(error=exc), file=sys.stderr)
+    keep(bao, slug, target, epoch)
     return target, found
 
 

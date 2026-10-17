@@ -662,7 +662,8 @@ class HerdrRuntime:
             effort_range.bounds(config, agent.lane),
             preserve=preserves_effort(bool(agent.effort), agent.lane),
         )
-        rc = remote_control.decision(agent.lane, agent.harness, agent.route_kind, config.slug, login)
+        kind = "interactive" if login else agent.route_kind
+        rc = remote_control.decision(agent.lane, agent.harness, kind, config.slug, login)
         argv += ["--resume", agent.conversation_id, "--", *route, *remote_control.arguments(rc), *model]
         placed = timing.call(self._launch, config, agent.lane, agent.task, agent.name, argv)
         if not self._holds(placed.pane_id, agent.conversation_id):
@@ -678,7 +679,7 @@ class HerdrRuntime:
             model_source=picked.source,
             profile_decision={**agent.profile_decision, **placed.profile_decision},
             overlays=agent.overlays,
-            route_kind=agent.route_kind,
+            route_kind=kind,
             remote_control=rc,
         )
 

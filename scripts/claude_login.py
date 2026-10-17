@@ -200,7 +200,6 @@ def _rendered(profile: str) -> Path:
 
 
 def master(swarm: str, openbao: bool | None, environ: Mapping[str, str], deps: Deps) -> int:
-    """The one operator login of a swarm's front door master, into its private home; never the shared login."""
     from scripts import master_claude_login as login
 
     try:

@@ -114,10 +114,11 @@ def _resumed(tmp_path, lane, harness, kind, login=True):
     return _passed(seen["runs"][0]), placed
 
 
-def test_a_master_with_the_login_on_resumes_on_its_own_route_with_remote_control(tmp_path):
-    passed, placed = _resumed(tmp_path, "master", "claude", "interactive")
+@pytest.mark.parametrize("kind", ["interactive", "subscription", "api"])
+def test_a_master_with_the_login_on_resumes_on_its_own_route_with_remote_control(tmp_path, kind):
+    passed, placed = _resumed(tmp_path, "master", "claude", kind)
     assert passed[:6] == ["--route", "master-login", *RC]
-    assert placed.remote_control == ON
+    assert (placed.route_kind, placed.remote_control) == ("interactive", ON)
 
 
 @pytest.mark.parametrize(
