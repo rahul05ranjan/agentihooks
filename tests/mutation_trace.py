@@ -13,4 +13,13 @@ def trace_browser_deadlines():
     for owner in (Page, BrowserContext):
         for name in ("set_default_timeout", "set_default_navigation_timeout"):
             setter = getattr(owner, name)
-            setattr(owner, name, lambda self, timeout, setter=setter: setter(self, traced(timeout)))
+            setter = getattr(setter, "untraced", setter)
+            setattr(owner, name, _traced_setter(setter))
+
+
+def _traced_setter(setter):
+    def traced_setter(self, timeout):
+        return setter(self, traced(timeout))
+
+    traced_setter.untraced = setter
+    return traced_setter
