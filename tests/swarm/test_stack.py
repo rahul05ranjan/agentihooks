@@ -504,7 +504,7 @@ DEV = "c" * 40
 GONE = "fatal: couldn't find remote ref eng-a"
 
 
-def _gone_branch(parked, monkeypatch, repo, *, listed="", state="MERGED\n", viewed=0):
+def _gone_branch(parked, monkeypatch, repo, *, listed="\n", state="MERGED\n", viewed=0):
     _, ledger, _, shell, _ = parked
     ledger.rows["a"].update({"branch_repo": repo, "pr_url": PULL})
     fetch = ["git", "fetch", "--", OTHER, "eng-a"] if repo else ["git", "fetch", "origin", "eng-a"]

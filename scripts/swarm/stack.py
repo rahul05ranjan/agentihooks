@@ -117,14 +117,32 @@ def _merged_into_dev(dep):
         raise SwarmError(f"cannot read the dependency pull request: {exc}") from exc
 
 
+def _merged_away(dep, remote):
+    if shell(["git", "ls-remote", "--heads", "--", remote, dep["branch"]]).stdout.split():
+        return False
+    if not dep.get("pr_url"):
+        return False
+    view = ["gh", "pr", "view", dep["pr_url"], "--json", "state", "--jq", ".state"]
+    return shell(view).stdout.strip() == "MERGED"
+
+
+def _fetched(argv, refused, dep, remote):
+    done = shell(argv)
+    if done.returncode == 0:
+        return True
+    if _merged_away(dep, remote):
+        return False
+    raise SwarmError(f"{refused}: {done.stderr.strip()}")
+
+
 def _base_of(dep, foreign):
     branch = dep["branch"]
-    merged = _merged_into_dev(dep)
-    if dep not in foreign and not merged:
-        _out(["git", "fetch", "origin", branch], f"cannot fetch {branch}")
-        return _out(["git", "merge-base", "HEAD", f"origin/{branch}"], f"{branch} shares no history")
-    if not merged:
-        _out(["git", "fetch", "--", dep["branch_repo"], branch], f"cannot fetch {branch} from {dep['branch_repo']}")
+    if dep not in foreign:
+        if _fetched(["git", "fetch", "origin", branch], f"cannot fetch {branch}", dep, "origin"):
+            return _out(["git", "merge-base", "HEAD", f"origin/{branch}"], f"{branch} shares no history")
+    else:
+        repo = dep["branch_repo"]
+        _fetched(["git", "fetch", "--", repo, branch], f"cannot fetch {branch} from {repo}", dep, repo)
     _out(["git", "fetch", "origin", "dev"], "cannot fetch dev")
     return _out(["git", "merge-base", "HEAD", "origin/dev"], "the task shares no history with dev")
 
