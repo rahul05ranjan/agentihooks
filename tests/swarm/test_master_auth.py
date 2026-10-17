@@ -82,3 +82,27 @@ def test_master_prefers_a_valid_login_even_after_a_token_handoff(tmp_path, login
     passed = seen[0][seen[0].index("--") + 1 :]
     assert passed[:2] == ["--route", "interactive" if login else "token"]
     assert placed.route_kind == ("interactive" if login else "subscription")
+
+
+@pytest.mark.parametrize("kind", ["subscription", "api", "interactive"])
+@pytest.mark.parametrize("lane", ["master", "eng"])
+@pytest.mark.parametrize("desired", ["interactive", ""])
+def test_health_reports_only_master_fallback_and_clears_after_move_back(kind, lane, desired):
+    from scripts.swarm.health.findings import Limits, findings
+
+    agent = {
+        "name": "agent",
+        "seat": "master@proof",
+        "lane": lane,
+        "task": lane,
+        "state": "working",
+        "route_kind": kind,
+        "desired_route_kind": desired,
+    }
+    found = [f for f in findings({}, [agent], [], Limits()) if f.kind == "master-fallback-auth"]
+    if lane == "master" and desired == "interactive" and kind != "interactive":
+        assert len(found) == 1
+        assert found[0].id == "master-fallback-auth/master@proof"
+        assert found[0].summary == "master on fallback auth, phone access lost"
+    else:
+        assert found == []
