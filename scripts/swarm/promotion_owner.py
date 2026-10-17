@@ -1,7 +1,10 @@
 import subprocess
+from collections.abc import Iterator
 from contextlib import contextmanager
 from hashlib import sha256
 from pathlib import Path
+
+from redis import Redis
 
 from scripts.doctor.priming import doctor_slug
 from scripts.swarm.store import PREFIX, RedisStore
@@ -38,12 +41,12 @@ def select(slug: str, repo: str, store: RedisStore) -> str:
     return owner
 
 
-def history(repo: str, redis) -> set[str]:
+def history(repo: str, redis: Redis) -> set[str]:
     return {value for field, value in redis.hgetall(key(repo)).items() if field.startswith("swarm:")}
 
 
 @contextmanager
-def intake(slug: str, repo: str, store: RedisStore):
+def intake(slug: str, repo: str, store: RedisStore) -> Iterator[str | None]:
     lock = store.redis.lock(f"{key(repo)}:lock", timeout=300)
     if not lock.acquire(blocking=False):
         yield None

@@ -258,3 +258,31 @@ def test_repository_aliases_share_the_same_intake_owner(linked, tmp_path, alias)
     observe(store, ledger, WATCHED)
     assert ledger.docs[DOCTOR]["tasks"] == []
     assert [task["id"] for task in ledger.docs[WATCHED]["tasks"]] == ["promo-900-0"]
+
+
+def test_handover_records_the_previous_owner_and_retains_earlier_history(linked):
+    from scripts.swarm import promotion_owner
+
+    store, ledger = linked
+    observe(store, ledger, WATCHED)
+    record = promotion_owner.key("/repo")
+    assert store.redis.hget(record, "owner") == WATCHED
+    assert store.redis.hget(record, "previous") == ""
+    store.update(WATCHED, state="stopped")
+    observe(store, ledger, DOCTOR, NOW + promotion_watch.REFRESH_MS)
+    assert store.redis.hget(record, "owner") == DOCTOR
+    assert store.redis.hget(record, "previous") == WATCHED
+    assert promotion_owner.history("/repo", store.redis) == {WATCHED, DOCTOR}
+
+
+def test_newer_local_checkpoint_survives_an_older_shared_checkpoint(linked, monkeypatch):
+    from scripts.swarm import promotion_owner
+
+    store, ledger = linked
+    record = promotion_owner.key("/repo")
+    store.redis.hset(record, mapping={"owner": WATCHED, "seen": 900})
+    store.redis.set(promotion_watch.key(WATCHED, "seen"), 901)
+    monkeypatch.setitem(RED, "id", 901)
+    assert observe(store, ledger, WATCHED) == []
+    assert ledger.docs[WATCHED]["tasks"] == []
+    assert store.redis.hget(record, "seen") == "901"
