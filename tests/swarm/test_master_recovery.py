@@ -444,6 +444,26 @@ def test_master_move_without_a_live_master_is_refused(store):  # noqa: F811
     assert str(refused.value) == "no live master to move"
 
 
+def test_master_move_from_the_command_line_replaces_an_earlier_order(store, capsys, monkeypatch):  # noqa: F811
+    from scripts.swarm import cli, master_move
+
+    _hive(store, "spare", NOW)
+    _hive(store, "other", NOW)
+    name = store.next_name("sw", MASTER)
+    store.put_agent("sw", AgentRecord(name, MASTER, MASTER, harness="claude", account="one", seat="master@sw"))
+    first = master_move.order(store, "sw", "other", NOW)
+    monkeypatch.setattr(cli, "now_ms", lambda: NOW)
+
+    cli.cmd_master(store, cli.build_parser().parse_args(["sw", "master", "move", "--to", "spare"]))
+
+    printed = json.loads(capsys.readouterr().out)
+    assert printed == master_move.pending(store, "sw")
+    assert (printed["to"], printed["master"]) == ("spare", name)
+    inbox = InboxStore(store.redis)
+    assert inbox.get(first["item"]).state == "cancelled"
+    assert inbox.get(printed["item"]).text == master_move.ORDER.format(to="spare", current="this machine", slug="sw")
+
+
 def test_master_move_grace_round_trips(store):  # noqa: F811
     from scripts.swarm import cli
 
