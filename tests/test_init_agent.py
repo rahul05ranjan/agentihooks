@@ -592,7 +592,8 @@ def test_a_swarm_launcher_pins_its_own_pid(tmp_path):
 
 
 def test_a_swarm_launcher_exports_the_agent_s_ledger_token_and_drops_the_server_secret(tmp_path):
-    env = {"AGENTIHOOKS_SWARM": "sw", "AGENTIHOOKS_LEDGER_AGENT_TOKEN": "derived-one"}
+    (tmp_path / ".env").write_text("PLAIN=1\n")
+    env = {"HOME": str(tmp_path), "AGENTIHOOKS_SWARM": "sw", "AGENTIHOOKS_LEDGER_AGENT_TOKEN": "derived-one"}
     text = _launcher_text(tmp_path, env)
     lines = text.splitlines()
     assert "export AGENTIHOOKS_LEDGER_AGENT_TOKEN=derived-one" in lines
