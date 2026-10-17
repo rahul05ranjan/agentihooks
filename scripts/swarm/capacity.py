@@ -190,7 +190,7 @@ def reserve(rows: list[Account], held: "Reservation | None") -> list[Account]:
     if held is None:
         return rows
     return [
-        replace(row, state=_state(0), cap=0, reserved=held.reason)
+        replace(row, state=quota_state.CLOSED, cap=0, reserved=held.reason)
         if row.harness == held.harness
         and row.kind != API
         and row.week_left is not None

@@ -192,7 +192,7 @@ def test_rows_say_stale_unknown_and_blocked_and_never_carry_a_stale_cap():
     rows = agents_quota.codex_rows(accounts, {"default": stale, "alpha": blocked}, {"alpha": 1}, NOW)
     assert [(row.account, row.state, row.cap, row.sessions) for row in rows] == [
         ("default", "STALE", None, 0),
-        ("alpha", "BLOCKED", 0, 1),
+        ("alpha", "CLOSED", 0, 1),
         ("beta", "UNKNOWN", None, 0),
     ]
     assert [(row.five_hour_left, row.seven_day_left) for row in rows] == [(None, 80.0), (None, None), (None, None)]
