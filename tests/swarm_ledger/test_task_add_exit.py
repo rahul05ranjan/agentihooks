@@ -1,0 +1,89 @@
+import json
+from types import SimpleNamespace
+
+import pytest
+
+from scripts.swarm_ledger import ledger, ledger_tasks, plan_ranges
+
+
+@pytest.fixture
+def doc(monkeypatch):
+    monkeypatch.setattr(plan_ranges, "anchors", lambda doc, phase: ["first"] if phase.get("id") == "p1" else [])
+    return {"phases": [{"id": "p1"}, {"id": "p2"}], "tasks": [{"id": "t1", "title": "Held", "state": "open"}]}
+
+
+def serve(monkeypatch, doc, reply=None):
+    sent = []
+
+    def call(slug, ops):
+        assert slug == "s"
+        sent.extend(ops)
+        if reply is not None:
+            return reply
+        ctx = SimpleNamespace(refused=[], record=lambda *a, **k: None)
+        accepted = ledger_tasks.apply(doc, dict(ops[0]), ctx)
+        ids = [ops[0]["id"]]
+        return {
+            "applied": ids if accepted else [],
+            "rejected": [] if accepted else ids,
+            "_meta": {"warnings": ctx.refused},
+        }
+
+    monkeypatch.setattr(ledger, "call", call)
+    return sent
+
+
+def add(*argv, name="master"):
+    args = ledger.build_parser().parse_args(["--slug", "s", "--as", name, "task", "add", *argv])
+    ledger.cmd_task(args)
+
+
+def refusal(monkeypatch, doc, *argv, name="master"):
+    serve(monkeypatch, doc)
+    with pytest.raises(SystemExit) as exit_:
+        add(*argv, name=name)
+    return str(exit_.value)
+
+
+def test_a_task_add_missing_its_slice_exits_nonzero_and_says_it_was_not_added(monkeypatch, doc, capsys):
+    text = refusal(monkeypatch, doc, "t9", "Fix", "--phase", "p1")
+    assert text.startswith("task t9 was not added: phase p1 has a plan with slice anchors")
+    assert capsys.readouterr().out == ""
+    assert [t["id"] for t in doc["tasks"]] == ["t1"]
+
+
+@pytest.mark.parametrize(
+    ("argv", "name", "reason"),
+    [
+        (["t1", "Again", "--phase", "p2"], "master", 'task t1 already exists as "Held" (open)'),
+        (["t9", "Fix", "--phase", "p2"], "engineer@d44a5a-0516", "engineer@d44a5a-0516 works in the eng lane"),
+        (["t9", "Fix", "--phase", "p2", "--rank", "1"], "master", "master cannot set a task rank"),
+        (
+            ["t9", "Fix", "--phase", "p1", "--follow-up", "--plan-slice", "first"],
+            "master",
+            "task t9 is a follow up and names no slice",
+        ),
+        (["t9", "Fix", "--phase", "p2", "--depends-on", "ghost"], "master", "task_add on the ledger refused"),
+    ],
+)
+def test_every_refused_task_add_exits_nonzero_and_says_it_was_not_added(monkeypatch, doc, argv, name, reason):
+    text = refusal(monkeypatch, doc, *argv, name=name)
+    assert text.startswith(f"task {argv[0]} was not added: {reason}")
+    assert [t["id"] for t in doc["tasks"]] == ["t1"]
+
+
+@pytest.mark.parametrize("reply", [{"applied": [], "_meta": {"warnings": []}}, {"_meta": {}}])
+def test_a_task_add_the_server_neither_applied_nor_rejected_exits_nonzero(monkeypatch, doc, reply, capsys):
+    serve(monkeypatch, doc, reply)
+    with pytest.raises(SystemExit) as exit_:
+        add("t9", "Fix", "--phase", "p2")
+    assert str(exit_.value) == "task t9 was not added: the ledger server did not apply it"
+    assert capsys.readouterr().out == ""
+
+
+def test_a_task_add_the_server_applied_prints_its_id_and_returns(monkeypatch, doc, capsys):
+    sent = serve(monkeypatch, doc)
+    add("t9", "Fix", "--phase", "p2")
+    assert json.loads(capsys.readouterr().out) == {"task": "t9", "added": "Fix"}
+    assert [op["op"] for op in sent] == ["task_add"]
+    assert [t["id"] for t in doc["tasks"]] == ["t1", "t9"]
