@@ -197,6 +197,53 @@ attempt image selection remain with antoncore GitOps. Rollback retains the
 previously qualified image for new attempts; active attempts and durable task
 state are unchanged.
 
+`.github/workflows/swarm-node-smoke.yml` runs the smoke as three matrix legs,
+`startup`, `rebuild` and `profiles`, each passing its name as the second
+argument. Two caches keep the legs from rebuilding and rescanning unchanged
+layers:
+
+| Cache | Key | Restored by | Saved by |
+|---|---|---|---|
+| `worker-layers` | `worker-layers-` plus the hash of `docker/swarm-node/**` and `scripts/swarm_v2/worker_image.py`, falling back to the newest `worker-layers-` entry | the image workflow's candidate build, and the `startup` and `profiles` smoke legs on self-hosted runners | the image workflow, after the candidate qualifies and only when its key missed |
+| `worker-scanner` | runner OS and architecture plus the hash of `scan.sh` and `versions.lock` | every smoke leg | the `startup` leg, after it passes |
+
+The smoke legs only read `worker-layers`. The restore step's matched key
+sets `WORKER_LAYERS` to the restored folder, and `smoke.sh` then adds
+`--cache-from type=local,src=$WORKER_LAYERS` to its build when Docker uses the
+containerd image store, the only store that build path exports layers for.
+Without a match, on a GitHub hosted runner, or on another store the variable
+is empty and the build runs as before. The `rebuild` leg never restores the
+layers: it builds the worker stage with `--no-cache-filter worker` to prove an
+uncached rebuild matches the first build. Because cache entries belong to the
+ref that saved them, pull request and merge queue runs read the layers the
+image workflow saved on dev.
+
+A reused build step shows as `CACHED` in the leg's `build.log` evidence. Trivy
+keys its scanner cache by layer DiffID, so a layer whose DiffID matches one
+already scanned is not scanned again, and every rebuilt layer is. To find which
+layers miss build cache or scan reuse, download a leg's artifact, count its
+`CACHED` steps and compare its layer DiffIDs, recorded in
+`credential-scan/secrets.json`, with another leg or run:
+
+```bash
+gh run download RUN_ID --name swarm-worker-image-profiles --dir profiles
+gh run download RUN_ID --name swarm-worker-image-startup --dir startup
+grep -c CACHED profiles/build.log
+comm -12 \
+  <(jq -r '.Metadata.DiffIDs[]' profiles/credential-scan/secrets.json | sort) \
+  <(jq -r '.Metadata.DiffIDs[]' startup/credential-scan/secrets.json | sort) | wc -l
+```
+
+The last command prints how many layers the two legs share. On dev push run
+39016785850, before the smoke legs restored `worker-layers`, the profiles leg
+logged no `CACHED` step and shared only 6 of its 21 layers with the startup
+leg of the same run: the five leading layers and the final empty layer. Its
+apt install, venv install, tool download and pip download steps rebuilt from
+unchanged inputs, so every layer between them carried a new DiffID the scanner
+cache could not match. The proof step took 101 seconds of the leg's 118. An
+image workflow run restoring the same cache (run 39017550399) logged 14
+`CACHED` steps.
+
 `python /opt/swarm-node/health.py MODE --attempt ATTEMPT --harness claude|codex`
 answers the execution adapter's probes with one JSON report. `liveness` reads
 only the attempt's newest supervisor incarnation: its process is alive in this
