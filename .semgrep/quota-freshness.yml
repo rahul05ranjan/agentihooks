@@ -26,7 +26,7 @@ rules:
       - pattern-not-inside: |
           def $F(...):
               ...
-              <... scripts.quota_freshness.$CHECK(...) ...>
+              <... scripts.quota_freshness.stale(...) ...>
               ...
       - pattern-not-inside: |
           def $F(...):

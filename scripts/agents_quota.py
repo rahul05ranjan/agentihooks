@@ -412,7 +412,6 @@ def _unprobed(account: str) -> ProbeResult:
 
 
 def _observed(results: list, now: float, fable: bool) -> dict[str, float]:
-    """When each result was read: its router cache entry, else now for a result the cache does not hold."""
     from scripts.claude_quota_balancer import cached_observations
 
     cached = {result.account: at for at, result in cached_observations(include_fable=fable)}

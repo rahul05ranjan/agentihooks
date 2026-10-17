@@ -91,10 +91,14 @@ def test_a_stored_reading_past_the_freshness_window_or_never_read_is_not_drainin
     assert drain_watch.draining(_read(closed, 100.0), Limits(), 100.0 + 900)
     assert not drain_watch.draining(_read(closed, 100.0), Limits(), 100.0 + 901)
     assert not drain_watch.draining(closed, Limits(), 100.0)
+    assert drain_watch.draining({**_read(closed, 100.0), "five_resets_at": 161, "week_resets_at": 161}, Limits(), 160)
+    assert not drain_watch.draining({**_read(closed, 100.0), "five_resets_at": 160}, Limits(), 160)
+    assert not drain_watch.draining({**_read(closed, 100.0), "week_resets_at": 160}, Limits(), 160)
     store = _drain_swarm()
     old = {**DECISION, "accounts": [_read(row("alpha", "CLOSED", 1, 40.0, 7.5), 1_000.0)]}
     store.redis.set(store.key(SLUG, "quota-capacity"), json.dumps(old))
-    assert drain_watch.findings(store, SLUG, Limits(), 1_000_000 + 15 * MINUTE)
+    [found] = drain_watch.findings(store, SLUG, Limits(), 1_000_000 + 15 * MINUTE)
+    assert found.evidence == ("account alpha is closed, routing 7.5% left", "task t1")
     assert drain_watch.findings(store, SLUG, Limits(), 1_000_000 + 16 * MINUTE) == []
 
 
@@ -181,6 +185,8 @@ def test_swarm_status_prints_the_capacity_decision_and_the_drain_finding(env, ca
     store, ledger, _ = env
     run("sw", "create", "--repo", "/repo")
     _drain_swarm(store=store, slug="sw")
+    read = {**DECISION, "accounts": [_read(row("alpha", "CLOSED", 1, 40.0, 7.5), 1_660.0)]}
+    store.redis.set(store.key("sw", "quota-capacity"), json.dumps(read))
     ledger.rows["t1"].update(state="claimed", claimed_by="engineer@abc-0001", title="Fold the chat panel")
     monkeypatch.setattr(cli, "now_ms", lambda: 1_000_000 + 12 * MINUTE)
     monkeypatch.setattr(status, "now_ms", lambda: 1_000_000 + 12 * MINUTE)
@@ -188,7 +194,8 @@ def test_swarm_status_prints_the_capacity_decision_and_the_drain_finding(env, ca
     capsys.readouterr()
     run("sw", "status")
     out = capsys.readouterr().out.splitlines()
-    assert out[out.index("quota account claude alpha  closed  routing 7.5% left, read 0m ago  sessions 1") - 1] == (
+    line = "quota account claude alpha  closed  routing 7.5% left, read 1m ago  sessions 1"
+    assert out[out.index(line) - 1] == (
         "quota capacity eng 2 of 4, ci 1 of 1, plan 0 of 1, changed 12 minutes ago, because accounts are closed; "
         "Claude has 1 free seats and Codex has 0 free seats"
     )

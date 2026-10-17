@@ -10,7 +10,8 @@ CLOSED = "CLOSED"
 
 
 def draining(account: dict, limits: Limits, now: float) -> bool:
-    if quota_freshness.stale(account.get("observed_at"), (), now):
+    resets = (account.get("five_resets_at"), account.get("week_resets_at"))
+    if quota_freshness.stale(account.get("observed_at"), resets, now):
         return False
     left = quota_view.routing_left(account)
     return account["state"] == CLOSED or (left is not None and left <= limits.drain_left)

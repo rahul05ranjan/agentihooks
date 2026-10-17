@@ -9,7 +9,6 @@ NEVER = "never read"
 
 
 def stale(observed_at: float | None, resets: Iterable[float | None], now: float) -> bool:
-    """Missing, older than the freshness window, or taken before a window reset that has since passed."""
     return not session_bands.fresh(observed_at, now) or any(reset is not None and reset <= now for reset in resets)
 
 
