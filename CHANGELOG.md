@@ -52,6 +52,8 @@ release assembles them into its release notes. See `changelog.d/README.md`.
 - `terminate-agent --stand-down` reports a Redis error with whether the
   conversation is fenced, names a process with unregistered conversations as
   unknown and refuses to fence a conversation that exited after its plan.
+- Master notices for new and overdue follow ups include the item identifier and
+  its exact completion command.
 - The swarm stall watchdog no longer reopens a task or stops its owner while
   the task depends on a task not yet done, or while its owner has declared a
   wait on another open task or on another open pull request's merge.

@@ -121,10 +121,10 @@ def test_the_kind_job_restores_and_saves_the_layers_it_builds_with():
     assert smoke["env"]["KIND_LAYER_CACHE_HIT"] == "${{ steps.layers.outputs.cache-hit }}"
     assert save["with"]["key"] == "${{ steps.layers.outputs.cache-primary-key }}"
     exported = steps["exported"]
-    assert exported["if"] == "always() && steps.layers.outputs.cache-hit != 'true'"
+    assert exported["if"] == "always() && steps.key.outputs.hit != 'true' && steps.layers.outputs.cache-hit != 'true'"
     assert "$RUNNER_TEMP/kind-layers/complete" in exported["run"]
     assert restore["with"]["path"] == "${{ runner.temp }}/kind-layers"
-    assert save["if"] == "always() && steps.exported.outputs.complete == 'true'"
+    assert save["if"] == "always() && steps.key.outputs.hit != 'true' && steps.exported.outputs.complete == 'true'"
     order = list(steps)
     assert order.index("layers") < order.index(smoke_name) < order.index("exported")
     assert order.index("exported") < order.index("Save the fixture image layers")
@@ -139,3 +139,10 @@ def test_the_kind_job_restores_and_saves_the_layers_it_builds_with():
         "deploy/helm/agentihooks-swarm/ci/terminal-worker.Dockerfile",
     )
     assert restore["with"]["key"] == f"kind-layers-${{{{ hashFiles({', '.join(map(repr, sources))}) }}}}"
+
+
+def test_requirements_layer_depends_on_the_lock_alone():
+    stage = (ROOT / "Dockerfile").read_text()
+    stage = stage[: stage.index("COPY hooks/ hooks/")]
+    assert "COPY docker/swarm/requirements.lock ./\nRUN python -m venv /opt/venv" in stage
+    assert stage.index("-r requirements.lock") < stage.index("COPY pyproject.toml README.md ./")
