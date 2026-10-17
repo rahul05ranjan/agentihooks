@@ -120,7 +120,7 @@ def test_a_push_codex_persona_carries_the_push_waiting_line_without_the_loop():
     persona = codex_master.persona(text, push=True)
     assert persona == (
         "Read agentihooks msg inbox.\nWatch its checks.\n"
-        "Start a `agentihooks swarm <slug> wait --on` on long running work.\n\n"
+        "Start a `agentihooks swarm <slug> wait --on checks|reply|task` on long running work.\n\n"
         + codex_master.waiting("<slug>", push=True)
         + "\n"
     )
