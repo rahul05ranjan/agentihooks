@@ -92,7 +92,7 @@ def cancel(repo: str, head: str, paths: set[str], wait: float, step: float = 5.0
     cancelled, seen = set(), set()
     deadline = time.monotonic() + wait
     while True:
-        pending = set()
+        pending = False
         for run in api(f"repos/{repo}/actions/runs?head_sha={head}&per_page=100").get("workflow_runs", []):
             path = run["path"].split("@")[0]
             if path not in paths:
@@ -102,7 +102,7 @@ def cancel(repo: str, head: str, paths: set[str], wait: float, step: float = 5.0
                 if stop(repo, run["id"]):
                     cancelled.add(run["id"])
                 else:
-                    pending.add(path)
+                    pending = True
         if (seen >= paths and not pending) or time.monotonic() >= deadline:
             return cancelled
         time.sleep(step)
