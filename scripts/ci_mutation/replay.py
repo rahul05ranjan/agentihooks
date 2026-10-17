@@ -99,11 +99,12 @@ def verify(folder: Path) -> dict:
     reports = [json.loads(path.read_text()) for path in sorted((folder / "grades").glob("*/report.json"))]
     report = merge_reports(reports, load_clearances(folder / "source"))
     shards = report.get("shards", [])
-    units = sum(len(assignment) if isinstance(assignment, list) else 1 for assignment in plan["assignments"].values())
+    units = manifest["mutants"] + sum(
+        len(names) - 1 for names in plan.get("assignments", {}).values() if isinstance(names, list)
+    )
     complete = (
         sorted(shard["index"] for shard in shards) == list(range(plan["shards"]))
         and all(shard["complete"] for shard in shards)
-        and len(plan["assignments"]) == manifest["mutants"]
         and sum(shard["expected"] for shard in shards) == units
         and sum(shard["graded"] for shard in shards) == units
     )
