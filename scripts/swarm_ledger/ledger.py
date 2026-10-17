@@ -62,6 +62,7 @@ Usage: ledger.py --slug SLUG --as NAME <command> [args]
                                       D is the task size, S, M or L, recorded as the operator's choice
   task set ID FIELD=VALUE...          set state, claimed_by, issue_url, pr_url, depends_on, territory, kind, rank,
                                       difficulty (S, M or L), artifact (yes or no) or plan_slice of a task;
+                                      after_release=vX.Y.Z holds its claim until a newer release tag exists;
                                       phase moves it to another phase, from the master or a planner;
                                       a move naming no slice drops it, into a phase with a plan as a follow up;
                                       plan_slice computes its plan lines from the published plan;
@@ -313,12 +314,15 @@ def op(kind, args, /, **fields):
     return {"op": kind, "id": f"{kind}-{uuid.uuid4().hex[:10]}", "by": args.name, **fields}
 
 
-def refused(state, ops=(), fallback=""):
+def refused(state, ops=(), fallback="", lead=""):
     if rejected := state.get("rejected"):
-        reasons = [w for w in state.get("_meta", {}).get("warnings", []) if not core.size_warning(w)] or [
-            unexplained(o) for o in ops if o["id"] in rejected
-        ]
-        sys.exit("; ".join(reasons) or fallback or f"rejected: {rejected}")
+        warnings = state.get("_meta", {}).get("warnings", [])
+        reasons = [
+            w
+            for w in warnings
+            if not core.size_warning(w) and not (lead and w.startswith(ledger_task_duplicates.UNCHECKED_PREFIX))
+        ] or [unexplained(o) for o in ops if o["id"] in rejected]
+        sys.exit(lead + ("; ".join(reasons) or fallback or f"rejected: {rejected}"))
 
 
 def unexplained(sent):
@@ -341,8 +345,16 @@ def held(state):
 
 def send(args, kind, /, **fields):
     ops = [op(kind, args, **fields)]
-    state = call(args.slug, ops)
-    refused(state, ops)
+    lead = f"task {fields['task']} was not added: " if kind == "task_add" else ""
+    try:
+        state = call(args.slug, ops)
+    except SystemExit as exc:
+        if lead and isinstance(exc.code, str):
+            raise type(exc)(lead + exc.code) from None
+        raise
+    refused(state, ops, lead=lead)
+    if lead and not state.get("applied"):
+        sys.exit(f"{lead}the ledger server did not apply it")
     for warning in state.get("_meta", {}).get("warnings", []):
         if warning.startswith(ledger_task_duplicates.UNCHECKED_PREFIX):
             print(warning, file=sys.stderr)
@@ -737,6 +749,30 @@ def refuse_unset_quote(args):
         sys.exit(f"task {args.action} takes no --quote: run task set <id> rank=<rank> --quote <his words> after it")
 
 
+def _add_task(args, title, fields):
+    if args.scaffold:
+        task = {"id": args.id, "title": title, "description": args.description, "phase": args.phase, **fields}
+        doc = call(args.slug) if args.kind == "plan" else None
+        fields["workspace"] = str(ledger_workspace.folder(args.slug, args.id))
+    send(
+        args,
+        "task_add",
+        task=args.id,
+        title=title,
+        lane=args.lane,
+        phase=args.phase,
+        description=args.description,
+        **fields,
+    )
+    if args.scaffold:
+        try:
+            ledger_workspace.scaffold(args.slug, task, doc)
+        except OSError as exc:
+            print(f"task {args.id} was added; its work folder was not created: {exc}", file=sys.stderr)
+            return {"workspace_error": str(exc)}
+    return {}
+
+
 def cmd_task(args):
     refuse_unset_quote(args)
     if args.action == "add":
@@ -769,21 +805,7 @@ def cmd_task(args):
             ("plan_slice", args.plan_slice),
         )
         lists.update((key, value) for key, value in options if value)
-        if args.scaffold:
-            task = {"id": args.id, "title": title, "description": args.description, "phase": args.phase, **lists}
-            doc = call(args.slug) if args.kind == "plan" else None
-            lists["workspace"] = str(ledger_workspace.scaffold(args.slug, task, doc))
-        send(
-            args,
-            "task_add",
-            task=args.id,
-            title=title,
-            lane=args.lane,
-            phase=args.phase,
-            description=args.description,
-            **lists,
-        )
-        print(json.dumps({"task": args.id, "added": title}))
+        print(json.dumps({"task": args.id, "added": title, **_add_task(args, title, lists)}))
         return
     if args.action in TASK_LISTS:
         kind, field, shown = TASK_LISTS[args.action]

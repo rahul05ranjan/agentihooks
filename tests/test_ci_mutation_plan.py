@@ -41,6 +41,57 @@ def test_shared_statistics_replace_flat_costs_before_assigning_shards():
     assert len(set(expensive_shards)) == min(plan["shards"], 8)
 
 
+@pytest.mark.parametrize("changed", [{2}, {6}, {10, 13, 16}, set(range(1, 22)), set()])
+def test_refinement_selects_names_without_rendering_mutant_source(tmp_path, monkeypatch, changed):
+    from scripts.ci_mutation import measured
+    from scripts.ci_mutation.selection import selected_mutants
+    from scripts.ci_mutation.stats import SharedStats, stats_key, write_part
+
+    source = (
+        "VALUE = 0\n"
+        "def outer(value):\n"
+        "    return value + 1\n"
+        "\n"
+        "class Example:\n"
+        "    def __init__(self, value):\n"
+        "        self.value = value + 2\n"
+        "\n"
+        "    @classmethod\n"
+        "    def make(cls, value):\n"
+        "        return cls(value + 3)\n"
+        "\n"
+        "    async def result(self):\n"
+        "        return self.value + 4\n"
+        "\n"
+        "    class Nested:\n"
+        "        def ignored(self): return 5\n"
+        "\n"
+        "async def later(value):\n"
+        "    return value + 6\n"
+        "\n"
+        "if True:\n"
+        "    def conditional():\n"
+        "        return 7\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("mutmut.configuration._config", None)
+    _project(tmp_path, {})
+    (tmp_path / "sample.py").write_text(source)
+    selected = {"sample.py": (changed, ["tests/test_sample.py"])}
+    stats = SharedStats(tmp_path / "stats", "head")
+    key = stats_key(stats.head, selected)
+    write_part(stats.group(0).folder / "part-0.json", key, (0, 1), [])
+    _, expected = selected_mutants("sample.py", source, changed)
+
+    def refuse_render(*args, **kwargs):
+        pytest.fail("Refinement must not render mutated source")
+
+    monkeypatch.setattr("mutmut.mutation.file_mutation.combine_mutations_to_source", refuse_render)
+    plan = measured.refine_plan(tmp_path, selected, stats)
+    assert sorted(plan["assignments"]) == sorted(f"sample.{name}" for name in expected)
+    assert plan["keys"] == [key]
+
+
 def test_measured_costs_merge_mappings_keep_slowest_durations_and_cover_missing_nodes():
     from scripts.ci_mutation.measured import measured_costs
 
@@ -382,11 +433,13 @@ def test_main_writes_one_matrix_entry_per_shard(tmp_path, monkeypatch, capsys):
     ("estimated", "shards", "parts"),
     [
         ((0, 0, {}), "[0]", "[0]"),
-        ((962, 500, dict.fromkeys("abcde", 15.24)), "[0, 1]", "[0, 1]"),
+        ((962, 500, dict.fromkeys("abcde", 15.24)), "[0, 1, 2]", "[0, 1]"),
+        ((480, 500, {}), "[0]", "[0]"),
+        ((481, 500, {}), "[0, 1]", "[0]"),
         ((10**6, 10**4, {f"t{n}": 30 for n in range(40)}), json.dumps(list(range(10))), json.dumps(list(range(10)))),
     ],
 )
-def test_main_defaults_to_origin_dev_a_four_minute_target_a_half_minute_stats_bucket_and_ten_shards(
+def test_main_defaults_to_origin_dev_a_two_minute_target_a_half_minute_stats_bucket_and_ten_shards(
     tmp_path, monkeypatch, estimated, shards, parts
 ):
     seconds, mutants, timed = estimated

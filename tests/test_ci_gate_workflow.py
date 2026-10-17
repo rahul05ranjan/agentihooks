@@ -15,6 +15,7 @@ LINT_CONTROLS = [
     "Check every pull request job is a need of Gate Required",
     "Hold the size and complexity limits",
     "Fail on known vulnerabilities new against the base",
+    "Run every Swarm Ledger dashboard query against this head's metrics tables",
 ]
 LINT_SETUP = [
     "Install ruff",
@@ -27,6 +28,36 @@ LINT_SETUP = [
 
 def _workflow():
     return yaml.safe_load((_ROOT / ".github/workflows/test.yml").read_text())
+
+
+def test_stored_durations_share_selection_admission_before_both_shard_paths():
+    jobs = _workflow()["jobs"]
+    assert "durations" not in jobs
+    admission = jobs["select"]
+    assert "github.event_name != 'merge_group'" not in admission["if"]
+    assert admission["outputs"]["key"] == "${{ steps.stored.outputs.cache-matched-key }}"
+    assert admission["outputs"]["queued"] == "${{ steps.republished.outputs.queued }}"
+    assert admission["outputs"]["source"] == "${{ steps.unit-source.outputs.source }}"
+    assert "select" in jobs["split"]["needs"]
+    assert "select" in jobs["unit-selected"]["needs"]
+    assert jobs["split"]["env"]["UNIT_SOURCE"] == "${{ needs.select.outputs.source }}"
+    assert any(
+        step.get("with", {}).get("key") == "${{ needs.select.outputs.key }}" for step in jobs["unit-selected"]["steps"]
+    )
+    published = next(step for step in admission["steps"] if step.get("name") == "Republish the dev durations")
+    assert published["with"]["name"] == "dev-durations"
+    assert published["with"]["if-no-files-found"] == "error"
+
+
+@pytest.mark.parametrize("shard_path", ["split", "unit-selected"])
+def test_each_shard_path_restores_selected_durations_red_on_a_cache_miss(shard_path):
+    steps = _workflow()["jobs"][shard_path]["steps"]
+    restore = next(step for step in steps if step.get("name") == "Restore latest dev durations")
+    assert restore["with"]["key"] == "${{ needs.select.outputs.key }}"
+    assert restore["with"]["fail-on-cache-miss"] is True
+    assert "needs.select.outputs.key != ''" in restore["if"]
+    adopt = next(step for step in steps if step.get("name") == "Adopt latest dev durations")
+    assert "tests.dev_durations" in adopt["run"]
 
 
 @pytest.mark.parametrize("gate_plant,allowed", [("", False), ("false", False), ("true", True)])
@@ -118,6 +149,25 @@ def test_each_cheap_gate_grades_in_lint_after_its_setup_even_after_an_earlier_re
     assert max(names.index(name) for name in LINT_SETUP) < names.index(control)
 
 
+def test_lint_grades_dashboard_columns_with_the_antoncore_dev_checker():
+    steps = _workflow()["jobs"]["lint"]["steps"]
+    token = next((s for s in steps if s.get("id") == "antoncore-token"), None)
+    assert token is not None
+    assert token["with"]["repositories"] == "antoncore"
+    assert token["with"]["permission-contents"] == "read"
+    checkout = next((s for s in steps if s.get("with", {}).get("repository") == "the-cloud-clockwork/antoncore"), None)
+    assert checkout is not None
+    assert checkout["if"] == "${{ !cancelled() && steps.antoncore-token.outcome == 'success' }}"
+    assert checkout["with"]["token"] == "${{ steps.antoncore-token.outputs.token }}"
+    assert checkout["with"]["ref"] == "dev"
+    assert checkout["with"]["persist-credentials"] is False
+    assert "scripts/swarm_dashboard_columns.py" in checkout["with"]["sparse-checkout"]
+    check = next((s for s in steps if "swarm_dashboard_columns.py check" in s.get("run", "")), None)
+    assert check is not None
+    assert steps.index(token) < steps.index(checkout) < steps.index(check)
+    assert '--agentihooks "$GITHUB_WORKSPACE"' in check["run"]
+
+
 def test_post_shard_graders_do_not_wait_on_each_other_and_the_gate_needs_each():
     jobs = _workflow()["jobs"]
     graders = {"shard-check", "coverage-ratchet", "sonar"}
@@ -190,7 +240,8 @@ def test_test_count_floor_runs_per_suite_beside_unit_against_the_base():
         job["strategy"]["matrix"]["python-version"]
         == _workflow()["jobs"]["unit"]["strategy"]["matrix"]["python-version"]
     )
-    base, floor = job["steps"][-2:]
+    base = next(step for step in job["steps"] if step.get("name") == "Check out the base revision")
+    floor = next(step for step in job["steps"] if step.get("name") == "Hold the base revision's test count")
     assert base["env"]["BASE"] == (
         "${{ github.event_name == 'pull_request' && github.base_ref == 'dev' && 'origin/dev'"
         " || github.event.pull_request.base.sha || github.event.merge_group.base_sha"
@@ -456,7 +507,7 @@ def test_coverage_ratchet_grades_a_batched_dev_push_against_the_previous_tip(tmp
 
 
 def test_test_count_refuses_a_base_without_its_grader(tmp_path):
-    floor = _workflow()["jobs"]["test-count"]["steps"][-1]
+    floor = _step("test-count", "Hold the base revision's test count")
     (tmp_path / "base").mkdir()
     env = dict(os.environ, RUNNER_TEMP=str(tmp_path), GITHUB_WORKSPACE=str(tmp_path))
     result = subprocess.run(["bash", "-e", "-c", floor["run"]], env=env, capture_output=True, text=True)

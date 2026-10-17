@@ -378,6 +378,33 @@ def test_worker_smoke_shares_one_versioned_scanner_cache_across_independent_proo
     assert image["steps"].index(restore) < image["steps"].index(proof) < image["steps"].index(save)
 
 
+def test_worker_smoke_reuses_the_candidate_layers_except_in_the_uncached_rebuild():
+    smoke_workflow = yaml.safe_load((ROOT / ".github/workflows/swarm-node-smoke.yml").read_text())
+    image_workflow = yaml.safe_load((ROOT / ".github/workflows/swarm-node-image.yml").read_text())
+    steps = smoke_workflow["jobs"]["worker-image"]["steps"]
+    layers = next(step for step in steps if step.get("id") == "layers")
+    candidate = next(
+        step for step in image_workflow["jobs"]["image"]["steps"] if step.get("name") == "Restore the candidate layers"
+    )
+    proof = next(step for step in steps if "smoke.sh" in step.get("run", ""))
+    smoke = (ROOT / "docker/swarm-node/smoke.sh").read_text()
+
+    assert layers["uses"] == "actions/cache/restore@v4"
+    assert layers["with"] == candidate["with"]
+    assert layers["if"] == "matrix.proof != 'rebuild' && runner.environment == 'self-hosted'"
+    assert all(
+        step["with"]["path"] == "${{ env.WORKER_SCANNER_CACHE }}"
+        for step in steps
+        if step.get("uses") == "actions/cache/save@v4"
+    )
+    assert steps.index(layers) < steps.index(proof)
+    assert proof["env"]["WORKER_LAYERS"] == (
+        "${{ steps.layers.outputs.cache-matched-key && format('{0}/worker-layers', runner.temp) || '' }}"
+    )
+    assert 'build_args+=(--cache-from "type=local,src=$WORKER_LAYERS")' in smoke
+    assert smoke.index("--cache-from") < smoke.index('-t "$image" "$context" > "$output/build.log"')
+
+
 def test_worker_compare_downloads_every_proof_artifact_into_its_proof_folder():
     workflow = yaml.safe_load((ROOT / ".github/workflows/swarm-node-smoke.yml").read_text())
     proofs = workflow["jobs"]["worker-image"]["strategy"]["matrix"]["proof"]
@@ -461,3 +488,22 @@ def test_a_failed_proof_fails_the_step_by_name_while_every_other_proof_reports(t
     assert f"planted failure in {fail}" in done.stdout
     assert done.stdout.count("::group::") == 5
     assert f"failed proofs: {proof}" in done.stderr
+
+
+def test_the_candidate_build_reuses_layers_saved_only_after_the_proofs(workflow):
+    names = [step.get("name") for step in steps(workflow)]
+    restore = named(workflow, "Restore the candidate layers")
+    build = named(workflow, "Build the candidate")
+    save = named(workflow, "Save the qualified candidate layers")
+
+    assert restore["uses"] == "actions/cache/restore@v4"
+    assert restore["with"]["path"] == save["with"]["path"] == "${{ runner.temp }}/worker-layers"
+    assert save["uses"] == "actions/cache/save@v4"
+    assert save["with"]["key"] == "${{ steps.layers.outputs.cache-primary-key }}"
+    assert save["if"] == named(workflow, "Keep the qualified candidate layers")["if"]
+    assert save["if"] == "steps.layers.outputs.cache-hit != 'true'"
+    assert '${LAYERS_FROM:+--cache-from "$LAYERS_FROM"}' in build["run"]
+    assert '${LAYERS_TO:+--cache-to "$LAYERS_TO"}' in build["run"]
+    assert "mode=max" in build["env"]["LAYERS_TO"]
+    assert names.index(restore["name"]) < names.index(build["name"])
+    assert names.index("Require the independent requalification to match") < names.index(save["name"])
