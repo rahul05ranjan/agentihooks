@@ -3,6 +3,17 @@ import subprocess
 
 from tests.swarm_ledger.ledger_page import page_source
 
+STUBS = """
+const h = (tag, attrs, ...kids) => ({tag, attrs, kids});
+const label = (text, tone) => ({label: text, tone});
+const cells = (...values) => values;
+const withId = (row) => row;
+const idCell = (text) => text;
+const transportCell = (c) => c ? "transport" : "—";
+const agentActions = () => "actions";
+const pending = "", swarmReadError = false;
+"""
+
 
 def _function(page, name):
     return "function " + name + "(" + page.split("  function " + name + "(", 1)[1].split("\n  }\n", 1)[0] + "\n}"
@@ -10,34 +21,43 @@ def _function(page, name):
 
 def _run(script):
     page = page_source()
-    names = ("span", "modelText", "terminalView", "executionView", "agentRows", "remoteControlCell")
-    stubs = """
-const h = (tag, attrs, ...kids) => ({tag, attrs, kids});
-const label = (text, tone) => ({label: text, tone});
-"""
-    js = stubs + "\n".join(_function(page, name) for name in names) + script
+    names = ("span", "modelText", "terminalView", "executionView", "agentRows", "agentRow", "remoteControlCell")
+    js = STUBS + "\n".join(_function(page, name) for name in names) + script
     return json.loads(subprocess.check_output(["node", "-e", js], text=True))
 
 
-def test_only_the_master_row_carries_its_remote_control_line():
-    rows = _run("""
-const raw = {agents: [
-  {name: 'm', lane: 'master', remote_control: 'Remote Control: on (master · sw)'},
-  {name: 'e', lane: 'eng', remote_control: 'Remote Control: on (master · sw)'},
-  {name: 'q', lane: 'master'}
-]};
-console.log(JSON.stringify(agentRows(raw, 0).map((r) => [r.name, r.remoteControl])));
-""")
-    assert rows == [["m", "Remote Control: on (master · sw)"], ["e", ""], ["q", ""]]
-
-
-def test_the_cell_labels_the_state_and_shows_the_name_or_reason():
+def test_only_a_master_with_a_recorded_decision_gets_the_remote_control_cell():
     cells = _run("""
-console.log(JSON.stringify(['Remote Control: on (master · sw)', 'Remote Control: off (fallback auth)', 'odd'].map(remoteControlCell)));
+const on = {state: 'on', detail: 'master · sw'};
+const raw = {agents: [
+  {name: 'm', lane: 'master', remote_control: on, capabilities: {push_inbox: true}},
+  {name: 'e', lane: 'eng', remote_control: on},
+  {name: 'q', lane: 'master', remote_control: {}}
+]};
+console.log(JSON.stringify(agentRows(raw, 0).map((r) => agentRow(r, false)[5])));
 """)
-    assert [(c["attrs"]["data-tip"], c["kids"][0], c["kids"][1]["attrs"]["text"]) for c in cells] == [
-        ("Remote Control: on (master · sw)", {"label": "remote control on", "tone": "on"}, "master · sw"),
-        ("Remote Control: off (fallback auth)", {"label": "remote control off", "tone": "off"}, "fallback auth"),
-        ("odd", {"label": "remote control off", "tone": "off"}, "odd"),
+    assert cells == [
+        {
+            "tag": "span",
+            "attrs": {"data-tip": "Remote Control: on (master · sw)"},
+            "kids": [
+                {"label": "remote control on", "tone": "on"},
+                {"tag": "span", "attrs": {"class": "sw-sub", "text": "master · sw"}, "kids": []},
+                "transport",
+            ],
+        },
+        "—",
+        "—",
     ]
-    assert "a.remoteControl ? remoteControlCell(a.remoteControl) : transportCell(a.transport)" in page_source()
+
+
+def test_an_off_master_without_transport_shows_the_reason_alone():
+    cell = _run("console.log(JSON.stringify(remoteControlCell({state: 'off', detail: 'fallback auth'}, null)));")
+    assert cell == {
+        "tag": "span",
+        "attrs": {"data-tip": "Remote Control: off (fallback auth)"},
+        "kids": [
+            {"label": "remote control off", "tone": "off"},
+            {"tag": "span", "attrs": {"class": "sw-sub", "text": "fallback auth"}, "kids": []},
+        ],
+    }

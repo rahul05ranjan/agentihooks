@@ -6,7 +6,7 @@ import time
 from collections.abc import Mapping
 
 from scripts.inbox.seats import seat_address
-from scripts.swarm.store import MASTER
+from scripts.swarm.store import MASTER, RedisStore, connect
 
 FLAG = "AGENTIHOOKS_MASTER_REMOTE_CONTROL"
 FAILURES = "remote-control-failures"
@@ -14,6 +14,10 @@ FALLBACK = "fallback auth"
 GATEWAY = "gateway"
 OFF = "flag"
 FAILURE_WORDS = ("Remote Control failed", "Remote Control disconnected")
+
+
+def now_ms() -> int:
+    return int(time.time() * 1000)
 
 
 def session_name(seat: str, slug: str) -> str:
@@ -34,31 +38,35 @@ def off_reason(route_kind: str, environ: Mapping[str, str]) -> str:
     return "" if route_kind == "interactive" else FALLBACK
 
 
-def arguments(lane: str, harness: str, route_kind: str, slug: str, environ: Mapping[str, str]) -> list[str]:
-    if lane != MASTER or harness != "claude" or off_reason(route_kind, environ):
-        return []
-    name = session_name(seat_address(slug, MASTER), slug)
-    return ["--remote-control", name, "--remote-control-session-name-prefix", name_prefix()]
-
-
-def line(agent: Mapping, slug: str, environ: Mapping[str, str]) -> str:
-    if agent.get("lane") != MASTER or agent.get("harness") != "claude":
-        return ""
-    reason = off_reason(agent.get("route_kind", ""), environ)
+def decision(lane: str, harness: str, route_kind: str, slug: str, environ: Mapping[str, str]) -> dict:
+    if lane != MASTER or harness != "claude":
+        return {}
+    reason = off_reason(route_kind, environ)
     if reason:
-        return f"Remote Control: off ({reason})"
-    return f"Remote Control: on ({session_name(agent.get('seat') or seat_address(slug, MASTER), slug)})"
+        return {"state": "off", "detail": reason}
+    return {"state": "on", "detail": session_name(seat_address(slug, MASTER), slug)}
+
+
+def arguments(decided: Mapping) -> list[str]:
+    if decided.get("state") != "on":
+        return []
+    return ["--remote-control", decided["detail"], "--remote-control-session-name-prefix", name_prefix()]
+
+
+def line(agent: Mapping) -> str:
+    decided = agent.get("remote_control")
+    return f"Remote Control: {decided['state']} ({decided['detail']})" if decided else ""
 
 
 def failure(message: str) -> bool:
     return any(words in message for words in FAILURE_WORDS)
 
 
-def record(store, slug: str, name: str, message: str, now_ms: int) -> None:
-    store.redis.hset(store.key(slug, FAILURES), name, json.dumps({"message": message, "at": now_ms}))
+def record(store: RedisStore, slug: str, name: str, message: str, at: int) -> None:
+    store.redis.hset(store.key(slug, FAILURES), name, json.dumps({"message": message, "at": at}))
 
 
-def failures(store, slug: str) -> dict[str, dict]:
+def failures(store: RedisStore, slug: str) -> dict[str, dict]:
     return {name: json.loads(raw) for name, raw in store.redis.hgetall(store.key(slug, FAILURES)).items()}
 
 
@@ -67,7 +75,5 @@ def on_notification(payload: Mapping, environ: Mapping[str, str] = os.environ) -
     message = str(payload.get("message") or "")
     if not slug or not name or environ.get("AGENTIHOOKS_SWARM_LANE") != MASTER or not failure(message):
         return False
-    from scripts.swarm.store import RedisStore, connect
-
-    record(RedisStore(connect()), slug, name, message, int(time.time() * 1000))
+    record(RedisStore(connect()), slug, name, message, now_ms())
     return True

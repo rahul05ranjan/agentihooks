@@ -280,7 +280,6 @@ def status_report(store: RedisStore, slug: str, state: dict, runtime: Runtime | 
                 "state_since": int(store.redis.hget(store.key(slug, "state-since"), a.name) or 0),
                 "observation": observation(store, slug, a),
                 "capabilities": transport(a),
-                "remote_control": remote_control.line(a.__dict__, slug, os.environ),
                 "gates": active.get(a.name, []),
                 "inbox": [
                     {"text": item.text, "sender": item.sender, "state": item.state}
