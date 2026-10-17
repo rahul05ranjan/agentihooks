@@ -45,6 +45,52 @@ gh api repos/the-cloud-clockwork/agentihooks/actions/runs/<run id>/jobs \
 
 A dispatch whose first job starts within seconds of its `created_at` did not queue. If a dispatch still sits queued for minutes, list the runs on its lane: another dispatch or a lane workflow run holds it, not a Startup stages or Worker resources push. `tests/test_ci_hosted_lanes.py` checks, for a sample branch across all ten run id endings, that a branch push of either workflow never resolves to a lane while a dispatch still does.
 
+## Codex CLI cache
+
+The live Codex API test, `tests/routing/test_codex_api.py`, runs the real Codex CLI. `tests/shards.py` pins that file to unit shard 1, so only two Tests jobs need the CLI: the Python 3.12 shard 1 of the `unit` job, and a Python 3.12 leg of the `unit-selected` job whose selected files include that test. Both read the binary from the Actions cache and never write it.
+
+| Job | When it needs the CLI | Cache action | On a miss |
+|---|---|---|---|
+| `unit` | Python 3.12, shard 1, the shard runs tests itself | `actions/cache/restore` | downloads the release and runs it; saves nothing |
+| `unit-selected` | Python 3.12 leg whose files name `tests/routing/test_codex_api.py` | `actions/cache/restore` | downloads the release and runs it; saves nothing |
+| Codex cache workflow `seed` | always, on the self-hosted pool | `actions/cache` | downloads the release; the cache action saves it to `main` |
+
+Both test jobs put `~/codex` on `PATH` and set `CODEX_CLI_REQUIRED=1`, so a missing CLI fails the test instead of skipping it.
+
+The cache key is `codex-<runner OS>-<CODEX_RELEASE>`, today `codex-Linux-rust-v0.160.0`, and the path is `~/codex`. The binary is the `codex-x86_64-unknown-linux-musl` asset of that release from `github.com/openai/codex`, about 104 MB.
+
+Only the Codex cache workflow (`codex-cache.yml`) saves the entry. It runs on every push to `main`, every six hours (`23 */6 * * *`) and on dispatch. A cache entry is visible to runs of the ref that saved it and of the default branch, `main`. Merge queue refs (`gh-readonly-queue/dev/...`), pull request refs and `dev` therefore all restore the one `main` entry, and no merge queue branch stores its own copy. The scheduled run renews the entry so the seven day eviction of unused caches does not drop it between promotions.
+
+The seed job saves only on the self-hosted pool the unit shards restore on. Hosted runners compress the cache with zstd, which produces a cache version the gzip compressed self-hosted unit runners cannot restore. When the trusted actor check routes the job to `ubuntu-latest`, the job warns `Only the self-hosted pool unit shards restore on may save the Codex cache.` and skips every other step.
+
+### Changing the Codex release
+
+`CODEX_RELEASE` is set in three places: the `unit` and `unit-selected` job environments in `test.yml` and the `seed` job in `codex-cache.yml`. Change all three in one pull request. The new key does not exist until the next push to `main` or a dispatch of the seed:
+
+```bash
+gh workflow run codex-cache.yml --ref main
+```
+
+Until then the Codex shard downloads the release on every run, which still passes.
+
+### Checking the cache
+
+List the Codex entries with their ref and size:
+
+```bash
+gh api "repos/the-cloud-clockwork/agentihooks/actions/caches?key=codex-" \
+  --jq '.actions_caches[] | [.key, .ref, .size_in_bytes, .last_accessed_at] | @tsv'
+```
+
+Expect one entry on `refs/heads/main` per release. An entry on any other ref was saved before the seed workflow existed or by a dispatch of the seed on that ref; it is not refreshed and expires seven days after its last use. List the seed runs:
+
+```bash
+gh run list --workflow codex-cache.yml --limit 5 \
+  --json event,headBranch,conclusion,databaseId
+```
+
+If the Codex shard log shows the `Install the Codex CLI` step running, the restore missed: check that the seed's latest run passed on the self-hosted pool and that its `CODEX_RELEASE` matches `test.yml`.
+
 ## Historical measurements
 
 Last ten runs of the Tests workflow on dev (35380163028, 35379942561, 35379468297, 35156774129, 35156548701, 35156299806, 35155214526, 35138446531, 35138276256, 35137837913). Seconds per step, mean and max over those runs.
