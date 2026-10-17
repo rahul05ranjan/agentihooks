@@ -83,7 +83,7 @@ def _swarm_of(environ, session_id: str = "") -> str:
 
 def _pinned_swarm(session_id: str) -> dict:
     try:
-        return json.loads(_marker(session_id, "swarm").read_text(encoding="utf-8"))
+        return json.loads(_marker(session_id, "swarm").read_bytes())
     except (OSError, ValueError):
         return {}
 
