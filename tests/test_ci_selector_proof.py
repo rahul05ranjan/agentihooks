@@ -27,7 +27,7 @@ def test_selector_proof_is_unprivileged_and_restricted_to_plants():
     assert len(checkouts) == 2
     assert all(step["with"]["persist-credentials"] is False for step in checkouts)
     steps = {step.get("name"): step for step in job["steps"]}
-    assert 'refs/heads/diffcheck/selector-' in steps["Require a plant branch"]["run"]
+    assert "refs/heads/diffcheck/selector-" in steps["Require a plant branch"]["run"]
     for side in ("base", "head"):
         step = steps[f"Run {side} selector"]
         assert step["working-directory"] == side
@@ -51,12 +51,18 @@ def test_selector_proof_is_unprivileged_and_restricted_to_plants():
 def test_selector_proof_reports_both_selections_and_requires_a_base_miss(tmp_path, base, head, success):
     (tmp_path / "base.txt").write_text(base)
     (tmp_path / "head.txt").write_text(head)
-    (tmp_path / "metadata.json").write_text(json.dumps({"plant": "Named plant", "base": "base-sha", "head": "head-sha"}))
+    (tmp_path / "metadata.json").write_text(
+        json.dumps({"plant": "Named plant", "base": "base-sha", "head": "head-sha"})
+    )
     step = next(step for step in workflow()["jobs"]["selection"]["steps"] if step.get("name") == "Compare selections")
     result = subprocess.run(
         ["bash", "-euo", "pipefail", "-c", step["run"]],
         cwd=tmp_path,
-        env={**os.environ, "EXPECTED_TESTS": "tests/test_ci_select.py", "GITHUB_STEP_SUMMARY": str(tmp_path / "summary")},
+        env={
+            **os.environ,
+            "EXPECTED_TESTS": "tests/test_ci_select.py",
+            "GITHUB_STEP_SUMMARY": str(tmp_path / "summary"),
+        },
         text=True,
         capture_output=True,
     )
