@@ -65,7 +65,7 @@ def rows(store: RedisStore, slug: str) -> list[dict]:
     ]
 
 
-def consume(store: RedisStore, slug: str, owner: str, execute: Callable[[dict], str]) -> list[str]:
+def consume(store: RedisStore, slug: str, owner: str, execute: Callable[[dict], str], only: str = "") -> list[str]:
     held = lease.acquire(store, slug, owner)
     if held is None:
         return []
@@ -77,7 +77,7 @@ def consume(store: RedisStore, slug: str, owner: str, execute: Callable[[dict], 
         if row["state"] != "pending":
             store.redis.lrem(pending, 1, key)
             continue
-        if row["owner"] and row["owner"] != owner:
+        if row["owner"] and row["owner"] != owner or only and row["command"] != only:
             continue
         stale = row.get("epoch", 0) not in (0, held.epoch)
         row.update(owner=owner, epoch=held.epoch, state="accepted", accepted_at=time.time_ns() // 1_000_000)
@@ -101,11 +101,13 @@ def publish(store: RedisStore, slug: str, status: dict, tails: dict) -> None:
 
 
 def view(store: RedisStore, slug: str) -> dict:
-    from scripts.swarm import lifecycle, tick_activity
+    from scripts.swarm import lifecycle, quota_refresh, tick_activity
 
     config = store.config(slug)
     data = json.loads(store.redis.get(store.key(slug, "published")) or "{}")
     status = data.get("status", {"agents": [], "tasks": {}})
+    quota = quota_refresh.latest(store, slug, status.get("quota"))
+    status = status if quota is None else {**status, "quota": quota}
     now = time.time_ns() // 1_000_000
     terminals = visibility.read(store, slug, now)
     executions, errors = execution_card.cards(status.get("agents", []), terminals)

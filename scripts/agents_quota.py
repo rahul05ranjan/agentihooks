@@ -9,7 +9,7 @@ from collections.abc import Callable, Mapping, MutableMapping
 from dataclasses import asdict, dataclass, replace
 from typing import TYPE_CHECKING
 
-from scripts import codex_router, quota_freshness, session_bands
+from scripts import codex_router, quota_freshness, quota_state, session_bands
 from scripts.claude_quota_balancer import (
     MASTERS_ONLY,
     OPEN,
@@ -100,10 +100,11 @@ def claude_rows(
 def _claude_row(
     result, sessions: dict[str, int], source: str, seen: float | None, now: float, include_fable: bool
 ) -> QuotaRow:
+    cap = account_cap(result, now, include_fable) if session_bands.fresh(seen, now) else None
     row = QuotaRow(
         agent="claude",
         account=result.account,
-        state=result.state,
+        state=quota_state.shown(result.state, cap, result.margin),
         sessions=sessions.get(result.account, 0),
         five_hour_left=result.five_hour.remaining,
         seven_day_left=result.seven_day.remaining,
@@ -111,7 +112,7 @@ def _claude_row(
         source=source,
         five_hour_resets_at=result.five_hour.resets_at,
         observed_at=seen,
-        cap=account_cap(result, now, include_fable) if session_bands.fresh(seen, now) else None,
+        cap=cap,
         routing_left=result.margin,
         fable_left=result.fable.remaining,
         fable_resets_at=result.fable.resets_at,
@@ -167,7 +168,7 @@ def codex_rows(
             QuotaRow(
                 agent="codex",
                 account=account.name,
-                state=_codex_state(account, quota, now, environ),
+                state=quota_state.shown(_codex_state(account, quota, now, environ), cap, week),
                 sessions=sessions.get(account.name, 0),
                 five_hour_left=session_bands.left(quota.five_hour.used, quota.five_hour.resets_at, now)
                 if fresh
