@@ -3,16 +3,14 @@ order, and each is claimed by exactly one live master, in round robin seat order
 
 from scripts.inbox.seats import is_seat, master_of, seat_address
 from scripts.inbox.store import POOL_SKIP
-from scripts.swarm import master_retire
 from scripts.swarm.keyspace import ROOT
 from scripts.swarm.store import MASTER, RedisStore
-from scripts.swarm_v2.masters import MasterSeats
+from scripts.swarm_v2 import masters
 
 PREFIX = f"{ROOT}:inbox:pool"
 POOLS = f"{PREFIX}s"
 OPERATOR = "operator"
 CLAIMER = "inbox"
-GONE = ("finished", "retiring")
 CLAIM_ATTEMPTS = 3
 DROPPED = object()
 
@@ -33,15 +31,7 @@ def number(address: str) -> int:
 
 
 def live_masters(redis, slug: str) -> list[str]:
-    """Master seats in seat order whose master is neither gone nor asked to retire, and whose seat is not retired."""
-    store = RedisStore(redis)
-    retired = set(MasterSeats(redis).retired(slug))
-    seats = {
-        agent.seat or front_door(slug)
-        for agent in store.agents(slug)
-        if agent.lane == MASTER and agent.state not in GONE and not master_retire.reason(store, slug, agent.name)
-    }
-    return sorted(seats - retired, key=number)
+    return list(masters.held(redis, slug, RedisStore(redis).agents(slug)))
 
 
 def turn(live: list[str], last: str, skip: str | None) -> str:

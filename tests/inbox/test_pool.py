@@ -159,11 +159,30 @@ def test_masters_gone_or_draining_are_passed_over(swarm, inbox):
     assert [inbox.get(i.id).address for i in items] == [FRONT, "master-6@sw", FRONT]
 
 
-def test_a_master_record_without_a_seat_holds_the_front_door(swarm):
-    swarm.put_agent(SLUG, AgentRecord("sw-master-1", "master", "master"))
-    swarm.put_agent(SLUG, AgentRecord("sw-master-10", "master", "master", seat="master-10@sw"))
+def test_pool_fence_and_front_door_agree_on_the_seats_mid_handoff(swarm, inbox):
+    from scripts.swarm.ledger_events import Mail
+    from scripts.swarm.operator_mail import master_address
+    from scripts.swarm_v2.master_fence import Seats
+
+    _masters(swarm, 2)
+    swarm.put_agent(SLUG, AgentRecord("sw-master-2", "master", "master", seat=SECOND, state="finished"))
+    swarm.seats.occupy(SECOND, "sw-master-2b", at=2)
+    fence = Seats(SLUG, swarm, {})
+    assert live_masters(swarm.redis, SLUG) == fence.live == Mail(inbox, swarm, SLUG).masters == [FRONT, SECOND]
+    assert master_address(swarm.redis, SLUG, swarm.agents(SLUG)) == fence.lead == FRONT
+    assert (fence.writer("sw-master-2b"), fence.writer("sw-master-1")) == (SECOND, FRONT)
+    items = [inbox.send("swarm", FRONT, f"item {n}") for n in range(2)]
+    assert [inbox.get(i.id).address for i in items] == [FRONT, SECOND]
+
+
+def test_a_seat_whose_occupant_left_it_is_not_live(swarm):
+    _masters(swarm, 3)
+    swarm.seats.record_exit("sw-master-3", THIRD, "stopped")
     swarm.put_agent(SLUG, AgentRecord("sw-eng-1", "eng", "t1", seat="eng-1@sw"))
-    assert live_masters(swarm.redis, SLUG) == [FRONT, "master-10@sw"]
+    swarm.seats.occupy("eng-1@sw", "sw-eng-1", at=1)
+    assert live_masters(swarm.redis, SLUG) == [FRONT, SECOND]
+    swarm.seats.occupy(THIRD, "sw-master-3b", at=2)
+    assert live_masters(swarm.redis, SLUG) == [FRONT, SECOND, THIRD]
 
 
 def test_turn_follows_seat_order_and_passes_over_the_last_holder():

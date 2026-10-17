@@ -11,6 +11,7 @@ SAVE_ATTEMPTS = 5
 UNNUMBERED = 10_000
 HIVES = "hives"
 RETIRED = "retired"
+GONE = ("finished", "retiring")
 HIVE_KEY = "hive."
 HIVE_PAIR = f"a hive owner is set as {HIVE_KEY}<hive id>=<master seat>"
 
@@ -65,8 +66,25 @@ def _number(slug: str, address: str) -> int:
     return int(found) if found.isdecimal() else UNNUMBERED
 
 
-def live_seats(live: list) -> list[str]:
-    return [a.seat or a.name for a in live if a.lane == MASTER]
+def held(redis, slug: str, agents: list) -> dict[str, str]:
+    """Each live master seat, in seat order, with its occupant, read from the seat registry: occupied, its occupant
+    neither left nor finished nor retiring nor asked to retire, and the seat not retired. The pool, the fence and the
+    front door all read this, so they agree while a seat changes hands."""
+    from scripts.inbox.seats import SeatRegistry
+    from scripts.swarm import master_retire
+    from scripts.swarm.store import RedisStore
+
+    registry, table, store = SeatRegistry(redis), MasterSeats(redis), RedisStore(redis)
+    gone = {a.name for a in agents if a.state in GONE}
+    retired = set(table.retired(slug))
+    candidates = {*seats(slug, table.count(slug)), *(a.seat for a in agents if a.lane == MASTER and a.seat)}
+    live = {}
+    for address in sorted(candidates - retired, key=lambda seat_id: _number(slug, seat_id)):
+        name = registry.occupant(address).occupant
+        if name and name not in gone and not registry.left(name, address):
+            if not master_retire.reason(store, slug, name):
+                live[address] = name
+    return live
 
 
 def assign(phases: list[str], seat_list: list[str], previous: dict[str, str], known: list[str]) -> dict[str, str]:
