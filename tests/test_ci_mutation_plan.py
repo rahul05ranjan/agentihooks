@@ -48,6 +48,7 @@ def test_refinement_selects_names_without_rendering_mutant_source(tmp_path, monk
     from scripts.ci_mutation.stats import SharedStats, stats_key, write_part
 
     source = (
+        "VALUE = 0\n"
         "def outer(value):\n"
         "    return value + 1\n"
         "\n"
@@ -67,6 +68,10 @@ def test_refinement_selects_names_without_rendering_mutant_source(tmp_path, monk
         "\n"
         "async def later(value):\n"
         "    return value + 6\n"
+        "\n"
+        "if True:\n"
+        "    def conditional():\n"
+        "        return 7\n"
     )
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("mutmut.configuration._config", None)
