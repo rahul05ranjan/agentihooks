@@ -149,7 +149,10 @@ def test_a_superseded_sonar_run_is_reported_without_fixers_or_alerts(store):
     assert store.redis.get(promotion_watch.key(SLUG, "seen")) == "900"
 
 
-@pytest.mark.parametrize("message", ["fatal: unable to access origin", "", SUPERSEDED + " extra error"])
+@pytest.mark.parametrize(
+    "message",
+    ["fatal: unable to access origin", "", SUPERSEDED + " extra error", "Process completed with exit code 1."],
+)
 def test_a_real_sonar_failure_still_files_a_fixer(store, message):
     ledger = Ledger()
     actions = refresh(store, ledger, sonar_run(message))
