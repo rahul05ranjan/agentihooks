@@ -79,16 +79,11 @@ def grade(folder: Path, index: int, total: int) -> dict:
     rows, reason = mutate_files(folder / "source", work, selected, started + 1080, (index, total), stats.group(0))
     cleared = load_clearances(folder / "source")
     split = split_plan_names(stats)
-    graded = (
-        []
-        if reason
-        else [grade_shard_rows(path, rows[path], lines, cleared, split) for path, (lines, _) in selected.items()]
-    )
-    report = {
-        "files": [result for result, _ in graded],
-        "units": [units for _, units in graded if units["rows"]],
-        "not_mutated": [{"path": path, "reason": reason} for path in selected] if reason else [],
-    }
+    report = {"files": [], "not_mutated": [{"path": path, "reason": reason} for path in selected] if reason else []}
+    if not reason:
+        report["files"] = [
+            grade_shard_rows(report, path, rows[path], lines, cleared, split) for path, (lines, _) in selected.items()
+        ]
     report["failed"] = bool(reason) or any(file["failures"] for file in report["files"])
     record_shard_measurement(report, output, stats, started, 1080, (index, total))
     (output / "report.json").write_text(json.dumps(report))

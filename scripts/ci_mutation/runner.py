@@ -180,10 +180,12 @@ def record_shard_measurement(
     print(json.dumps({"shard": report["shard"]}), flush=True)
 
 
-def grade_shard_rows(path: str, rows: list[dict], lines: set[int], cleared: dict, split: set[str]) -> tuple[dict, dict]:
-    whole = [row for row in rows if row["name"] not in split]
-    units = {"path": path, "lines": sorted(lines), "rows": [row for row in rows if row["name"] in split]}
-    return evaluate(path, whole, lines, cleared), units
+def grade_shard_rows(
+    report: dict, path: str, rows: list[dict], lines: set[int], cleared: dict, split: set[str]
+) -> dict:
+    if units := [row for row in rows if row["name"] in split]:
+        report.setdefault("units", []).append({"path": path, "lines": sorted(lines), "rows": units})
+    return evaluate(path, [row for row in rows if row["name"] not in split], lines, cleared)
 
 
 def split_plan_names(stats: SharedStats | None) -> set[str]:
@@ -239,9 +241,7 @@ def run_gate(
             print(f"{path}: not mutated, {reasons[path]}", flush=True)
             report["failed"] = True
             continue
-        result, units = grade_shard_rows(path, rows[path], lines, cleared, split)
-        if units["rows"]:
-            report.setdefault("units", []).append(units)
+        result = grade_shard_rows(report, path, rows[path], lines, cleared, split)
         report["files"].append(result)
         if path in selected:
             print(json.dumps(result), flush=True)

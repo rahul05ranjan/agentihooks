@@ -269,6 +269,13 @@ LIGHT_BOOTSTRAP = (
 )
 
 
+def run_unit(run_tests, runner, mutant_name: str | None, tests: list[str], memory: KillMemory) -> int:
+    if mutant_name is not None and not tests:
+        # The mutant's other units run every test it has; this one has none to add.
+        return 0
+    return run_tests(runner, mutant_name=mutant_name, tests=memory.prepare(mutant_name, tests))
+
+
 def run_selected(selection: Path, shard: tuple[int, int], mode: str = "", *stats: str) -> None:
     from mutmut import __main__ as runner
 
@@ -335,11 +342,7 @@ def run_selected(selection: Path, shard: tuple[int, int], mode: str = "", *stats
             except runner.BadTestExecutionCommandsException:
                 # The stats shards proved these node ids collect, so a usage error here is the forced failure at import.
                 return 1
-        tests = shard_tests(list(tests), mutant_name, shard[0])
-        if mutant_name is not None and not tests:
-            # The mutant's other units run every test it has; this one has none to add.
-            return 0
-        return run_tests(self, mutant_name=mutant_name, tests=memory.prepare(mutant_name, tests))
+        return run_unit(run_tests, self, mutant_name, shard_tests(list(tests), mutant_name, shard[0]), memory)
 
     memory = KillMemory(Path.cwd() / "killers")
 
