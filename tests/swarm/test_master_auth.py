@@ -4,9 +4,10 @@ import pytest
 
 
 @pytest.mark.parametrize("lane", ["master", "eng"])
-@pytest.mark.parametrize("five_left,week_left", [(90, 25), (90, 9), (4, 25)])
-def test_only_the_master_can_use_reserved_room(tmp_path, lane, five_left, week_left):
-    from scripts.swarm.capacity import Account
+@pytest.mark.parametrize("five_left,week_left,cap", [(90, 25, 6), (90, 9, 6), (4, 25, 0), (90, 25, None), (90, 25, 0)])
+def test_only_the_master_can_use_reserved_room(tmp_path, lane, five_left, week_left, cap):
+    from scripts.routing.reservation import Reservation
+    from scripts.swarm.capacity import Account, reserve
     from scripts.swarm.runtime import HerdrRuntime
     from scripts.swarm.tick import SpawnError
     from tests.swarm.profile_fixture import validated
@@ -19,9 +20,11 @@ def test_only_the_master_can_use_reserved_room(tmp_path, lane, five_left, week_l
         return SimpleNamespace(returncode=0, stdout=validated(argv, out), stderr="")
 
     runtime = HerdrRuntime(home=tmp_path, run=run, choose=lambda *_: ("claude", "requested"))
-    runtime._quota_accounts = [
-        Account("claude", "reserved", "CLOSED", 0, five_left, week_left, 0, reserved="worker ceiling")
-    ]
+    state = "UNKNOWN" if cap is None else "OPEN" if cap else "CLOSED"
+    runtime._quota_accounts = reserve(
+        [Account("claude", "reserved", state, 0, five_left, week_left, cap)],
+        Reservation("claude", "reserved", 1),
+    )
     config = SimpleNamespace(
         slug="proof",
         repo=str(tmp_path),
@@ -31,7 +34,7 @@ def test_only_the_master_can_use_reserved_room(tmp_path, lane, five_left, week_l
         autonomy="delegate",
     )
     task = {"id": lane, "title": "proof", "route_kind": "subscription"}
-    if lane != "master" or five_left == 4 or week_left == 9:
+    if lane != "master" or five_left == 4 or week_left == 9 or not cap:
         with pytest.raises(SpawnError):
             runtime.spawn(config, lane, "agent", task)
         assert not seen
