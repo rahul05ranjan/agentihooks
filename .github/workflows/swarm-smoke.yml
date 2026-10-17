@@ -25,6 +25,8 @@ jobs:
         run: bash scripts/packaging/pull-runtime-image.sh mirror.gcr.io/library/python:3.12-slim-bookworm
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
       - name: Build the swarm image
         if: ${{ !cancelled() }}
         uses: docker/build-push-action@v6
