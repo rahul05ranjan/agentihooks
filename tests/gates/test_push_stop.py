@@ -344,6 +344,33 @@ def test_a_numbered_second_worktree_in_another_repo_is_pushed_too(rig):
     assert git(rig.seed, "ls-remote", str(rig.origin), f"refs/heads/{BRANCH}-2")
 
 
+def test_a_continuation_pushes_its_head_to_the_recorded_pull_request_branch_not_its_own_name(rig):
+    predecessor = "engineer-100001-0009"
+    rig.commit("before")
+    git(rig.tree, "push", "origin", f"HEAD:refs/heads/{predecessor}")
+    rig.ledger.task.update(branch=predecessor, pr_url="https://github.com/o/r/pull/7")
+    head = rig.commit()
+    assert rig.stop().allowed
+    assert git(rig.seed, "ls-remote", str(rig.origin), f"refs/heads/{predecessor}").split("\t")[0] == head
+    assert rig.remote_head() == ""
+    assert git(rig.tree, "rev-parse", "--abbrev-ref", "@{upstream}") == f"origin/{predecessor}"
+    assert predecessor in rig.ledger.comments[0][2]
+
+
+def test_a_recorded_branch_head_does_not_hold_is_left_alone_and_its_own_branch_is_pushed(rig):
+    other = "engineer-100001-0009"
+    (rig.seed / "elsewhere").write_text("elsewhere")
+    git(rig.seed, "add", "elsewhere")
+    git(rig.seed, "commit", "-m", "elsewhere")
+    git(rig.seed, "push", "origin", f"HEAD:refs/heads/{other}")
+    unrelated = git(rig.seed, "rev-parse", "HEAD")
+    rig.ledger.task.update(branch=other, pr_url="https://github.com/o/r/pull/7")
+    head = rig.commit()
+    assert rig.stop().allowed
+    assert rig.remote_head() == head
+    assert git(rig.seed, "ls-remote", str(rig.origin), f"refs/heads/{other}").split("\t")[0] == unrelated
+
+
 def test_a_worktree_on_dev_or_main_is_never_pushed(rig):
     rig.ledger.task["pr_url"] = "https://github.com/o/r/pull/7"
     dev = git(rig.seed, "rev-parse", "origin/dev")
