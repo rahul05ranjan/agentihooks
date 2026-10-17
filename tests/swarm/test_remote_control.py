@@ -1,4 +1,5 @@
 import json
+import shlex
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -83,6 +84,24 @@ def test_the_flag_turns_remote_control_off_at_spawn(tmp_path, monkeypatch):
     assert placed.remote_control == {"state": "off", "detail": "flag"}
 
 
+def test_a_master_placed_on_the_api_route_records_gateway(tmp_path):
+    def run(argv, **kwargs):
+        output = "status=started\nroute_status=routed\naccount=api\n"
+        return SimpleNamespace(returncode=0, stdout=validated(argv, output), stderr="")
+
+    runtime = HerdrRuntime(home=tmp_path, run=run, choose=lambda *_: ("claude", "requested"))
+    config = SimpleNamespace(
+        slug="proof",
+        repo=str(tmp_path),
+        code="a1b2c3",
+        compact_limit=0,
+        lanes={"master": {"agent": "claude"}},
+        autonomy="delegate",
+    )
+    placed = runtime.spawn(config, "master", "agent", {"id": "master", "title": "proof"})
+    assert (placed.route_kind, placed.remote_control) == ("api", {"state": "off", "detail": "gateway"})
+
+
 def _resumed(tmp_path, lane, harness, kind):
     runtime, config, agent, seen = _resuming(tmp_path, "c0ffee", harness)
     config.slug = "proof"
@@ -165,6 +184,10 @@ def test_placement_records_the_decision_and_keeps_it_when_a_relaunch_has_none():
     [
         ("Remote Control failed · /remote-control", True),
         ("Remote Control disconnected — run /login to restore Remote Control", True),
+        ("Remote Control stopped: the server refused to reconnect this computer", True),
+        ("Remote Control session expired", True),
+        ("Remote Control back on", False),
+        ("Upload failed", False),
         ("Claude needs your permission to use Bash", False),
         ("", False),
     ],
@@ -232,5 +255,5 @@ def test_a_master_launch_with_remote_control_still_marks_its_folder_trusted(monk
     )
     out = capsys.readouterr().out
     assert rc == 0 and "trust=marked" in out
-    assert f"--remote-control {init_agent.shlex.quote('master · proof')}" in out
+    assert f"--remote-control {shlex.quote('master · proof')}" in out
     assert json.loads((tmp_path / ".claude.json").read_text())["projects"][str(project)]["hasTrustDialogAccepted"]

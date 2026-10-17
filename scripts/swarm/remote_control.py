@@ -13,7 +13,9 @@ FAILURES = "remote-control-failures"
 FALLBACK = "fallback auth"
 GATEWAY = "gateway"
 OFF = "flag"
-FAILURE_WORDS = ("Remote Control failed", "Remote Control disconnected")
+SUBJECT = "Remote Control"
+FAILURE_WORDS = ("failed", "disconnected", "stopped", "expired")
+RECOVERY = "Remote Control back on"
 
 
 def now_ms() -> int:
@@ -59,7 +61,7 @@ def line(agent: Mapping) -> str:
 
 
 def failure(message: str) -> bool:
-    return any(words in message for words in FAILURE_WORDS)
+    return SUBJECT in message and any(word in message for word in FAILURE_WORDS)
 
 
 def record(store: RedisStore, slug: str, name: str, message: str, at: int) -> None:
@@ -73,7 +75,12 @@ def failures(store: RedisStore, slug: str) -> dict[str, dict]:
 def on_notification(payload: Mapping, environ: Mapping[str, str] = os.environ) -> bool:
     slug, name = environ.get("AGENTIHOOKS_SWARM"), environ.get("AGENTIHOOKS_AGENT_NAME")
     message = str(payload.get("message") or "")
-    if not slug or not name or environ.get("AGENTIHOOKS_SWARM_LANE") != MASTER or not failure(message):
+    recovered = RECOVERY in message
+    if not slug or not name or environ.get("AGENTIHOOKS_SWARM_LANE") != MASTER or not (recovered or failure(message)):
         return False
-    record(RedisStore(connect()), slug, name, message, now_ms())
+    store = RedisStore(connect())
+    if recovered:
+        store.redis.hdel(store.key(slug, FAILURES), name)
+    else:
+        record(store, slug, name, message, now_ms())
     return True

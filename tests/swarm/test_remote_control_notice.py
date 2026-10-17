@@ -67,6 +67,20 @@ def test_the_latest_notice_replaces_the_earlier_one(store):
     assert remote_control.failures(store, "proof") == {"m": {"message": "Remote Control disconnected", "at": 2}}
 
 
+def test_a_back_on_notice_clears_only_that_masters_failure(store):
+    remote_control.record(store, "proof", "master@a1b2c3-0001", "Remote Control failed", 1)
+    remote_control.record(store, "proof", "other", "Remote Control failed", 1)
+    assert remote_control.on_notification({"message": "Remote Control back on"}, MASTER_ENV) is True
+    assert list(remote_control.failures(store, "proof")) == ["other"]
+
+
+def test_a_worker_back_on_notice_clears_nothing(store):
+    remote_control.record(store, "proof", "master@a1b2c3-0001", "Remote Control failed", 1)
+    worker = {**MASTER_ENV, "AGENTIHOOKS_SWARM_LANE": "eng"}
+    assert remote_control.on_notification({"message": "Remote Control back on"}, worker) is False
+    assert list(remote_control.failures(store, "proof")) == ["master@a1b2c3-0001"]
+
+
 def test_the_notification_hook_hands_its_payload_to_the_recorder(monkeypatch):
     seen = []
     monkeypatch.setattr(remote_control, "on_notification", lambda payload: seen.append(payload))
