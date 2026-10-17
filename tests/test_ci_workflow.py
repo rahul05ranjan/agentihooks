@@ -466,9 +466,7 @@ def test_promotion_shard_reports_use_the_pushed_grader_and_prs_keep_the_base():
 
 def test_unit_shards_check_out_full_history_without_old_file_contents():
     checkouts = [
-        step
-        for step in _workflow()["jobs"]["unit"]["steps"]
-        if step.get("uses", "").startswith("actions/checkout")
+        step for step in _workflow()["jobs"]["unit"]["steps"] if step.get("uses", "").startswith("actions/checkout")
     ]
     assert checkouts
     for checkout in checkouts:
