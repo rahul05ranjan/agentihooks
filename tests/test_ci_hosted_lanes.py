@@ -307,3 +307,21 @@ def test_only_the_dev_push_worker_image_build_stays_uncapped_because_it_publishe
 def test_lane_titles_match_the_workflow_names():
     for name, (title, _) in DIRECT.items():
         assert _workflow(name)["name"] == title, name
+
+
+def test_computed_mutation_lanes_use_each_stage_output_and_isolate_runs_without_capacity():
+    push = {"event_name": "push", "ref": "refs/heads/task-branch", "workflow": "Mutation preflight", "run_id": 1000}
+    needs = {"plan": {"outputs": {"stats_lane": "0"}}, "refine": {"outputs": {"shard_lane": "5"}}}
+    stats = _resolve(_block("mutation-preflight.yml:stats"), needs=needs, **push)
+    shard = _resolve(_block("mutation-preflight.yml:mutation-shard"), needs=needs, **push)
+    assert stats == {"group": "mutation-lane-0-stats-0", "queue": "max", "cancel-in-progress": None}
+    assert shard == {"group": "mutation-lane-5-shard-0", "queue": "max", "cancel-in-progress": None}
+    empty = {"plan": {"outputs": {"stats_lane": ""}}, "refine": {"outputs": {"shard_lane": ""}}}
+    assert (
+        _resolve(_block("mutation-preflight.yml:stats"), needs=empty, **push)["group"]
+        == "mutation-preflight-job-1000-stats-0"
+    )
+    assert (
+        _resolve(_block("mutation-preflight.yml:mutation-shard"), needs=empty, **push)["group"]
+        == "mutation-preflight-job-1000-shard-0"
+    )

@@ -82,7 +82,7 @@ def test_preflight_reuses_a_green_report_before_the_plan_installs_anything():
         if step.get("id") in {"capacity-token", "lanes"}:
             assert (
                 step["if"]
-                == "steps.plan.outputs.changed != '0' && github.workflow == 'Mutation preflight' && runner.environment == 'self-hosted'"
+                == "steps.plan.conclusion == 'success' && steps.plan.outputs.changed != '0' && github.workflow == 'Mutation preflight' && runner.environment == 'self-hosted'"
             )
         else:
             assert step["if"] == gated, step
@@ -288,3 +288,33 @@ def test_touched_tests_job_selects_and_runs_the_tests_the_branch_touches():
         'read -ra files <<< "$FILES"\npython -m pytest "${files[@]}" -n auto --tb=short -p no:cacheprovider\n'
     )
     assert not any(step.get("continue-on-error") for step in steps)
+
+
+def test_preflight_sizes_each_stage_from_the_authoritative_batch_capacity():
+    jobs = _workflow()["jobs"]
+    steps = {step.get("id"): step for step in jobs["plan"]["steps"]}
+    token = steps["capacity-token"]
+    assert token["uses"] == "actions/create-github-app-token@v3.2.0"
+    assert token["with"]["repositories"] == "antoncore"
+    assert token["with"]["permission-contents"] == "read"
+    lanes = steps["lanes"]
+    assert lanes["if"] == token["if"]
+    assert lanes["env"]["GH_TOKEN"] == "${{ steps.capacity-token.outputs.token }}"
+    assert lanes["env"]["SHARDS"] == "${{ steps.plan.outputs.stats_parts }}"
+    assert (
+        "repos/the-cloud-clockwork/antoncore/contents/k8s/charts/arc-runners-oss/values-oss-batch.yaml?ref=dev"
+        in lanes["run"]
+    )
+    assert '--values "$RUNNER_TEMP/batch-values.yaml" --shards "$SHARDS" --run-id "$GITHUB_RUN_ID"' in lanes["run"]
+    assert jobs["plan"]["outputs"]["batch_ceiling"] == "${{ steps.lanes.outputs.ceiling }}"
+    refined = next(step for step in jobs["refine"]["steps"] if step.get("id") == "lanes")
+    assert refined["if"] == "needs.plan.outputs.batch_ceiling != ''"
+    assert refined["env"] == {
+        "CEILING": "${{ needs.plan.outputs.batch_ceiling }}",
+        "SHARDS": "${{ steps.refine.outputs.shards }}",
+    }
+    assert (
+        refined["run"]
+        == 'python -m scripts.ci_mutation.lanes --ceiling "$CEILING" --shards "$SHARDS" --run-id "$GITHUB_RUN_ID"'
+    )
+    assert jobs["refine"]["outputs"]["shard_lane"] == "${{ steps.lanes.outputs.lane }}"
