@@ -719,7 +719,7 @@ jobs:
             echo "reused=0" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [[ "$GITHUB_EVENT_NAME" == pull_request && ! -f "$RUNNER_TEMP/planner/tests/reused_coverage.py" ]]; then
+          if [[ "$GITHUB_EVENT_NAME" != merge_group && ! -f "$RUNNER_TEMP/planner/tests/reused_coverage.py" ]]; then
             echo "The grader cannot carry reused tests' coverage into Sonar; every test runs."
             echo "reused=0" >> "$GITHUB_OUTPUT"
             exit 0
