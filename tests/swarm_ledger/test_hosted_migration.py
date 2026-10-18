@@ -225,7 +225,7 @@ def test_transfer_verifies_a_separate_read_and_blocks_redirects(stores, monkeypa
     monkeypatch.setattr(hosted.time, "time", lambda: 1000)
     result = hosted.transfer("https://hosted.example/", snapshot, secret)
     assert result == {"source": expected, "hosted": expected, "match": True}
-    assert [req.method for req, _ in calls] == ["POST", "GET"]
+    assert [req.get_method() for req, _ in calls] == ["POST", "GET"]
     assert all(timeout == 300 for _, timeout in calls)
     assert all(req.full_url == "https://hosted.example/api/v1/migrations/migration-proof" for req, _ in calls)
     first = calls[0][0]
