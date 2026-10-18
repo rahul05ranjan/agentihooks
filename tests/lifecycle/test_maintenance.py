@@ -77,7 +77,7 @@ def test_the_live_home_schedules_maintenance_and_reports_a_failed_start(repo, mo
 
 def test_a_git_error_is_reported_without_aborting_the_sweep(repo, monkeypatch):
     def broken(path, *args, timeout=120):
-        if args[0] == "maintenance":
+        if args[0] in ("maintenance", "config"):
             raise subprocess.TimeoutExpired(["git", *args], timeout)
         return subprocess.CompletedProcess(args, 0, "", "")
 

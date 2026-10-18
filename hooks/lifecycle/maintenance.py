@@ -9,11 +9,20 @@ from hooks.lifecycle.worktrees import discover
 
 
 def primaries(worktrees: list[Path]) -> list[Path]:
-    return sorted({admin.parent.parent.parent for path in worktrees if (admin := admin_dir(path))})
+    return sorted(
+        {
+            admin.parent.parent.parent
+            for path in worktrees
+            if (admin := admin_dir(path)) and admin.parent.name == "worktrees"
+        }
+    )
 
 
 def registered_repos() -> list[str]:
-    result = git(Path.home(), "config", "--global", "--get-all", "maintenance.repo")
+    try:
+        result = git(Path.home(), "config", "--global", "--get-all", "maintenance.repo")
+    except (OSError, subprocess.TimeoutExpired):
+        return []
     return [str(Path(line).resolve()) for line in result.stdout.splitlines() if line]
 
 
