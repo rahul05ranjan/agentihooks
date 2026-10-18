@@ -161,10 +161,10 @@ def test_no_script_a_step_runs_calls_the_api():
         "scripts/ci_gate_summary.py",
         "scripts/ci_input_key.py",
         "scripts/ci_mutation/__main__.py",
-        "scripts/ci_mutation/browser.py",
         "scripts/ci_mutation/plan.py",
         "scripts/ci_mutation/reuse.py",
         "scripts/ci_queue_fail_fast.py",
+        "scripts/ci_queue_rebuild.py",
         "scripts/ci_release.sh",
         "scripts/ci_semgrep.py",
         "scripts/ci_wiring.py",
@@ -224,6 +224,8 @@ def test_no_script_a_step_runs_calls_the_api():
     assert sorted(str(path.relative_to(ROOT)) for path in calls) in (
         sorted(expected),
         sorted(expected + routing_contracts),
+        sorted(expected + ["tests/queue_shards.py"]),
+        sorted(expected + routing_contracts + ["tests/queue_shards.py"]),
     )
     assert {path: count for path, count in calls.items() if count} == {}
 
