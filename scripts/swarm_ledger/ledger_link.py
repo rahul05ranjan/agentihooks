@@ -96,7 +96,8 @@ def remote(environ=os.environ) -> bool:
 
 
 def access_headers(environ=os.environ) -> dict:
-    client, secret = environ.get("SWARM_ACCESS_CLIENT_ID"), environ.get("SWARM_ACCESS_CLIENT_SECRET")
+    client = environ.get("SWARM_ACCESS_CLIENT_ID") or environ.get("CF_ACCESS_CLIENT_ID")
+    secret = environ.get("SWARM_ACCESS_CLIENT_SECRET") or environ.get("CF_ACCESS_CLIENT_SECRET")
     if not (client and secret):
         return {}
     return {"CF-Access-Client-Id": client, "CF-Access-Client-Secret": secret, "User-Agent": USER_AGENT}
