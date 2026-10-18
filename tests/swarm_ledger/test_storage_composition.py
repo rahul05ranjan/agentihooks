@@ -97,7 +97,7 @@ def test_the_relay_journal_holds_releases_and_drops_revisions(tmp_path):
 def test_a_failed_transaction_leaves_nothing_stored(tmp_path):
     built = storage.build(tmp_path / storage.DATABASE)
     with pytest.raises(RuntimeError, match="^stop$"), built.transaction() as transaction:
-        transaction.insert("rolled", document(), None)
+        transaction.insert("rolled", document(), None, "token")
         assert transaction.exists("rolled")
         raise RuntimeError("stop")
     assert not built.exists("rolled")

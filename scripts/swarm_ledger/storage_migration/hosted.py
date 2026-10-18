@@ -249,8 +249,9 @@ def main() -> None:
     repo = storage.build(args.source / storage.DATABASE, ledger_server.core)
     with repo.snapshot() as snapshot:
         slugs = args.slug or snapshot.slugs()
-        if args.freeze and not args.slug:
-            fence(repo, "*", args.url)
+    if args.freeze and not args.slug:
+        fence(repo, "*", args.url)
+        with repo.snapshot() as snapshot:
             slugs = snapshot.slugs()
     for slug in slugs:
         if args.freeze:

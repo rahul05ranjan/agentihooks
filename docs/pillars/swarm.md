@@ -1516,8 +1516,9 @@ is a refusal boundary. Restoring Redis lets replay free space; a send refused be
 
 Operator ledger writes and alerts retain their oldest unrelayed revision in the ledger database's relay
 journal, through the ledger repository, when neither Redis nor the outbox accepts them. A
-`ledger-unrelayed.json` left by an older server is moved into the journal at server start. The next write to that ledger retries the intervening events;
-the ledger watch also retries every five passes, about ten seconds at its default interval. Stable ids
+`ledger-unrelayed.json` left by an older server is moved into the journal at server start. The next
+write to that ledger retries the intervening events; the ledger watch also retries every five passes,
+about ten seconds at its default interval. Stable ids
 prevent duplicate inbox items. Ledger replay is limited to its retained history of 2000 events: writes
 older than that history cannot be reconstructed by replay. The ledger records a notice naming the lost
 revision range for the operator; the watcher and tick also report trimmed history gaps.

@@ -1,3 +1,4 @@
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -303,6 +304,39 @@ def test_the_watch_loop_never_replays_when_nothing_is_held(monkeypatch, tmp_path
     replayed = []
     watch_passes(monkeypatch, {}, replayed.append)
     assert replayed == []
+
+
+class Unreadable:
+    def held_revisions(self):
+        raise sqlite3.OperationalError("database is locked")
+
+
+def test_an_unreadable_relay_journal_reads_as_nothing_held(monkeypatch):
+    monkeypatch.setattr(ledger_server, "stored", Unreadable())
+    assert ledger_server.unrelayed() == {}
+
+
+def test_the_watch_loop_survives_a_failed_journal_read(monkeypatch, capsys):
+    replayed = []
+
+    def unreadable():
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(ledger_server, "unrelayed", unreadable)
+    passes = []
+    monkeypatch.setattr(ledger_server.time, "sleep", lambda _: passes.append(1) or len(passes) == 6 and stop())
+    for name in ("bin_closed_without_swarm", "expire_alerts", "sample_streams"):
+        monkeypatch.setattr(ledger_server, name, lambda: None)
+    monkeypatch.setattr(ledger_server.ledger_bin, "tidy", lambda: None)
+    monkeypatch.setattr(ledger_server, "reloading", lambda *args: False)
+    monkeypatch.setattr(ledger_server, "replay_unrelayed", lambda: replayed.append(1))
+    with pytest.raises(Stop):
+        ledger_server.watch_ledgers()
+    assert replayed == [] and capsys.readouterr().err.count("unrelayed replay: disk gone") == 2
+
+
+def stop():
+    raise Stop
 
 
 def test_each_operator_write_trimmed_before_its_relay_leaves_one_notice_for_the_operator(outage, monkeypatch):

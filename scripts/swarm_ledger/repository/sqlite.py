@@ -54,6 +54,7 @@ FENCES = "CREATE TABLE IF NOT EXISTS hosted_fences (slug TEXT PRIMARY KEY, desti
 FENCED = "SELECT destination FROM hosted_fences WHERE slug IN (?, '*')"
 FENCE_DESTINATIONS = "SELECT destination FROM hosted_fences WHERE slug IN (?, '*') OR ?='*'"
 TABLE_ID = re.compile(r"[a-z_]+\Z")
+# a fenced ledger's last relay must still be able to hold its revision
 UNFENCED = ("hosted_fences", "relay_journal")
 
 
@@ -227,7 +228,7 @@ def without_events(state: dict) -> dict:
     return {**state, "_meta": {key: value for key, value in state["_meta"].items() if key != "events"}}
 
 
-def fenced(directory, slug: str) -> bool:
+def fenced(directory: Path, slug: str) -> bool:
     """Whether the hosted migration fenced this ledger, or every ledger, in the folder's database."""
     with read_only(directory) as connection:
         exists = (
@@ -256,8 +257,8 @@ class Transaction:
         written = self.written[slug] = self.repository._write(self.connection, slug, entry, state, events)
         return written
 
-    def insert(self, slug: str, state: dict, seeds: dict | None, token: str | None = None) -> None:
-        self.repository._insert(self.connection, slug, state, token or secrets.token_urlsafe(24), seeds)
+    def insert(self, slug: str, state: dict, seeds: dict | None, token: str) -> None:
+        self.repository._insert(self.connection, slug, state, token, seeds)
 
     def add_registries(self, rows: list) -> None:
         self.connection.executemany(ADD_REGISTRY, rows)
@@ -266,7 +267,6 @@ class Transaction:
         return self.repository._export(self.connection, slug)
 
     def prepare_fence(self, slug: str, destination: str) -> None:
-        """Refuse a second destination, then make every ledger table refuse writes to a fenced slug."""
         connection = self.connection
         connection.execute(FENCES)
         previous = connection.execute(FENCE_DESTINATIONS, (slug, slug)).fetchall()

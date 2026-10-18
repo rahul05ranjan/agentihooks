@@ -619,7 +619,10 @@ REPLAY_EVERY = 5
 
 
 def unrelayed() -> dict:
-    return stored.held_revisions()
+    try:
+        return stored.held_revisions()
+    except storage.Error:
+        return {}
 
 
 def unrelayed_since(kind, slug, rev) -> int:
@@ -638,7 +641,6 @@ def relayed(kind, slug, since, rev):
 
 
 def adopt_unrelayed() -> None:
-    """Hold the revisions an older server journaled in its own file, then remove the file."""
     from hooks import config
 
     path = Path(config.AGENTIHOOKS_HOME) / UNRELAYED
@@ -1162,9 +1164,10 @@ def watch_ledgers(interval=2.0):
             bin_closed_without_swarm()
         if passes and passes % BIN_SWEEP_EVERY == 0:
             expire_alerts()
-        if passes % REPLAY_EVERY == 0 and unrelayed():
+        if passes % REPLAY_EVERY == 0:
             try:
-                replay_unrelayed()
+                if unrelayed():
+                    replay_unrelayed()
             except Exception as exc:  # the watch loop also tidies the bin, expires alerts and samples streams
                 sys.stderr.write(f"unrelayed replay: {exc}\n")
         sample_streams()
