@@ -15,6 +15,24 @@ STORE_PACKAGE = ROOT / "scripts" / "swarm_ledger" / "repository"
 
 
 STORE_NAMES = {STORE, "repository.sqlite", "swarm_ledger.repository.sqlite"}
+PACKAGE_NAMES = {name.removesuffix(".sqlite") for name in STORE_NAMES}
+
+
+def dotted(node: ast.AST) -> str:
+    if isinstance(node, ast.Attribute):
+        return f"{dotted(node.value)}.{node.attr}"
+    return node.id if isinstance(node, ast.Name) else ""
+
+
+def aliases(tree: ast.AST, path: Path, root: Path) -> dict:
+    bound = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            bound.update({alias.asname: alias.name for alias in node.names if alias.asname})
+        elif isinstance(node, ast.ImportFrom):
+            module = absolute(path, root, node)
+            bound.update({alias.asname or alias.name: f"{module}.{alias.name}" for alias in node.names})
+    return bound
 
 
 def absolute(path: Path, root: Path, node: ast.ImportFrom) -> str:
@@ -26,15 +44,22 @@ def absolute(path: Path, root: Path, node: ast.ImportFrom) -> str:
 
 def imported(path: Path, root: Path = ROOT) -> set:
     names = set()
-    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    bound = aliases(tree, path, root)
+    for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             names.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
             module = absolute(path, root, node)
             names.add(module)
             names.update(f"{module}.{alias.name}" for alias in node.names)
+            if module in PACKAGE_NAMES and any(alias.name == "*" for alias in node.names):
+                names.add(f"{module}.sqlite")
         elif isinstance(node, ast.Constant) and node.value in STORE_NAMES:
             names.add(node.value)
+        elif isinstance(node, ast.Attribute) and node.attr == "sqlite":
+            head, _, rest = dotted(node).partition(".")
+            names.add(".".join(part for part in (bound.get(head, head), rest) if part))
     return names
 
 
@@ -59,6 +84,10 @@ def test_no_module_outside_the_composition_root_imports_the_sqlite_store():
         ("scripts/swarm_ledger", "from repository.sqlite import DATABASE\n", "repository.sqlite"),
         ("hooks", "import swarm_ledger.repository.sqlite\n", "swarm_ledger.repository.sqlite"),
         ("hooks", 'importlib.import_module("scripts.swarm_ledger.repository.sqlite")\n', STORE),
+        ("hooks", "import scripts.swarm_ledger.repository as r\nr.sqlite.read_ledger\n", STORE),
+        ("hooks", "from scripts.swarm_ledger import repository\nrepository.sqlite.DATABASE\n", STORE),
+        ("hooks", "import scripts.swarm_ledger.repository\nscripts.swarm_ledger.repository.sqlite.DATABASE\n", STORE),
+        ("hooks", "from scripts.swarm_ledger.repository import *\n", STORE),
     ],
 )
 def test_the_import_check_sees_every_spelling_of_the_store(tmp_path, folder, source, name):
