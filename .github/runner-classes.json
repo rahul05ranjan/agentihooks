@@ -5,6 +5,7 @@
   "ci-templates.yml/actionlint": "hosted",
   "codex-cache.yml/seed": "standard",
   "coverage-stability.yml/compare": "batch",
+  "docs-build.yml/build": "hosted",
   "equivalence.yml/ledger-equivalence": "standard",
   "gate-protected.yml/grade": "hosted",
   "github-access-audit.yml/read-back": "hosted",
