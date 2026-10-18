@@ -88,7 +88,8 @@ def test_a_request_without_access_settings_sends_no_access_headers(heard, monkey
     for key in ACCESS:
         monkeypatch.delenv(key, raising=False)
     ResourceClient(url, {"X-Ledger-Token": "t"}).request(SLUG, "metadata")
-    assert not {key for key in seen[0] if key.lower().startswith("cf-access")}
+    assert {key for key in seen[0] if key.lower().startswith("cf-access")} == set()
+    assert seen[0].get("User-Agent").startswith("Python-urllib/")
 
 
 def test_the_health_probe_carries_the_access_headers(heard, monkeypatch):
