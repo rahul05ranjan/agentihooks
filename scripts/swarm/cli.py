@@ -222,9 +222,9 @@ def _publish_tick_status(store, slug, doc):
             raise
 
 
-@ledger_route.tick
 @timing.instrument_tick
 @outage.guard_tick
+@ledger_route.tick
 def run_tick(store, slug, ledger=None, runtime=None, messenger=None, scheduled=False):
     from scripts.swarm import command_runner, commands, controller, incidents, lease, tick_activity
 
