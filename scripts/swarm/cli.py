@@ -157,7 +157,7 @@ from scripts.swarm.store import (
     connect,
 )
 from scripts.swarm.tick import agent_status, primed, ready_in_order, skip_refused, spawn_holds, tick
-from scripts.swarm_ledger import ledger_creator, ledger_kinds, ledger_link, ledger_workspace, plan_shape
+from scripts.swarm_ledger import ledger_creator, ledger_kinds, ledger_link, ledger_route, ledger_workspace, plan_shape
 from scripts.swarm_v2 import master_scale, masters
 from scripts.swarm_v2.runtime.routed import routed
 
@@ -222,6 +222,7 @@ def _publish_tick_status(store, slug, doc):
             raise
 
 
+@ledger_route.tick
 @timing.instrument_tick
 @outage.guard_tick
 def run_tick(store, slug, ledger=None, runtime=None, messenger=None, scheduled=False):
@@ -2160,13 +2161,18 @@ def dispatch(argv):
         if "slug" in args:
             args.slug = store.names.swarm_slug(args.slug)
         action = getattr(args, "command", "")
-        before = control_notifications.master(store, args.slug) if action in control_notifications.CONTROLS else None
-        if action in clearance.COMMANDS:
-            run_control(store, args, who, handler)
-        else:
-            handler(store, args)
-        if action in control_notifications.CONTROLS:
-            control_notifications.notify(store, args, LedgerClient(), before, action)
+        route_slug = getattr(args, "slug", "")
+        address = store.config(route_slug).api_url if route_slug and handler is not cmd_create else ""
+        with ledger_route.scoped(route_slug, address):
+            before = (
+                control_notifications.master(store, args.slug) if action in control_notifications.CONTROLS else None
+            )
+            if action in clearance.COMMANDS:
+                run_control(store, args, who, handler)
+            else:
+                handler(store, args)
+            if action in control_notifications.CONTROLS:
+                control_notifications.notify(store, args, LedgerClient(), before, action)
     except (SwarmError, InboxError, RedisError) as exc:
         if handler is cmd_status and outage.show(args.slug, args.json):
             return 0
