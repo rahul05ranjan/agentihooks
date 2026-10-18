@@ -621,7 +621,7 @@ REPLAY_EVERY = 5
 def unrelayed() -> dict:
     try:
         return stored.held_revisions()
-    except storage.Error:
+    except (storage.Error, OSError):
         return {}
 
 

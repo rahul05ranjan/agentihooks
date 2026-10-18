@@ -33,6 +33,8 @@ def imported(path: Path, root: Path = ROOT) -> set:
             module = absolute(path, root, node)
             names.add(module)
             names.update(f"{module}.{alias.name}" for alias in node.names)
+        elif isinstance(node, ast.Constant) and node.value in STORE_NAMES:
+            names.add(node.value)
     return names
 
 
@@ -56,6 +58,7 @@ def test_no_module_outside_the_composition_root_imports_the_sqlite_store():
         ("scripts/swarm_ledger/api", "from ..repository import sqlite\n", STORE),
         ("scripts/swarm_ledger", "from repository.sqlite import DATABASE\n", "repository.sqlite"),
         ("hooks", "import swarm_ledger.repository.sqlite\n", "swarm_ledger.repository.sqlite"),
+        ("hooks", 'importlib.import_module("scripts.swarm_ledger.repository.sqlite")\n', STORE),
     ],
 )
 def test_the_import_check_sees_every_spelling_of_the_store(tmp_path, folder, source, name):
