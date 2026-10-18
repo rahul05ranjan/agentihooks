@@ -1,6 +1,7 @@
 import json
 import re
 import subprocess
+from collections.abc import Callable
 
 from scripts.swarm.store import SwarmError
 
@@ -35,7 +36,7 @@ def target(proof: dict, role: str) -> tuple[str, str, str]:
     return match[1], match[2], head
 
 
-def jobs(path: str, read) -> list:
+def jobs(path: str, read: Callable[[str], dict]) -> list:
     found = {}
     page = 1
     while True:
@@ -50,7 +51,7 @@ def jobs(path: str, read) -> list:
         page += 1
 
 
-def contracts(proof: dict, path: str, head: str, read) -> None:
+def contracts(proof: dict, path: str, head: str, read: Callable[[str], dict]) -> None:
     names = proof.get("contracts")
     if not isinstance(names, list) or not names or any(not isinstance(name, str) or not name.strip() for name in names):
         raise SwarmError("staged compatibility: declare every affected contract job")
@@ -70,7 +71,7 @@ def contracts(proof: dict, path: str, head: str, read) -> None:
         raise SwarmError(f"staged compatibility: missing successful contract jobs: {', '.join(missing)}")
 
 
-def verify(proof: dict, url: str, head: str, read) -> None:
+def verify(proof: dict, url: str, head: str, read: Callable[[str], dict]) -> None:
     repo, prerequisite, prerequisite_head = target(proof, "prerequisite")
     candidate_repo, candidate, candidate_head = target(proof, "candidate")
     match = re.fullmatch(RUN, proof.get("run", ""))

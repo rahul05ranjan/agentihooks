@@ -1,7 +1,9 @@
 import copy
+import inspect
 import json
 import subprocess
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -306,3 +308,89 @@ def test_incomplete_or_stale_job_inventory_never_admits(change):
     with pytest.raises(SwarmError, match="staged compatibility"):
         invoke()
     assert not any(f"query={merge_queue.QUEUE}" in cmd for cmd, _ in calls)
+
+
+def test_staged_publisher_proof_includes_the_old_queue_seed_dependency_assertion(monkeypatch):
+    from tests import test_ci_queue_seed
+
+    candidate = copy.deepcopy(test_ci_queue_seed._jobs())
+    job = candidate["coverage-baseline"]
+    job["needs"] = ["unit", "gate-required"]
+    base = copy.deepcopy(candidate)
+    job["needs"] = ["unit", "coverage-ratchet"]
+    assert base["coverage-baseline"]["needs"] == ["unit", "gate-required"]
+    assert "needs.unit.result == 'success'" in job["if"]
+    contract = test_ci_queue_seed.test_failed_units_cannot_publish_a_push_baseline
+    source = inspect.getsource(contract)
+    legacy = source.replace(
+        'assert job["needs"] in (["unit", "gate-required"], ["unit", "coverage-ratchet"])',
+        'assert job["needs"] == ["unit", "gate-required"]',
+    )
+    assert legacy != source
+    namespace = {"_jobs": lambda: candidate}
+    exec(compile(legacy, "staged_queue_seed_contract.py", "exec"), namespace)
+    with pytest.raises(AssertionError):
+        namespace[contract.__name__]()
+
+    proof, endpoints = staged(contract.__name__)
+    evidence = endpoints["repos/o/r/actions/runs/42/jobs?per_page=100&page=1"]["jobs"][0]
+    evidence["conclusion"] = "failure"
+    invoke, _ = queue(proof, endpoints)
+    with pytest.raises(SwarmError, match=contract.__name__):
+        invoke()
+
+    monkeypatch.setattr(test_ci_queue_seed, "_jobs", lambda: candidate)
+    contract()
+    evidence["conclusion"] = "success"
+    invoke, _ = queue(proof, endpoints)
+    assert invoke()["queued"]
+
+    job["if"] = "always()"
+    with pytest.raises(AssertionError):
+        contract()
+    evidence["conclusion"] = "failure"
+    invoke, _ = queue(proof, endpoints)
+    with pytest.raises(SwarmError, match=contract.__name__):
+        invoke()
+
+
+def test_staged_promotion_proof_accepts_squash_and_preserves_the_exact_merge_request(tmp_path):
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "tests/contracts/promotion/promote.cjs").read_text().split("\\ntest(", 1)[0]
+    source = source.replace(
+        "require('../../../.github/scripts/promote.cjs')",
+        "require(" + json.dumps(str(root / ".github/scripts/promote.cjs")) + ")",
+    )
+    script = tmp_path / "staged-promotion.cjs"
+    script.write_text(
+        source
+        + """
+(async () => {
+  const f = fixture();
+  await promote(f);
+  assert.equal(f.writes[1][0], 'merge');
+  const { merge_method, ...request } = f.writes[1][1];
+  if (process.argv[2] === 'old') assert.equal(merge_method, 'rebase');
+  else assert.ok(['rebase', 'squash'].includes(merge_method));
+  assert.deepEqual(request, {
+    owner: 'owner', repo: 'repo', pull_number: 7, sha: 'snapshot',
+    commit_message: f.writes[0][1].body,
+  });
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+    )
+    old = subprocess.run(["node", str(script), "old"], capture_output=True, text=True)
+    assert old.returncode == 1
+    assert "rebase" in old.stderr and "squash" in old.stderr
+    proof, endpoints = staged("promotion API contracts")
+    evidence = endpoints["repos/o/r/actions/runs/42/jobs?per_page=100&page=1"]["jobs"][0]
+    evidence["conclusion"] = "failure"
+    invoke, _ = queue(proof, endpoints)
+    with pytest.raises(SwarmError, match="promotion API contracts"):
+        invoke()
+
+    compatible = subprocess.run(["node", str(script), "compatible"], capture_output=True, text=True)
+    assert compatible.returncode == 0, compatible.stdout + compatible.stderr
+    evidence["conclusion"] = "success"
+    invoke, _ = queue(proof, endpoints)
+    assert invoke()["queued"]
