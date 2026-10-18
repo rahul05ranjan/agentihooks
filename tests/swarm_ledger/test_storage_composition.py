@@ -85,6 +85,26 @@ def test_a_built_repository_stores_at_the_path_it_was_given(tmp_path):
     assert storage.read_slugs(tmp_path) == ["composed"]
 
 
+def test_a_built_repository_follows_the_domain_it_was_given(tmp_path):
+    domain = object()
+    assert storage.build(tmp_path / storage.DATABASE, domain).domain is domain
+
+
+def test_an_entry_keeps_what_it_was_built_with():
+    from scripts.swarm_ledger.repository.entry import Entry
+
+    entry = Entry(7, '{"a":1}', {"a": 1})
+    assert (entry.generation, entry.text, entry.state, entry.views, entry.fragments) == (
+        7,
+        '{"a":1}',
+        {"a": 1},
+        {},
+        None,
+    )
+    fragments = object()
+    assert Entry(8, None, {}, fragments).fragments is fragments
+
+
 def test_the_relay_journal_holds_releases_and_drops_revisions(tmp_path):
     journal = storage.build(tmp_path / storage.DATABASE)
     assert journal.held_revisions() == {}
