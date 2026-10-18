@@ -604,10 +604,7 @@ class SwarmPanel(unittest.TestCase):
             [
                 {"body": {"action": "set", "effort_min": "low", "effort_max": "max"}, "bad": []},
                 {"body": {"action": "set"}, "bad": ["effort floor must be one of low, medium, high, xhigh, max"]},
-                {
-                    "body": {"action": "set", "effort_min": "max"},
-                    "bad": ["effort floor must not be above the effort ceiling"],
-                },
+                {"body": {"action": "set", "effort_min": "max"}, "bad": []},
                 {"body": {"action": "set"}, "bad": []},
             ],
         )

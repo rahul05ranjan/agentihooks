@@ -99,26 +99,37 @@ def served_version():
     return served_page()[0]
 
 
-def page_view(state):
+def page_view(state, fix_phase=""):
     meta = {key: item for key, item in state.get("_meta", {}).items() if key not in ("seeds", "api_operations")}
-    marks = freeze.marks(state, hierarchy.project(state)[0])
+    marks = freeze.marks(state, hierarchy.project(state)[0], fix_phase)
     return {**state, "marks": marks, "_meta": {**meta, "limits": PAGE_LIMITS}}
 
 
-def ledger_view(state):
-    view = page_view(state)
+def doctor_fix_phase(slug):
+    from redis import RedisError
+
+    from scripts.swarm.store import SwarmError
+
+    try:
+        return freeze.fix_phase(swarm_store().config(slug))
+    except (SwarmError, RedisError):
+        return ""
+
+
+def ledger_view(state, slug=None):
+    view = page_view(state, doctor_fix_phase(slug) if slug else "")
     view["_meta"].update(page_version=served_version(), crew=ledger_gate.crew(state["_meta"]))
     return view
 
 
 def publish_ledger(slug, state):
     if HUB.has(slug):
-        HUB.publish(slug, "ledger", ledger_view(state))
+        HUB.publish(slug, "ledger", ledger_view(state, slug))
 
 
 def publish_snapshot(slug: str, state: dict) -> None:
     if HUB.has(slug):
-        HUB.publish_snapshot(slug, "ledger", ledger_view(state))
+        HUB.publish_snapshot(slug, "ledger", ledger_view(state, slug))
 
 
 repository = publishing(stored, publish_snapshot)
@@ -717,7 +728,7 @@ def doctor_phrase(slug, state):
 
 
 def stream_resources(slug):
-    ledger = ledger_view(repository.get_document(slug))
+    ledger = ledger_view(repository.get_document(slug), slug)
     return {"ledger": ledger, "swarm": swarm_status(slug, ledger)}
 
 

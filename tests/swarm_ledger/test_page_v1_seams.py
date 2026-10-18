@@ -92,6 +92,20 @@ def test_the_streamed_ledger_view_carries_the_marks_and_the_server_limits():
     }
 
 
+def test_the_streamed_view_never_marks_a_doctor_fix_phase_task_held(monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts.doctor import loop, priming
+    from scripts.swarm_ledger import ledger_server
+
+    doc = {**DOC, "phases": [*DOC["phases"], {"id": loop.FIX_PHASE, "title": "Fix", "plan": "plans/p2"}]}
+    doc = {**doc, "tasks": [*DOC["tasks"], task("t6", loop.FIX_PHASE)], "freezes": [record("plans/p1", "focus")]}
+    config = SimpleNamespace(template=priming.TEMPLATE)
+    monkeypatch.setattr(ledger_server, "swarm_store", lambda: SimpleNamespace(config=lambda slug: config))
+    assert "tasks/t6" not in ledger_server.ledger_view(ledger_state(doc), "doctor")["marks"]["held"]
+    assert "tasks/t6" in ledger_server.ledger_view(ledger_state(doc))["marks"]["held"]
+
+
 def test_page_saves_apply_through_version_one(live):
     op = {"op": "add", "id": "v1-page-save", "thread": "chat", "text": "Saved through version one"}
     status, reply = request(live, "PUT", "saves", {"ops": [op]})

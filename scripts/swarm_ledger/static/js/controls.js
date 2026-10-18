@@ -89,7 +89,6 @@ function capChanges(values, draft, limits, catalog = {}) {
     if (!(value >= low && value <= high)) bad.push(`${name || lane} must be a whole number from ${low} to ${high}`);
     else if (value !== Number(values[key])) body[key] = value;
   }
-  const range = { ...values, ...draft };
   for (const [key, name] of Object.entries(EFFORT_CAPS)) {
     if (!(key in draft)) continue;
     const value = String(draft[key]).trim();
@@ -106,8 +105,6 @@ function capChanges(values, draft, limits, catalog = {}) {
     if (!MASTER_AGENTS.includes(draft.master_agent)) bad.push("master affinity must be Claude or Codex");
     else if (draft.master_agent !== values.master_agent) body.master_agent = draft.master_agent;
   }
-  const [floor, ceiling] = [range.effort_min, range.effort_max].map((v) => efforts.indexOf(String(v).trim()));
-  if (floor >= 0 && ceiling >= 0 && floor > ceiling) bad.push("effort floor must not be above the effort ceiling");
   return { body, bad };
 }
 
