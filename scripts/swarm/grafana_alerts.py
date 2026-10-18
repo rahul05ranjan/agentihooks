@@ -1,4 +1,4 @@
-"""Firing Grafana swarm bottleneck alerts in, standing stage findings out, read through the gateway Grafana tools.
+"""Grafana swarm bottleneck alert state history in, standing stage findings out, read through the gateway Grafana tools.
 
 Only numbers and known names are taken from an alert; its free text never reaches the swarm.
 """
@@ -11,6 +11,7 @@ import math
 import os
 import re
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from scripts.swarm.health import standing
@@ -20,9 +21,10 @@ if TYPE_CHECKING:
     from redis import Redis
 
 URL_ENV = "LANGFUSE_MCP_URL"
-TOOL = "grafana-alerting_manage_rules"
+TOOL = "grafana-get_annotations"
 TIMEOUT_S = 10
-EPISODE_CHARS = 40
+WINDOW_MS = 24 * 3_600_000
+LIMIT = 1000
 UNIT = "task hours in the window"
 STAGES = (
     "seat_wait",
@@ -34,16 +36,10 @@ STAGES = (
     "quota_hold",
     "host_hold",
 )
-SLUG = re.compile(r"[a-z0-9][a-z0-9-]*")
+LABELS = re.compile(r"\{([^{}]*)\}")
 
 
-def _text(result) -> object:
-    if result.isError:
-        raise RuntimeError("Grafana alert rule tool failed")
-    return json.loads(next(item.text for item in result.content if item.type == "text"))
-
-
-async def _rules(timeout: float) -> list:
+async def _annotations(since_ms: int, timeout: float) -> list:
     from mcp import ClientSession
     from mcp.client.streamable_http import streamablehttp_client
 
@@ -58,16 +54,15 @@ async def _rules(timeout: float) -> list:
         ) as (read, write, _):
             async with ClientSession(read, write) as session:
                 await session.initialize()
-                listed = _text(await session.call_tool(TOOL, {"operation": "list"})) or []
-                return [
-                    _text(await session.call_tool(TOOL, {"operation": "get", "rule_uid": rule["uid"]}))
-                    for rule in listed
-                    if (rule.get("labels") or {}).get("swarm") == "bottleneck" and rule.get("state") == "firing"
-                ]
+                result = await session.call_tool(TOOL, {"Type": "alert", "From": since_ms, "Limit": LIMIT})
+                if result.isError:
+                    raise RuntimeError("Grafana annotations tool failed")
+                body = json.loads(next(item.text for item in result.content if item.type == "text"))
+                return (body.get("Payload") or []) if isinstance(body, dict) else []
 
 
-def read_rules(timeout: float = TIMEOUT_S) -> list:
-    return asyncio.run(_rules(timeout))
+def read_annotations(now_ms: int, timeout: float = TIMEOUT_S) -> list:
+    return asyncio.run(_annotations(now_ms - WINDOW_MS, timeout))
 
 
 def _number(value):
@@ -78,45 +73,55 @@ def _number(value):
     return number if math.isfinite(number) else None
 
 
-def _firing(rule, slug: str) -> dict:
-    if not isinstance(rule, dict):
-        return {}
-    labels = rule.get("labels") if isinstance(rule.get("labels"), dict) else {}
-    stage, threshold = str(labels.get("stage")), _number(labels.get("threshold_hours"))
-    if labels.get("swarm") != "bottleneck" or stage not in STAGES or threshold is None:
-        return {}
-    found = {}
-    for alert in rule.get("alerts") or []:
-        if not isinstance(alert, dict) or not str(alert.get("state")).startswith("Alerting"):
-            continue
-        tags = alert.get("labels") if isinstance(alert.get("labels"), dict) else {}
-        notes = alert.get("annotations") if isinstance(alert.get("annotations"), dict) else {}
-        hours = _number(notes.get("hours"))
-        if tags.get("ledger") == slug and SLUG.fullmatch(slug) and hours is not None:
-            episode = str(alert.get("activeAt") or "")[:EPISODE_CHARS]
-            found[stage] = standing.Reading(hours, threshold, UNIT, episode)
-    return found
+def _labels(text) -> dict:
+    found = LABELS.search(str(text))
+    return dict(part.partition("=")[::2] for part in found.group(1).split(", ")) if found else {}
 
 
-def apply(redis: Redis, slug: str, rules: list, now_ms: int) -> list[str]:
-    firing = {}
-    for rule in rules:
-        firing.update(_firing(rule, slug))
+def _latest(annotations: list, slug: str) -> dict:
+    notes = [note for note in annotations if isinstance(note, dict)]
+    latest = {}
+    for note in sorted(notes, key=lambda note: (_number(note.get("time")) or 0, _number(note.get("id")) or 0)):
+        labels = _labels(note.get("text"))
+        if labels.get("swarm") == "bottleneck" and labels.get("ledger") == slug and labels.get("stage") in STAGES:
+            latest[labels["stage"]] = (note, labels)
+    return latest
+
+
+def _reading(note: dict, labels: dict):
+    data = note.get("data") if isinstance(note.get("data"), dict) else {}
+    values = data.get("values") if isinstance(data.get("values"), dict) else {}
+    hours, threshold, at = (
+        _number(values.get("hours")),
+        _number(labels.get("threshold_hours")),
+        _number(note.get("time")),
+    )
+    if hours is None or threshold is None or at is None:
+        return None
+    episode = datetime.fromtimestamp(at / 1000, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return standing.Reading(hours, threshold, UNIT, episode)
+
+
+def apply(redis: Redis, slug: str, annotations: list, now_ms: int) -> list[str]:
     actions = []
-    for stage, reading in firing.items():
-        standing.fire(redis, slug, stage, reading, now_ms)
-        actions.append(f"fired {stage} on {slug}")
-    for stage, row in standing.read(redis, slug).items():
-        if stage in STAGES and stage not in firing and row.get("unit") == UNIT and standing.clear(redis, slug, stage):
-            actions.append(f"cleared {stage} on {slug}")
+    for stage, (note, labels) in _latest(annotations, slug).items():
+        state = str(note.get("newState"))
+        reading = _reading(note, labels) if state.startswith("Alerting") else None
+        if reading:
+            standing.fire(redis, slug, stage, reading, now_ms)
+            actions.append(f"fired {stage} on {slug}")
+        elif state.startswith("Normal"):
+            row = standing.read(redis, slug).get(stage)
+            if row and row.get("unit") == UNIT and standing.clear(redis, slug, stage):
+                actions.append(f"cleared {stage} on {slug}")
     return actions
 
 
-def refresh(redis: Redis, slug: str, now_ms: int, read: Callable[[], list] = read_rules) -> list[str]:
+def refresh(redis: Redis, slug: str, now_ms: int, read: Callable[[int], list] = read_annotations) -> list[str]:
     if not (os.environ.get(URL_ENV) and os.environ.get("MCP_KEY_GATEWAY")):
         return []
     try:
-        rules = read()
+        annotations = read(now_ms)
     except Exception:
         return []
-    return apply(redis, slug, rules, now_ms)
+    return apply(redis, slug, annotations, now_ms)

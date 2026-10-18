@@ -8,11 +8,10 @@ from scripts.swarm import grafana_alerts
 
 pytestmark = [pytest.mark.unit, pytest.mark.xdist_group("mcp-sdk")]
 
+NOTE = {"id": 1, "newState": "Alerting", "text": "x {swarm=bottleneck}", "time": 1}
 
-RULE = {"uid": "a", "state": "firing", "labels": {"swarm": "bottleneck"}, "alerts": []}
 
-
-def _gateway(monkeypatch, listed, details, error=False):
+def _gateway(monkeypatch, body, error=False, timeout=0.5):
     import mcp
     from mcp.client import streamable_http
 
@@ -29,7 +28,7 @@ def _gateway(monkeypatch, listed, details, error=False):
             "Host": "llm.homeofanton.com",
             "x-mcp-servers": "grafana",
         }
-        assert timeout == 0.5
+        calls.append(("timeout", timeout))
         yield "read", "write", None
 
     class Session:
@@ -47,8 +46,10 @@ def _gateway(monkeypatch, listed, details, error=False):
 
         async def call_tool(self, name, arguments):
             calls.append((name, arguments))
-            body = listed if arguments["operation"] == "list" else details[arguments["rule_uid"]]
-            return SimpleNamespace(isError=error, content=[SimpleNamespace(type="text", text=json.dumps(body))])
+            return SimpleNamespace(
+                isError=error,
+                content=[SimpleNamespace(type="image", text="{}"), SimpleNamespace(type="text", text=json.dumps(body))],
+            )
 
     monkeypatch.setenv("MCP_KEY_GATEWAY", "fixture")
     monkeypatch.setenv("LANGFUSE_MCP_URL", "http://fixture/mcp/")
@@ -57,34 +58,29 @@ def _gateway(monkeypatch, listed, details, error=False):
     return calls
 
 
-def test_the_reader_gets_only_firing_bottleneck_rules_through_the_gateway(monkeypatch):
-    listed = [
-        {"uid": "a", "state": "firing", "labels": {"swarm": "bottleneck"}},
-        {"uid": "b", "state": "normal", "labels": {"swarm": "bottleneck"}},
-        {"uid": "c", "state": "firing", "labels": {"swarm": "other"}},
-        {"uid": "d", "state": "firing"},
-        {"uid": "e", "state": "pending", "labels": {"swarm": "bottleneck"}},
-    ]
-    calls = _gateway(monkeypatch, listed, {"a": RULE})
-    assert grafana_alerts.read_rules(0.5) == [RULE]
+def test_the_reader_asks_for_a_day_of_alert_state_history_through_the_gateway(monkeypatch):
+    calls = _gateway(monkeypatch, {"Payload": [NOTE]})
+    assert grafana_alerts.read_annotations(100_000_000, 0.5) == [NOTE]
     assert calls == [
+        ("timeout", 0.5),
         "initialize",
-        ("grafana-alerting_manage_rules", {"operation": "list"}),
-        ("grafana-alerting_manage_rules", {"operation": "get", "rule_uid": "a"}),
+        ("grafana-get_annotations", {"Type": "alert", "From": 100_000_000 - 86_400_000, "Limit": 1000}),
     ]
 
 
-def test_the_reader_takes_an_empty_listing(monkeypatch):
-    _gateway(monkeypatch, None, {})
-    assert grafana_alerts.read_rules(0.5) == []
+def test_the_reader_bounds_a_read_at_ten_seconds_by_default(monkeypatch):
+    calls = _gateway(monkeypatch, {"Payload": []})
+    assert grafana_alerts.read_annotations(100_000_000) == []
+    assert calls[0] == ("timeout", 10)
+
+
+@pytest.mark.parametrize("body", [{"Payload": None}, {}, [NOTE], None])
+def test_the_reader_takes_an_empty_or_odd_reply_as_no_history(monkeypatch, body):
+    _gateway(monkeypatch, body)
+    assert grafana_alerts.read_annotations(100_000_000, 0.5) == []
 
 
 def test_the_reader_raises_on_a_tool_error(monkeypatch):
-    _gateway(monkeypatch, [], {}, error=True)
-    with pytest.raises(RuntimeError, match="^Grafana alert rule tool failed$"):
-        grafana_alerts.read_rules(0.5)
-
-
-def test_the_reader_defaults_to_a_ten_second_bound():
-    assert grafana_alerts.TIMEOUT_S == 10
-    assert grafana_alerts.read_rules.__defaults__ == (10,)
+    _gateway(monkeypatch, {"Payload": [NOTE]}, error=True)
+    with pytest.raises(RuntimeError, match="^Grafana annotations tool failed$"):
+        grafana_alerts.read_annotations(100_000_000, 0.5)
