@@ -472,3 +472,11 @@ def test_an_existing_computed_lane_cannot_keep_its_group_while_changing_its_prod
     updated = copy.deepcopy(baseline)
     updated["jobs"][producer]["steps"].append({"run": "echo lane=unbounded"})
     assert any(f"job {job} " in problem for problem in lanes.problems(updated, baseline))
+
+
+@pytest.mark.parametrize(("workflow", "job"), [("Replay", "stats"), ("Mutation preflight", "replay")])
+def test_unchanged_trusted_needs_groups_outside_the_mutation_stages_are_preserved(workflow, job):
+    block = {"group": "${{ needs.plan.outputs.lane }}"}
+    baseline = {**_workflow(**{job: {"runs-on": "x", "concurrency": block}}), "name": workflow}
+    updated = {**_workflow(**{job: {"runs-on": "x", "concurrency": block, "steps": [{"run": "x"}]}}), "name": workflow}
+    assert lanes.problems(updated, baseline) == []
