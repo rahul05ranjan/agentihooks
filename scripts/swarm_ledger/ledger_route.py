@@ -31,7 +31,11 @@ def scoped(slug: str, address: str) -> Iterator[None]:
 def session(slug: str) -> Iterator[None]:
     from scripts.swarm.store import connect
 
-    if os.environ.get("AGENTIHOOKS_SWARM") == slug and not os.environ.get("SWARM_URL"):
+    if (
+        os.environ.get("AGENTIHOOKS_SWARM") == slug
+        and os.environ.get("AGENTIHOOKS_DEPLOYMENT", "local") == "local"
+        and not os.environ.get("SWARM_URL")
+    ):
         with scoped(slug, connect().config(slug).api_url):
             yield
     else:
