@@ -27,6 +27,29 @@ def test_a_forced_launch_reports_the_unfinished_lead_that_blocks_replacement():
     assert runtime.masters == []
 
 
+def test_a_forced_launch_lists_each_unfinished_lead_with_its_state():
+    from scripts.swarm.store import MASTER, AgentRecord
+    from scripts.swarm.tick import _master
+    from tests.swarm.test_tick import tasks
+    from tests.swarm.test_tick_master import direct
+
+    swarm, runtime = direct(
+        AgentRecord("master@a1b2c3-0002", MASTER, MASTER, state="suspect", seat="master@sw"),
+        AgentRecord("master@a1b2c3-0003", MASTER, MASTER, state="retiring", seat="master@sw"),
+    )
+    runtime.live.clear()
+    config = swarm.config("sw")
+    actions = tick_master.run(
+        "sw", config, swarm, tasks(), runtime, 300_001, lambda: _master("sw", config, swarm, runtime, 300_001)
+    )
+
+    assert actions == [
+        "master down 5 minutes, forced a master launch",
+        "master launch refused: unfinished lead master@a1b2c3-0002 (suspect), master@a1b2c3-0003 (retiring)",
+    ]
+    assert runtime.masters == []
+
+
 @pytest.mark.parametrize(
     ("pending", "reason"),
     [
