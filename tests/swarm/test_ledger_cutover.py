@@ -58,3 +58,25 @@ def test_readiness_requires_each_current_worker_and_both_masters_to_authenticate
         assert status["ready"] is (index == len(actors) - 1)
     assert store.config(SLUG).api_url == ""
     assert authority_context.secret() is None
+
+
+@pytest.mark.parametrize("command", ["ledger", "swarm"])
+def test_normal_local_commands_acknowledge_the_staged_successor(pending, monkeypatch, capsys, command):
+    from scripts.swarm_ledger import ledger
+
+    _, actors, secret = pending
+    actor = actors[0]
+    monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", actor.name)
+    monkeypatch.setenv("AGENTIHOOKS_LEDGER_AGENT_TOKEN", ledger_authority.agent_token(secret, SLUG, actor.name))
+    if command == "ledger":
+        monkeypatch.setattr(ledger, "cmd_url", lambda args: None)
+        monkeypatch.setattr("sys.argv", ["ledger", "--slug", SLUG, "url"])
+        ledger.main()
+    else:
+        monkeypatch.setattr(cli, "cmd_status", lambda store, args: None)
+        assert cli.main([SLUG, "status"]) == 0
+    monkeypatch.setenv("AGENTIHOOKS_LEDGER_AGENT_TOKEN", "")
+    assert cli.main([SLUG, "ledger-ready"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert set(report["missing"]) == {master.name for master in actors[1:]}
+    assert not report["ready"]
