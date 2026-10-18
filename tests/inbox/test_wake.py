@@ -262,6 +262,33 @@ def test_a_session_outside_herdr_gets_no_wake_and_goes_straight_to_escalation(in
     assert herdr.prompts == [] and len(inbox.inbox(MASTER_NAME)) == 1 and len(ledger.followups) == 1
 
 
+@pytest.mark.parametrize("sender", [MASTER_NAME, "master@sw", "sw-master-0"])
+def test_a_master_message_nobody_reads_goes_to_the_operator_never_back_to_its_own_seat(inbox, monkeypatch, sender):
+    monkeypatch.setattr(
+        "scripts.inbox.addresses.get_active_sessions", lambda **kwargs: {"desk": {"name": "operator-desk"}}
+    )
+    inbox.seats.occupy("master@sw", "sw-master-0", at=1)
+    inbox.seats.occupy("master@sw", MASTER_NAME, at=2)
+    agents = [*SEATED, AgentRecord("sw-master-0", MASTER, MASTER, seat="master@sw")]
+    item = inbox.send(sender, "operator-desk", "need a decision")
+    ledger = FakeLedger()
+    run(inbox, FakeHerdr({}), ledger, sent_at(item) + W, agents)
+    assert inbox.inbox("master@sw") == [] and inbox.inbox(MASTER_NAME) == []
+    assert events(inbox, item.id) == ["escalated_operator"] and len(ledger.followups) == 1
+
+
+def test_an_agent_message_nobody_reads_still_goes_to_its_master_seat(inbox, monkeypatch):
+    monkeypatch.setattr(
+        "scripts.inbox.addresses.get_active_sessions", lambda **kwargs: {"desk": {"name": "operator-desk"}}
+    )
+    inbox.seats.occupy("master@sw", MASTER_NAME, at=1)
+    item = inbox.send("sw-eng-1", "operator-desk", "need a decision")
+    ledger = FakeLedger()
+    run(inbox, FakeHerdr({}), ledger, sent_at(item) + W, SEATED)
+    [raised] = inbox.inbox("master@sw")
+    assert item.id in raised.text and events(inbox, item.id) == ["escalated_master"] and ledger.followups == []
+
+
 def test_an_item_for_the_master_skips_straight_to_the_operator(inbox):
     item = inbox.send("sw-eng-1", MASTER_NAME, "check the plan")
     herdr, ledger = FakeHerdr({"pm": "idle"}), FakeLedger()
