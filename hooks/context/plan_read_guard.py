@@ -144,6 +144,8 @@ def _migration(words: list[str]) -> bool:
             position += 1
         elif option in ("--source", "--url", "--slug") and position + 1 < len(words):
             position += 2
+        elif option in (">", ">>") and position + 2 == len(words):
+            return True
         else:
             return False
     return True
@@ -151,7 +153,8 @@ def _migration(words: list[str]) -> bool:
 
 def _arguments(words: list[str]) -> list[str]:
     if _migration(words):
-        return words[:3]
+        redirects = next((index for index, word in enumerate(words) if word in (">", ">>")), len(words))
+        return words[:3] + words[redirects:]
     if not words or PurePath(words[0]).name not in WRITERS:
         return words
     return [words[0], *(word for word in words[1:] if not _prose(word))]

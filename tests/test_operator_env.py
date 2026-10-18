@@ -60,6 +60,19 @@ def test_values_follow_the_shell_where_a_later_file_wins(tmp_path):
     assert not operator_env.SHELL_NAMES & loaded.keys()
 
 
+def test_shared_env_files_cannot_load_the_server_secret(tmp_path, monkeypatch):
+    state = _home(tmp_path)
+    (state / "swarm.env").write_text("SWARM_SECRET='$FIXTURE_SWARM_SECRET'\nSWARM_URL=https://hosted.example\n")
+    loaded = operator_env.values({"HOME": str(tmp_path), "PATH": os.environ["PATH"]})
+    assert "SWARM_SECRET" not in loaded
+    assert loaded["SWARM_URL"] == "https://hosted.example"
+    monkeypatch.setattr(operator_env, "block_tokens", lambda: {})
+    trusted = "$TRUSTED_SWARM_SECRET"
+    environ = {"HOME": str(tmp_path), "PATH": os.environ["PATH"], "SWARM_SECRET": trusted}
+    operator_env.fill(environ)
+    assert environ["SWARM_SECRET"] == trusted
+
+
 def test_accounts_are_the_interactive_shell_account_variables_only(tmp_path):
     (tmp_path / ".profile").write_text(
         "echo AH_CC_TOKEN_noise=printed\n"

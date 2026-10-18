@@ -167,7 +167,7 @@ def test_frozen_uploads_and_cleanup_preserve_fallback_files(stores, monkeypatch)
     os.utime(existing, (0, 0))
     with pytest.raises(ledger_media.Refused, match="hosted"):
         ledger_media.write_file(folder / ("a" * 64 + ".md"), b"new content")
-    with pytest.raises(ledger_media.Refused, match="hosted"):
+    with pytest.raises(ledger_artifacts.media.Refused, match="hosted"):
         ledger_artifacts.store("migration-proof", "new.md", b"new content")
     ledger_media.sweep("migration-proof", set(), 10**12)
     ledger_media.purge("migration-proof")
@@ -194,3 +194,75 @@ def test_migration_inventory_prints_only_the_source_manifest(stores, monkeypatch
     monkeypatch.setattr(sys, "argv", ["migration", "--source", str(source.directory)])
     hosted.main()
     assert json.loads(capsys.readouterr().out) == hosted.manifest(hosted.capture(source, "migration-proof"))
+
+
+def test_transfer_verifies_a_separate_read_and_blocks_redirects(stores, monkeypatch):
+    source, _ = stores
+    snapshot = hosted.capture(source, "migration-proof")
+    secret = secrets.token_hex(32)
+    expected = hosted.manifest(snapshot)
+    calls = []
+    answers = [expected, expected]
+
+    def opened(req, timeout):
+        calls.append((req, timeout))
+        return io.BytesIO(json.dumps({"data": answers.pop(0)}).encode())
+
+    def opener(handler):
+        assert isinstance(handler, hosted.NoRedirect)
+        assert handler.redirect_request(None, None, 302, "redirect", {}, "https://elsewhere.example") is None
+        return SimpleNamespace(open=opened)
+
+    monkeypatch.setattr(hosted.urllib.request, "build_opener", opener)
+    monkeypatch.setenv("SWARM_ACCESS_CLIENT_ID", "$FIXTURE_ACCESS_ID")
+    monkeypatch.setenv("SWARM_ACCESS_CLIENT_SECRET", "$FIXTURE_ACCESS_SECRET")
+    monkeypatch.setattr(hosted.time, "time", lambda: 1000)
+    result = hosted.transfer("https://hosted.example/", snapshot, secret)
+    assert result == {"source": expected, "hosted": expected, "match": True}
+    assert [req.method for req, _ in calls] == ["POST", "GET"]
+    assert all(timeout == 300 for _, timeout in calls)
+    assert all(req.full_url == "https://hosted.example/api/v1/migrations/migration-proof" for req, _ in calls)
+    first = calls[0][0]
+    assert json.loads(gzip.decompress(first.data)) == snapshot
+    assert first.get_header("Cf-access-client-id") == "$FIXTURE_ACCESS_ID"
+    assert first.get_header("Cf-access-client-secret") == "$FIXTURE_ACCESS_SECRET"
+    assert first.get_header("User-agent") == "agentihooks-swarm"
+    assert hosted.authorize(secret, "migration-proof", first.get_header("X-ledger-migration"), 1000)
+    answers.extend([expected, {**expected, "events": 999}])
+    with pytest.raises(ValueError, match="comparison"):
+        hosted.transfer("https://hosted.example", snapshot, secret)
+
+
+def test_command_freezes_source_before_transferring_and_reports_comparison(stores, monkeypatch, capsys):
+    import sys
+
+    source, _ = stores
+    snapshot = hosted.capture(source, "migration-proof")
+    secret = secrets.token_hex(32)
+    monkeypatch.setenv("SWARM_SECRET", secret)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "migration",
+            "--source",
+            str(source.directory),
+            "--url",
+            "https://hosted.example",
+            "--freeze",
+            "--slug",
+            "migration-proof",
+        ],
+    )
+
+    def transfer(url, actual, supplied):
+        assert url == "https://hosted.example"
+        assert actual == snapshot
+        assert supplied == secret
+        with pytest.raises(sqlite3.IntegrityError):
+            source.import_document("migration-proof", document(), replace=True)
+        return {"match": True}
+
+    monkeypatch.setattr(hosted, "transfer", transfer)
+    hosted.main()
+    assert json.loads(capsys.readouterr().out) == {"match": True}
