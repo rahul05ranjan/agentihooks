@@ -8,6 +8,8 @@ from scripts.swarm import cli, lease
 from scripts.swarm.store import RedisStore, SwarmConfig
 from scripts.swarm_ledger import ledger, ledger_link
 
+pytestmark = pytest.mark.xdist_group("fakeredis")
+
 
 @pytest.fixture
 def store():
