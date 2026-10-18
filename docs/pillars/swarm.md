@@ -890,6 +890,18 @@ every 60 seconds. Redis server time determines expiry. The owner comes
 from `SWARM_HIVE_ID`, falling back to the hostname. Ledger and spawn writes carry the epoch; stale controllers
 are refused. The tick lock prevents two ticks in the same epoch and lets a higher epoch take over.
 
+### Staged and prerequisite pull requests
+
+A task that lands in stages, or registers a prerequisite pull request before its own, declares the scope each such pull request delivers when it records it:
+
+```bash
+agentihooks swarm <id> pr <prerequisite-pull-request-url> --prerequisite "tests that accept both gate states"
+agentihooks swarm <id> pr <stage-pull-request-url> --stage "the ledger field and its validation"
+agentihooks swarm <id> pr <final-pull-request-url>
+```
+
+The task keeps each declaration in `pull_scopes`, a map from the pull request URL to its kind, `stage` or `prerequisite`, and its nonempty scope. The intent check grades a declared pull request against its declared scope alone, without the whole task text or the task's plan lines, and the parent intent stamped on its body names that scope. A changed declaration is judged again. A pull request recorded without `--stage` or `--prerequisite` is the task's final pull request and is graded against the whole task contract. A blank scope is refused, and one pull request declares one kind.
+
 ### Ledger event pass
 
 Each swarm keeps a cursor on the ledger's event list. The tick reads the events written since it and sends one

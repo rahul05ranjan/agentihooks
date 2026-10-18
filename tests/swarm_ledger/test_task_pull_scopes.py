@@ -10,6 +10,8 @@ URL = "https://github.com/o/r/pull/9"
 
 def test_an_engineer_records_the_scope_a_pull_request_delivers():
     scopes = {URL: {"kind": "prerequisite", "scope": "tests that accept both gate states"}}
+    op = {"op": "task_update", "id": "u0", "by": ENGINEER, "item": "tasks/t1", "fields": {"pull_scopes": scopes}}
+    assert ledger_tasks.check(op) == {"pull_scopes": scopes}
     state, rejected = update("t1", {"pull_scopes": scopes}, by=ENGINEER)
     assert rejected == []
     assert row(state, "t1")["pull_scopes"] == scopes
