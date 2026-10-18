@@ -75,3 +75,36 @@ def test_scoped_routes_match_the_slug_and_restore_after_a_refusal():
                 raise ValueError("refused")
         assert ledger_route.url("selected") == "https://hosted.example"
     assert ledger_route.url() == ""
+
+
+def test_pending_destination_stages_private_authority_without_routing_the_tick(store, monkeypatch):
+    from argparse import Namespace
+
+    from scripts import operator_env
+    from scripts.swarm_ledger import authority_context
+    from scripts.swarm_ledger.storage_migration import hosted
+
+    store.update("selected", api_url="")
+    monkeypatch.setattr(cli, "run_tick", lambda *_: [])
+    cli.cmd_set(store, Namespace(slug="selected", pairs=["api-url-pending=https://hosted.example"]))
+    config = store.config("selected")
+    assert config.api_url == ""
+    assert config.pending_api_url == "https://hosted.example"
+    assert config.ledger_staged_at > 0
+    assert store.config("other").pending_api_url == ""
+    seen = []
+    monkeypatch.setattr(cli.timer, "installed_refusal", lambda: "")
+    monkeypatch.setattr(operator_env, "fill", lambda *_: None)
+    monkeypatch.setattr(operator_env, "classifier", lambda *_: None)
+    monkeypatch.setattr(hosted, "server_secret", lambda: "private-staging-fixture")
+    monkeypatch.setattr(cli, "_reconcile_services", lambda: None)
+
+    def run(slugs, callback, settled, elapsed):
+        seen.append((authority_context.secret(), ledger_link.remote()))
+        return True
+
+    monkeypatch.setattr(cli.tick_stop, "run", run)
+    cli.cmd_tick(store, None)
+    assert seen == [("private-staging-fixture", False)]
+    assert "SWARM_SECRET" not in os.environ
+    assert authority_context.secret() is None
