@@ -17,6 +17,13 @@ HEAD = "a" * 40
 CANDIDATE_HEAD = "b" * 40
 
 
+READ_PULL = ledger_events.view
+
+
+@pytest.fixture(autouse=True)
+def read_real_pull(monkeypatch):
+    monkeypatch.setattr(ledger_events, "view", READ_PULL)
+
 def declaration(family):
     return {
         "complete": True,
