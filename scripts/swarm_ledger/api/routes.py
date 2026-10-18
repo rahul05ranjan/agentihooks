@@ -49,18 +49,22 @@ def dispatch(handler: object, server: ModuleType) -> dict | str | None:
     if principal is None:
         raise APIError(403, "forbidden", "Missing or wrong ledger credential")
     if handler.command == "GET":
-        query = pagination(handler.path)
-        if path == "events" and handler.headers.get("Accept") == "text/event-stream":
-            return events(handler, server, slug)
-        if path == "swarm/models":
-            catalog = server.swarm_models()
-            return {"data": catalog, "revision": resources.revision(catalog)}
-        if path == "swarm" or path.startswith("swarm/"):
-            return resources.swarm_read(server.swarm_status(slug), path, query)
-        if WORKSPACE_RE.fullmatch(path):
-            return workspace(server, slug, path.split("/")[1])
-        return ledger_read(server, slug, path, query)
+        return ledger_get(handler, server, slug, path)
     return ledger_operation(handler, server, slug, path, principal)
+
+
+def ledger_get(handler: object, server: ModuleType, slug: str, path: str) -> dict | None:
+    query = pagination(handler.path)
+    if path == "events" and handler.headers.get("Accept") == "text/event-stream":
+        return events(handler, server, slug)
+    if path == "swarm/models":
+        catalog = server.swarm_models()
+        return {"data": catalog, "revision": resources.revision(catalog)}
+    if path == "swarm" or path.startswith("swarm/"):
+        return resources.swarm_read(server.swarm_status(slug), path, query)
+    if WORKSPACE_RE.fullmatch(path):
+        return workspace(server, slug, path.split("/")[1])
+    return ledger_read(server, slug, path, query)
 
 
 def ledger_read(server: ModuleType, slug: str, path: str, query: dict) -> dict:
