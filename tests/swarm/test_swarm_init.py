@@ -275,6 +275,9 @@ def test_init_help_names_the_command_and_every_option():
         "--operator-asked OPERATOR_ASKED the operator's words asking for a swarm with fewer than three tasks",
         "--timeout TIMEOUT seconds to wait for every service to be healthy",
         "--prepare-clients verify bundle credentials on existing local Redis and activate clients",
+        "--adopt serve the existing shared ledger folder as this user from the stack, on the default ledger port, "
+        "and keep doing so on every later run",
+        "--no-start write the stack files and settings, adoption included, and stop: no service, swarm or ledger",
     ):
         assert words in text
 
@@ -287,6 +290,32 @@ def test_prepare_clients_needs_no_name_and_runs_only_the_stack_preparation(monke
     assert swarm_init.init(["--prepare-clients"], {"A": "1"}, docker, page, out) == 3
     assert seen == [(["--prepare-clients"], {"A": "1"}, docker, page, out, "")]
     assert (docker.calls, out.getvalue()) == ([], "")
+
+
+@pytest.mark.parametrize(("given", "passed"), [(["--adopt"], ["--adopt", "--no-start"]), ([], ["--no-start"])])
+def test_no_start_needs_no_name_and_creates_no_swarm(monkeypatch, given, passed):
+    seen = []
+    monkeypatch.setattr(stack_init, "init", lambda *args: seen.append(args) or 0)
+    out = io.StringIO()
+    docker = Stack()
+    assert swarm_init.init([*given, "--no-start"], {"A": "1"}, docker, page, out) == 0
+    assert seen == [(passed, {"A": "1"}, docker, page, out, "")]
+    assert (docker.calls, out.getvalue()) == ([], "")
+
+
+def test_adopt_reaches_the_stack_before_the_swarm_is_created(monkeypatch, plan):
+    seen = []
+    monkeypatch.setattr(stack_init, "init", lambda *args: seen.append(args[0]) or 4)
+    out = io.StringIO()
+    assert swarm_init.init(["demo-swarm", "--adopt", "--plan", str(plan)], {}, Stack(), page, out) == 4
+    assert seen == [["--timeout", "300", "--adopt"]]
+
+
+def test_adopt_and_prepare_clients_are_refused_together(capsys):
+    with pytest.raises(SystemExit) as raised:
+        swarm_init.init(["--adopt", "--prepare-clients"], {}, Stack(), page, io.StringIO())
+    assert raised.value.code == 2
+    assert "argument --prepare-clients: not allowed with argument --adopt" in capsys.readouterr().err
 
 
 def test_names_check_help_names_the_command_and_its_plan_option(capsys):

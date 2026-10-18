@@ -56,10 +56,22 @@ def parser() -> argparse.ArgumentParser:
     parser.add_argument("--template", help="the swarm template for caps, models and lanes")
     parser.add_argument("--operator-asked", help="the operator's words asking for a swarm with fewer than three tasks")
     parser.add_argument("--timeout", default="300", help="seconds to wait for every service to be healthy")
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--prepare-clients",
         action="store_true",
         help="verify bundle credentials on existing local Redis and activate clients",
+    )
+    mode.add_argument(
+        "--adopt",
+        action="store_true",
+        help="serve the existing shared ledger folder as this user from the stack, on the default ledger port, "
+        "and keep doing so on every later run",
+    )
+    parser.add_argument(
+        "--no-start",
+        action="store_true",
+        help="write the stack files and settings, adoption included, and stop: no service, swarm or ledger",
     )
     return parser
 
@@ -150,6 +162,9 @@ def init(argv: list[str], environ: Mapping[str, str], run: stack_init.Run, opene
     args = parser().parse_args(argv)
     if args.prepare_clients:
         return stack_init.init(["--prepare-clients"], environ, run, opener, out, args.name)
+    adoption = ["--adopt"] if args.adopt else []
+    if args.no_start:
+        return stack_init.init([*adoption, "--no-start"], environ, run, opener, out, args.name)
     paint = stack_init.painter(out, environ)
     content = seed(args)
     title = plan_title(args.plan) or str(content.get("title", ""))
@@ -157,7 +172,7 @@ def init(argv: list[str], environ: Mapping[str, str], run: stack_init.Run, opene
         print(paint(f"Swarm not created: {problem}.", "failed"), file=out)
         rule(title, out=out)
         return 1
-    if code := stack_init.init(["--timeout", str(args.timeout)], environ, run, opener, out, args.name):
+    if code := stack_init.init(["--timeout", str(args.timeout), *adoption], environ, run, opener, out, args.name):
         return code
     if refusal := create(args, content, environ, run, out):
         print(paint(f"Swarm not created: {refusal.problem}.", "failed"), file=out)

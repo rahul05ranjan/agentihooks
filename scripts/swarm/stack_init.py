@@ -5,6 +5,7 @@ It never creates or starts a swarm; swarm init creates it after this step and th
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import urllib.parse
@@ -17,6 +18,8 @@ from scripts.swarm.stack_env import BIND, client_env, read_env, settings, write_
 PROJECT = "agentihooks-swarm"
 BUNDLED = Path(__file__).with_name("stack")
 SERVICES = ("redis", "swarm", "controller")
+ADOPTION = "deploy/compose/adopt.yaml"
+LEDGER_PORT = 8765
 AGAIN = "then run agentihooks swarm init again"
 OUTPUT_LINES = 10
 DOCKER_CHECKS = (
@@ -48,10 +51,22 @@ Paint = Callable[[str, str], str]
 def parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agentihooks swarm init", description=__doc__)
     parser.add_argument("--timeout", type=int, default=300, help="seconds to wait for every service to be healthy")
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--prepare-clients",
         action="store_true",
         help="verify bundle credentials on existing local Redis and activate clients",
+    )
+    mode.add_argument(
+        "--adopt",
+        action="store_true",
+        help="serve the existing shared ledger folder as this user from the stack, on the default ledger port, "
+        "and keep doing so on every later run",
+    )
+    parser.add_argument(
+        "--no-start",
+        action="store_true",
+        help="write the stack files and settings, adoption included, without starting any service",
     )
     return parser
 
@@ -84,6 +99,22 @@ def materialize(home: Path) -> None:
     (home / "deploy" / "compose" / "tls").mkdir(exist_ok=True)
 
 
+def adopt(env_file: Path, environ: Mapping[str, str]) -> None:
+    values = read_env(env_file)
+    values.update(
+        {
+            "SWARM_ADOPT_LEDGER_DIR": str(
+                Path(environ.get("LEDGER_DIR") or Path.home() / "development-ledger").expanduser()
+            ),
+            "SWARM_ADOPT_HOME": str(Path.home()),
+            "SWARM_ADOPT_UID": str(os.getuid()),
+            "SWARM_ADOPT_GID": str(os.getgid()),
+            "SWARM_PORT": str(LEDGER_PORT),
+        }
+    )
+    write_private(env_file, "".join(f"{key}={value}\n" for key, value in values.items()))
+
+
 def project(home: Path) -> str:
     return read_env(home / ".env").get("SWARM_COMPOSE_PROJECT") or PROJECT
 
@@ -93,6 +124,7 @@ def logs(home: Path) -> str:
 
 
 def compose(home: Path, *args: str) -> list[str]:
+    adoption = ["--file", str(home / ADOPTION)] if read_env(home / ".env").get("SWARM_ADOPT_LEDGER_DIR") else []
     return [
         "docker",
         "compose",
@@ -102,6 +134,7 @@ def compose(home: Path, *args: str) -> list[str]:
         str(home),
         "--file",
         str(home / "compose.yaml"),
+        *adoption,
         "--env-file",
         str(home / ".env"),
         *args,
@@ -172,8 +205,13 @@ def init(argv: list[str], environ: Mapping[str, str], run: Run, opener: Callable
         return 1
     home = stack_home(environ)
     materialize(home)
+    if args.adopt:
+        adopt(home / ".env", environ)
     values = settings(home / ".env")
     write_private(home / "client.env", client_env(values, home))
+    if args.no_start:
+        print(f"Swarm stack settings written to {home}; no service was started.", file=out)
+        return 0
     if sick := start(run, home, args.timeout, out):
         for service, state in sick:
             fix = FIXES[service].format(env=home / ".env", again=AGAIN, **values)
