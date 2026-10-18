@@ -172,6 +172,8 @@ def test_unreserved_rows_regain_the_state_of_their_original_cap():
     assert (row.cap, row.state, row.reserved) == (6, "OPEN", "")
     drained = unreserved(reserve([Account("claude", "low", "DRAIN", 0, 8, 25, 6)], Reservation("claude", "low", 1)))
     assert drained[0].state == "DRAIN"
+    codex = unreserved(reserve([Account("codex", "weekly", "UNKNOWN", 0, 5, 25, 2)], Reservation("codex", "weekly", 1)))
+    assert codex[0].state == "OPEN"
 
 
 def _master_spawn(tmp_path, login, task):
