@@ -265,7 +265,12 @@ def test_the_required_workflow_uses_the_protected_canonical_aggregation():
         if "durations" in workflow["jobs"]
         else ({"queue_tier": True, "consolidated": True}, {"queue_tier": True, "promotion": True, "consolidated": True})
     )
-    assert steps in [ci_reuse.gate_steps(**form, summary=summary) for form in forms for summary in (False, True)]
+    assert steps in [
+        ci_reuse.gate_steps(**form, summary=summary, suite_speed=speed)
+        for form in forms
+        for summary in (False, True)
+        for speed in (False, True)
+    ]
 
     assert workflow["jobs"]["gate-required"]["runs-on"] in gate_protected.runners(policy)
     assert workflow["jobs"]["reuse"] in gate_protected.reuse_jobs(policy)
@@ -954,6 +959,14 @@ def test_queue_gate_keeps_legacy_duration_admission_by_default():
     assert implicit != ci_reuse.gate_steps(queue_tier=True, consolidated=True)
 
 
+def test_suite_speed_admission_is_explicit_in_the_canonical_gate():
+    from scripts import ci_reuse
+
+    form = {"queue_tier": True, "promotion": True, "consolidated": True}
+    assert ci_reuse.gate_steps(**form) == ci_reuse.gate_steps(**form, suite_speed=False)
+    assert ci_reuse.gate_steps(**form) != ci_reuse.gate_steps(**form, suite_speed=True)
+
+
 @pytest.mark.parametrize("event", ["merge_group", "pull_request"])
 @pytest.mark.parametrize("promotion", [False, True])
 @pytest.mark.parametrize("admission", ["success", "failure", "skipped", "cancelled", None])
@@ -973,6 +986,28 @@ def test_consolidated_gate_requires_the_shared_admission(event, promotion, admis
         needs["select"]["result"] = admission
     result = _gate(ci_reuse.gate_steps(queue_tier=True, promotion=promotion, consolidated=True), needs, event)
     assert (result.returncode == 0) == (admission == "success"), result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("event", ["pull_request", "merge_group", "push"])
+@pytest.mark.parametrize("outcome", ["success", "failure", "cancelled", "skipped", None])
+def test_the_early_suite_speed_gate_requires_its_event_result(event, outcome):
+    from scripts import ci_reuse
+
+    required = (
+        {"select", "test-count", "lint", "semgrep", "sonar"}
+        if event == "pull_request"
+        else {"select", "split", "unit", "shard-check", "test-count", "queue-fail-fast"}
+        if event == "merge_group"
+        else {"reuse"}
+    )
+    needs = {name: {"result": "success", "outputs": {"scope": "none"}} for name in required}
+    if outcome is not None:
+        needs["suite-speed"] = {"result": outcome}
+    steps = ci_reuse.gate_steps(queue_tier=True, promotion=True, consolidated=True, suite_speed=True)
+    result = _gate(steps, needs, event)
+    assert (result.returncode == 0) == (outcome == ("success" if event == "pull_request" else "skipped")), (
+        result.stdout + result.stderr
+    )
 
 
 def test_the_canonical_gate_still_needs_the_standalone_ratchet_in_the_queue():

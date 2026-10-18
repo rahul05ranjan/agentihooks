@@ -239,14 +239,18 @@ def test_only_a_dev_push_saves_the_test_environment_after_installing_it():
     callers = {
         name: job["steps"] for name, job in jobs.items() if any(s.get("id") == "venv" for s in job.get("steps", []))
     }
-    assert sorted(callers) == ["count-record", "split", "test-count", "unit", "unit-selected"]
+    assert sorted(set(callers) - {"suite-speed"}) == ["count-record", "split", "test-count", "unit", "unit-selected"]
     for name, steps in callers.items():
         restore = next(step for step in steps if step.get("id") == "venv")
         assert restore["uses"] == "actions/cache/restore@v4"
         saves = [
             step for step in steps if step.get("uses") == "actions/cache/save@v4" and step["with"]["path"] == "~/venv"
         ]
-        guards = {"unit-selected": "github.event_name == 'pull_request'", "test-count": "github.event_name != 'push'"}
+        guards = {
+            "unit-selected": "github.event_name == 'pull_request'",
+            "suite-speed": "github.event_name == 'pull_request'",
+            "test-count": "github.event_name != 'push'",
+        }
         if name in guards:
             assert guards[name] in jobs[name]["if"]
             assert saves == []
