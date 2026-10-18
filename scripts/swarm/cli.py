@@ -496,6 +496,10 @@ def cmd_tick(store, args):
     if why := timer.installed_refusal():
         raise SwarmError(f"the tick refused to run: {why}")
     operator_env.fill(os.environ)
+    if os.environ.get("SWARM_URL") and not os.environ.get("SWARM_SECRET"):
+        from scripts.swarm_ledger.storage_migration.hosted import server_secret
+
+        os.environ["SWARM_SECRET"] = server_secret()
     operator_env.classifier(os.environ)
     if os.environ.get("AGENTIHOOKS_CONTROLLER_TICK_SECONDS"):
         raise SwarmError(

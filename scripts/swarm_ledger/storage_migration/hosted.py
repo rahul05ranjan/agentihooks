@@ -242,6 +242,21 @@ def transfer(url: str, snapshot: dict, secret: str) -> dict:
     return {"source": manifest(snapshot), "hosted": verified, "match": True}
 
 
+def server_secret() -> str:
+    if secret := os.environ.get("SWARM_SECRET"):
+        return secret
+    base = os.environ.get("OPENBAO_URL", "").rstrip("/")
+    credential = os.environ.get("OPENBAO_TOKEN")
+    if not base or not credential:
+        raise ValueError("trusted OpenBao credentials unavailable")
+    request = urllib.request.Request(base + "/v1/secret/data/k8s/swarm", headers={"X-Vault-Token": credential})
+    with urllib.request.build_opener(NoRedirect).open(request, timeout=30) as response:
+        secret = json.load(response)["data"]["data"].get("SWARM_SECRET")
+    if not secret:
+        raise ValueError("OpenBao record k8s/swarm has no server secret")
+    return secret
+
+
 def main() -> None:
     from hooks import config  # noqa: F401
 
@@ -257,6 +272,7 @@ def main() -> None:
         parser.error("freezing requires a hosted destination")
     if args.url and not args.freeze:
         parser.error("hosted transfers require source fencing with --freeze")
+    secret = server_secret() if args.url else None
     from scripts.swarm_ledger import ledger_server
 
     repo = SQLiteLedgerRepository(args.source / DATABASE, ledger_server.core)
@@ -266,7 +282,7 @@ def main() -> None:
         if args.freeze:
             fence(repo, slug, args.url)
         snapshot = capture(repo, slug)
-        result = transfer(args.url, snapshot, os.environ["SWARM_SECRET"]) if args.url else manifest(snapshot)
+        result = transfer(args.url, snapshot, secret) if args.url else manifest(snapshot)
         print(json.dumps(result), flush=True)
 
 
