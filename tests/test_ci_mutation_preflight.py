@@ -144,6 +144,7 @@ def test_preflight_sizes_its_stats_parts_and_shards_from_the_plan():
         "shards": "${{ steps.plan.outputs.shards }}",
         "stats_parts": "${{ steps.plan.outputs.stats_parts }}",
         "bases": "${{ steps.plan.outputs.bases }}",
+        "browser": "${{ steps.plan.outputs.browser }}",
         "changed": "${{ steps.plan.outputs.changed }}",
         "graded": "${{ steps.plan.conclusion == 'success' }}",
         "open": "${{ steps.open.outputs.open }}",
@@ -196,11 +197,13 @@ def test_preflight_collects_one_stats_part_per_leg_with_the_pull_request_budget(
     job = _workflow()["jobs"]["stats"]
     assert job["timeout-minutes"] == 26
     steps, names = _steps(job)
-    select = steps[names.index("Select mutation tests before browser setup")]
     collect = steps[names.index("Collect one stats part for every mutation shard")]
-    for step in (select, collect):
-        assert step["env"]["BASES"] == "${{ needs.plan.outputs.bases }}"
-    assert select["run"] == "python -m scripts.ci_mutation." + 'browser --bases "$BASES"'
+    assert collect["env"]["BASES"] == "${{ needs.plan.outputs.bases }}"
+    selection = steps[names.index("Download planned mutation test selection")]
+    assert selection["with"]["name"] == "mutation-selection"
+    assert "Select mutation tests before browser setup" not in names
+    browser = steps[names.index("Install the browser that page tests drive")]
+    assert browser["if"] == "needs.plan.outputs.browser == 'true'"
     assert collect["env"]["PART"] == "${{ matrix.part }}"
     assert collect["env"]["PARTS"] == "${{ strategy.job-total }}"
     assert collect["run"] == (
@@ -232,7 +235,9 @@ def test_preflight_mutates_each_shard_against_the_shared_stats_with_the_pull_req
     assert names.index("Install the browser that page tests drive") < names.index(mutate["name"])
     assert steps[-1]["if"] == "always()"
     assert steps[-1]["with"]["name"] == "mutation-preflight-shard-${{ matrix.shard }}"
-    assert steps[-1]["with"]["path"] == ".mutation-gate/"
+    assert steps[-1]["with"]["path"] == (
+        "${{ job.status == 'success' && '.mutation-gate/report.json' || '.mutation-gate/' }}"
+    )
 
 
 def test_single_shard_collection_preserves_both_supported_workflow_states():

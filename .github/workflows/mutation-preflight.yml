@@ -29,6 +29,7 @@ jobs:
       shards: ${{ steps.plan.outputs.shards }}
       stats_parts: ${{ steps.plan.outputs.stats_parts }}
       bases: ${{ steps.plan.outputs.bases }}
+      browser: ${{ steps.plan.outputs.browser }}
       changed: ${{ steps.plan.outputs.changed }}
       graded: ${{ steps.plan.conclusion == 'success' }}
       open: ${{ steps.open.outputs.open }}
@@ -120,6 +121,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python -m scripts.ci_mutation.plan --base "$BASE"
+
+      - name: Upload planned mutation test selection
+        if: steps.open.outputs.open != 'true' && steps.reuse.outputs.reused != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-selection
+          path: .mutation-selection.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
 
   # A branch that adds only failing tests has no mutants and may reuse a green report, so its touched tests run here.
   touched-tests:
@@ -213,15 +224,14 @@ jobs:
       - name: Install dependencies
         run: uv pip install --system --excludes .github/test-excludes.txt -e ".[dev,all]"
 
-      - name: Select mutation tests before browser setup
-        id: selection
-        env:
-          BASES: ${{ needs.plan.outputs.bases }}
-        run: python -m scripts.ci_mutation.browser --bases "$BASES"
+      - name: Download planned mutation test selection
+        uses: actions/download-artifact@v4
+        with:
+          name: mutation-selection
 
       - name: Install the browser that page tests drive
         id: browser
-        if: steps.selection.outputs.browser == 'true'
+        if: needs.plan.outputs.browser == 'true'
         timeout-minutes: 6
         uses: ./.github/actions/browser-cache
 
@@ -351,15 +361,14 @@ jobs:
       - name: Install dependencies
         run: uv pip install --system --excludes .github/test-excludes.txt -e ".[dev,all]"
 
-      - name: Select mutation tests before browser setup
-        id: selection
-        env:
-          BASES: ${{ needs.plan.outputs.bases }}
-        run: python -m scripts.ci_mutation.browser --bases "$BASES"
+      - name: Download planned mutation test selection
+        uses: actions/download-artifact@v4
+        with:
+          name: mutation-selection
 
       - name: Install the browser that page tests drive
         id: browser
-        if: steps.selection.outputs.browser == 'true'
+        if: needs.plan.outputs.browser == 'true'
         timeout-minutes: 6
         uses: ./.github/actions/browser-cache
 
@@ -395,7 +404,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mutation-preflight-shard-${{ matrix.shard }}
-          path: .mutation-gate/
+          path: ${{ job.status == 'success' && '.mutation-gate/report.json' || '.mutation-gate/' }}
           include-hidden-files: true
           retention-days: 7
           overwrite: true
