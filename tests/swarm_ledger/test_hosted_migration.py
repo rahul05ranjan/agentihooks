@@ -152,3 +152,45 @@ def test_manifest_changes_when_history_or_media_changes(stores):
     changed = copy.deepcopy(snapshot)
     changed["files"].clear()
     assert hosted.manifest(changed)["digest"] != expected["digest"]
+
+
+def test_frozen_uploads_and_cleanup_preserve_fallback_files(stores, monkeypatch):
+    from scripts.swarm_ledger import ledger_artifacts, ledger_media
+
+    source, _ = stores
+    monkeypatch.setattr(ledger_media.core, "LEDGER_DIR", source.directory)
+    hosted.fence(source, "migration-proof", "https://hosted.example")
+    folder = source.directory / "migration-proof.media"
+    existing = next(folder.iterdir())
+    import os
+
+    os.utime(existing, (0, 0))
+    with pytest.raises(ledger_media.Refused, match="hosted"):
+        ledger_media.write_file(folder / ("a" * 64 + ".md"), b"new content")
+    with pytest.raises(ledger_media.Refused, match="hosted"):
+        ledger_artifacts.store("migration-proof", "new.md", b"new content")
+    ledger_media.sweep("migration-proof", set(), 10**12)
+    ledger_media.purge("migration-proof")
+    doc = {"artifacts": [], "artifact_trash": [{"file": {"id": existing.name}, "deleted_at": 0}]}
+    before = copy.deepcopy(doc)
+    ledger_artifacts.sweep("migration-proof", doc, SimpleNamespace(at=10**12, dropped=[], dirty=False))
+    assert doc == before
+    assert existing.read_bytes() == b"An artifact kept with its ledger."
+    ledger_media.write_file(source.directory / "another-ledger.media" / ("b" * 64 + ".md"), b"allowed")
+
+
+def test_hosted_command_requires_source_fencing_before_transfer(monkeypatch, tmp_path):
+    import sys
+
+    monkeypatch.setattr(sys, "argv", ["migration", "--source", str(tmp_path), "--url", "https://hosted.example"])
+    with pytest.raises(SystemExit, match="2"):
+        hosted.main()
+
+
+def test_migration_inventory_prints_only_the_source_manifest(stores, monkeypatch, capsys):
+    import sys
+
+    source, _ = stores
+    monkeypatch.setattr(sys, "argv", ["migration", "--source", str(source.directory)])
+    hosted.main()
+    assert json.loads(capsys.readouterr().out) == hosted.manifest(hosted.capture(source, "migration-proof"))
