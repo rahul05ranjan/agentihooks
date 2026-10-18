@@ -356,7 +356,7 @@ def test_staged_publisher_proof_includes_the_old_queue_seed_dependency_assertion
 
 def test_staged_promotion_proof_accepts_squash_and_preserves_the_exact_merge_request(tmp_path):
     root = Path(__file__).resolve().parents[2]
-    source = (root / "tests/contracts/promotion/promote.cjs").read_text().split("\\ntest(", 1)[0]
+    source = (root / "tests/contracts/promotion/promote.cjs").read_text().split("\ntest(", 1)[0]
     source = source.replace(
         "require('../../../.github/scripts/promote.cjs')",
         "require(" + json.dumps(str(root / ".github/scripts/promote.cjs")) + ")",
