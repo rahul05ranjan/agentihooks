@@ -493,6 +493,36 @@ def test_shards_wait_only_on_the_durations_lookup():
     assert jobs["lint"]["needs"] in (["reuse"], ["reuse", "admission"])
 
 
+def test_suite_speed_contracts_admit_both_unit_paths_before_any_shard_starts():
+    from tests.contracts.ci_tiers.test_workflow import enabled
+
+    jobs = _workflow()["jobs"]
+    early = jobs["suite-speed"]
+    assert early["if"] == "github.event_name == 'pull_request'"
+    assert not early.get("needs")
+    assert early["timeout-minutes"] <= 5
+    run = next(step for step in early["steps"] if step.get("name") == "Run suite speed contracts")
+    assert "python -m pytest tests/test_suite_speed.py" in run["run"]
+    assert "-n 0" in run["run"]
+    assert run["if"] == "steps.changed.outputs.tests == 'true'"
+    for name in ("unit", "unit-selected"):
+        assert "suite-speed" in jobs[name]["needs"]
+        for result in ("failure", "cancelled", "skipped"):
+            needs = {
+                "suite-speed": type("Need", (), {"result": result})(),
+                "select": type(
+                    "Need",
+                    (),
+                    {
+                        "result": "success",
+                        "outputs": type("Outputs", (), {"scope": "full" if name == "unit" else "selected"})(),
+                    },
+                )(),
+            }
+            assert not enabled(jobs[name]["if"], "pull_request", needs)
+    assert "suite-speed" in jobs["gate-required"]["needs"]
+
+
 def test_full_suite_collection_starts_beside_selection_and_feeds_split():
     jobs = _workflow()["jobs"]
     assert "collect" not in jobs
