@@ -52,24 +52,36 @@ def test_a_line_the_base_ran_and_the_head_no_longer_runs_is_lost():
     assert result.lost == {"hooks/a.py": [3]}
 
 
-@pytest.mark.parametrize("line_count", [199, 200, 500])
-@pytest.mark.parametrize("changed_first_line", [False, True])
-def test_repeated_statement_coverage_loss_is_graded_in_long_files(line_count, changed_first_line):
+@pytest.mark.parametrize("head_lines", [199, 200, 500])
+@pytest.mark.parametrize("insert_first_line", [False, True])
+@pytest.mark.parametrize("disable_autojunk", [False, True])
+def test_repeated_statement_coverage_loss_is_graded_in_long_files(
+    monkeypatch, head_lines, insert_first_line, disable_autojunk
+):
+    from tests import coverage_grade
+
+    monkeypatch.setattr(coverage_grade, "line_map", coverage_grade.line_map.__wrapped__)
+    if disable_autojunk:
+        matcher = coverage_grade.difflib.SequenceMatcher
+        monkeypatch.setattr(coverage_grade.difflib, "SequenceMatcher", lambda *args: matcher(*args, autojunk=False))
+    offset = int(insert_first_line)
+    line_count = head_lines - offset
     source = "value = 1\n" * line_count
-    head_source = "value = 2\n" + source.split("\n", 1)[1] if changed_first_line else source
+    head_source = "inserted = 2\n" + source if insert_first_line else source
     lost_line = line_count // 2
     covered = set(range(1, line_count + 1))
+    head_covered = {line + offset for line in covered - {lost_line}}
     base = _measure("repeated-base", {"hooks/repeated.py": covered}, {"hooks/repeated.py": source})
-    result = ratchet.grade({"hooks/repeated.py": covered - {lost_line}}, lambda path: head_source, iter([base]))
+    result = ratchet.grade({"hooks/repeated.py": head_covered}, lambda path: head_source, iter([base]))
     output = ratchet.report(
         result,
-        {"hooks/repeated.py": [lost_line]},
-        {"hooks/repeated.py": line_count - 1},
+        {"hooks/repeated.py": [lost_line + offset]},
+        {"hooks/repeated.py": len(head_covered)},
         {"hooks/repeated.py": line_count},
     )
     assert result.lost == {"hooks/repeated.py": [lost_line]}, (
-        f"lines={line_count}, changed_first_line={changed_first_line}, lost_line={lost_line}\n"
-        f"mapped_lines={len(ratchet.line_map(source, head_source))}\n{output}"
+        f"head_lines={head_lines}, insert_first_line={insert_first_line}, disable_autojunk={disable_autojunk}\n"
+        f"mapped_lines={len(coverage_grade.line_map(source, head_source))}\n{output}"
     )
 
 
