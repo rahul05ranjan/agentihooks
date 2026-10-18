@@ -142,6 +142,7 @@ def test_no_script_a_step_runs_calls_the_api():
         ".github/actions/browser-cache/select-artifacts.sh",
         ".github/actions/browser-cache/verify.sh",
         ".github/coverage/combine.sh",
+        ".github/coverage/flatten.py",
         ".github/coverage/proxy.py",
         ".github/coverage/sonar-retry.sh",
         "deploy/helm/agentihooks-swarm/ci/kind-smoke.sh",
@@ -205,6 +206,7 @@ def test_no_script_a_step_runs_calls_the_api():
         "tests/flake_ledger.py",
         "tests/routing/test_codex_api.py",
         "tests/shards.py",
+        "tests/test_suite_speed.py",
         "scripts/ci_reuse.py",
         "scripts/ci_runner_classes.py",
     ]

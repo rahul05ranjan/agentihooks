@@ -133,6 +133,7 @@ class Placed:
     route_kind: str = "subscription"
     transport: str = ""
     execution: AgentRecord | None = None
+    remote_control: dict = field(default_factory=dict)
 
 
 class Ledger(Protocol):
@@ -211,6 +212,7 @@ def tick(slug, store, ledger, runtime, now_ms):
     actions += skip_refused(_orphans, slug, store, ledger, rows)
     actions += skip_refused(dev_red.reopen_pass, slug, config, store, ledger, rows)
     actions += skip_refused(promotion_watch.refresh, slug, config, store, ledger, doc, now_ms)
+    actions += skip_refused(release_wait.alert_pass, slug, config, ledger, doc)
     actions += skip_refused(difficulty.size_pass, slug, ledger, doc)
     actions += skip_refused(grouping.release_pass, slug, store, ledger, doc)
     actions += skip_refused(dispatcher.group, slug, config, store, ledger, doc, now_ms)
@@ -1123,6 +1125,7 @@ def placed_record(record, placed):
         launch_timings=placed.launch_timings,
         route_kind=placed.route_kind,
         transport=placed.transport or record.transport,
+        remote_control=placed.remote_control or record.remote_control,
         state="working",
     )
 
