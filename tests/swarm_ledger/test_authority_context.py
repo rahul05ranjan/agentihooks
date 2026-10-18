@@ -24,57 +24,71 @@ def test_trusted_authority_derives_worker_tokens_without_entering_the_environmen
     assert authority_context.secret() is None
 
 
-def child_launches():
+def source_aliases(tree):
+    result = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            result.update({item.asname or item.name: item.name for item in node.names})
+        elif isinstance(node, ast.ImportFrom):
+            result.update({item.asname or item.name: f"{node.module}.{item.name}" for item in node.names})
+    return result
+
+
+def source_calls():
     root = Path(__file__).resolve().parents[2]
     result = []
     for folder in (root / "scripts", root / "hooks"):
         for path in folder.rglob("*.py"):
             tree = ast.parse(path.read_text(encoding="utf-8"))
-            aliases = {}
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    aliases.update({item.asname or item.name: item.name for item in node.names})
-                elif isinstance(node, ast.ImportFrom) and node.module in ("subprocess", "asyncio", "os"):
-                    aliases.update({item.asname or item.name: f"{node.module}.{item.name}" for item in node.names})
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.Call):
-                    continue
+            aliases = source_aliases(tree)
+            functions = [node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
+            for node in (item for item in ast.walk(tree) if isinstance(item, ast.Call)):
                 name = ast.unparse(node.func)
                 first, dot, rest = name.partition(".")
                 name = aliases.get(first, first) + (dot + rest if dot else "")
-                if name.startswith(
-                    (
-                        "subprocess.",
-                        "asyncio.create_subprocess",
-                        "os.spawn",
-                        "os.posix_spawn",
-                        "os.exec",
-                        "os.fork",
-                        "os.system",
-                        "os.popen",
-                    )
-                ):
-                    if name not in (
-                        "subprocess.CompletedProcess",
-                        "subprocess.TimeoutExpired",
-                        "subprocess.CalledProcessError",
-                        "subprocess.list2cmdline",
-                        "subprocess.SubprocessError",
-                    ):
-                        result.append(f"{path.relative_to(root)}:{node.lineno}:{name}")
-    return sorted(result)
+                owners = [item for item in functions if item.lineno <= node.lineno <= item.end_lineno]
+                owner = min(owners, key=lambda item: item.end_lineno - item.lineno).name if owners else "<module>"
+                result.append((str(path.relative_to(root)), node.lineno, name, owner))
+    return result
+
+
+def child_launches(calls):
+    excluded = {
+        "subprocess.CompletedProcess",
+        "subprocess.TimeoutExpired",
+        "subprocess.CalledProcessError",
+        "subprocess.list2cmdline",
+        "subprocess.SubprocessError",
+    }
+    prefixes = (
+        "subprocess.",
+        "asyncio.create_subprocess",
+        "os.spawn",
+        "os.posix_spawn",
+        "os.exec",
+        "os.fork",
+        "os.system",
+        "os.popen",
+    )
+    return sorted(
+        f"{path}:{line}:{name}" for path, line, name, _ in calls if name.startswith(prefixes) and name not in excluded
+    )
 
 
 def test_every_discovered_child_launch_inherits_no_server_authority(monkeypatch, capsys):
     secret = secrets.token_hex(32)
     monkeypatch.setenv("SWARM_SECRET", secret)
-    launches = child_launches()
+    calls = source_calls()
+    launches = child_launches(calls)
     assert launches
+    readers = {
+        f"{path}:{owner}" for path, _, name, owner in calls if name == "scripts.swarm_ledger.authority_context.secret"
+    }
+    assert readers == {"scripts/swarm_ledger/ledger.py:derived_token", "scripts/swarm/runtime.py:_ledger_token"}
     print(json.dumps({"child_launch_paths": launches}))
     code = "import os; from scripts.swarm_ledger import authority_context; print(bool(os.environ.get('SWARM_SECRET') or authority_context.secret()))"
     with authority_context.bound(secret):
-        for _ in launches:
-            assert "SWARM_SECRET" not in dict(os.environ)
+        assert "SWARM_SECRET" not in dict(os.environ)
         result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
         assert result.stdout.strip() == "False"
         with subprocess.Popen(
