@@ -178,7 +178,7 @@ SCALING_KEYS = {
     "load-low": "load_low",
     "memory-per-agent": "memory_per_agent_mb",
 }
-ADDRESS_KEYS = {"api-url": "api_url"}
+ADDRESS_KEYS = {"api-url": "api_url", "api-url-pending": "pending_api_url"}
 NO_API_ADDRESS = "api-url takes an http or https address with a host and no credentials"
 TRANSPORT_KEYS = {"codex-inbox-transport": "codex_inbox_transport"}
 ON_OFF = {"on": True, "off": False}
@@ -502,19 +502,21 @@ def cmd_tick(store, args):
     if why := timer.installed_refusal():
         raise SwarmError(f"the tick refused to run: {why}")
     operator_env.fill(os.environ)
+    if os.environ.get("AGENTIHOOKS_CONTROLLER_TICK_SECONDS"):
+        raise SwarmError(
+            "the tick refused to run: AGENTIHOOKS_CONTROLLER_TICK_SECONDS is for controller installs, "
+            "and the host timer ticks every 60 seconds"
+        )
+    slugs = store.slugs()
     value = None
-    if os.environ.get("SWARM_URL"):
+    if os.environ.get("SWARM_URL") or any(
+        store.config(slug).api_url or store.config(slug).pending_api_url for slug in slugs
+    ):
         from scripts.swarm_ledger.storage_migration.hosted import server_secret
 
         value = server_secret()
     with authority_context.bound(value):
         operator_env.classifier(os.environ)
-        if os.environ.get("AGENTIHOOKS_CONTROLLER_TICK_SECONDS"):
-            raise SwarmError(
-                "the tick refused to run: AGENTIHOOKS_CONTROLLER_TICK_SECONDS is for controller installs, "
-                "and the host timer ticks every 60 seconds"
-            )
-        slugs = store.slugs()
         if slugs:
             _reconcile_services()
             firsts, until = _Firsts(len(slugs)), time.monotonic() + EXTRA_TICKS_UNTIL
