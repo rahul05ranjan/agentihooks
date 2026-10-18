@@ -1546,3 +1546,25 @@ died reopens its own conversation in the same seat; if that cannot resume, the h
 successor's context. Recovery preserves the existing task claim. A changed claim owner or execution
 generation, expired claim lease or changed seat occupant fences out the old agent, so recovery cannot
 resume work already taken by a successor.
+
+### Staged compatibility before admission
+
+A tests-first prerequisite stays unqueued until its scoped implementation and compatibility inventory are final. Keep both pull requests running CI in parallel. Include affected contracts outside the edited module, such as the publisher's queue seed dependency assertion and the promotion merge method. The owner's completion declaration attests that all planned prerequisite edits are finished; CI proves the combined candidate on the recorded heads.
+
+Add one declaration to the body of both pull requests:
+
+```text
+<!-- staged-compatibility
+{
+  "complete": true,
+  "prerequisite": {"url": "https://github.com/OWNER/REPO/pull/123", "head": "FULL_PREREQUISITE_HEAD"},
+  "candidate": {"url": "https://github.com/OWNER/REPO/pull/124", "head": "FULL_CANDIDATE_HEAD"},
+  "run": "https://github.com/OWNER/REPO/actions/runs/456",
+  "contracts": ["Affected compatibility job name", "Other affected contract family job"]
+}
+-->
+```
+
+Use the exact successful job names from a completed CI run on the candidate head. The candidate must contain the exact prerequisite commit. Both pull requests and the run belong to the same repository. A prerequisite can enter the queue after this proof succeeds; its candidate waits until that prerequisite has merged. The prerequisite head must still match after a squash merge. If either head, the scoped implementation or the inventory changes, complete the edits, regenerate the affected proof and update both declarations before admission.
+
+`swarm ready` refuses an incomplete declaration before releasing its owner. `merge queue` checks it again against live GitHub heads immediately before admission, including admissions by the ready merge pass and queue priority path. A missing or unsuccessful contract job, an unreadable proof, or a stale head names the missing piece. Pull requests without a declaration retain their existing admission behavior. Required checks, reviews and the queue unit suite retain their current policy; the proof adds no slow suite to the pull request tier.
