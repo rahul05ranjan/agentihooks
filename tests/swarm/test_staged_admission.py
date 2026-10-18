@@ -420,9 +420,10 @@ def evidence_runner(responses, endpoints):
     return run, calls
 
 
-def test_ready_accepts_complete_proof_on_its_observed_head(monkeypatch):
+@pytest.mark.parametrize("suffix", ["", "\n<!-- unrelated metadata -->"])
+def test_ready_accepts_complete_proof_on_its_observed_head(monkeypatch, suffix):
     proof, endpoints = staged("promotion API contracts")
-    pull = ledger_events.pull_request({"state": "OPEN", "headRefOid": HEAD, "body": body(proof)})
+    pull = ledger_events.pull_request({"state": "OPEN", "headRefOid": HEAD, "body": body(proof) + suffix})
     agent = AgentRecord(name="ci-1", lane="ci", task="t1")
     monkeypatch.setattr(ready.stack, "shell", lambda cmd: subprocess.CompletedProcess(cmd, 0, "false"))
     monkeypatch.setattr(ready, "_checkout", lambda *args: "/worktree")
