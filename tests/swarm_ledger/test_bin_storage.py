@@ -5,7 +5,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "swarm_ledger"))
 
-from scripts.swarm_ledger.repository import bin_storage, repository
+from scripts.swarm_ledger.repository import bin_storage
+from scripts.swarm_ledger.storage import default as default_repository
+
+repository = default_repository()
 
 
 @pytest.fixture(autouse=True)

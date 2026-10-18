@@ -55,7 +55,7 @@ def test_a_built_repository_stores_at_the_path_it_was_given(tmp_path):
     built = storage.build(tmp_path / storage.DATABASE)
     built.import_document("composed", document())
     assert built.path == tmp_path / storage.DATABASE
-    assert storage.read_document(tmp_path, "composed") == document()
+    assert storage.read_slugs(tmp_path) == ["composed"]
 
 
 def test_the_relay_journal_holds_releases_and_drops_revisions(tmp_path):
