@@ -614,7 +614,9 @@ def test_planning_refuses_an_unmatched_module_before_publishing_statistics(tmp_p
         ("def test_sdk():\n    import mcp\n", True, False),
     ],
 )
-def test_planning_checks_selected_test_collection_and_worker_contracts(tmp_path, monkeypatch, imports, grouped, refused):
+def test_planning_checks_selected_test_collection_and_worker_contracts(
+    tmp_path, monkeypatch, imports, grouped, refused
+):
     _project(tmp_path, {})
     group = 'pytestmark = pytest.mark.xdist_group("mcp-sdk")\n' if grouped else ""
     (tmp_path / "tests/test_sample.py").write_text("from scripts.sample import f\n" + group + imports)
