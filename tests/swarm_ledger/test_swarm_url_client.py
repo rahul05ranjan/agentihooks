@@ -14,7 +14,7 @@ WORKER = "engineer@323133-0001"
 SEED = "seed-one"
 PARTS = ("id-one.access", "part-two")
 ACCESS = dict(zip(("SWARM_ACCESS_CLIENT_ID", "SWARM_ACCESS_CLIENT_SECRET"), PARTS))
-SENT = dict(zip(("CF-Access-Client-Id", "CF-Access-Client-Secret"), PARTS))
+SENT = {**dict(zip(("CF-Access-Client-Id", "CF-Access-Client-Secret"), PARTS)), "User-Agent": "agentihooks-swarm"}
 
 
 @pytest.fixture
