@@ -86,6 +86,7 @@ def _aggregator_problems(
                     {"queue_tier": True, "consolidated": True},
                     {"queue_tier": True, "promotion": True, "consolidated": True},
                     {"queue_tier": True, "promotion": True, "consolidated": True, "suite_speed": True},
+                    {"queue_tier": True, "promotion": True, "consolidated": True, "suite_speed": True, "docs": True},
                 )
                 for summary in (False, True)
             ]

@@ -800,8 +800,9 @@ def test_the_promotion_gate_form_is_an_allowed_transition(weakened, promotion):
     assert bool(problems) == weakened, problems
 
 
+@pytest.mark.parametrize("docs", [False, True])
 @pytest.mark.parametrize("weakened", [False, True])
-def test_the_early_suite_speed_gate_form_is_an_allowed_strict_transition(weakened):
+def test_the_early_suite_speed_gate_form_is_an_allowed_strict_transition(weakened, docs):
     from scripts import ci_reuse
 
     base = _workflow()
@@ -809,7 +810,7 @@ def test_the_early_suite_speed_gate_form_is_an_allowed_strict_transition(weakene
     base["jobs"]["gate-required"]["steps"] = ci_reuse.gate_steps()
     head = copy.deepcopy(base)
     head["jobs"]["gate-required"]["steps"] = ci_reuse.gate_steps(
-        queue_tier=True, promotion=True, consolidated=True, suite_speed=True
+        queue_tier=True, promotion=True, consolidated=True, suite_speed=True, docs=docs
     )
     if weakened:
         head["jobs"]["gate-required"]["steps"][0]["run"] += "true\n"
