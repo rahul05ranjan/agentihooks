@@ -223,6 +223,7 @@ def test_the_tick_fills_its_environment_before_any_spawn(tmp_path, monkeypatch):
 
 
 def test_remote_tick_loads_the_server_secret_before_processing_ledgers(tmp_path, monkeypatch):
+    from scripts.swarm_ledger import authority_context
     from scripts.swarm_ledger.storage_migration import hosted
 
     _home(tmp_path)
@@ -235,11 +236,12 @@ def test_remote_tick_loads_the_server_secret_before_processing_ledgers(tmp_path,
 
     class Store:
         def slugs(self):
-            seen.append(os.environ.get("SWARM_SECRET"))
+            seen.append((os.environ.get("SWARM_SECRET"), authority_context.secret()))
             return []
 
     swarm_cli.cmd_tick(Store(), None)
-    assert seen == [trusted]
+    assert seen == [(None, trusted)]
+    assert authority_context.secret() is None
 
 
 def _launcher(tmp_path, environ):
