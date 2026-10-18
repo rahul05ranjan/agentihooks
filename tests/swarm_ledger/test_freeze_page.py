@@ -1,3 +1,5 @@
+import copy
+
 import pytest
 
 from tests.swarm_ledger.ledger_page import fulfill_events, is_events, ledger_state, loaded, serve_modules, shell_html
@@ -51,6 +53,7 @@ def page(browser, request):
     html = shell_html().replace("__LEDGER_PAGE__", ledger_server.served_version())
     sent = {"ops": [], "changes": []}
     freezes = list(setup["freezes"])
+    doc = copy.deepcopy({**DOC, **setup.get("doc", {})})
 
     def answer(route):
         if route.request.url == URL:
@@ -59,6 +62,9 @@ def page(browser, request):
             body = route.request.post_data_json
             sent["ops"].extend(body.get("ops", []))
             sent["changes"].extend(body.get("changes", []))
+            for change in body.get("changes", []):
+                kind, item, field = change["path"].split("/")
+                next(row for row in doc[kind] if row["id"] == item)[field] = change["value"]
             for op in body.get("ops", []):
                 if op["op"] == "freeze_set":
                     freezes.append(freeze(op["target"], op["verb"]))
@@ -72,7 +78,7 @@ def page(browser, request):
     serve_modules(context)
     context.route(
         is_events,
-        lambda route: fulfill_events(route, ledger_state({**DOC, **setup.get("doc", {}), "freezes": freezes}), SWARM),
+        lambda route: fulfill_events(route, ledger_state({**doc, "freezes": freezes}), SWARM),
     )
     tab = context.new_page()
     tab.set_default_timeout(3000)
