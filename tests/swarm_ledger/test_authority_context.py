@@ -30,13 +30,18 @@ def test_trusted_authority_derives_worker_tokens_without_entering_the_environmen
     assert authority_context.secret() is None
 
 
-def source_aliases(tree):
+def source_aliases(tree, package):
     result = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             result.update({item.asname or item.name: item.name for item in node.names})
         elif isinstance(node, ast.ImportFrom):
-            result.update({item.asname or item.name: f"{node.module}.{item.name}" for item in node.names})
+            parents = package.split(".")
+            base = parents[: len(parents) - node.level + 1] if node.level else []
+            module = ".".join([*base, node.module or ""]).strip(".")
+            if module == "scripts.swarm_ledger.authority_context":
+                assert all(item.name != "*" for item in node.names)
+            result.update({item.asname or item.name: f"{module}.{item.name}" for item in node.names})
     return result
 
 
@@ -46,7 +51,7 @@ def source_calls():
     for folder in (root / "scripts", root / "hooks"):
         for path in folder.rglob("*.py"):
             tree = ast.parse(path.read_text(encoding="utf-8"))
-            aliases = source_aliases(tree)
+            aliases = source_aliases(tree, ".".join(path.parent.relative_to(root).parts))
             functions = [node for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
             for node in (item for item in ast.walk(tree) if isinstance(item, ast.Call)):
                 name = ast.unparse(node.func)
