@@ -311,6 +311,23 @@ def test_real_git_repositories_remain_independent_with_bounded_identity_reads(li
     assert reads == ["--git-common-dir", "--git-common-dir"]
 
 
+def test_first_owner_lookup_after_watcher_import_does_not_capture_a_temporary_runner(tmp_path):
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+    code = """
+import sys
+from unittest.mock import patch
+from scripts.swarm import promotion_watch
+
+with patch("subprocess.run", side_effect=AssertionError("temporary runner retained")):
+    from scripts.swarm import promotion_owner
+    print(promotion_owner.repository(sys.argv[1]))
+"""
+    result = subprocess.run([sys.executable, "-c", code, str(repo)], capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str((repo / ".git").resolve())
+
+
 def test_intake_leaves_patched_subprocess_and_lua_scripts_untouched(linked, monkeypatch):
     store, ledger = linked
 
