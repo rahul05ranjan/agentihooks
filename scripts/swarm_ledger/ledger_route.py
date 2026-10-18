@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
 
+from scripts.gates import Who
 from scripts.swarm.store import RedisStore
 
 CURRENT: ContextVar[tuple[str, str] | None] = ContextVar("ledger_route", default=None)
@@ -39,11 +40,20 @@ def session(slug: str) -> Iterator[None]:
         store = connect()
         with scoped(slug, store.config(slug).api_url):
             yield
-            from scripts.gates import Who
             from scripts.swarm import ledger_cutover
 
             ledger_cutover.acknowledge(store, slug, Who.from_env())
     else:
+        yield
+
+
+@contextmanager
+def command(store: RedisStore, slug: str, who: Who) -> Iterator[None]:
+    with scoped(slug, configured(store, slug) if slug else ""):
+        if slug:
+            from scripts.swarm import ledger_cutover
+
+            ledger_cutover.acknowledge(store, slug, who)
         yield
 
 
