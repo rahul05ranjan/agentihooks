@@ -12,7 +12,6 @@ from scripts.doctor.priming import doctor_slug
 from scripts.swarm import naming
 from scripts.swarm.store import PREFIX, RedisStore
 
-
 if TYPE_CHECKING:
     from redis import Redis
 
