@@ -248,6 +248,31 @@ def test_park_writes_the_open_dependencies_and_the_stacked_base(parked, capsys):
     }
 
 
+def test_a_read_only_task_releases_its_seat_without_a_branch_or_worktree(parked, capsys):
+    store, ledger, _, shell, doc = parked
+    ledger.rows["t1"].update({"kind": "tune", "branch": "", "issue_url": ""})
+    assert park(doc) == 0
+    assert ("t1", {"parked_on": ["a"]}, AGENT) in ledger.updates
+    assert ledger.rows["t1"]["parked_on"] == ["a"] and "stacked_base" not in ledger.rows["t1"]
+    assert shell.calls == []
+    assert ("sw", "t1", stack.READ_ONLY_NOTE.format(names="Build the parser"), AGENT) in ledger.comments
+    assert store.handoff("sw", "t1") == doc.read_text()
+    assert [a.state for a in store.agents("sw") if a.name == AGENT] == ["finished"]
+    assert json.loads(capsys.readouterr().out) == {
+        "task": "t1",
+        "parked_on": ["a"],
+        "worktree_removed": "",
+        "next": "stop now; the task waits on its dependencies and the next engineer continues it",
+    }
+
+
+def test_a_read_only_task_with_no_open_dependency_is_refused(parked, capsys):
+    ledger = parked[1]
+    ledger.rows["t1"].update({"kind": "tune", "branch": ""})
+    ledger.rows["a"]["state"] = "done"
+    _refused(parked, capsys, "the task waits on no open dependency; finish it, or hand it off for its window")
+
+
 @pytest.mark.parametrize("repo", [None, "https://github.com/o/other"])
 def test_park_accepts_an_open_dependency_merged_into_dev_after_its_branch_is_deleted(parked, monkeypatch, repo):
     _, ledger, _, shell, doc = parked

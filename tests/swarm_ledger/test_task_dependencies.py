@@ -60,6 +60,30 @@ def test_claim_without_dependencies_still_applies():
     assert (live["state"], live["claimed_by"], ctx.dirty) == ("claimed", "engineer-next", True)
 
 
+@pytest.mark.parametrize("kind", ["code", "ci", None])
+@pytest.mark.parametrize(("state", "eligible"), [("claimed", False), ("pr", False), ("done", True)])
+def test_a_tune_task_waits_for_its_code_dependency_to_be_done(kind, state, eligible):
+    work = {"id": "work", "title": "measure", "lane": "ci", "kind": "tune", "state": "open", "claimed_by": ""}
+    dep = {"id": "dep", "state": state, "branch": "feature", **({"kind": kind} if kind else {})}
+    work["depends_on"] = ["dep"]
+
+    live, ctx = claim({"tasks": [work, dep]})
+
+    assert (live["state"], live["claimed_by"]) == (("claimed", "engineer-next") if eligible else ("open", ""))
+    assert ctx.dirty == eligible
+
+
+@pytest.mark.parametrize(("work_kind", "dep_kind"), [("tune", "tune"), ("tune", "research"), ("code", "code")])
+def test_other_kind_pairs_still_stack_on_a_claimed_dependency_branch(work_kind, dep_kind):
+    work = {"id": "work", "title": "x", "lane": "eng", "kind": work_kind, "state": "open", "claimed_by": ""}
+    dep = {"id": "dep", "state": "claimed", "branch": "feature", "kind": dep_kind}
+    work["depends_on"] = ["dep"]
+
+    live, ctx = claim({"tasks": [work, dep]})
+
+    assert (live["state"], live["claimed_by"], ctx.dirty) == ("claimed", "engineer-next", True)
+
+
 @pytest.mark.parametrize("state", ["claimed", "pr"])
 def test_retained_pull_claim_waits_for_all_dependencies_to_finish(state):
     work = {
