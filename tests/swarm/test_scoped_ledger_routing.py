@@ -6,7 +6,7 @@ import pytest
 
 from scripts.swarm import cli, lease
 from scripts.swarm.store import RedisStore, SwarmConfig
-from scripts.swarm_ledger import ledger, ledger_link, ledger_route
+from scripts.swarm_ledger import authority_context, ledger, ledger_link, ledger_route
 
 pytestmark = pytest.mark.xdist_group("fakeredis")
 
@@ -41,7 +41,7 @@ def test_only_the_selected_tick_uses_the_hosted_ledger(store, monkeypatch):
         return False
 
     monkeypatch.setattr(cli.outage, "ledger_health", probe)
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with authority_context.bound("trusted-tick-fixture"), ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(lambda slug: cli.run_tick(store, slug, runtime=object()), ("selected", "other")))
     assert results == [["Ledger health probe failed"], ["Ledger health probe failed"]]
     assert seen == {

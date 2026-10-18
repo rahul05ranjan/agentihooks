@@ -158,7 +158,12 @@ class LedgerClient:
         LedgerClient(service=True)._call(slug, [op])
 
     def notify(self, slug, text):
-        self._call(slug, [_op("notice", "swarm", text=text)])
+        from scripts.gates import Who
+        from scripts.swarm_ledger import ledger_link
+
+        who = Who.from_env()
+        author = who.name if ledger_link.remote(slug=slug) and who.pinned else "swarm"
+        self._call(slug, [_op("notice", author, text=text)])
 
     def raise_alert(self, slug, source, text):
         self._call(slug, [_op("alert_raise", "swarm", source=source, text=text)])

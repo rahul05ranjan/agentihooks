@@ -45,3 +45,17 @@ def tick(function: Callable) -> Callable:
             return function(store, slug, *args, **kwargs)
 
     return routed
+
+
+def service(function: Callable) -> Callable:
+    @tick
+    @wraps(function)
+    def trusted(store, slug, *args, **kwargs):
+        from scripts.swarm_ledger.authority_context import tick_headers
+
+        pending = store.redis.hget(store.key(slug, "config"), "pending_api_url")
+        if (url(slug) or pending) and not tick_headers(slug):
+            return ["the host tick will apply the settings"]
+        return function(store, slug, *args, **kwargs)
+
+    return trusted
