@@ -390,6 +390,22 @@ def control_argv(body):
     return ["set", *pairs]
 
 
+def effort_refusal(slug, body):
+    if body.get("action") != "set" or not {"effort_min", "effort_max"} & set(body):
+        return None
+    from redis import RedisError
+
+    from scripts.swarm import effort_range
+    from scripts.swarm.store import SwarmError
+
+    try:
+        config = swarm_store().config(slug)
+    except (SwarmError, RedisError):
+        return None
+    bounds = (body.get("effort_min", config.effort_min), body.get("effort_max", config.effort_max))
+    return effort_range.refusal(bounds, config.lanes)
+
+
 def scaling_pairs(body):
     pairs = []
     if "scaling" in body:
@@ -950,6 +966,8 @@ class Handler(BaseHTTPRequestHandler):
                 control = functools.partial(refresh_quota, slug)
             else:
                 command, argv = ("doctor", DOCTOR[action]) if action in DOCTOR else ("swarm", control_argv(body))
+                if refused := effort_refusal(slug, body):
+                    raise ValueError(refused)
                 control = functools.partial(swarm_control, slug, argv, command)
         except ValueError as exc:
             return self.send(400, str(exc), "text/plain")

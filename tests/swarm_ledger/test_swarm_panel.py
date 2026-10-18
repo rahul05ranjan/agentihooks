@@ -566,7 +566,7 @@ class SwarmPanel(unittest.TestCase):
             },
         )
 
-    def test_effort_steps_move_one_level_and_never_cross(self):
+    def test_effort_steps_move_one_level_within_the_published_ladder(self):
         values = {"effort_min": "medium", "effort_max": "high"}
         steps = [("effort_min", False), ("effort_min", True), ("effort_max", True), ("effort_max", False)]
         out = self.run_js(
@@ -580,7 +580,7 @@ class SwarmPanel(unittest.TestCase):
         )
         meet = {"effort_min": "high", "effort_max": "high"}
         out = self.run_js(["capStep"], f"[capStep({json.dumps(meet)}, 'effort_min', true, LIMITS)]")
-        self.assertEqual(out, [{"effort_min": "high"}])
+        self.assertEqual(out, [{"effort_min": "xhigh"}])
         edges = {"effort_min": "low", "effort_max": "max"}
         out = self.run_js(["capBounds"], f"capBounds({json.dumps(edges)}, LIMITS)")
         self.assertEqual(

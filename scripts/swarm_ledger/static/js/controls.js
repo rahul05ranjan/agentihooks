@@ -72,8 +72,7 @@ function pageLimits() {
 function capStep(values, lane, up, limits) {
   const efforts = limits.efforts;
   if (lane in EFFORT_CAPS) {
-    const [low, high] = lane === "effort_min" ? [0, efforts.indexOf(values.effort_max)] : [efforts.indexOf(values.effort_min), efforts.length - 1];
-    return { [lane]: efforts[Math.min(high, Math.max(low, efforts.indexOf(values[lane]) + (up ? 1 : -1)))] };
+    return { [lane]: efforts[Math.min(efforts.length - 1, Math.max(0, efforts.indexOf(values[lane]) + (up ? 1 : -1)))] };
   }
   const [key, step] = STEPS[lane], [low, high] = limits.capacity[key] || [];
   return { [key]: Math.min(high, Math.max(low, (Number(values[key]) || 0) + (up ? step : -step))) };
@@ -119,8 +118,10 @@ function capBounds(values, limits) {
     off[`${lane}_down`] = !(Number(values[key]) > low);
     off[`${lane}_up`] = !(Number(values[key]) < high);
   }
-  const low = efforts.indexOf(values.effort_min), high = efforts.indexOf(values.effort_max);
-  Object.assign(off, { effort_min_down: !(low > 0), effort_min_up: !(low >= 0 && low < high), effort_max_down: !(high > low && low >= 0), effort_max_up: !(high >= 0 && high < efforts.length - 1) });
+  for (const key of Object.keys(EFFORT_CAPS)) {
+    const at = efforts.indexOf(values[key]);
+    Object.assign(off, { [`${key}_down`]: !(at > 0), [`${key}_up`]: !(at >= 0 && at < efforts.length - 1) });
+  }
   return off;
 }
 

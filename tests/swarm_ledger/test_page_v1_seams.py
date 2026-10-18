@@ -81,6 +81,11 @@ def test_a_watched_swarm_focus_holds_every_task_but_urgent_and_fix_phase_ones():
     assert marks([], "ph2", watched=True)["held"] == {"tasks/t1", "tasks/t3"}
 
 
+def test_a_task_that_is_not_open_is_never_held():
+    doc = {**DOC, "tasks": [{**DOC["tasks"][1], "state": "done"}], "freezes": [record("plans/p1", "focus")]}
+    assert freeze.marks(doc, hierarchy.project(doc)[0])["held"] == ["plans/p2", "phases/ph2"]
+
+
 def test_the_streamed_ledger_view_carries_the_marks_and_the_server_limits():
     from scripts.swarm_ledger import ledger_artifacts, ledger_core, ledger_server
 
@@ -126,6 +131,17 @@ def test_swarm_controls_and_the_model_list_answer_through_version_one(live):
     catalog = {"claude": [{"model": "opus"}], "codex": []}
     with patch.object(server, "swarm_models", return_value=catalog):
         assert request(live, "GET", "swarm/models") == (200, {"data": catalog, "revision": revision(catalog)})
+
+
+def test_a_crossed_effort_range_is_refused_before_it_is_queued(live, monkeypatch):
+    from types import SimpleNamespace
+
+    config = SimpleNamespace(effort_min="low", effort_max="medium", lanes={})
+    monkeypatch.setattr(server, "swarm_store", lambda: SimpleNamespace(config=lambda slug: config))
+    with patch.object(server, "swarm_control") as control:
+        status, error = request(live, "PUT", "swarm/controls", {"action": "set", "effort_min": "high"})
+    assert (status, error["error"]["message"]) == (400, "effort-min high is above effort-max medium")
+    control.assert_not_called()
 
 
 def test_uploaded_media_is_served_from_version_one(live):

@@ -86,7 +86,9 @@ def marks(doc: dict, graph: dict, fix: str = "", watched: bool = False) -> dict:
         task = tasks.get(node)
         if task is not None:
             cold = frozen(task, records, chain)
-            hold = unfocused(task, records, chain, fix) or watched and not exempt(task, fix)
+            hold = task.get("state") == "open" and (
+                unfocused(task, records, chain, fix) or watched and not exempt(task, fix)
+            )
         else:
             cold = any(r["verb"] == "freeze" and r["target"] in chain for r in records)
             hold = bool(focus) and not any(_reaches(target, node, chains) for target in focus)
