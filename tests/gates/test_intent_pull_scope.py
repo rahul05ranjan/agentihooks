@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from scripts.gates import intent
@@ -61,8 +63,13 @@ def test_the_body_stamp_reads_the_declaration_of_the_stamped_pull_request():
     sent = []
 
     def run(args, input=None, **_):
-        sent.append(input)
+        sent.append((args, input))
         return type("Done", (), {"returncode": 0, "stdout": '{"body": ""}'})()
 
     assert intent.stamp_body(OTHER, doc, doc["tasks"][0], run=run)
-    assert f"a declared stage:** {SCOPE}" in sent[-1]
+    (read, _), (patch, body) = sent
+    assert read == ["gh", "pr", "view", OTHER, "--json", "body"]
+    assert patch == ["gh", "api", "--method", "PATCH", "repos/o/r/pulls/10", "--input", "-"]
+    stamped = intent.section(doc, {**doc["tasks"][0], "pr_url": OTHER})
+    assert json.loads(body) == {"body": stamped}
+    assert f"a declared stage:** {SCOPE}" in stamped

@@ -36,9 +36,17 @@ def test_swarm_pr_refuses_a_blank_scope(started, capsys, kind):  # noqa: F811
     _, ledger, stamped = started
     assert run("sw", "pr", FIRST, f"--{kind}", "  ") != 0
     assert capsys.readouterr().err.strip().endswith(f"--{kind} needs the scope this pull request delivers")
-    assert (stamped, ledger.rows["t1"].get("pr_url")) == ([], None)
+    assert stamped == [] and not ledger.rows["t1"].get("pr_url")
 
 
-def test_a_pull_request_declares_one_kind_only(started):  # noqa: F811
+def test_a_pull_request_declares_one_kind_only(started, capsys):  # noqa: F811
     with pytest.raises(SystemExit):
         cli.main(["sw", "pr", FIRST, "--stage", "a", "--prerequisite", "b"])
+    assert "argument --prerequisite: not allowed with argument --stage" in capsys.readouterr().err
+
+
+def test_recording_a_declared_pull_request_again_keeps_its_declaration(started):  # noqa: F811
+    _, ledger, _ = started
+    assert run("sw", "pr", FIRST, "--stage", "the gate") == 0
+    assert run("sw", "pr", FIRST) == 0
+    assert ledger.rows["t1"]["pull_scopes"] == {FIRST: {"kind": "stage", "scope": "the gate"}}
