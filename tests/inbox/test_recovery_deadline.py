@@ -18,8 +18,9 @@ def arm(which, seconds):
 
 signal.setitimer = arm
 names = [name for mark in test_channel_reconnect.pytestmark if mark.name == "usefixtures" for name in mark.args]
-for name in names:
-    next(getattr(conftest, name)._get_wrapped_function()())
+held = [getattr(conftest, name)._get_wrapped_function()() for name in names]
+for fixture in held:
+    next(fixture)
 print(json.dumps(armed))
 """
 
