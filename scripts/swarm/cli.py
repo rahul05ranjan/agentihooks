@@ -1060,7 +1060,6 @@ def _remote_control_text(agents):
 def cmd_ledger_ready(store: RedisStore, args: argparse.Namespace) -> None:
     from scripts.swarm import ledger_cutover
 
-    ledger_cutover.acknowledge(store, args.slug, Who.from_env())
     print(json.dumps(ledger_cutover.readiness(store, args.slug)))
 
 
@@ -2177,12 +2176,7 @@ def dispatch(argv):
             args.slug = store.names.swarm_slug(args.slug)
         action = getattr(args, "command", "")
         route_slug = getattr(args, "slug", "")
-        address = ledger_route.configured(store, route_slug) if route_slug else ""
-        with ledger_route.scoped(route_slug, address):
-            if route_slug and handler is not cmd_ledger_ready:
-                from scripts.swarm import ledger_cutover
-
-                ledger_cutover.acknowledge(store, route_slug, who)
+        with ledger_route.command(store, route_slug, who):
             before = (
                 control_notifications.master(store, args.slug) if action in control_notifications.CONTROLS else None
             )
