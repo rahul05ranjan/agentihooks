@@ -447,7 +447,7 @@ def test_priority_restores_a_completed_staged_prerequisite_on_its_original_head(
         [
             {"data": {"resource": OPEN}},
             checked_resource(),
-            {"data": {"resource": {**staged_raw, "mergeQueueEntry": ENTRY}}},
+            {"data": {"resource": {**staged_raw, "mergeQueueEntry": {**ENTRY, "state": "QUEUED"}}}},
             {"data": {}},
             {"data": {"resource": OPEN}},
             {"data": {}},
