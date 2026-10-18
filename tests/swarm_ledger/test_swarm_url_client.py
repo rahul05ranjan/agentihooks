@@ -152,9 +152,10 @@ def test_a_proof_ledger_call_carries_the_access_headers(heard):
     url, seen = heard
     environ = {"SWARM_URL": url, "AGENTIHOOKS_CONTROLLER_CREDENTIAL": "controller", **ACCESS}
     assert proof_ledger.call(f"ledgers/{SLUG}/metadata", None, environ) == {}
-    assert {key: seen[0].get(key) for key in (*SENT, "X-Controller-Credential")} == {
+    assert {key: seen[0].get(key) for key in (*SENT, "X-Controller-Credential", "Content-Type")} == {
         **SENT,
         "X-Controller-Credential": "controller",
+        "Content-Type": "application/json",
     }
 
 
@@ -164,7 +165,11 @@ def test_a_proof_control_call_carries_the_access_headers(heard):
     url, seen = heard
     environ = {"SWARM_URL": url, **ACCESS}
     assert proof_ledger._control_call(SLUG, "controls", {}, {"X-Proof-Credential": "proof"}, environ) == {}
-    assert {key: seen[0].get(key) for key in (*SENT, "X-Proof-Credential")} == {**SENT, "X-Proof-Credential": "proof"}
+    assert {key: seen[0].get(key) for key in (*SENT, "X-Proof-Credential", "Content-Type")} == {
+        **SENT,
+        "X-Proof-Credential": "proof",
+        "Content-Type": "application/json",
+    }
 
 
 def test_an_upload_carries_the_access_headers(heard, monkeypatch, tmp_path):
