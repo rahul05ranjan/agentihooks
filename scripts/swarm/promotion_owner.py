@@ -1,15 +1,20 @@
+from __future__ import annotations
+
 import subprocess
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from hashlib import sha256
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
-
-from redis import Redis
 
 from scripts.doctor.priming import doctor_slug
 from scripts.swarm import naming
 from scripts.swarm.store import PREFIX, RedisStore
+
+
+if TYPE_CHECKING:
+    from redis import Redis
 
 
 def repository(repo: str, run: Callable = subprocess.run) -> str:
