@@ -572,3 +572,14 @@ def test_ready_bounds_unterminated_declaration_parsing(monkeypatch):
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous_handler)
         signal.setitimer(signal.ITIMER_REAL, *previous_timer)
+
+
+def test_ready_preserves_unicode_whitespace_after_the_declaration_marker(monkeypatch):
+    proof, endpoints = staged("promotion API contracts")
+    declaration_body = MARKER + "\u00a0" + json.dumps(proof) + "-->"
+    pull = ledger_events.pull_request({"state": "OPEN", "headRefOid": HEAD, "body": declaration_body})
+    agent = AgentRecord(name="ci-1", lane="ci", task="t1")
+    monkeypatch.setattr(ready.stack, "shell", lambda cmd: subprocess.CompletedProcess(cmd, 0, "false"))
+    monkeypatch.setattr(ready, "_checkout", lambda *args: "/worktree")
+    monkeypatch.setattr(merge_queue, "rest", lambda path, run: endpoints[path])
+    assert ready.check({"kind": "ci", "pr_url": URL}, agent, "full", lambda url: pull, 1)["head"] == HEAD
