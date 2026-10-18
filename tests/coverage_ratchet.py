@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 
 from coverage import Coverage, CoverageData
+from coverage.exceptions import NotPython
 
 from tests.coverage_grade import GRADED, Measurement, Result, Unmeasured, executed, grade, line_map, pair_moves
 from tests.coverage_history import dev_runs, git, renamed
@@ -30,12 +31,9 @@ def report(result: Result, missed: dict[str, list[int]], covered: dict[str, int]
     return "\n".join(out) + "\n"
 
 
-def _missed(head: Path, shards: list[Path], out: Path) -> dict[str, list[int]]:
+def _missed(head: Path, lines: dict[str, set[int]], out: Path) -> dict[str, list[int]]:
     combined = CoverageData(basename=str(out.resolve() / ".coverage"))
-    for shard in shards:
-        part = CoverageData(basename=str(shard))
-        part.read()
-        combined.update(part)
+    combined.add_lines(lines)
     combined.write()
     coverage = Coverage(data_file=combined.base_filename(), config_file=False)
     coverage.set_option("run:relative_files", True)
@@ -102,16 +100,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base-baseline", type=Path, help="exact base measurement restored from the Actions cache")
     args = parser.parse_args(argv)
     head_files = [args.head_shards / f"coverage-3.12-{n}" / ".coverage" for n in range(1, args.shards + 1)]
+    head_files += sorted(args.head_shards.glob("coverage-3.12-*/reused-coverage/.coverage"))
     args.out.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as scratch:
         try:
             head, base, result = _grade(args, head_files, Path(scratch))
-        except (Unmeasured, subprocess.CalledProcessError, KeyError, ValueError, OSError) as exc:
+            if os.environ.get("GITHUB_EVENT_NAME") == "merge_group":
+                changed = set(git("diff", "--name-only", "--no-renames", "HEAD^", "HEAD", cwd=args.head).splitlines())
+                result.lost = {path: lines for path, lines in result.lost.items() if path in changed}
+        except (Unmeasured, subprocess.CalledProcessError, KeyError, ValueError, OSError, NotPython) as exc:
             print(f"::error::The coverage ratchet cannot grade: {exc}")
             return 1
     text = report(
         result,
-        _missed(args.head, head_files, args.out),
+        _missed(args.head, head, args.out),
         {path: len(lines) for path, lines in head.items()},
         {path: len(lines) for path, lines in base.executed.items()},
     )
