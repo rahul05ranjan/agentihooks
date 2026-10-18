@@ -2,7 +2,6 @@ import copy
 import inspect
 import json
 import subprocess
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -168,7 +167,7 @@ def test_pull_request_view_retains_the_declaration_for_ready():
     proof = body(declaration("promotion squash method"))
     pull = ledger_events.pull_request({"state": "OPEN", "body": proof})
     assert pull.body == proof
-    assert replace(pull, body="").body == ""
+    assert ledger_events.pull_request({"state": "OPEN"}).body == ""
 
 
 def test_priority_refuses_unfinished_compatibility_before_displacing_entries():
@@ -395,3 +394,149 @@ def test_staged_promotion_proof_accepts_squash_and_preserves_the_exact_merge_req
     evidence["conclusion"] = "success"
     invoke, _ = queue(proof, endpoints)
     assert invoke()["queued"]
+
+
+def evidence_runner(responses, endpoints):
+    base, calls = runner(*responses)
+
+    def run(command, **kwargs):
+        if command[2] in endpoints:
+            calls.append((command, kwargs))
+            return subprocess.CompletedProcess(command, 0, json.dumps(endpoints[command[2]]))
+        return base(command, **kwargs)
+
+    return run, calls
+
+
+def test_ready_accepts_complete_proof_on_its_observed_head(monkeypatch):
+    proof, endpoints = staged("promotion API contracts")
+    pull = ledger_events.pull_request({"state": "OPEN", "headRefOid": HEAD, "body": body(proof)})
+    agent = AgentRecord(name="ci-1", lane="ci", task="t1")
+    monkeypatch.setattr(ready.stack, "shell", lambda cmd: subprocess.CompletedProcess(cmd, 0, "false"))
+    monkeypatch.setattr(ready, "_checkout", lambda *args: "/worktree")
+    monkeypatch.setattr(merge_queue, "rest", lambda path, run: endpoints[path])
+    found = ready.check({"kind": "ci", "pr_url": URL}, agent, "full", lambda url: pull, 1)
+    assert found["head"] == HEAD
+    assert found["url"] == URL
+
+
+def test_priority_accepts_complete_exact_head_proof(monkeypatch):
+    proof, endpoints = staged("promotion API contracts")
+    raw = {**OPEN, "headRefOid": HEAD, "body": body(proof)}
+    run, calls = evidence_runner(
+        [
+            {"data": {"resource": raw}},
+            checked_resource(head=HEAD),
+            {"data": {"resource": raw}},
+            {"data": {}},
+        ],
+        endpoints,
+    )
+    monkeypatch.setattr(merge_queue, "waiting_ahead", lambda *args: [])
+    assert merge_queue.prioritize(URL, run=run)["errors"] == []
+    assert any(f"query={merge_queue.QUEUE}" in cmd and f"head={HEAD}" in cmd for cmd, _ in calls)
+
+
+def test_priority_restores_a_completed_staged_prerequisite_on_its_original_head(monkeypatch):
+    other = "https://github.com/o/r/pull/2"
+    proof, endpoints = staged("queue seed dependency assertion")
+    proof["prerequisite"]["url"] = other
+    endpoints["repos/o/r/pulls/2"] = endpoints.pop("repos/o/r/pulls/7")
+    staged_raw = {**OPEN, "id": "PR_two", "headRefOid": HEAD, "body": body(proof)}
+    run, calls = evidence_runner(
+        [
+            {"data": {"resource": OPEN}},
+            checked_resource(),
+            {"data": {"resource": {**staged_raw, "mergeQueueEntry": ENTRY}}},
+            {"data": {}},
+            {"data": {"resource": OPEN}},
+            {"data": {}},
+            {"data": {"resource": staged_raw}},
+            {"data": {}},
+        ],
+        endpoints,
+    )
+    monkeypatch.setattr(
+        merge_queue,
+        "waiting_ahead",
+        lambda *args: [
+            {"id": "PR_two", "url": other, "headRefOid": HEAD},
+        ],
+    )
+    result = merge_queue.prioritize(URL, run=run)
+    assert result["errors"] == []
+    assert result["displaced"] == [other]
+    assert any(f"query={merge_queue.QUEUE}" in cmd and "id=PR_two" in cmd and f"head={HEAD}" in cmd for cmd, _ in calls)
+
+
+@pytest.mark.parametrize(
+    "role,field",
+    [
+        ("prerequisite", "url"),
+        ("candidate", "url"),
+        ("prerequisite", "head"),
+        ("candidate", "head"),
+    ],
+)
+def test_missing_target_fields_name_the_incomplete_role(role, field):
+    proof, endpoints = staged("promotion API contracts")
+    del proof[role][field]
+    invoke, _ = queue(proof, endpoints)
+    with pytest.raises(SwarmError, match=f"valid {role} URL and full head"):
+        invoke()
+
+
+def test_invalid_full_head_names_the_required_correction():
+    proof, endpoints = staged("promotion API contracts")
+    proof["prerequisite"]["head"] = "short"
+    invoke, _ = queue(proof, endpoints)
+    with pytest.raises(SwarmError, match="valid prerequisite URL and full head"):
+        invoke()
+
+
+def test_missing_run_names_the_required_proof():
+    proof, endpoints = staged("promotion API contracts")
+    del proof["run"]
+    invoke, _ = queue(proof, endpoints)
+    with pytest.raises(SwarmError, match="proof run must share a repository"):
+        invoke()
+
+
+def test_a_declaration_for_a_different_observed_head_names_that_gap():
+    proof, endpoints = staged("promotion API contracts")
+    proof["prerequisite"]["head"] = "c" * 40
+    invoke, _ = queue(proof, endpoints)
+    with pytest.raises(SwarmError, match="exact pull request head"):
+        invoke()
+
+
+def test_identical_candidate_and_prerequisite_commits_have_valid_ancestry():
+    proof, endpoints = staged("promotion API contracts")
+    proof["candidate"]["head"] = HEAD
+    endpoints["repos/o/r/pulls/8"]["head"]["sha"] = HEAD
+    endpoints["repos/o/r/actions/runs/42"]["head_sha"] = HEAD
+    endpoints["repos/o/r/actions/runs/42/jobs?per_page=100&page=1"]["jobs"][0]["head_sha"] = HEAD
+    endpoints[f"repos/o/r/compare/{HEAD}...{HEAD}"] = {"status": "identical"}
+    invoke, _ = queue(proof, endpoints)
+    assert invoke()["queued"]
+
+
+def test_nonadvancing_full_job_pages_fail_without_another_page_request():
+    proof, endpoints = staged("promotion API contracts")
+    job = endpoints["repos/o/r/actions/runs/42/jobs?per_page=100&page=1"]["jobs"][0]
+    repeated = {"total_count": 101, "jobs": [{**job, "id": n} for n in range(100)]}
+    endpoints["repos/o/r/actions/runs/42/jobs?per_page=100&page=1"] = repeated
+    endpoints["repos/o/r/actions/runs/42/jobs?per_page=100&page=2"] = repeated
+    invoke, calls = queue(proof, endpoints)
+    with pytest.raises(SwarmError, match="incomplete compatibility job inventory"):
+        invoke()
+    assert not any("page=3" in cmd[2] for cmd, _ in calls)
+
+
+@pytest.mark.parametrize("response", [{}, None])
+def test_unreadable_proof_response_names_the_repair(response):
+    proof, endpoints = staged("promotion API contracts")
+    endpoints["repos/o/r/actions/runs/42"] = response
+    invoke, _ = queue(proof, endpoints)
+    with pytest.raises(SwarmError, match="unreadable compatibility proof"):
+        invoke()
