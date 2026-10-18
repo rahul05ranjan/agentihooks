@@ -73,6 +73,20 @@ def test_shared_env_files_cannot_load_the_server_secret(tmp_path, monkeypatch):
     assert environ["SWARM_SECRET"] == trusted
 
 
+def test_generated_shell_loader_also_removes_shared_server_authority(tmp_path):
+    import subprocess
+
+    state = _home(tmp_path)
+    (state / "swarm.env").write_text("SWARM_SECRET='$FIXTURE_SWARM_SECRET'\n")
+    environ = {"HOME": str(tmp_path), "PATH": os.environ["PATH"]}
+    script = operator_env.source_line(environ) + "env -0"
+    done = subprocess.run(["bash", "--noprofile", "--norc", "-c", script], env=environ, capture_output=True)
+    names = {item.partition(b"=")[0] for item in done.stdout.split(b"\0") if item}
+    assert done.returncode == 0
+    assert b"SWARM_SECRET" not in names
+    assert b"SECONDARY_ONLY" in names
+
+
 def test_accounts_are_the_interactive_shell_account_variables_only(tmp_path):
     (tmp_path / ".profile").write_text(
         "echo AH_CC_TOKEN_noise=printed\n"

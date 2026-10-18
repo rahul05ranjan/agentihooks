@@ -69,7 +69,7 @@ def distinct(environ: Mapping[str, str], names: Iterable[str]) -> list[str]:
 
 def source_line(environ: Mapping[str, str]) -> str:
     paths = files(environ)
-    return f"set -- {shlex.join(map(str, paths))}; {SOURCE}; set --\n" if paths else ""
+    return f"set -- {shlex.join(map(str, paths))}; {SOURCE}; unset SWARM_SECRET; set --\n" if paths else ""
 
 
 def _shell_exports(environ: Mapping[str, str], prefix: str) -> dict[str, str]:
