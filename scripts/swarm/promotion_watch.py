@@ -15,7 +15,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from scripts.ci_budget import GATE
-from scripts.swarm import dev_red, naming
+from scripts.swarm import dev_red, naming, promotion_owner
 from scripts.swarm.store import PREFIX
 from scripts.swarm_ledger import ledger_comments
 
