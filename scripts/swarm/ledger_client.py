@@ -159,10 +159,11 @@ class LedgerClient:
 
     def notify(self, slug, text):
         from scripts.gates import Who
+        from scripts.swarm.naming import lane_of
         from scripts.swarm_ledger import ledger_link
 
         who = Who.from_env()
-        author = who.name if ledger_link.remote(slug=slug) and who.pinned else "swarm"
+        author = who.name if ledger_link.remote(slug=slug) and who.pinned and lane_of(who.name) == "master" else "swarm"
         self._call(slug, [_op("notice", author, text=text)])
 
     def raise_alert(self, slug, source, text):
