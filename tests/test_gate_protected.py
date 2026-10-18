@@ -668,6 +668,7 @@ def test_a_declared_documentation_check_cannot_switch_to_legacy_aggregation(exis
     from scripts import ci_reuse
 
     base, head = _aggregators()
+    base["jobs"]["gate-required"]["steps"] = ci_reuse.gate_steps(queue_tier=True, consolidated=True)
     head["jobs"]["docs"] = {"runs-on": "ubuntu-latest", "if": False}
     head["jobs"]["gate-required"]["needs"].append("docs")
     head["jobs"]["gate-required"]["steps"] = ci_reuse.gate_steps(queue_tier=True, consolidated=True)
