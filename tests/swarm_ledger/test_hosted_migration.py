@@ -225,11 +225,11 @@ def test_transfer_verifies_a_separate_read_and_blocks_redirects(stores, monkeypa
     monkeypatch.setenv("SWARM_ACCESS_CLIENT_ID", "$FIXTURE_ACCESS_ID")
     monkeypatch.setenv("SWARM_ACCESS_CLIENT_SECRET", "$FIXTURE_ACCESS_SECRET")
     monkeypatch.setattr(hosted.time, "time", lambda: 1000)
-    result = hosted.transfer("https://hosted.example/", snapshot, secret)
+    result = hosted.transfer("https://hosted.example/prefixX/", snapshot, secret)
     assert result == {"source": expected, "hosted": expected, "match": True}
     assert [req.get_method() for req, _ in calls] == ["POST", "GET"]
     assert all(timeout == 300 for _, timeout in calls)
-    assert all(req.full_url == "https://hosted.example/api/v1/migrations/migration-proof" for req, _ in calls)
+    assert all(req.full_url == "https://hosted.example/prefixX/api/v1/migrations/migration-proof" for req, _ in calls)
     first = calls[0][0]
     assert json.loads(gzip.decompress(first.data)) == snapshot
     assert first.get_header("Cf-access-client-id") == "$FIXTURE_ACCESS_ID"
@@ -290,6 +290,33 @@ def test_command_freezes_source_before_transferring_and_reports_comparison(store
     monkeypatch.setattr(hosted, "transfer", transfer)
     hosted.main()
     assert json.loads(capsys.readouterr().out) == {"match": True}
+
+
+def test_each_ledger_comparison_is_visible_before_the_next_transfer(stores, monkeypatch):
+    import sys
+
+    source, _ = stores
+    source.import_document("second-proof", document())
+    monkeypatch.setenv("SWARM_SECRET", secrets.token_hex(32))
+    monkeypatch.setattr(
+        sys, "argv", ["migration", "--source", str(source.directory), "--url", "https://hosted.example", "--freeze"]
+    )
+    transport = io.BytesIO()
+    output = io.TextIOWrapper(transport, encoding="utf-8")
+    seen = []
+
+    def transfer(url, snapshot, secret):
+        assert len(transport.getvalue().splitlines()) == len(seen)
+        seen.append(snapshot["slug"])
+        return {"slug": snapshot["slug"], "match": True}
+
+    monkeypatch.setattr(hosted, "transfer", transfer)
+    with monkeypatch.context() as capture:
+        capture.setattr(sys, "stdout", output)
+        hosted.main()
+        rows = [json.loads(line) for line in transport.getvalue().splitlines()]
+    assert seen == ["migration-proof", "second-proof"]
+    assert rows == [{"slug": slug, "match": True} for slug in seen]
 
 
 def test_server_secret_is_loaded_from_openbao_only_in_memory(monkeypatch, capsys):

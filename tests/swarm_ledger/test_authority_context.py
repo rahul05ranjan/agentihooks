@@ -193,3 +193,26 @@ def test_scoped_tick_and_migration_credentials_refuse_cleartext_transport():
         with pytest.raises(ledger_link.Cleartext):
             ledger_link.guard("http://hosted.example", {header: "$FIXTURE_SCOPED_TOKEN"})
         ledger_link.guard("https://hosted.example", {header: "$FIXTURE_SCOPED_TOKEN"})
+
+
+def test_shared_access_credentials_reach_hosted_clients_without_copying_secrets(monkeypatch):
+    from scripts.swarm_ledger import ledger_link
+
+    monkeypatch.delenv("SWARM_ACCESS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("SWARM_ACCESS_CLIENT_SECRET", raising=False)
+    monkeypatch.setenv("CF_ACCESS_CLIENT_ID", "$FIXTURE_SHARED_ID")
+    monkeypatch.setenv("CF_ACCESS_CLIENT_SECRET", "$FIXTURE_SHARED_SECRET")
+    assert ledger_link.access_headers() == {
+        "CF-Access-Client-Id": "$FIXTURE_SHARED_ID",
+        "CF-Access-Client-Secret": "$FIXTURE_SHARED_SECRET",
+        "User-Agent": "agentihooks-swarm",
+    }
+    monkeypatch.setenv("SWARM_ACCESS_CLIENT_ID", "$FIXTURE_OVERRIDE_ID")
+    monkeypatch.setenv("SWARM_ACCESS_CLIENT_SECRET", "$FIXTURE_OVERRIDE_SECRET")
+    assert ledger_link.access_headers()["CF-Access-Client-Id"] == "$FIXTURE_OVERRIDE_ID"
+    assert ledger_link.access_headers()["CF-Access-Client-Secret"] == "$FIXTURE_OVERRIDE_SECRET"
+    for missing in ("ID", "SECRET"):
+        with monkeypatch.context() as absent:
+            absent.delenv(f"CF_ACCESS_CLIENT_{missing}")
+            absent.delenv(f"SWARM_ACCESS_CLIENT_{missing}")
+            assert ledger_link.access_headers() == {}
