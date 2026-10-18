@@ -327,6 +327,29 @@ def test_each_ledger_comparison_is_visible_before_the_next_transfer(stores, monk
     assert rows == [{"slug": slug, "match": True} for slug in seen]
 
 
+def test_whole_store_migration_makes_the_local_fallback_read_only(stores, monkeypatch):
+    import sys
+
+    source, _ = stores
+    monkeypatch.setenv("SWARM_SECRET", secrets.token_hex(32))
+    monkeypatch.setattr(
+        sys, "argv", ["migration", "--source", str(source.directory), "--url", "https://hosted.example", "--freeze"]
+    )
+
+    def transfer(url, snapshot, secret):
+        with pytest.raises(sqlite3.IntegrityError, match="hosted"):
+            source.import_document("late-ledger", document())
+        with source.connect() as connection, pytest.raises(sqlite3.IntegrityError, match="hosted"):
+            source.save_registry(connection, "bin", {"late-ledger": 42})
+        with pytest.raises(ValueError, match="hosted"):
+            with hosted.media_mutation(source.directory, "late-ledger"):
+                pass
+        return {"match": True}
+
+    monkeypatch.setattr(hosted, "transfer", transfer)
+    hosted.main()
+
+
 def test_server_secret_is_loaded_from_openbao_only_in_memory(monkeypatch, capsys):
     secret = secrets.token_hex(32)
     monkeypatch.delenv("SWARM_SECRET", raising=False)
