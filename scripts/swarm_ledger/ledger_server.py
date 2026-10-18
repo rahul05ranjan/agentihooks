@@ -99,15 +99,16 @@ def served_version():
     return served_page()[0]
 
 
+def page_view(state):
+    meta = {key: item for key, item in state.get("_meta", {}).items() if key not in ("seeds", "api_operations")}
+    marks = freeze.marks(state, hierarchy.project(state)[0])
+    return {**state, "marks": marks, "_meta": {**meta, "limits": PAGE_LIMITS}}
+
+
 def ledger_view(state):
-    meta = {key: item for key, item in state["_meta"].items() if key not in ("seeds", "api_operations")}
-    meta.update(page_version=served_version(), crew=ledger_gate.crew(state["_meta"]))
-    graph = hierarchy.project(state)[0]
-    tasks = [
-        {**task, "freeze_ancestry": freeze.ancestry(task, graph)} if task.get("merged_into") else task
-        for task in state.get("tasks", [])
-    ]
-    return {**state, "tasks": tasks, "_meta": meta}
+    view = page_view(state)
+    view["_meta"].update(page_version=served_version(), crew=ledger_gate.crew(state["_meta"]))
+    return view
 
 
 def publish_ledger(slug, state):
@@ -294,6 +295,19 @@ MAX_LOAD = 10.0
 MASTER_AGENTS = ("claude", "codex")
 MAX_NOTE = 500
 FINDING_RE = re.compile(r"^[a-z][a-z-]*/[\w.-]{1,64}$")
+CAPS = {
+    "max_eng": ("max-eng-agents", 0, MAX_CAP),
+    "max_ci": ("max-ci-agents", 0, MAX_CAP),
+    "max_plan": ("max-plan-agents", 0, MAX_CAP),
+    "masters_step": ("masters-step", 0, MAX_CAP),
+    "compact_limit": ("compact-limit", MIN_COMPACT, MAX_COMPACT),
+}
+PAGE_LIMITS = {
+    "capacity": {key: [low, high] for key, (_, low, high) in CAPS.items()},
+    "efforts": list(EFFORTS),
+    "sync_cooldown_ms": core.SYNC_COOLDOWN_MS,
+    "bin_days": ledger_artifacts.KEEP_DAYS,
+}
 
 
 def model_pairs(body):
@@ -327,17 +341,10 @@ def control_argv(body):
     if action != "set":
         raise ValueError("action must be start, pause, stop, stop_now, close, reopen, set or verdict")
     pairs = []
-    for key, flag, limit in (
-        ("max_eng", "max-eng-agents", MAX_CAP),
-        ("max_ci", "max-ci-agents", MAX_CAP),
-        ("max_plan", "max-plan-agents", MAX_CAP),
-        ("masters_step", "masters-step", MAX_CAP),
-        ("compact_limit", "compact-limit", MAX_COMPACT),
-    ):
+    for key, (flag, low, limit) in CAPS.items():
         value = body.get(key)
         if value is None:
             continue
-        low = MIN_COMPACT if key == "compact_limit" else 0
         if type(value) is not int or not low <= value <= limit:
             raise ValueError(f"{key} must be a whole number from {low} to {limit}")
         pairs.append(f"{flag}={value}")
@@ -1126,6 +1133,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.put_swarm(slug.removeprefix("swarm/"))
         if not self.path.startswith("/api/") or not self.exists(slug):
             return self.send(404, "no such ledger", "text/plain")
+        return self.put_ledger(slug)
+
+    def put_ledger(self, slug):
         if self.refused(slug):
             return None
         if not (self.headers.get("Content-Type") or "").startswith("application/json"):

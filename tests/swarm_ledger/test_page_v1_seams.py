@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from scripts.swarm import freeze
+from scripts.swarm_ledger.api.resources import revision
 from scripts.swarm_ledger.repository import hierarchy
 from tests.swarm_ledger.ledger_page import MODULES, ledger_state, shell_html, show
 from tests.swarm_ledger.test_api_v1 import authority_live as _authority_live
@@ -105,7 +106,7 @@ def test_swarm_controls_and_the_model_list_answer_through_version_one(live):
     control.assert_called_once_with(SLUG, ["pause"], "swarm")
     catalog = {"claude": [{"model": "opus"}], "codex": []}
     with patch.object(server, "swarm_models", return_value=catalog):
-        assert request(live, "GET", "swarm/models") == (200, {"data": catalog})
+        assert request(live, "GET", "swarm/models") == (200, {"data": catalog, "revision": revision(catalog)})
 
 
 def test_uploaded_media_is_served_from_version_one(live):
@@ -132,22 +133,39 @@ def test_uploaded_media_is_served_from_version_one(live):
     assert (status, json.loads(body)["error"]["code"]) == (404, "request_refused")
 
 
+def test_the_version_one_layout_takes_the_page_layout_shape(live):
+    layout = {
+        "capacity-box": {"height": 312.5},
+        "columns": {"swarm-agents": [120, 80.4]},
+        "stats": ["elapsed", "started"],
+    }
+    status, data, _ = send(
+        live,
+        "PUT",
+        "/api/v1/layout",
+        json.dumps(layout).encode(),
+        **{"Origin": sorted(server.ALLOWED_ORIGINS)[0], "Content-Type": "application/json"},
+    )
+    saved = {"capacity-box": {"height": 312}, "columns": {"swarm-agents": [120, 80]}, "stats": ["elapsed", "started"]}
+    assert (status, json.loads(data)["data"]) == (200, saved)
+
+
 def source(name):
     return (MODULES / f"{name}.js").read_text(encoding="utf-8")
 
 
 def test_every_page_route_goes_through_version_one():
-    routes = source("config.js") + source("api.js")
+    routes = source("config") + source("api")
     assert not re.search(r"`/api/\$\{SLUG\}`\)|/api/swarm|/api/media|\"/api/layout\"|/media/\$\{SLUG\}", routes)
     assert "/artifacts/${SLUG}" not in routes
-    for call in re.findall(r"fetch\(([^,)]+)", source("api.js")):
+    for call in re.findall(r"fetch\(([^,)]+)", source("api")):
         assert "V1" in call or call == "artifactUrl(id", call
 
 
 def test_the_page_copies_no_server_rule_or_limit():
-    assert not re.search(r"SYNC_COOLDOWN_MS|ARTIFACT_KEEP_DAYS", source("config.js"))
-    assert not re.search(r"\bancestors\b|rank === \"urgent\"", source("freezes.js"))
-    controls = source("controls.js")
+    assert not re.search(r"SYNC_COOLDOWN_MS|ARTIFACT_KEEP_DAYS", source("config"))
+    assert not re.search(r"\bancestors\b|rank === \"urgent\"", source("freezes"))
+    controls = source("controls")
     assert '"xhigh"' not in controls
     assert not re.search(r"\b50\]|1000\]", controls)
 
@@ -175,6 +193,7 @@ def test_the_page_renders_the_marks_the_server_sends_without_judging_freezes(bro
     tab = rendered(browser, ledger, SWARM)
     try:
         tab.click("#tasks-box > summary")
+        tab.locator("#item-tasks-t3").wait_for()
         classes = tab.evaluate(
             "() => ['t1', 't2', 't3'].map((id) => document.getElementById(`item-tasks-${id}`).className)"
         )

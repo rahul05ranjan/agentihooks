@@ -1,6 +1,6 @@
 import pytest
 
-from tests.swarm_ledger.ledger_page import ledger_state, loaded, serve_modules, shell_html
+from tests.swarm_ledger.ledger_page import fulfill_events, is_events, ledger_state, loaded, serve_modules, shell_html
 from tests.swarm_ledger.test_caps_columns import browser as chromium_browser
 
 browser = chromium_browser
@@ -50,6 +50,7 @@ def page(browser, request):
 
     html = shell_html().replace("__LEDGER_PAGE__", ledger_server.served_version())
     sent = {"ops": [], "changes": []}
+    freezes = list(setup["freezes"])
 
     def answer(route):
         if route.request.url == URL:
@@ -58,13 +59,21 @@ def page(browser, request):
             body = route.request.post_data_json
             sent["ops"].extend(body.get("ops", []))
             sent["changes"].extend(body.get("changes", []))
+            for op in body.get("ops", []):
+                if op["op"] == "freeze_set":
+                    freezes.append(freeze(op["target"], op["verb"]))
+                elif op["op"] == "freeze_clear":
+                    freezes[:] = [row for row in freezes if row["target"] != op["target"]]
+            applied = [op["id"] for op in body.get("ops", [])]
+            return route.fulfill(json={"applied": applied, "rejected": [], "_meta": {"rev": 1, "warnings": []}})
         return route.abort()
 
     context.route("**/*", answer)
-    view = ledger_server.ledger_view(ledger_state({**DOC, **setup.get("doc", {}), "freezes": setup["freezes"]}))
-    if setup.get("bare"):
-        view["tasks"] = [{k: v for k, v in row.items() if k != "freeze_ancestry"} for row in view["tasks"]]
-    serve_modules(context, view, SWARM)
+    serve_modules(context)
+    context.route(
+        is_events,
+        lambda route: fulfill_events(route, ledger_state({**DOC, **setup.get("doc", {}), "freezes": freezes}), SWARM),
+    )
     tab = context.new_page()
     tab.set_default_timeout(3000)
     tab.on("dialog", lambda dialog: dialog.accept())
@@ -287,23 +296,6 @@ def test_freezing_a_group_lead_holds_its_members(page):
     assert row_state(tab, "#item-tasks-t2")["frozen"] is False
 
 
-def test_page_snapshot_carries_the_shared_group_freeze_ancestry():
-    from scripts.swarm_ledger import ledger_server
-
-    snapshot = ledger_server.ledger_view(ledger_state(DOC))
-    member = next(row for row in snapshot["tasks"] if row["id"] == "t5")
-    assert set(member["freeze_ancestry"]) == {
-        "tasks/t5",
-        "tasks/t1",
-        "slices/hier.hy-page",
-        "phases/p1",
-        "plans/hier",
-        "phases/p3",
-        "plans/v2",
-    }
-    assert "freeze_ancestry" not in DOC["tasks"][-1]
-
-
 @pytest.mark.parametrize("page", [[freeze("phases/p4")]], indirect=True)
 def test_an_out_of_scope_item_keeps_its_freeze_button(page):
     tab, sent = page
@@ -323,7 +315,7 @@ def test_a_lane_focus_holds_tasks_outside_the_lane_and_no_phase(page):
     assert tab.locator("#item-plans-v2 > details.plan-fold > summary > .snowflake").count() == 0
 
 
-@pytest.mark.parametrize("page", [{"freezes": [freeze("phases/p1")], "bare": True}], indirect=True)
+@pytest.mark.parametrize("page", [{"freezes": [freeze("phases/p1")]}], indirect=True)
 def test_a_folded_task_without_stored_ancestry_follows_its_merged_target(page):
     tab, _ = page
     assert row_state(tab, "#item-tasks-t5")["frozen"] is True
@@ -335,7 +327,7 @@ MERGE_CYCLE = {
 }
 
 
-@pytest.mark.parametrize("page", [{"freezes": [freeze("phases/p3")], "bare": True, "doc": MERGE_CYCLE}], indirect=True)
+@pytest.mark.parametrize("page", [{"freezes": [freeze("phases/p3")], "doc": MERGE_CYCLE}], indirect=True)
 def test_folded_tasks_merged_into_each_other_render_and_share_their_freezes(page):
     tab, _ = page
     assert row_state(tab, "#item-tasks-t6")["frozen"] is True

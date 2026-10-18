@@ -74,6 +74,40 @@ def covers(target: str, task: dict, chain: list) -> bool:
     return target in chain
 
 
+def marks(doc: dict, graph: dict, fix_phase: str = "") -> dict:
+    records = doc.get("freezes") or []
+    focus = [r["target"] for r in records if r["verb"] == "focus"]
+    tasks = {
+        f"tasks/{t['id']}": t for t in doc.get("tasks") or [] if isinstance(t, dict) and f"tasks/{t.get('id')}" in graph
+    }
+    chains = {node: _chain(node, graph, tasks) for node in graph}
+    found = {"frozen": [], "held": []}
+    for node, chain in chains.items():
+        task = tasks.get(node)
+        if task is not None:
+            cold, hold = frozen(task, records, chain), unfocused(task, records, chain, fix_phase)
+        else:
+            cold = any(r["verb"] == "freeze" and r["target"] in chain for r in records)
+            hold = bool(focus) and not any(_reaches(target, node, chains) for target in focus)
+        if cold or hold:
+            found["frozen" if cold else "held"].append(node)
+    return found
+
+
+def _chain(node: str, graph: dict, tasks: dict) -> list:
+    if node in tasks:
+        return ancestry(tasks[node], graph)
+    chain, up = [node], (graph.get(node) or (None, None))[1]
+    while up and up not in chain and len(chain) < hierarchy.CHAIN:
+        chain.append(up)
+        up = (graph.get(up) or (None, None))[1]
+    return chain
+
+
+def _reaches(target: str, node: str, chains: dict) -> bool:
+    return target.partition(":")[0] in SELECTORS or target in chains[node] or node in chains.get(target, ())
+
+
 def fix_phase(config: SwarmConfig) -> str:
     return loop.FIX_PHASE if config.template == priming.TEMPLATE else ""
 

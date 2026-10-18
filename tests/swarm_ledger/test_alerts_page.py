@@ -40,9 +40,9 @@ def tab(browser):
     def answer(route):
         if "/api/" not in route.request.url:
             return route.fulfill(body=html, content_type="text/html")
-        if "/api/swarm/" in route.request.url:
+        if "/swarm/" in route.request.url:
             return route.fulfill(body="null", content_type="application/json")
-        if not route.request.url.endswith("/api/alerts-page"):
+        if not route.request.url.endswith("/api/v1/ledgers/alerts-page/saves"):
             return route.fulfill(json={})
         if route.request.method == "PUT":
             for op in json.loads(route.request.post_data)["ops"]:

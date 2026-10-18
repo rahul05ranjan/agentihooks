@@ -138,7 +138,7 @@ class LostAck(Page):
 
     def route(self, route, html):
         request = route.request
-        if "/api/swarm/" in request.url and request.method == "PUT" and self.drop:
+        if "/swarm/" in request.url and request.method == "PUT" and self.drop:
             self.drop -= 1
             self.puts.append(json.loads(request.post_data))
             return route.abort()

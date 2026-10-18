@@ -16,7 +16,7 @@ def model_page(open_page, catalog=CATALOG):
     payload["config"].update(claude_model="opus", codex_model="gpt-6.1-sol")
     page = open_page(payload, width=1920)
     page.tab.set_viewport_size({"width": 1920, "height": 1080})
-    page.context.route("**/api/swarm/*/models", lambda route: route.fulfill(json=catalog))
+    page.context.route("**/swarm/models", lambda route: route.fulfill(json={"data": catalog}))
     page.tab.reload()
     expect(page.tab.locator("#cap-claude_model")).to_have_value("opus")
     return page
@@ -42,7 +42,7 @@ def test_empty_catalog_shows_only_current_value(open_page):
 def test_populated_catalog_does_not_add_an_absent_current_model(open_page):
     page = model_page(open_page)
     page.context.route(
-        "**/api/swarm/*/models", lambda route: route.fulfill(json={"claude": CATALOG["claude"][1:], "codex": []})
+        "**/swarm/models", lambda route: route.fulfill(json={"data": {"claude": CATALOG["claude"][1:], "codex": []}})
     )
     page.tab.reload()
     expect(page.tab.locator("#cap-claude_model option")).to_have_count(1)

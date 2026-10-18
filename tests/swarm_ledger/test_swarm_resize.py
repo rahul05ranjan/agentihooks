@@ -191,7 +191,7 @@ def test_local_storage_paints_the_layout_while_the_server_is_unreachable(visit):
     page.drag("height", "handoff-box", dy=50)
     saved(("handoff-box",), page)
     height = page.box("handoff-box")["height"]
-    page.tab.route("**/api/layout", lambda route: route.abort())
+    page.tab.route("**/api/v1/layout", lambda route: route.abort())
     page.reload()
     assert page.box("handoff-box")["height"] == pytest.approx(height, abs=1)
 

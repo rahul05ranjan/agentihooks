@@ -68,8 +68,19 @@ def ledger_state(doc, rev=1):
 
 
 def snapshot_body(ledger=None, swarm=None):
-    data = {"ledger": ledger, "swarm": swarm}
+    data = {"ledger": served_ledger(ledger), "swarm": swarm}
     return f"id: c0\nevent: snapshot\ndata: {json.dumps(data)}\n\n"
+
+
+def served_ledger(ledger):
+    """The ledger as the server streams it: with freeze marks and limits, unless the test gives its own."""
+    if not isinstance(ledger, dict):
+        return ledger
+    from scripts.swarm_ledger import ledger_server
+
+    view = ledger_server.page_view(ledger)
+    meta = ledger.get("_meta", {})
+    return {**view, "marks": ledger.get("marks", view["marks"]), "_meta": {**view["_meta"], **meta}}
 
 
 def is_events(url):

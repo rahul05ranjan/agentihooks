@@ -15,10 +15,15 @@ def layout(handler: object, server: ModuleType, payload: dict | None) -> dict:
                 "type": "object",
                 "minProperties": 1,
                 "additionalProperties": False,
-                "properties": {key: {"type": "integer"} for key in fields},
+                "properties": {key: {"type": "number"} for key in fields},
             }
             for row, fields in server.ledger_layout.ROWS.items()
         }
+        properties[server.ledger_layout.COLUMNS] = {
+            "type": "object",
+            "additionalProperties": {"type": "array", "items": {"type": "number"}},
+        }
+        properties[server.ledger_layout.STATS] = {"type": "array", "items": {"type": "string"}}
         schemas.validate({"type": "object", "additionalProperties": False, "properties": properties}, payload)
         try:
             data = server.ledger_layout.write(payload)

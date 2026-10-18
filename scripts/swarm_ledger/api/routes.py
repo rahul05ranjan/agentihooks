@@ -11,6 +11,7 @@ from . import resources, schemas
 from .errors import APIError
 
 WORKSPACE_RE = re.compile(r"tasks/[\w.-]+/workspace")
+FILE_RE = re.compile(r"files/(media|artifacts)/[\w.-]+")
 
 
 def body(handler: object, server: ModuleType) -> dict:
@@ -39,6 +40,9 @@ def dispatch(handler: object, server: ModuleType) -> dict | str | None:
         raise APIError(404, "ledger_missing", "No such ledger")
     if path == "agent-token" and handler.command == "POST":
         return agent_token(handler, server, slug)
+    if handler.command == "GET" and FILE_RE.fullmatch(path):
+        _, kind, name = path.split("/")
+        return handler.send_media(slug, name, server.ledger_artifacts if kind == "artifacts" else server.ledger_media)
     principal = server.authority.caller(handler.headers, server.repository.token(slug), slug)
     if principal is None and server.authority.controller(handler.headers.get("X-Controller-Credential")):
         principal = ""
@@ -48,6 +52,9 @@ def dispatch(handler: object, server: ModuleType) -> dict | str | None:
         query = pagination(handler.path)
         if path == "events" and handler.headers.get("Accept") == "text/event-stream":
             return events(handler, server, slug)
+        if path == "swarm/models":
+            catalog = server.swarm_models()
+            return {"data": catalog, "revision": resources.revision(catalog)}
         if path == "swarm" or path.startswith("swarm/"):
             return resources.swarm_read(server.swarm_status(slug), path, query)
         if WORKSPACE_RE.fullmatch(path):
@@ -140,6 +147,8 @@ def ledger_operation(handler: object, server: ModuleType, slug: str, path: str, 
         raise APIError(405, "method_not_allowed", "Use a resource operation")
     if path in ("uploads/media", "uploads/artifacts"):
         return admin.upload(handler, server, slug, path)
+    if handler.command == "PUT" and path in PAGE_WRITES:
+        return getattr(handler, PAGE_WRITES[path])(slug)
     payload = body(handler, server)
     if path == "lifecycle/actions":
         return admin.lifecycle(server, principal, slug, payload)
@@ -160,6 +169,9 @@ def ledger_operation(handler: object, server: ModuleType, slug: str, path: str, 
 
         return architecture.act(handler, server, slug, principal, payload, os.environ)
     raise APIError(404, "resource_missing", "No such operation resource")
+
+
+PAGE_WRITES = {"saves": "put_ledger", "swarm/controls": "put_swarm"}
 
 
 def export_body(state: dict) -> str:

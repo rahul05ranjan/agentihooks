@@ -16,57 +16,16 @@ function byId(list, id) {
   return list.find((i) => i.id === id);
 }
 
-export function ancestors(d, key, seen = new Set()) {
-  const [list, id] = key.split("/");
-  if (list === "phases") {
-    const phase = byId(d.phases, id);
-    return [key, ...(phase && phase.plan ? [phase.plan] : [])];
-  }
-  if (list === "slices") {
-    const row = byId(d.slices, id);
-    return [key, ...(row && row.phase ? ancestors(d, row.phase) : [])];
-  }
-  if (list === "tasks") {
-    const task = byId(d.tasks, id);
-    if (!task) return [key];
-    if (task.merged_into && task.freeze_ancestry) return task.freeze_ancestry;
-    seen.add(key);
-    const target = task.merged_into ? `tasks/${task.merged_into}` : "";
-    const up = [...(task.slice ? ancestors(d, task.slice) : []),
-      ...(task.phase ? ancestors(d, `phases/${task.phase}`) : []),
-      ...(target && !seen.has(target) ? ancestors(d, target, seen) : [])];
-    return [key, ...new Set(up)];
-  }
-  return [key];
-}
-
-function matches(d, key, selector) {
-  const [list, id] = key.split("/");
-  const task = list === "tasks" && byId(d.tasks, id);
-  if (!task) return false;
-  const [field, value] = selector.split(":");
-  return task[field] === value;
-}
-
-function covers(d, key, target) {
-  return isSelector(target) ? matches(d, key, target) : ancestors(d, key).includes(target);
-}
-
 export function ownFreeze(d, key) {
   return d.freezes.find((r) => r.verb === "freeze" && r.target === key);
 }
 
 export function frozen(d, key) {
-  return d.freezes.some((r) => r.verb === "freeze" && covers(d, key, r.target));
+  return d.marks.frozen.includes(key);
 }
 
 export function held(d, key) {
-  const focus = d.freezes.filter((r) => r.verb === "focus");
-  if (!focus.length || frozen(d, key)) return false;
-  const [list, id] = key.split("/");
-  if (list === "tasks" && (byId(d.tasks, id) || {}).rank === "urgent") return false;
-  return !focus.some((r) => (isSelector(r.target) ? list !== "tasks" || matches(d, key, r.target)
-    : covers(d, key, r.target) || ancestors(d, r.target).includes(key)));
+  return d.marks.held.includes(key);
 }
 
 export function setFreeze(d, op, at) {

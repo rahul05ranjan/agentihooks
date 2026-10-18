@@ -1,7 +1,7 @@
-import { ARTIFACT_KEEP_DAYS, DAY } from "./config.js";
+import { DAY } from "./config.js";
 import { $, h, newId, when } from "./dom.js";
 import { artifactUrl, readArtifact } from "./api.js";
-import { doc, queue } from "./sync.js";
+import { doc, meta, queue } from "./sync.js";
 import { jsonTree, markdown } from "./markdown.js";
 import { anchorPanel } from "./notices.js";
 import { firstPage, moreButton } from "./pages.js";
@@ -38,7 +38,7 @@ function openArtifact(a) {
 }
 
 function daysLeft(deletedAt) {
-  return Math.max(0, Math.ceil((ARTIFACT_KEEP_DAYS * DAY - (Date.now() - deletedAt)) / DAY));
+  return Math.max(0, Math.ceil((((meta.limits || {}).bin_days || 0) * DAY - (Date.now() - deletedAt)) / DAY));
 }
 
 export function renderArtifacts() {
