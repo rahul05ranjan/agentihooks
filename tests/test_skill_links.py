@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts import deps_preflight, install
+from scripts import deps_preflight, install, tool_deps
 from tests import test_install as install_tests
 
 
@@ -16,6 +16,7 @@ def skill_home(tmp_path, monkeypatch):
     monkeypatch.setattr(install, "_get_bundle_path", lambda: None)
     monkeypatch.setattr(install, "_install_cli_tool", lambda: None)
     monkeypatch.setattr(install, "_resolve_hooks_python", lambda: Path(sys.executable))
+    monkeypatch.setattr(tool_deps, "SOURCE", tmp_path)
     package = tmp_path / "package"
     monkeypatch.setattr(install, "PACKAGE_FEATURES_DIR", package)
     source = profiles / "tiny" / ".claude" / "skills" / "worktree"
@@ -64,7 +65,8 @@ def test_deps_check_reports_dangling_managed_skill_without_manifest(skill_home, 
     assert link.is_symlink()
 
 
-def test_deps_check_ignores_personal_dangling_links(tmp_path, capsys):
+def test_deps_check_ignores_personal_dangling_links(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(tool_deps, "SOURCE", tmp_path)
     skills = install.CLAUDE_HOME / "skills"
     skills.mkdir()
     personal = skills / "personal"
