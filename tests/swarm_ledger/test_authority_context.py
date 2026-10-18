@@ -159,6 +159,7 @@ def test_tick_read_and_service_credentials_are_scoped_renewed_and_verified(monke
         assert renewed != headers
     monkeypatch.setenv("SWARM_AUTH_MODE", "edge")
     monkeypatch.setenv("SWARM_SECRET", value)
+    assert authority_context.tick_headers("ledger") == {}
     monkeypatch.setattr(ledger_authority, "access_operator", lambda assertion: False)
     assert ledger_authority.caller(headers, "", "ledger") == ""
     assert ledger_authority.caller(headers, "", "another-ledger") is None
@@ -167,6 +168,9 @@ def test_tick_read_and_service_credentials_are_scoped_renewed_and_verified(monke
     assert ledger_authority.caller(headers, "", "ledger") is None
     assert ledger_authority.caller(renewed, "", "ledger") == ""
     clock[0] = 1000
+    monkeypatch.delenv("SWARM_SECRET")
+    assert ledger_authority.caller(headers, "", "ledger") is None
+    monkeypatch.setenv("SWARM_SECRET", value)
     expires, signature = headers["X-Ledger-Tick"].split(".")
     assert ledger_authority.caller({"X-Ledger-Tick": f"{int(expires) - 1}.{signature}"}, "", "ledger") is None
     future = 1901

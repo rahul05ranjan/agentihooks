@@ -14,7 +14,14 @@ from pathlib import Path
 START = "agentihooks ledger serve --ensure"
 LOOPBACK = ("127.0.0.1", "localhost")
 USER_AGENT = "agentihooks-swarm"
-CREDENTIAL_HEADERS = ("X-Controller-Credential", "X-Hive-Credential", "X-Ledger-Token", "X-Proof-Credential")
+CREDENTIAL_HEADERS = (
+    "X-Controller-Credential",
+    "X-Hive-Credential",
+    "X-Ledger-Token",
+    "X-Proof-Credential",
+    "X-Ledger-Tick",
+    "X-Ledger-Migration",
+)
 TLS_CERT_ENV, TLS_KEY_ENV, CA_ENV = "LEDGER_TLS_CERT", "LEDGER_TLS_KEY", "LEDGER_CA_PEM"
 
 

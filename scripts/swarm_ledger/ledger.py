@@ -136,8 +136,13 @@ def base():
 
 
 def credentials(slug, service=False):
+    from scripts.swarm_ledger.authority_context import tick_headers
+
     who = Who.from_env()
     if ledger_link.remote():
+        tick = tick_headers(slug)
+        if tick:
+            return tick
         controller = os.environ.get("AGENTIHOOKS_CONTROLLER_CREDENTIAL")
         if controller and not who.pinned:
             return {"X-Controller-Credential": controller}

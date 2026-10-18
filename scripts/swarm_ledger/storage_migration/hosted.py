@@ -145,7 +145,7 @@ def file_bytes(files: dict) -> dict:
 
 
 def write_files(folder: Path, files: dict) -> None:
-    folder.mkdir(parents=True, exist_ok=True)
+    folder.mkdir(exist_ok=True)
     for name, data in files.items():
         path = folder / name
         if path.is_symlink() or (path.exists() and path.read_bytes() != data):
@@ -230,6 +230,9 @@ def transfer(url: str, snapshot: dict, secret: str) -> dict:
         "CF-Access-Client-Secret": os.environ.get("SWARM_ACCESS_CLIENT_SECRET")
         or os.environ.get("CF_ACCESS_CLIENT_SECRET", ""),
     }
+    from scripts.swarm_ledger.ledger_link import guard
+
+    guard(url, headers)
     endpoint = url.rstrip("/") + "/api/v1/migrations/" + snapshot["slug"]
     opener = urllib.request.build_opener(NoRedirect)
     request = urllib.request.Request(endpoint, data=gzip.compress(encode(snapshot)), headers=headers)
