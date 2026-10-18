@@ -45,10 +45,6 @@ def dispatch(handler: object, server: ModuleType) -> dict | str | None:
     if principal is None:
         raise APIError(403, "forbidden", "Missing or wrong ledger credential")
     if handler.command == "GET":
-        if path == "controller-lease":
-            from . import controller_lease
-
-            return controller_lease.read(slug)
         query = pagination(handler.path)
         if path == "events" and handler.headers.get("Accept") == "text/event-stream":
             return events(handler, server, slug)
@@ -61,6 +57,10 @@ def dispatch(handler: object, server: ModuleType) -> dict | str | None:
 
 
 def ledger_read(server: ModuleType, slug: str, path: str, query: dict) -> dict:
+    if path == "controller-lease":
+        from . import controller_lease
+
+        return controller_lease.read(slug)
     if path.split("/")[0] == "hierarchy":
         return resources.hierarchy_read(server.repository, slug, path, query)
     if path == "architecture":
