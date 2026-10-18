@@ -45,7 +45,7 @@ def authorize(secret: str, slug: str, credential: str, now: int) -> bool:
     return (
         bool(secret)
         and now < expires <= now + LIFETIME
-        and hmac.compare_digest(credential, token(secret, slug, expires))
+        and hmac.compare_digest(credential.encode(), token(secret, slug, expires).encode())
     )
 
 
@@ -177,7 +177,7 @@ def restore(repo: SQLiteLedgerRepository, snapshot: dict) -> dict:
             stored["_meta"]["seeds"] = {}
         import secrets
 
-        repo._insert(connection, slug, stored, secrets.token_urlsafe(24), seeds)
+        repo._insert(connection, slug, stored, secrets.token_urlsafe(), seeds)
         for registry, path, value in snapshot["registries"]:
             connection.execute("INSERT INTO registry VALUES (?,?,?)", (registry, path, value))
         if repo._export(connection, slug) != state:

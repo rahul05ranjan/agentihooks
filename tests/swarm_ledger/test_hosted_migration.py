@@ -38,6 +38,7 @@ def test_complete_history_bin_and_files_survive_an_idempotent_import(stores):
     snapshot = hosted.capture(source, "migration-proof")
     result = hosted.restore(target, snapshot)
     assert target.export_document("migration-proof") == document()
+    assert target.get_document("migration-proof")["_meta"]["seeds"] == {}
     assert hosted.capture(target, "migration-proof") == snapshot
     assert hosted.restore(target, snapshot) == result
     assert result["tasks"] == 2
@@ -77,6 +78,10 @@ def test_interrupted_file_copy_can_resume_without_losing_history(stores, monkeyp
         with pytest.raises(OSError, match="interrupted"):
             hosted.restore(target, snapshot)
     assert hosted.write_files is original
+    folder = target.directory / "migration-proof.media"
+    folder.mkdir()
+    pending = folder / (next(iter(snapshot["files"])) + ".part")
+    pending.write_bytes(b"partial copy")
     hosted.restore(target, snapshot)
     assert hosted.capture(target, "migration-proof") == snapshot
 
@@ -325,7 +330,7 @@ def test_each_ledger_comparison_is_visible_before_the_next_transfer(stores, monk
 def test_server_secret_is_loaded_from_openbao_only_in_memory(monkeypatch, capsys):
     secret = secrets.token_hex(32)
     monkeypatch.delenv("SWARM_SECRET", raising=False)
-    monkeypatch.setenv("OPENBAO_URL", "https://vault.example/")
+    monkeypatch.setenv("OPENBAO_URL", "https://vault.example/prefixX/")
     monkeypatch.setenv("OPENBAO_TOKEN", "$FIXTURE_OPENBAO_TOKEN")
     calls = []
 
@@ -340,7 +345,7 @@ def test_server_secret_is_loaded_from_openbao_only_in_memory(monkeypatch, capsys
     monkeypatch.setattr(hosted.urllib.request, "build_opener", opener)
     assert hosted.server_secret() == secret
     assert "SWARM_SECRET" not in hosted.os.environ
-    assert calls[0][0].full_url == "https://vault.example/v1/secret/data/k8s/swarm"
+    assert calls[0][0].full_url == "https://vault.example/prefixX/v1/secret/data/k8s/swarm"
     assert calls[0][0].get_header("X-vault-token") == "$FIXTURE_OPENBAO_TOKEN"
     assert calls[0][1] == 30
     assert capsys.readouterr().out == ""
@@ -453,9 +458,9 @@ def test_source_inventory_refuses_symbolic_links_and_missing_databases(stores, t
     folder = source.directory / "migration-proof.media"
     existing = next(folder.iterdir())
     (folder / ("a" * 64 + ".md")).symlink_to(existing)
-    with pytest.raises(ValueError, match="regular files"):
+    with pytest.raises(ValueError, match="^ledger media must contain regular files$"):
         hosted.capture(source, "migration-proof")
-    with pytest.raises(ValueError, match="database"):
+    with pytest.raises(ValueError, match="^no ledger database$"):
         hosted.capture(SQLiteLedgerRepository(tmp_path / "missing" / DATABASE, ledger_core), "migration-proof")
 
 
@@ -482,7 +487,7 @@ def test_import_refuses_corrupt_files_and_cross_ledger_registry_entries(stores):
 
 def test_unknown_source_ledger_cannot_be_fenced(stores):
     source, _ = stores
-    with pytest.raises(ValueError, match="no such ledger"):
+    with pytest.raises(ValueError, match="^no such ledger$"):
         hosted.fence(source, "absent", "https://hosted.example")
 
 
@@ -567,6 +572,22 @@ def test_migration_limits_accept_exact_boundaries_and_leave_the_next_request_unr
     assert incoming.rfile.read() == b"GET /next HTTP/1.1\r\n\r\n"
 
 
+def test_one_byte_import_body_is_consumed_before_the_next_request(stores, monkeypatch):
+    source, target = stores
+    secret = secrets.token_hex(32)
+    monkeypatch.setenv("SWARM_SECRET", secret)
+    monkeypatch.setattr(hosted.time, "time", lambda: 1000)
+    snapshot = hosted.capture(source, "migration-proof")
+    handler = request(snapshot, hosted.token(secret, "migration-proof", 1100))
+    handler.headers["Content-Length"] = "1"
+    handler.rfile = io.BytesIO(b"\x1fNEXT")
+    server = SimpleNamespace(repository=target, core=ledger_core)
+    with pytest.raises(APIError) as failure:
+        hosted.route(handler, server, ["migrations", "migration-proof"])
+    assert failure.value.status == 400
+    assert handler.rfile.read() == b"NEXT"
+
+
 def test_missing_server_secret_never_accepts_a_predictable_default_key(stores, monkeypatch):
     source, target = stores
     monkeypatch.delenv("SWARM_SECRET", raising=False)
@@ -586,7 +607,7 @@ def test_missing_server_secret_never_accepts_a_predictable_default_key(stores, m
 @pytest.mark.parametrize("missing", ["OPENBAO_URL", "OPENBAO_TOKEN"])
 def test_missing_openbao_settings_are_refused_before_any_network_access(monkeypatch, missing):
     monkeypatch.delenv("SWARM_SECRET", raising=False)
-    monkeypatch.setenv("OPENBAO_URL", "https://vault.example/")
+    monkeypatch.setenv("OPENBAO_URL", "https://vault.example/prefixX/")
     monkeypatch.setenv("OPENBAO_TOKEN", "$FIXTURE_OPENBAO_TOKEN")
     monkeypatch.delenv(missing)
 
