@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 import pytest
@@ -47,6 +48,11 @@ def test_a_changed_declaration_is_judged_again(planned):  # noqa: F811
     assert intent._fingerprint(first, first["tasks"][0]) != intent._fingerprint(second, second["tasks"][0])
     other = declared(planned, url=OTHER)
     assert intent._fingerprint(other, other["tasks"][0]) == intent._fingerprint(planned, task)
+    phase = planned["phases"][0]
+    parent = [task["title"], task["description"], phase["title"], phase["description"]]
+    chunk = {"plan_lines": "15-17", "plan_chunk": "line 15\nline 16\nline 17\n"}
+    today = hashlib.sha256(json.dumps([*parent, chunk]).encode()).hexdigest()
+    assert intent._fingerprint(planned, task) == today
 
 
 def test_the_stamped_parent_intent_names_the_declared_scope():

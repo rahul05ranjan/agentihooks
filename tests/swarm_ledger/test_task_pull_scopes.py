@@ -22,6 +22,8 @@ def test_an_engineer_records_the_scope_a_pull_request_delivers():
     [
         [],
         {"pull/9": {"kind": "stage", "scope": "the gate"}},
+        {"https://example.com/x": {"kind": "stage", "scope": "the gate"}},
+        {f"{URL}/files": {"kind": "stage", "scope": "the gate"}},
         {URL: "the gate"},
         {URL: {"kind": "half", "scope": "the gate"}},
         {URL: {"kind": "stage", "scope": " "}},

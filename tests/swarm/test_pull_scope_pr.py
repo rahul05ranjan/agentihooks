@@ -45,8 +45,11 @@ def test_a_pull_request_declares_one_kind_only(started, capsys):  # noqa: F811
     assert "argument --prerequisite: not allowed with argument --stage" in capsys.readouterr().err
 
 
-def test_recording_a_declared_pull_request_again_keeps_its_declaration(started):  # noqa: F811
-    _, ledger, _ = started
+def test_recording_a_declared_pull_request_without_a_declaration_drops_only_its_own(started):  # noqa: F811
+    _, ledger, stamped = started
     assert run("sw", "pr", FIRST, "--stage", "the gate") == 0
+    assert run("sw", "pr", SECOND, "--prerequisite", "the tests") == 0
     assert run("sw", "pr", FIRST) == 0
-    assert ledger.rows["t1"]["pull_scopes"] == {FIRST: {"kind": "stage", "scope": "the gate"}}
+    kept = {SECOND: {"kind": "prerequisite", "scope": "the tests"}}
+    assert ledger.rows["t1"]["pull_scopes"] == kept
+    assert stamped[-1][2]["pull_scopes"] == kept

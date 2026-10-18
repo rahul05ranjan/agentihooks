@@ -63,6 +63,7 @@ COMMIT_RE = re.compile(r"^([0-9a-f]{7,64})?$")
 RELEASE_RE = re.compile(r"^(v?\d+\.\d+\.\d+)?$")
 OBJECT_FIELDS = ("contract", "proof", "recovery", "repository_branches", "pull_scopes")
 PULL_SCOPE_KINDS = ("stage", "prerequisite")
+PULL_URL_RE = re.compile(r"^https://github\.com/[^/\s]+/[^/\s]+/pull/\d+$")
 URL_FIELDS = ("issue_url", "pr_url", "plan_url")
 URL_RE = re.compile(r"^https?://[^\s]+$")
 OPS = ("task_add", "task_update")
@@ -235,7 +236,7 @@ def check_repository_branches(fields: dict) -> None:
 def check_pull_scopes(fields: dict) -> None:
     scopes = fields.get("pull_scopes", {})
     if not isinstance(scopes, dict) or not all(
-        URL_RE.match(url)
+        PULL_URL_RE.match(url)
         and isinstance(declared, dict)
         and set(declared) == {"kind", "scope"}
         and declared["kind"] in PULL_SCOPE_KINDS

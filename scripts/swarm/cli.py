@@ -1410,13 +1410,14 @@ def _split_binding(row, url, half):
 
 
 def _pull_scope(row, args):
+    scopes = row.get("pull_scopes") or {}
     kind = "stage" if args.stage is not None else "prerequisite" if args.prerequisite is not None else ""
     if not kind:
-        return {}
+        return {"pull_scopes": {url: s for url, s in scopes.items() if url != args.url}} if args.url in scopes else {}
     scope = getattr(args, kind).strip()
     if not scope:
         raise SwarmError(f"--{kind} needs the scope this pull request delivers")
-    return {"pull_scopes": {**(row.get("pull_scopes") or {}), args.url: {"kind": kind, "scope": scope}}}
+    return {"pull_scopes": {**scopes, args.url: {"kind": kind, "scope": scope}}}
 
 
 def _queue_intent(store, args, agent, head):
