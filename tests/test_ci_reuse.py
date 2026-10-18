@@ -1005,9 +1005,13 @@ def test_the_early_suite_speed_gate_requires_its_event_result(event, outcome):
         needs["suite-speed"] = {"result": outcome}
     steps = ci_reuse.gate_steps(queue_tier=True, promotion=True, consolidated=True, suite_speed=True)
     result = _gate(steps, needs, event)
-    assert (result.returncode == 0) == (outcome == ("success" if event == "pull_request" else "skipped")), (
-        result.stdout + result.stderr
-    )
+    passed = outcome == ("success" if event == "pull_request" else "skipped")
+    assert result.returncode == (0 if passed else 1), result.stdout + result.stderr
+    if not passed:
+        assert (
+            "::error::The early suite speed gate must succeed on pull requests and be skipped on other events."
+            in result.stdout.splitlines()
+        )
 
 
 def test_the_canonical_gate_still_needs_the_standalone_ratchet_in_the_queue():
