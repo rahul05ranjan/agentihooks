@@ -55,7 +55,7 @@ def _print_report(report: dict) -> None:
             print(f"{item['action']:9} {state:8} {item['size'] / GB:7.2f} GB  {item['path']}  ({item['reason']})")
     for item in report.get("git_maintenance", []):
         state = item["outcome"] or ("maintenance registered" if item["registered"] else "maintenance not registered")
-        print(f"git       {item['loose']:5} loose {item['packs']:5} packs  {item['path']}  ({state})")
+        print(f"git       {item['loose']!s:>5} loose {item['packs']!s:>5} packs  {item['path']}  ({state})")
 
 
 def _lease(path: Path, kind: str) -> int:

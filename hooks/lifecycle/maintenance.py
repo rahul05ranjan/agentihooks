@@ -1,15 +1,15 @@
+import subprocess
 from pathlib import Path
 
 from hooks.lifecycle.config import load_roots
 from hooks.lifecycle.gitstate import git
 from hooks.lifecycle.lease import admin_dir
-from hooks.lifecycle.model import Root
 from hooks.lifecycle.timer import _live_home
 from hooks.lifecycle.worktrees import discover
 
 
-def primaries(roots: list[Root]) -> list[Path]:
-    return sorted({admin.parent.parent.parent for path, _root in discover(roots) if (admin := admin_dir(path))})
+def primaries(worktrees: list[Path]) -> list[Path]:
+    return sorted({admin.parent.parent.parent for path in worktrees if (admin := admin_dir(path))})
 
 
 def registered_repos() -> list[str]:
@@ -19,30 +19,34 @@ def registered_repos() -> list[str]:
 
 def objects(primary: Path) -> dict:
     result = git(primary, "count-objects", "-v")
+    if result.returncode != 0:
+        return {"loose": None, "packs": None}
     counts = dict(line.split(": ", 1) for line in result.stdout.splitlines() if ": " in line)
     return {"loose": int(counts.get("count", 0)), "packs": int(counts.get("packs", 0))}
 
 
 def register(primary: Path) -> str:
-    if _live_home() and git(primary, "maintenance", "start").returncode == 0:
-        return "registered"
-    result = git(primary, "maintenance", "register")
+    result = git(primary, "maintenance", "start" if _live_home() else "register")
     return "registered" if result.returncode == 0 else f"failed: {result.stderr.strip()}"
 
 
+def _entry(primary: Path, registered: bool, act: bool) -> dict:
+    try:
+        outcome = register(primary) if act and not registered else ""
+        counts = objects(primary)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        outcome, counts = f"failed: {error}", {"loose": None, "packs": None}
+    registered = registered or outcome == "registered"
+    return {"path": str(primary), "registered": registered, "outcome": outcome, **counts}
+
+
 def maintain(paths: list[Path], act: bool) -> list[dict]:
-    known, report = set(registered_repos()), []
-    for primary in paths:
-        registered, outcome = str(primary.resolve()) in known, ""
-        if act and not registered:
-            outcome = register(primary)
-            registered = outcome == "registered"
-        report.append({"path": str(primary), "registered": registered, "outcome": outcome, **objects(primary)})
-    return report
+    known = set(registered_repos())
+    return [_entry(primary, str(primary.resolve()) in known, act) for primary in paths]
 
 
-def setup(roots: list[Root] | None = None) -> list[str]:
-    report = maintain(primaries(load_roots() if roots is None else roots), act=True)
+def setup() -> list[str]:
+    report = maintain(primaries([path for path, _root in discover(load_roots())]), act=True)
     return [
         f"[{'OK' if item['registered'] else '!!'}] git maintenance {item['outcome']} for {item['path']}"
         for item in report

@@ -111,13 +111,14 @@ def sweep(
         snap = snap or take_snapshot()
         roots = load_roots() if roots is None else roots
         findings = confirm(collect(roots, snap), snap, home / "gc-state.json")
+        checkouts = primaries([Path(item.path) for item in findings if item.category == "worktree"])
         if scope:
             findings = [item for item in findings if _within(item.path, scope)]
         if act:
             findings = enforce(findings, roots, home, fresh)
         report = summarize(findings, snap)
         report["ledger_servers"] = sweep_servers(snap.table, home, scope, act)
-        checkouts = [path for path in primaries(roots) if not scope or _within(str(path), scope)]
+        checkouts = [path for path in checkouts if not scope or _within(str(path), scope)]
         report["git_maintenance"] = maintain(checkouts, act)
         (home / "gc-last.json").write_text(json.dumps(report), encoding="utf-8")
         return report

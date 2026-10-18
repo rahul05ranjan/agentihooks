@@ -1,3 +1,6 @@
+import subprocess
+from pathlib import Path
+
 import pytest
 
 from hooks.lifecycle import maintenance, timer
@@ -14,7 +17,10 @@ def _global_config(monkeypatch):
 
 
 def _registered() -> list[str]:
-    return maintenance.registered_repos()
+    result = subprocess.run(
+        ["git", "config", "--global", "--get-all", "maintenance.repo"], capture_output=True, text=True
+    )
+    return [str(Path(line).resolve()) for line in result.stdout.splitlines()]
 
 
 def _objects(path) -> dict:
@@ -51,6 +57,34 @@ def test_lifecycle_setup_registers_every_managed_primary(repo, monkeypatch):
     assert str(repo.primary.resolve()) in _registered()
     assert message.endswith(f"\n  [OK] git maintenance registered for {repo.primary}")
     assert "git maintenance" not in timer.install_timer("/venv/bin/python", "/opt/agentihooks")
+
+
+def test_the_live_home_schedules_maintenance_and_reports_a_failed_start(repo, monkeypatch):
+    calls = []
+
+    def fake(path, *args, timeout=120):
+        calls.append(args)
+        failed = args[0] in ("maintenance", "count-objects")
+        return subprocess.CompletedProcess(args, 1 if failed else 0, "", "no scheduler" if failed else "")
+
+    monkeypatch.setattr(maintenance, "_live_home", lambda: True)
+    monkeypatch.setattr(maintenance, "git", fake)
+    report = maintenance.maintain([repo.primary], act=True)
+    assert ("maintenance", "start") in calls and ("maintenance", "register") not in calls
+    assert report[0]["registered"] is False and report[0]["outcome"] == "failed: no scheduler"
+    assert report[0]["loose"] is None and report[0]["packs"] is None
+
+
+def test_a_git_error_is_reported_without_aborting_the_sweep(repo, monkeypatch):
+    def broken(path, *args, timeout=120):
+        if args[0] == "maintenance":
+            raise subprocess.TimeoutExpired(["git", *args], timeout)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(maintenance, "git", broken)
+    report = maintenance.maintain([repo.primary], act=True)
+    assert report[0]["registered"] is False and report[0]["outcome"].startswith("failed: ")
+    assert report[0]["loose"] is None
 
 
 def test_gc_prints_the_object_backlog_per_checkout(monkeypatch, capsys):
