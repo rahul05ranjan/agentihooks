@@ -56,6 +56,8 @@ def test_lifecycle_setup_registers_every_managed_primary(repo, monkeypatch):
     message = timer.install_timer("/venv/bin/python", "/opt/agentihooks")
     assert str(repo.primary.resolve()) in _registered()
     assert message.endswith(f"\n  [OK] git maintenance registered for {repo.primary}")
+    service = (timer.unit_dir() / f"{timer.UNIT}.service").read_text()
+    assert "ExecStart=/venv/bin/python " in service and "WorkingDirectory=/opt/agentihooks\n" in service
     assert "git maintenance" not in timer.install_timer("/venv/bin/python", "/opt/agentihooks")
 
 
@@ -84,15 +86,63 @@ def test_a_git_error_is_reported_without_aborting_the_sweep(repo, monkeypatch):
     monkeypatch.setattr(maintenance, "git", broken)
     report = maintenance.maintain([repo.primary], act=True)
     assert report[0]["registered"] is False and report[0]["outcome"].startswith("failed: ")
-    assert report[0]["loose"] is None
+    assert report[0]["loose"] is None and report[0]["packs"] is None
+
+
+def test_object_counts_come_from_the_count_objects_fields(repo, monkeypatch):
+    output = "count: 78532\nsize: 900\nin-pack: 12\npacks: 47\nsize-pack: 3\nprune-packable: 0\ngarbage: 0\n"
+    monkeypatch.setattr(
+        maintenance, "git", lambda path, *args, timeout=120: subprocess.CompletedProcess(args, 0, output, "")
+    )
+    assert maintenance.objects(repo.primary) == {"loose": 78532, "packs": 47}
+
+
+def test_registered_repos_read_every_global_entry_and_ignore_local_config(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    git(home, "init", "-q")
+    git(home, "config", "maintenance.repo", "/local")
+    for path in ("/first", "/second"):
+        git(home, "config", "--global", "--add", "maintenance.repo", path)
+    assert maintenance.registered_repos() == ["/first", "/second"]
+
+
+def test_only_linked_worktrees_name_a_primary(repo, tmp_path):
+    held = repo.worktree("held")
+    submodule = tmp_path / "sub"
+    submodule.mkdir()
+    (submodule / ".git").write_text(f"gitdir: {repo.primary}/.git/modules/sub\n")
+    assert maintenance.primaries([held, repo.primary, submodule]) == [repo.primary]
+
+
+def test_a_scoped_sweep_reports_only_checkouts_inside_its_scope(repo, tmp_path):
+    repo.worktree("held")
+    inside = sweep([repo.root()], snap(), tmp_path / "state", scope=str(repo.primary))
+    outside = sweep([repo.root()], snap(), tmp_path / "state", scope=str(tmp_path / "elsewhere"))
+    assert [item["path"] for item in inside["git_maintenance"]] == [str(repo.primary)]
+    assert outside["git_maintenance"] == []
+
+
+def test_setup_marks_a_failed_registration(monkeypatch):
+    monkeypatch.setattr(maintenance, "load_roots", lambda: [])
+    monkeypatch.setattr(maintenance, "discover", lambda roots: [])
+    failed = [{"path": "/r/a", "registered": False, "outcome": "failed: no git", "loose": None, "packs": None}]
+    monkeypatch.setattr(maintenance, "maintain", lambda paths, act: failed)
+    assert maintenance.setup() == ["[!!] git maintenance failed: no git for /r/a"]
 
 
 def test_gc_prints_the_object_backlog_per_checkout(monkeypatch, capsys):
     report = {
         "totals": {},
         "findings": [],
-        "git_maintenance": [{"path": "/r/a", "registered": False, "outcome": "", "loose": 78532, "packs": 47}],
+        "git_maintenance": [
+            {"path": "/r/a", "registered": False, "outcome": "", "loose": 78532, "packs": 47},
+            {"path": "/r/b", "registered": True, "outcome": "", "loose": 3, "packs": 1},
+        ],
     }
     monkeypatch.setattr(gc_cli, "sweep", lambda scope="", act=False: report)
     assert gc_cli.main(["gc"]) == 0
-    assert "git       78532 loose    47 packs  /r/a  (maintenance not registered)" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "git       78532 loose    47 packs  /r/a  (maintenance not registered)" in out
+    assert "git           3 loose     1 packs  /r/b  (maintenance registered)" in out

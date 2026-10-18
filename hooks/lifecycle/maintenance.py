@@ -30,8 +30,8 @@ def objects(primary: Path) -> dict:
     result = git(primary, "count-objects", "-v")
     if result.returncode != 0:
         return {"loose": None, "packs": None}
-    counts = dict(line.split(": ", 1) for line in result.stdout.splitlines() if ": " in line)
-    return {"loose": int(counts.get("count", 0)), "packs": int(counts.get("packs", 0))}
+    counts = dict(line.split(": ") for line in result.stdout.splitlines())
+    return {"loose": int(counts["count"]), "packs": int(counts["packs"])}
 
 
 def register(primary: Path) -> str:
