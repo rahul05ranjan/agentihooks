@@ -1,0 +1,6 @@
+{
+  "scripts/swarm_ledger/proof_ledger.py:scripts.swarm_ledger.proof_ledger.x_call__mutmut_5:6dc846c2389c5e7347420a4eaa81214b4d908f125c726c3a5ed8fe84c60c6d77": {
+    "reader": "standards_reader",
+    "reason": "Changes only the case of the header name 'Content-Type' to 'content-type' in the headers dict given to urllib.request.Request. Request.__init__ applies add_header in insertion order and add_header stores key.capitalize(), so both spellings store the same key and the request on the wire is byte-identical; no later merged header supplies this name, so precedence is unchanged."
+  }
+}
