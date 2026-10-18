@@ -38,7 +38,7 @@ class LedgerClient:
 
         if ops is not None and (epoch := lease.EPOCH.get()) is not None:
             ops = [{**op, "controller_epoch": epoch} for op in ops]
-        service = self.service or all(op.get("by") in SERVICE_AUTHORS for op in ops or ())
+        service = self.service or bool(ops) and all(op.get("by") in SERVICE_AUTHORS for op in ops)
         ledger = _ledger()
         try:
             state = ledger.call(slug, ops, service=service)
