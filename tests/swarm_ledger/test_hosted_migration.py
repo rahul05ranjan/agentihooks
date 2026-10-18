@@ -131,6 +131,7 @@ def test_expiring_import_authority_is_bound_to_the_ledger_and_scope(stores, monk
         hosted.token(secret, "migration-proof", 999),
         hosted.token(secret, "migration-proof", 10000),
         "invalid",
+        "1100.é",
     ):
         with pytest.raises(APIError) as failure:
             routes.dispatch(request(snapshot, invalid), server)
@@ -238,9 +239,11 @@ def test_transfer_verifies_a_separate_read_and_blocks_redirects(stores, monkeypa
     assert all(req.get_header("Content-type") == "application/gzip" for req, _ in calls)
     assert all(req.get_header("X-ledger-migration") == first.get_header("X-ledger-migration") for req, _ in calls)
     assert hosted.authorize(secret, "migration-proof", first.get_header("X-ledger-migration"), 1000)
-    answers.extend([expected, {**expected, "events": 999}])
-    with pytest.raises(ValueError, match="comparison"):
-        hosted.transfer("https://hosted.example", snapshot, secret)
+    wrong = {**expected, "events": 999}
+    for received in ([expected, wrong], [wrong, expected], [wrong, wrong]):
+        answers.extend(received)
+        with pytest.raises(ValueError, match="^hosted comparison differs; do not cut over$"):
+            hosted.transfer("https://hosted.example", snapshot, secret)
     monkeypatch.delenv("SWARM_ACCESS_CLIENT_ID")
     monkeypatch.delenv("SWARM_ACCESS_CLIENT_SECRET")
     monkeypatch.setenv("CF_ACCESS_CLIENT_ID", "$FALLBACK_ACCESS_ID")

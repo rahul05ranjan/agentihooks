@@ -21,6 +21,7 @@ def test_trusted_authority_derives_worker_tokens_without_entering_the_environmen
 
     secret = secrets.token_hex(32)
     monkeypatch.setenv("SWARM_SECRET", secret)
+    assert authority_context.secret() == secret
     with authority_context.bound(secret):
         assert authority_context.secret() == secret
         assert "SWARM_SECRET" not in os.environ
@@ -131,6 +132,8 @@ def test_forked_children_cannot_read_private_authority(monkeypatch):
             os.close(read_end)
             assert os.waitpid(child, 0)[1] == 0
         assert authority_context.secret() == secret
+        authority_context._clear()
+        assert authority_context.secret() is None
 
 
 def test_nested_authority_scopes_restore_memory_without_restoring_exported_secrets(monkeypatch):
