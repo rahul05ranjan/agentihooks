@@ -158,8 +158,9 @@ def test_every_page_route_goes_through_version_one():
     routes = source("config") + source("api")
     assert not re.search(r"`/api/\$\{SLUG\}`\)|/api/swarm|/api/media|\"/api/layout\"|/media/\$\{SLUG\}", routes)
     assert "/artifacts/${SLUG}" not in routes
+    constants = dict(re.findall(r"^export const (\w+) = (.*);$", source("config"), re.M))
     for call in re.findall(r"fetch\(([^,)]+)", source("api")):
-        assert "V1" in call or call == "artifactUrl(id", call
+        assert "V1" in call or re.search(r"API_V1|/api/v1/", constants.get(call, "")) or call == "artifactUrl(id", call
 
 
 def test_the_page_copies_no_server_rule_or_limit():

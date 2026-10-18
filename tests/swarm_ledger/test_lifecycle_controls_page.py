@@ -189,7 +189,7 @@ def test_a_refused_control_is_not_held_for_reconciling(open_page):
     payload = copy.deepcopy(with_lifecycle())
     page = open_page(payload)
     page.tab.route(
-        "**/api/swarm/**",
+        "**/swarm/controls",
         lambda route: (
             route.fulfill(status=409, body="the page is stale: this agent was replaced, finished or moved task")
             if route.request.method == "PUT"
