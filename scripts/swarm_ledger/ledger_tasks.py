@@ -243,7 +243,9 @@ def check_pull_scopes(fields: dict) -> None:
         and declared["scope"].strip()
         for url, declared in scopes.items()
     ):
-        raise ValueError("pull_scopes must map pull request URLs to a kind, stage or prerequisite, and a nonempty scope")
+        raise ValueError(
+            "pull_scopes must map pull request URLs to a kind, stage or prerequisite, and a nonempty scope"
+        )
 
 
 def check_lists(fields):
