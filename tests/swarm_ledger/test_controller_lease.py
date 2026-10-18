@@ -28,7 +28,7 @@ def test_a_transferred_hosted_tick_passes_and_the_old_local_epoch_is_refused(liv
     monkeypatch.setenv("AGENTIHOOKS_DEPLOYMENT", "compose")
     source.redis.set(source.key(SLUG, "control-epoch"), 40)
     old = lease.acquire(source, SLUG, "workstation")
-    hosted.redis.set(hosted.key(SLUG, "control-epoch"), 8)
+    hosted.redis.set(hosted.key(SLUG, "control-epoch"), 90)
     secret = secrets.token_hex(32)
     monkeypatch.setattr(ledger_server.authority, "environ", {"SWARM_AUTH_MODE": "edge", "SWARM_SECRET": secret})
     monkeypatch.setattr("scripts.swarm.store.redis_client", lambda *_: hosted.redis)
@@ -41,14 +41,30 @@ def test_a_transferred_hosted_tick_passes_and_the_old_local_epoch_is_refused(liv
     )["data"]
     transferred = lease.Lease(**data)
     assert transferred.epoch > old.epoch
+    assert transferred.epoch == 91
     assert lease.current(hosted, SLUG) == transferred
     assert lease.release(source, SLUG, old)
     assert lease.current(source, SLUG) is None
     with authority_context.bound(secret), ledger_route.scoped(SLUG, base):
+        assert lease.acquire(source, SLUG, old.owner).epoch == transferred.epoch
+        assert source.redis.get(source.key(SLUG, "control-owner")) is None
+        assert lease.current(source, SLUG).epoch == transferred.epoch
         tick = controller.FencedLedger(source, SLUG, transferred, LedgerClient())
         tick.comment_phase(SLUG, "p1", "Transferred tick applied", "swarm")
         state = tick.state(SLUG)
         assert any(comment["text"] == "Transferred tick applied" for comment in state["phases"][0]["comments"])
+        renewed = []
+
+        def heartbeat(store, slug, held, stop):
+            try:
+                renewed.append(lease.renew(store, slug, held).epoch)
+            except SwarmError:
+                renewed.append(None)
+
+        monkeypatch.setattr(lease, "beat", heartbeat)
+        with lease.kept(source, SLUG, transferred):
+            pass
+        assert renewed == [transferred.epoch]
         stale = controller.FencedLedger(source, SLUG, old, LedgerClient())
         with pytest.raises(SwarmError, match="stale"):
             stale.comment_phase(SLUG, "p1", "Stale tick refused", "swarm")
@@ -64,3 +80,6 @@ def test_a_transferred_hosted_tick_passes_and_the_old_local_epoch_is_refused(liv
         client.mutate(SLUG, [operation])
     assert refused.value.code == 409
     assert json.load(refused.value)["error"]["code"] == "stale_controller"
+    with authority_context.bound(secret), ledger_route.scoped(SLUG, base):
+        assert lease.release(source, SLUG, transferred)
+        assert lease.current(source, SLUG) is None
