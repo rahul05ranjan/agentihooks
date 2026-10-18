@@ -9,8 +9,8 @@ NOW = 1_791_700_000_000
 AT = 1_791_696_000_000
 
 
-def note(state="Alerting", ledger="sw", stage="ci_queue", hours=2.5, threshold="1", at=AT, ident=1, swarm="bottleneck"):
-    labels = f"alertname=Swarm stage {stage}, grafana_folder=Swarm, ledger={ledger}, stage={stage}, swarm={swarm}"
+def note(state="Alerting", ledger="sw", stage="ci_queue", hours=2.5, threshold="1", at=AT, ident=1):
+    labels = f"alertname=Swarm stage {stage}, grafana_folder=Swarm, ledger={ledger}, stage={stage}, swarm=bottleneck"
     if threshold is not None:
         labels += f", threshold_hours={threshold}"
     found = {
@@ -133,7 +133,7 @@ def test_one_read_updates_every_stage_it_carries(redis):
     "bad",
     [
         note(stage="build"),
-        note(swarm="other"),
+        {**note(), "text": note()["text"].replace("swarm=bottleneck", "swarm=other")},
         note(threshold=None),
         note(threshold="lots"),
         note(hours=None),
