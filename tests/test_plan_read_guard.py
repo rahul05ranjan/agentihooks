@@ -119,6 +119,16 @@ def test_named_migration_inventory_and_copy_pass_without_allowing_other_reads(le
     assert check(bash(f"python -c 'print(1)' -m {module} --source {ledger}"), env(ledger))
 
 
+def test_migration_flags_and_redirects_preserve_guard_operands(ledger):
+    module = "scripts.swarm_ledger.storage_migration.hosted"
+    for redirect in (">", ">>"):
+        assert check(bash(f"python -m {module} --source {ledger} {redirect} {stored(ledger)}"), env(ledger))
+    valid = f"python3 -m {module} --freeze --slug demo --source {ledger} --url https://hosted.example >> /home/x/scratch/proof.jsonl"
+    assert check(bash(valid), env(ledger)) is None
+    for ending in ("--slug", "--unknown value", "unexpected value", "> one two", "--source"):
+        assert check(bash(f"python -m {module} --source {ledger} {ending}"), env(ledger))
+
+
 def test_grep_and_fetch_of_plan_refused(ledger):
     assert check({"tool_name": "Grep", "tool_input": {"pattern": "x", "path": stored(ledger)}}, env(ledger))
     url = f"http://127.0.0.1:8765/artifacts/{SLUG}/{PLAN}"

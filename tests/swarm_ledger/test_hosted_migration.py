@@ -53,7 +53,7 @@ def test_conflicting_existing_ledger_is_never_replaced(stores):
     source, target = stores
     snapshot = hosted.capture(source, "migration-proof")
     target.import_document("migration-proof", {**document(), "title": "Hosted work"})
-    with pytest.raises(ValueError, match="conflict"):
+    with pytest.raises(ValueError, match="^hosted ledger conflict$"):
         hosted.restore(target, snapshot)
     assert target.export_document("migration-proof")["title"] == "Hosted work"
 
@@ -96,7 +96,7 @@ def test_fence_blocks_new_connections_and_preserves_other_ledgers(stores):
     reopened.import_document("still-local", document())
     assert reopened.export_document("still-local") == document()
     hosted.fence(reopened, "migration-proof", "https://hosted.example")
-    with pytest.raises(ValueError, match="destination"):
+    with pytest.raises(ValueError, match="^ledger already has a different hosted destination$"):
         hosted.fence(reopened, "migration-proof", "https://other.example")
 
 
@@ -165,8 +165,10 @@ def test_frozen_uploads_and_cleanup_preserve_fallback_files(stores, monkeypatch)
     import os
 
     os.utime(existing, (0, 0))
-    with pytest.raises(ledger_media.Refused, match="hosted"):
+    with pytest.raises(ledger_media.Refused) as refusal:
         ledger_media.write_file(folder / ("a" * 64 + ".md"), b"new content")
+    assert refusal.value.status == 409
+    assert str(refusal.value) == "ledger moved to hosted service"
     with pytest.raises(ledger_artifacts.media.Refused, match="hosted"):
         ledger_artifacts.store("migration-proof", "new.md", b"new content")
     ledger_media.sweep("migration-proof", set(), 10**12)
@@ -233,10 +235,26 @@ def test_transfer_verifies_a_separate_read_and_blocks_redirects(stores, monkeypa
     assert first.get_header("Cf-access-client-id") == "$FIXTURE_ACCESS_ID"
     assert first.get_header("Cf-access-client-secret") == "$FIXTURE_ACCESS_SECRET"
     assert first.get_header("User-agent") == "agentihooks-swarm"
+    assert all(req.get_header("Content-type") == "application/gzip" for req, _ in calls)
+    assert all(req.get_header("X-ledger-migration") == first.get_header("X-ledger-migration") for req, _ in calls)
     assert hosted.authorize(secret, "migration-proof", first.get_header("X-ledger-migration"), 1000)
     answers.extend([expected, {**expected, "events": 999}])
     with pytest.raises(ValueError, match="comparison"):
         hosted.transfer("https://hosted.example", snapshot, secret)
+    monkeypatch.delenv("SWARM_ACCESS_CLIENT_ID")
+    monkeypatch.delenv("SWARM_ACCESS_CLIENT_SECRET")
+    monkeypatch.setenv("CF_ACCESS_CLIENT_ID", "$FALLBACK_ACCESS_ID")
+    monkeypatch.setenv("CF_ACCESS_CLIENT_SECRET", "$FALLBACK_ACCESS_SECRET")
+    answers.extend([expected, expected])
+    hosted.transfer("https://hosted.example", snapshot, secret)
+    assert calls[-1][0].get_header("Cf-access-client-id") == "$FALLBACK_ACCESS_ID"
+    assert calls[-1][0].get_header("Cf-access-client-secret") == "$FALLBACK_ACCESS_SECRET"
+    monkeypatch.delenv("CF_ACCESS_CLIENT_ID")
+    monkeypatch.delenv("CF_ACCESS_CLIENT_SECRET")
+    answers.extend([expected, expected])
+    hosted.transfer("https://hosted.example", snapshot, secret)
+    assert calls[-1][0].get_header("Cf-access-client-id") == ""
+    assert calls[-1][0].get_header("Cf-access-client-secret") == ""
 
 
 def test_command_freezes_source_before_transferring_and_reports_comparison(stores, monkeypatch, capsys):
@@ -277,7 +295,7 @@ def test_command_freezes_source_before_transferring_and_reports_comparison(store
 def test_server_secret_is_loaded_from_openbao_only_in_memory(monkeypatch, capsys):
     secret = secrets.token_hex(32)
     monkeypatch.delenv("SWARM_SECRET", raising=False)
-    monkeypatch.setenv("OPENBAO_URL", "https://vault.example")
+    monkeypatch.setenv("OPENBAO_URL", "https://vault.example/")
     monkeypatch.setenv("OPENBAO_TOKEN", "$FIXTURE_OPENBAO_TOKEN")
     calls = []
 
@@ -285,11 +303,16 @@ def test_server_secret_is_loaded_from_openbao_only_in_memory(monkeypatch, capsys
         calls.append((req, timeout))
         return io.BytesIO(json.dumps({"data": {"data": {"SWARM_SECRET": secret}}}).encode())
 
-    monkeypatch.setattr(hosted.urllib.request, "build_opener", lambda *args: SimpleNamespace(open=opened))
+    def opener(handler):
+        assert handler is hosted.NoRedirect
+        return SimpleNamespace(open=opened)
+
+    monkeypatch.setattr(hosted.urllib.request, "build_opener", opener)
     assert hosted.server_secret() == secret
     assert "SWARM_SECRET" not in hosted.os.environ
     assert calls[0][0].full_url == "https://vault.example/v1/secret/data/k8s/swarm"
     assert calls[0][0].get_header("X-vault-token") == "$FIXTURE_OPENBAO_TOKEN"
+    assert calls[0][1] == 30
     assert capsys.readouterr().out == ""
 
 
@@ -369,6 +392,14 @@ def test_migration_api_rejects_invalid_inputs_without_creating_a_ledger(stores, 
     with pytest.raises(APIError) as failure:
         routes.dispatch(incoming, server)
     assert failure.value.status == status
+    codes = {400: "migration_invalid", 404: "resource_missing", 405: "method_not_allowed", 415: "content_type"}
+    messages = {
+        400: "Migration refused: invalid data or existing conflict",
+        404: "No such migration",
+        405: "Use GET or POST for migration",
+        415: "Migration requires application/gzip",
+    }
+    assert failure.value.envelope() == {"error": {"code": codes[status], "message": messages[status]}}
     assert not target.exists("migration-proof")
 
 
@@ -423,3 +454,177 @@ def test_unknown_source_ledger_cannot_be_fenced(stores):
     source, _ = stores
     with pytest.raises(ValueError, match="no such ledger"):
         hosted.fence(source, "absent", "https://hosted.example")
+
+
+def test_fences_cover_tables_added_after_previous_migrations(stores):
+    source, _ = stores
+    hosted.fence(source, "migration-proof", "https://hosted.example")
+    source.import_document("another-ledger", document())
+    with source.connect() as connection, connection:
+        connection.execute("CREATE TABLE metadata_without_slug (value TEXT)")
+        connection.execute("CREATE TABLE later_rows (slug TEXT, value TEXT)")
+        connection.execute("INSERT INTO later_rows VALUES (?,?)", ("another-ledger", "kept"))
+    hosted.fence(source, "another-ledger", "https://hosted.example")
+    with source.connect() as connection, pytest.raises(sqlite3.IntegrityError, match="hosted"):
+        connection.execute("DELETE FROM later_rows WHERE slug=?", ("another-ledger",))
+
+
+def test_tick_import_credentials_are_bound_to_the_signed_expiry():
+    value = secrets.token_hex(32)
+    credential = hosted.token(value, "ledger", 1100)
+    changed = "1200." + credential.split(".")[1]
+    assert not hosted.authorize(value, "ledger", changed, 1000)
+
+
+def test_base64_transport_rejects_noise_even_when_decoded_content_has_the_right_hash(stores):
+    source, target = stores
+    snapshot = hosted.capture(source, "migration-proof")
+    name = next(iter(snapshot["files"]))
+    snapshot["files"][name] += "!"
+    with pytest.raises(ValueError):
+        hosted.restore(target, snapshot)
+    assert not target.exists("migration-proof")
+
+
+def test_import_identity_rejects_independently_invalid_versions_and_slugs(stores):
+    source, target = stores
+    for key, value in (("version", 2), ("slug", "../escape")):
+        snapshot = hosted.capture(source, "migration-proof")
+        snapshot[key] = value
+        with pytest.raises(ValueError, match="^invalid migration identity$"):
+            hosted.restore(target, snapshot)
+
+
+def test_history_verification_rolls_back_a_corrupt_import(stores, monkeypatch):
+    source, target = stores
+    snapshot = hosted.capture(source, "migration-proof")
+    original = target._insert
+
+    def corrupt(connection, slug, state, token, seeds):
+        original(connection, slug, {**state, "title": "Corrupt"}, token, seeds)
+
+    monkeypatch.setattr(target, "_insert", corrupt)
+    with pytest.raises(ValueError, match="^imported history differs from source$"):
+        hosted.restore(target, snapshot)
+    assert not target.exists("migration-proof")
+
+
+def test_import_without_history_preserves_the_absence_of_seed_metadata(stores):
+    source, target = stores
+    state = document()
+    del state["_meta"]["seeds"]
+    source.import_document("without-history", state)
+    snapshot = hosted.capture(source, "without-history")
+    assert hosted.restore(target, snapshot)["revisions"] == 0
+    assert target.export_document("without-history") == state
+
+
+def test_migration_limits_accept_exact_boundaries_and_leave_the_next_request_unread(stores, monkeypatch):
+    source, target = stores
+    snapshot = hosted.capture(source, "migration-proof")
+    value = secrets.token_hex(32)
+    monkeypatch.setenv("SWARM_SECRET", value)
+    monkeypatch.setattr(hosted.time, "time", lambda: 1000)
+    incoming = request(snapshot, hosted.token(value, "migration-proof", 1100))
+    encoded = incoming.rfile.getvalue()
+    monkeypatch.setattr(hosted, "MAX_COMPRESSED", len(encoded))
+    monkeypatch.setattr(hosted, "MAX_EXPANDED", len(gzip.decompress(encoded)))
+    incoming.rfile = io.BytesIO(encoded + b"GET /next HTTP/1.1\r\n\r\n")
+    server = SimpleNamespace(
+        ALLOWED_HOSTS={"hosted.example"}, ALLOWED_ORIGINS=set(), repository=target, core=ledger_core
+    )
+    assert routes.dispatch(incoming, server) == {"data": hosted.manifest(snapshot)}
+    assert incoming.rfile.read() == b"GET /next HTTP/1.1\r\n\r\n"
+
+
+def test_missing_server_secret_never_accepts_a_predictable_default_key(stores, monkeypatch):
+    source, target = stores
+    monkeypatch.delenv("SWARM_SECRET", raising=False)
+    monkeypatch.setattr(hosted.time, "time", lambda: 1000)
+    incoming = request(hosted.capture(source, "migration-proof"), hosted.token("XXXX", "migration-proof", 1100))
+    server = SimpleNamespace(
+        ALLOWED_HOSTS={"hosted.example"}, ALLOWED_ORIGINS=set(), repository=target, core=ledger_core
+    )
+    with pytest.raises(APIError) as failure:
+        routes.dispatch(incoming, server)
+    assert failure.value.status == 403
+    assert failure.value.envelope() == {
+        "error": {"code": "forbidden", "message": "Missing or expired migration credential"}
+    }
+
+
+@pytest.mark.parametrize("missing", ["OPENBAO_URL", "OPENBAO_TOKEN"])
+def test_missing_openbao_settings_are_refused_before_any_network_access(monkeypatch, missing):
+    monkeypatch.delenv("SWARM_SECRET", raising=False)
+    monkeypatch.setenv("OPENBAO_URL", "https://vault.example/")
+    monkeypatch.setenv("OPENBAO_TOKEN", "$FIXTURE_OPENBAO_TOKEN")
+    monkeypatch.delenv(missing)
+
+    def unexpected(*args):
+        raise AssertionError("network access before credential validation")
+
+    monkeypatch.setattr(hosted.urllib.request, "build_opener", unexpected)
+    with pytest.raises(ValueError, match="^trusted OpenBao credentials unavailable$"):
+        hosted.server_secret()
+
+
+def test_missing_openbao_record_value_names_the_record_without_values(monkeypatch):
+    monkeypatch.delenv("SWARM_SECRET", raising=False)
+    monkeypatch.setenv("OPENBAO_URL", "https://vault.example")
+    monkeypatch.setenv("OPENBAO_TOKEN", "$FIXTURE_OPENBAO_TOKEN")
+    monkeypatch.setattr(
+        hosted.urllib.request,
+        "build_opener",
+        lambda *args: SimpleNamespace(open=lambda *args, **kwargs: io.BytesIO(b'{"data":{"data":{}}}')),
+    )
+    with pytest.raises(ValueError, match="^OpenBao record k8s/swarm has no server secret$"):
+        hosted.server_secret()
+
+
+@pytest.mark.parametrize(
+    "arguments,message",
+    [
+        ([], "the following arguments are required: --source"),
+        (["--url", "http://hosted.example"], "hosted destination must use HTTPS"),
+        (["--freeze"], "freezing requires a hosted destination"),
+        (["--url", "https://hosted.example"], "hosted transfers require source fencing with --freeze"),
+    ],
+)
+def test_migration_command_errors_are_actionable_and_exact(tmp_path, monkeypatch, capsys, arguments, message):
+    import sys
+
+    supplied = arguments if not arguments else ["--source", str(tmp_path), *arguments]
+    monkeypatch.setattr(sys, "argv", ["migration", *supplied])
+    with pytest.raises(SystemExit) as failure:
+        hosted.main()
+    assert failure.value.code == 2
+    assert capsys.readouterr().err.endswith(f"migration: error: {message}\n")
+
+
+def test_migration_decompression_never_reads_beyond_its_budget(stores, monkeypatch):
+    source, target = stores
+    value = secrets.token_hex(32)
+    monkeypatch.setenv("SWARM_SECRET", value)
+    monkeypatch.setattr(hosted.time, "time", lambda: 1000)
+    monkeypatch.setattr(hosted, "MAX_EXPANDED", 16)
+    incoming = request(hosted.capture(source, "migration-proof"), hosted.token(value, "migration-proof", 1100))
+
+    class Expanded:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, limit):
+            assert limit is not None and 0 < limit <= 17
+            return b"x" * min(1000, limit)
+
+    monkeypatch.setattr(hosted.gzip, "GzipFile", lambda **kwargs: Expanded())
+    server = SimpleNamespace(
+        ALLOWED_HOSTS={"hosted.example"}, ALLOWED_ORIGINS=set(), repository=target, core=ledger_core
+    )
+    with pytest.raises(APIError) as failure:
+        routes.dispatch(incoming, server)
+    assert failure.value.status == 400
+    assert not target.exists("migration-proof")

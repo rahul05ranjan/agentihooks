@@ -1,10 +1,16 @@
 import ast
+import hashlib
+import hmac
 import json
 import os
 import secrets
 import subprocess
 import sys
+import time
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from scripts.swarm_ledger import authority_context, ledger_authority
 
@@ -128,3 +134,51 @@ def test_nested_authority_scopes_restore_memory_without_restoring_exported_secre
             assert authority_context.secret() == second
         assert authority_context.secret() == first
     assert authority_context.secret() is None
+
+
+def test_tick_read_and_service_credentials_are_scoped_renewed_and_verified(monkeypatch):
+    from scripts.swarm_ledger import ledger
+
+    value = secrets.token_hex(32)
+    clock = [1000]
+    monkeypatch.setattr(time, "time", lambda: clock[0])
+    monkeypatch.setenv("SWARM_URL", "https://hosted.example")
+    monkeypatch.delenv("AGENTIHOOKS_CONTROLLER_CREDENTIAL", raising=False)
+    monkeypatch.setattr(ledger.Who, "from_env", lambda: SimpleNamespace(pinned=False, name=""))
+    with authority_context.bound(value):
+        headers = ledger.credentials("ledger")
+        assert set(headers) == {"X-Ledger-Tick"}
+        assert ledger.credentials("ledger", service=True) == headers
+        clock[0] += 1
+        renewed = ledger.credentials("ledger", service=True)
+        assert renewed != headers
+    monkeypatch.setenv("SWARM_AUTH_MODE", "edge")
+    monkeypatch.setenv("SWARM_SECRET", value)
+    monkeypatch.setattr(ledger_authority, "access_operator", lambda assertion: False)
+    assert ledger_authority.caller(headers, "", "ledger") == ""
+    assert ledger_authority.caller(headers, "", "another-ledger") is None
+    assert ledger_authority.caller(renewed, "", "ledger") == ""
+    clock[0] = 1900
+    assert ledger_authority.caller(headers, "", "ledger") is None
+    assert ledger_authority.caller(renewed, "", "ledger") == ""
+    clock[0] = 1000
+    expires, signature = headers["X-Ledger-Tick"].split(".")
+    assert ledger_authority.caller({"X-Ledger-Tick": f"{int(expires) - 1}.{signature}"}, "", "ledger") is None
+    future = 1901
+    message = f"ledger-tick:ledger:{future}".encode()
+    signature = hmac.new(value.encode(), message, hashlib.sha256).hexdigest()
+    assert ledger_authority.caller({"X-Ledger-Tick": f"{future}.{signature}"}, "", "ledger") is None
+    for invalid in ("", "invalid", "1800.é", ledger_authority.agent_token(value, "ledger", "worker")):
+        assert ledger_authority.caller({"X-Ledger-Tick": invalid}, "", "ledger") is None
+    assert authority_context.tick_headers("ledger") == {}
+    with pytest.raises(SystemExit):
+        ledger.credentials("ledger", service=True)
+
+
+def test_scoped_tick_and_migration_credentials_refuse_cleartext_transport():
+    from scripts.swarm_ledger import ledger_link
+
+    for header in ("X-Ledger-Tick", "X-Ledger-Migration"):
+        with pytest.raises(ledger_link.Cleartext):
+            ledger_link.guard("http://hosted.example", {header: "$FIXTURE_SCOPED_TOKEN"})
+        ledger_link.guard("https://hosted.example", {header: "$FIXTURE_SCOPED_TOKEN"})
