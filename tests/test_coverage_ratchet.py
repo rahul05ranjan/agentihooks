@@ -52,6 +52,27 @@ def test_a_line_the_base_ran_and_the_head_no_longer_runs_is_lost():
     assert result.lost == {"hooks/a.py": [3]}
 
 
+@pytest.mark.parametrize("line_count", [199, 200, 500])
+@pytest.mark.parametrize("changed_first_line", [False, True])
+def test_repeated_statement_coverage_loss_is_graded_in_long_files(line_count, changed_first_line):
+    source = "value = 1\n" * line_count
+    head_source = "value = 2\n" + source.split("\n", 1)[1] if changed_first_line else source
+    lost_line = line_count // 2
+    covered = set(range(1, line_count + 1))
+    base = _measure("repeated-base", {"hooks/repeated.py": covered}, {"hooks/repeated.py": source})
+    result = ratchet.grade({"hooks/repeated.py": covered - {lost_line}}, lambda path: head_source, iter([base]))
+    output = ratchet.report(
+        result,
+        {"hooks/repeated.py": [lost_line]},
+        {"hooks/repeated.py": line_count - 1},
+        {"hooks/repeated.py": line_count},
+    )
+    assert result.lost == {"hooks/repeated.py": [lost_line]}, (
+        f"lines={line_count}, changed_first_line={changed_first_line}, lost_line={lost_line}\n"
+        f"mapped_lines={len(ratchet.line_map(source, head_source))}\n{output}"
+    )
+
+
 def test_a_base_line_that_is_no_statement_of_the_base_source_is_never_lost():
     source = 'SCRIPT = """\nconst a = 1;\n"""\n\n\ndef f(x):\n    return x\n'
     base = _measure("b1", {"hooks/a.py": {1, 2, 6, 7}}, {"hooks/a.py": source})
