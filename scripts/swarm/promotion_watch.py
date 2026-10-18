@@ -97,8 +97,6 @@ def _held_jobs(redis, slug: str, doc: dict) -> set[str]:
 def _red(slug, redis, ledger, doc, last, failed, repo):
     run_id, sha, url = last["id"], last["head_sha"], last["html_url"]
     held, present = _held_jobs(redis, slug, doc), {t["id"] for t in doc.get("tasks", [])}
-    from scripts.swarm import promotion_owner
-
     for previous in promotion_owner.history(repo, redis) - {slug}:
         held.update(_held_jobs(redis, previous, ledger.state(previous)))
     actions = []
@@ -137,8 +135,6 @@ def _green(slug, ledger, doc, last):
 
 
 def _recover(slug, redis, ledger, doc, last, repo):
-    from scripts.swarm import promotion_owner
-
     actions = _green(slug, ledger, doc, last)
     for previous in promotion_owner.history(repo, redis) - {slug}:
         actions.extend(_green(previous, ledger, ledger.state(previous), last))
@@ -188,8 +184,6 @@ def refresh(
     now_ms: int,
     run: Callable = subprocess.run,
 ) -> list[str]:
-    from scripts.swarm import promotion_owner
-
     if naming.PROOF_RE.fullmatch(slug):
         return []
     with promotion_owner.intake(slug, config.repo, store) as owner:
