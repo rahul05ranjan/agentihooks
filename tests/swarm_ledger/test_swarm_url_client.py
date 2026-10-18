@@ -1,6 +1,7 @@
 import http.server
 import json
 import threading
+import urllib.request
 from unittest.mock import patch
 
 import pytest
@@ -134,16 +135,12 @@ def test_swarm_url_never_starts_a_local_server(monkeypatch):
     assert ledger_hook.serve_ledgers() is None
 
 
-def test_the_event_stream_request_carries_the_access_headers(monkeypatch):
-    from scripts.swarm_ledger import watch_ledger
-
-    monkeypatch.setenv("SWARM_URL", "https://swarm.example")
-    for key, value in ACCESS.items():
-        monkeypatch.setenv(key, value)
-    assert watch_ledger.request(SLUG, "", {"X-Ledger-Token": "t"}) == (
-        f"https://swarm.example/api/v1/ledgers/{SLUG}/events",
-        {**SENT, "X-Ledger-Token": "t", "Accept": "text/event-stream"},
-    )
+def test_every_ledger_transport_request_carries_the_access_headers(heard):
+    url, seen = heard
+    request = urllib.request.Request(f"{url}/healthz", headers={"Accept": "text/event-stream"})
+    with ledger_link.urlopen(request, 1, ACCESS):
+        pass
+    assert {key: seen[0].get(key) for key in (*SENT, "Accept")} == {**SENT, "Accept": "text/event-stream"}
 
 
 def test_a_proof_ledger_call_carries_the_access_headers(heard):

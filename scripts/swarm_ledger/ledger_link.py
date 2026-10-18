@@ -78,6 +78,8 @@ def transport(environ=os.environ) -> dict:
 
 
 def urlopen(request: urllib.request.Request, timeout: float, environ=os.environ):
+    for name, value in access_headers(environ).items():
+        request.add_header(name, value)
     guard(request.full_url, dict(request.header_items()))
     return urllib.request.urlopen(request, timeout=timeout, **transport(environ))
 
@@ -141,8 +143,7 @@ def folder(environ=os.environ) -> Path:
 
 def serving(timeout: float = 1, url: str | None = None) -> str | None:
     try:
-        probe = urllib.request.Request(f"{url or base()}/healthz", headers=access_headers())
-        with urllib.request.urlopen(probe, timeout=timeout, **transport()) as resp:
+        with urlopen(urllib.request.Request(f"{url or base()}/healthz"), timeout) as resp:
             body = json.loads(resp.read())
     except http.client.RemoteDisconnected:
         return None

@@ -1,6 +1,0 @@
-{
-  "scripts/swarm_ledger/proof_ledger.py:scripts.swarm_ledger.proof_ledger.x_call__mutmut_10:999c6f9a25fbb7b93fafdfdd41c2a508d7d4fad8b8f2b81f84e0975996cc9772": {
-    "reader": "standards_reader",
-    "reason": "Changes only the case of the header name 'X-Controller-Credential' to 'x-controller-credential' in the headers dict given to urllib.request.Request. Request.__init__ applies add_header in insertion order and add_header stores key.capitalize(), so both spellings store the same key and the request on the wire is byte-identical; no later merged header supplies this name, so precedence is unchanged."
-  }
-}

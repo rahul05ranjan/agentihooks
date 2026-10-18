@@ -18,11 +18,7 @@ def call(path: str, payload: dict | None, environ) -> dict | None:
     request = urllib.request.Request(
         f"{ledger_link.base(environ)}/api/v1/{path}",
         data=None if payload is None else json.dumps(payload).encode(),
-        headers={
-            "Content-Type": "application/json",
-            "X-Controller-Credential": credential,
-            **ledger_link.access_headers(environ),
-        },
+        headers={"Content-Type": "application/json", "X-Controller-Credential": credential},
     )
     try:
         with ledger_link.urlopen(request, TIMEOUT, environ) as response:
@@ -61,7 +57,7 @@ def _control_call(slug: str, route: str, payload: dict, headers: dict, environ) 
     request = urllib.request.Request(
         f"{ledger_link.base(environ)}/api/v1/proof-ledgers/{slug}/{route}",
         data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json", **ledger_link.access_headers(environ), **headers},
+        headers={"Content-Type": "application/json", **headers},
     )
     try:
         with ledger_link.urlopen(request, TIMEOUT, environ) as response:

@@ -449,7 +449,6 @@ def upload(slug: str, name: str, path: str, route: str, extra: dict) -> dict:
         f"{base()}/api/v1/ledgers/{slug}/uploads/{route}",
         data=Path(path).read_bytes(),
         headers={
-            **ledger_link.access_headers(),
             **credentials(slug),
             "X-Ledger-Agent": name,
             "Content-Type": "application/octet-stream",

@@ -18,7 +18,7 @@ BACKOFF = 0.25
 class ResourceClient:
     def __init__(self, base: str, credentials: dict, timeout: float = 10) -> None:
         self.base = base
-        self.credentials = {**ledger_link.access_headers(), **credentials}
+        self.credentials = credentials
         self.timeout = timeout
 
     def request(self, slug: str, path: str, payload: dict | None = None) -> dict:
