@@ -14,31 +14,55 @@ COMPOSITION_ROOT = ROOT / "scripts" / "swarm_ledger" / "storage.py"
 STORE_PACKAGE = ROOT / "scripts" / "swarm_ledger" / "repository"
 
 
-def imported(path: Path) -> set:
+STORE_NAMES = {STORE, "repository.sqlite", "swarm_ledger.repository.sqlite"}
+
+
+def absolute(path: Path, root: Path, node: ast.ImportFrom) -> str:
+    if not node.level:
+        return node.module or ""
+    parts = path.relative_to(root).with_suffix("").parts
+    return ".".join([*parts[: len(parts) - node.level], *([node.module] if node.module else [])])
+
+
+def imported(path: Path, root: Path = ROOT) -> set:
     names = set()
     for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
         if isinstance(node, ast.Import):
             names.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            names.add(node.module)
-            names.update(f"{node.module}.{alias.name}" for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            module = absolute(path, root, node)
+            names.add(module)
+            names.update(f"{module}.{alias.name}" for alias in node.names)
     return names
 
 
 def store_importers() -> list:
     sources = [*(ROOT / "scripts").rglob("*.py"), *(ROOT / "hooks").rglob("*.py")]
     allowed = [path for path in sources if path == COMPOSITION_ROOT or STORE_PACKAGE in path.parents]
-    return sorted(str(path.relative_to(ROOT)) for path in sources if path not in allowed and STORE in imported(path))
+    return sorted(
+        str(path.relative_to(ROOT)) for path in sources if path not in allowed and STORE_NAMES & imported(path)
+    )
 
 
 def test_no_module_outside_the_composition_root_imports_the_sqlite_store():
     assert store_importers() == []
 
 
-def test_the_import_check_sees_an_absolute_import_of_the_store(tmp_path):
-    probe = tmp_path / "probe.py"
-    probe.write_text("from scripts.swarm_ledger.repository import sqlite\n", encoding="utf-8")
-    assert STORE in imported(probe)
+@pytest.mark.parametrize(
+    ("folder", "source", "name"),
+    [
+        ("", "from scripts.swarm_ledger.repository import sqlite\n", STORE),
+        ("scripts/swarm_ledger/api", "from ..repository.sqlite import DATABASE\n", STORE),
+        ("scripts/swarm_ledger/api", "from ..repository import sqlite\n", STORE),
+        ("scripts/swarm_ledger", "from repository.sqlite import DATABASE\n", "repository.sqlite"),
+        ("hooks", "import swarm_ledger.repository.sqlite\n", "swarm_ledger.repository.sqlite"),
+    ],
+)
+def test_the_import_check_sees_every_spelling_of_the_store(tmp_path, folder, source, name):
+    probe = tmp_path / folder / "probe.py"
+    probe.parent.mkdir(parents=True, exist_ok=True)
+    probe.write_text(source, encoding="utf-8")
+    assert name in imported(probe, tmp_path)
 
 
 def test_the_repository_package_binds_no_repository_at_import():

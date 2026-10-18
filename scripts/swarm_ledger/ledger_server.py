@@ -647,9 +647,10 @@ def adopt_unrelayed() -> None:
     except (OSError, ValueError):
         return
     for kind, slugs in found.items() if isinstance(found, dict) else ():
-        for slug, revisions in slugs.items():
-            for rev in revisions:
-                unrelayed_on(kind, slug, rev)
+        for slug, revisions in slugs.items() if isinstance(slugs, dict) else ():
+            for rev in revisions if isinstance(revisions, list) else ():
+                if isinstance(rev, int):
+                    unrelayed_on(kind, slug, rev)
     path.unlink()
 
 

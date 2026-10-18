@@ -331,7 +331,9 @@ def test_a_journal_an_older_server_left_in_its_own_file_is_held_once_and_the_fil
     assert ledger_server.unrelayed() == {ledger_server.RELAY: {SLUG: [3, 5]}, ledger_server.ALERTS: {SLUG: [4]}}
 
 
-@pytest.mark.parametrize("text", ["not json", "[3]"])
+@pytest.mark.parametrize(
+    "text", ["not json", "[3]", '{"relay": []}', '{"relay": {"s": "x"}}', '{"relay": {"s": ["x"]}}']
+)
 def test_an_unreadable_or_foreign_journal_file_holds_nothing(monkeypatch, tmp_path, text):
     monkeypatch.setattr("hooks.config.AGENTIHOOKS_HOME", str(tmp_path))
     (tmp_path / ledger_server.UNRELAYED).write_text(text)
