@@ -3012,6 +3012,11 @@ def _install_global_inner(args: argparse.Namespace) -> None:
 
     _gc_python, _gc_root = str(_resolve_hooks_python()), str(AGENTIHOOKS_ROOT)
     _cprint("  " + (install_timer(_gc_python, _gc_root) if _gc_enabled() else remove_timer()))
+    if _gc_enabled():
+        from hooks.lifecycle.maintenance import setup as _git_maintenance_setup
+
+        for _line in _git_maintenance_setup():
+            _cprint("  " + _line)
 
     # MCP layers, target-native. A layer that ships the target's own MCP file
     # (copilot: mcp-config.overrides.json, codex: mcp.overrides.toml) is used
