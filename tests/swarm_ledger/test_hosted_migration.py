@@ -206,8 +206,12 @@ def test_migration_inventory_prints_only_the_source_manifest(stores, monkeypatch
 
     source, _ = stores
     monkeypatch.setattr(sys, "argv", ["migration", "--source", str(source.directory)])
+    with source.connect() as connection:
+        before = connection.execute("SELECT name,sql FROM sqlite_master ORDER BY name").fetchall()
     hosted.main()
     assert json.loads(capsys.readouterr().out) == hosted.manifest(hosted.capture(source, "migration-proof"))
+    with source.connect() as connection:
+        assert connection.execute("SELECT name,sql FROM sqlite_master ORDER BY name").fetchall() == before
 
 
 def test_transfer_verifies_a_separate_read_and_blocks_redirects(stores, monkeypatch):
@@ -269,6 +273,7 @@ def test_command_freezes_source_before_transferring_and_reports_comparison(store
     import sys
 
     source, _ = stores
+    source.import_document("still-local", document())
     snapshot = hosted.capture(source, "migration-proof")
     secret = secrets.token_hex(32)
     monkeypatch.setenv("SWARM_SECRET", secret)
@@ -298,6 +303,7 @@ def test_command_freezes_source_before_transferring_and_reports_comparison(store
     monkeypatch.setattr(hosted, "transfer", transfer)
     hosted.main()
     assert json.loads(capsys.readouterr().out) == {"match": True}
+    source.import_document("still-local", document(), replace=True)
 
 
 def test_each_ledger_comparison_is_visible_before_the_next_transfer(stores, monkeypatch):

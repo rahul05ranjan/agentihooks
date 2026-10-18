@@ -73,6 +73,15 @@ def test_shared_env_files_cannot_load_the_server_secret(tmp_path, monkeypatch):
     assert environ["SWARM_SECRET"] == trusted
 
 
+def test_captured_shell_output_cannot_import_server_authority(monkeypatch):
+    monkeypatch.setattr(operator_env, "source_line", lambda environ: "load operator configuration")
+    response = subprocess.CompletedProcess(
+        [], 0, stdout=b"SWARM_SECRET=$FIXTURE_SERVER_AUTHORITY\0SWARM_URL=https://hosted.example\0"
+    )
+    monkeypatch.setattr(operator_env.subprocess, "run", lambda *args, **kwargs: response)
+    assert operator_env.values({}) == {"SWARM_URL": "https://hosted.example"}
+
+
 def test_generated_shell_loader_also_removes_shared_server_authority(tmp_path):
     import subprocess
 
