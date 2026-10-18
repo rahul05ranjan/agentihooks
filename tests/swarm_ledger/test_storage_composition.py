@@ -28,9 +28,7 @@ def imported(path: Path) -> set:
 def store_importers() -> list:
     sources = [*(ROOT / "scripts").rglob("*.py"), *(ROOT / "hooks").rglob("*.py")]
     allowed = [path for path in sources if path == COMPOSITION_ROOT or STORE_PACKAGE in path.parents]
-    return sorted(
-        str(path.relative_to(ROOT)) for path in sources if path not in allowed and STORE in imported(path)
-    )
+    return sorted(str(path.relative_to(ROOT)) for path in sources if path not in allowed and STORE in imported(path))
 
 
 def test_no_module_outside_the_composition_root_imports_the_sqlite_store():
