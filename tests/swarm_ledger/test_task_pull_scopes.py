@@ -35,5 +35,8 @@ def test_an_engineer_records_the_scope_a_pull_request_delivers():
 )
 def test_the_ledger_refuses_a_malformed_pull_scope(scopes):
     op = {"op": "task_update", "id": "u1", "by": ENGINEER, "item": "tasks/t1", "fields": {"pull_scopes": scopes}}
-    with pytest.raises(ValueError, match="pull_scopes must map pull request URLs"):
+    with pytest.raises(ValueError) as refused:
         ledger_tasks.check(op)
+    assert str(refused.value) == (
+        "pull_scopes must map pull request URLs to a kind, stage or prerequisite, and a nonempty scope"
+    )
