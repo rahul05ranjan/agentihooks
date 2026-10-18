@@ -655,9 +655,28 @@ def test_documentation_aggregation_accepts_only_the_canonical_transition(docs):
 
     base, head = _aggregators()
     head["jobs"]["gate-required"]["steps"] = ci_reuse.gate_steps(queue_tier=True, consolidated=True, docs=docs)
+    if docs:
+        head["jobs"]["docs"] = {"runs-on": "ubuntu-latest"}
+        head["jobs"]["gate-required"]["needs"].append("docs")
     assert _grade({"test.yml": head}, base={"test.yml": base}) == []
     head["jobs"]["gate-required"]["steps"][0]["run"] += "\necho weakened"
     assert _grade({"test.yml": head}, base={"test.yml": base})
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_a_declared_documentation_check_cannot_switch_to_legacy_aggregation(existing):
+    from scripts import ci_reuse
+
+    base, head = _aggregators()
+    head["jobs"]["docs"] = {"runs-on": "ubuntu-latest", "if": False}
+    head["jobs"]["gate-required"]["needs"].append("docs")
+    head["jobs"]["gate-required"]["steps"] = ci_reuse.gate_steps(queue_tier=True, consolidated=True)
+    if existing:
+        base["jobs"]["docs"] = {"runs-on": "ubuntu-latest"}
+        base["jobs"]["gate-required"]["needs"].append("docs")
+        base["jobs"]["gate-required"]["steps"] = ci_reuse.gate_steps(queue_tier=True, consolidated=True, docs=True)
+    problems = _grade({"test.yml": head}, base={"test.yml": base})
+    assert any("changes its steps" in problem for problem in problems), problems
 
 
 @pytest.mark.parametrize("change", ["outcome", "byte", "extra"])
