@@ -606,6 +606,36 @@ def test_planning_refuses_an_unmatched_module_before_publishing_statistics(tmp_p
 
 
 @pytest.mark.parametrize(
+    "imports, grouped, refused",
+    [
+        ("import mcp\n", False, True),
+        ("import mcp\n", True, True),
+        ("def test_sdk():\n    import mcp\n", False, True),
+        ("def test_sdk():\n    import mcp\n", True, False),
+    ],
+)
+def test_planning_checks_selected_test_collection_and_worker_contracts(tmp_path, monkeypatch, imports, grouped, refused):
+    _project(tmp_path, {})
+    group = 'pytestmark = pytest.mark.xdist_group("mcp-sdk")\n' if grouped else ""
+    (tmp_path / "tests/test_sample.py").write_text("from scripts.sample import f\n" + group + imports)
+    (tmp_path / "tests/test_unrelated.py").write_text("import mcp\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["plan"])
+    monkeypatch.setattr(plan, "own_bases", lambda *args: ["base"])
+    monkeypatch.setattr(plan, "discover_changes", lambda *args: {"scripts/sample.py": {2}})
+    output = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    if refused:
+        with pytest.raises(SystemExit, match="tests/test_sample.py"):
+            plan.main()
+        assert not output.exists()
+        assert not (tmp_path / ".mutation-selection.json").exists()
+    else:
+        assert plan.main() == 0
+        assert "stats_parts=" in output.read_text()
+
+
+@pytest.mark.parametrize(
     ("estimated", "shards", "parts"),
     [
         ((0, 0, {}), "[0]", "[0]"),
