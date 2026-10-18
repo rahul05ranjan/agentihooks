@@ -649,6 +649,17 @@ def test_a_head_switching_to_either_canonical_aggregation_is_green(selected):
     assert _grade({"test.yml": head}, base={"test.yml": base}) == []
 
 
+@pytest.mark.parametrize("docs", [False, True])
+def test_documentation_aggregation_accepts_only_the_canonical_transition(docs):
+    from scripts import ci_reuse
+
+    base, head = _aggregators()
+    head["jobs"]["gate-required"]["steps"] = ci_reuse.gate_steps(queue_tier=True, consolidated=True, docs=docs)
+    assert _grade({"test.yml": head}, base={"test.yml": base}) == []
+    head["jobs"]["gate-required"]["steps"][0]["run"] += "\necho weakened"
+    assert _grade({"test.yml": head}, base={"test.yml": base})
+
+
 @pytest.mark.parametrize("change", ["outcome", "byte", "extra"])
 @pytest.mark.parametrize("selected", [False, True])
 def test_a_head_altering_the_queue_canonical_aggregation_is_red(change, selected):
