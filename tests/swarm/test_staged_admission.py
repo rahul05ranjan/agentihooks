@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from scripts.swarm import ledger_events, merge_queue, ready
+from scripts.swarm.staged_compatibility import MARKER
 from scripts.swarm.store import AgentRecord, SwarmError
 from tests.swarm.test_merge_queue import ENTRY, OPEN, URL, checked_resource, runner
 
@@ -38,7 +39,7 @@ def declaration(family):
 
 
 def body(proof):
-    return "<!-- staged-compatibility\n" + json.dumps(proof) + "\n-->"
+    return MARKER + "\n" + json.dumps(proof) + "\n-->"
 
 
 def staged(family):
