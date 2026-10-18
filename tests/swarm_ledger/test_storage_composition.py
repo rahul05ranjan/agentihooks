@@ -21,6 +21,8 @@ PACKAGE_NAMES = {name.removesuffix(".sqlite") for name in STORE_NAMES}
 def dotted(node: ast.AST) -> str:
     if isinstance(node, ast.Attribute):
         return f"{dotted(node.value)}.{node.attr}"
+    if isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Constant):
+        return str(node.args[0].value) if dotted(node.func).endswith(("import_module", "__import__")) else ""
     return node.id if isinstance(node, ast.Name) else ""
 
 
@@ -88,6 +90,7 @@ def test_no_module_outside_the_composition_root_imports_the_sqlite_store():
         ("hooks", "from scripts.swarm_ledger import repository\nrepository.sqlite.DATABASE\n", STORE),
         ("hooks", "import scripts.swarm_ledger.repository\nscripts.swarm_ledger.repository.sqlite.DATABASE\n", STORE),
         ("hooks", "from scripts.swarm_ledger.repository import *\n", STORE),
+        ("hooks", 'importlib.import_module("scripts.swarm_ledger.repository").sqlite\n', STORE),
     ],
 )
 def test_the_import_check_sees_every_spelling_of_the_store(tmp_path, folder, source, name):
