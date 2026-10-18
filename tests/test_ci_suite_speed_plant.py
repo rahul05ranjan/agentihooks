@@ -1,7 +1,7 @@
 import fakeredis
 import pytest
 
-pytestmark = pytest.mark.xdist_group(name="fakeredis")
+pytestmark = pytest.mark.xdist_group("fakeredis")
 
 
 def test_eager_redis_import_plant():
