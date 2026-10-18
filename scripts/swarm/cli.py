@@ -509,15 +509,7 @@ def cmd_tick(store, args):
             "the tick refused to run: AGENTIHOOKS_CONTROLLER_TICK_SECONDS is for controller installs, "
             "and the host timer ticks every 60 seconds"
         )
-    slugs = store.slugs()
-    value = None
-    if os.environ.get("SWARM_URL") or any(
-        store.config(slug).api_url or store.config(slug).pending_api_url for slug in slugs
-    ):
-        from scripts.swarm_ledger.storage_migration.hosted import server_secret
-
-        value = server_secret()
-    with authority_context.bound(value):
+    with authority_context.for_tick(store) as slugs:
         operator_env.classifier(os.environ)
         _reconcile_services()
         if slugs:
@@ -2175,7 +2167,7 @@ def dispatch(argv):
             args.slug = store.names.swarm_slug(args.slug)
         action = getattr(args, "command", "")
         route_slug = getattr(args, "slug", "")
-        address = store.config(route_slug).api_url if route_slug and handler is not cmd_create else ""
+        address = ledger_route.configured(store, route_slug) if route_slug else ""
         with ledger_route.scoped(route_slug, address):
             before = (
                 control_notifications.master(store, args.slug) if action in control_notifications.CONTROLS else None

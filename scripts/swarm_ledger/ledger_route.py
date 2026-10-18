@@ -4,7 +4,13 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
 
+from scripts.swarm.store import RedisStore
+
 CURRENT: ContextVar[tuple[str, str] | None] = ContextVar("ledger_route", default=None)
+
+
+def configured(store: RedisStore, slug: str) -> str:
+    return store.redis.hget(store.key(slug, "config"), "api_url") or ""
 
 
 def url(slug: str = "") -> str:
@@ -35,7 +41,7 @@ def session(slug: str) -> Iterator[None]:
 def tick(function: Callable) -> Callable:
     @wraps(function)
     def routed(store, slug, *args, **kwargs):
-        with scoped(slug, store.config(slug).api_url):
+        with scoped(slug, configured(store, slug)):
             return function(store, slug, *args, **kwargs)
 
     return routed
