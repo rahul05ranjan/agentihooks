@@ -308,3 +308,118 @@ def test_missing_trusted_credentials_never_freezes_the_source(stores, monkeypatc
     with pytest.raises(ValueError, match="trusted credentials"):
         hosted.main()
     source.import_document("migration-proof", document(), replace=True)
+
+
+def test_inventory_pins_every_count_and_the_complete_content_digest(stores):
+    source, _ = stores
+    snapshot = hosted.capture(source, "migration-proof")
+    digest = hashlib.sha256(
+        json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    assert hosted.manifest(snapshot) == {
+        "slug": "migration-proof",
+        "revision": 1,
+        "tasks": 2,
+        "events": 1,
+        "revisions": 2,
+        "artifacts": 1,
+        "artifact_trash": 1,
+        "files": 1,
+        "registries": 1,
+        "digest": digest,
+    }
+
+
+def test_import_authority_expires_at_the_boundary_and_cannot_be_extended():
+    secret = secrets.token_hex(32)
+    assert hosted.authorize(secret, "ledger", hosted.token(secret, "ledger", 1900), 1000)
+    for expires in (1000, 1901):
+        assert not hosted.authorize(secret, "ledger", hosted.token(secret, "ledger", expires), 1000)
+    assert not hosted.authorize("", "ledger", hosted.token("", "ledger", 1100), 1000)
+    assert not hosted.authorize(secret, "ledger", None, 1000)
+
+
+@pytest.mark.parametrize(
+    "case,status",
+    [("method", 405), ("type", 415), ("length", 400), ("large", 400), ("gzip", 400), ("json", 400), ("slug", 404)],
+)
+def test_migration_api_rejects_invalid_inputs_without_creating_a_ledger(stores, monkeypatch, case, status):
+    source, target = stores
+    secret = secrets.token_hex(32)
+    monkeypatch.setenv("SWARM_SECRET", secret)
+    monkeypatch.setattr(hosted.time, "time", lambda: 1000)
+    incoming = request(hosted.capture(source, "migration-proof"), hosted.token(secret, "migration-proof", 1100))
+    if case == "method":
+        incoming.command = "DELETE"
+    elif case == "type":
+        incoming.headers["Content-Type"] = "text/plain"
+    elif case == "length":
+        incoming.headers["Content-Length"] = "invalid"
+    elif case == "large":
+        incoming.headers["Content-Length"] = str(hosted.MAX_COMPRESSED + 1)
+    elif case == "gzip":
+        incoming.rfile = io.BytesIO(b"invalid gzip")
+    elif case == "json":
+        incoming.rfile = io.BytesIO(gzip.compress(b"{}"))
+    else:
+        incoming.path += "/unexpected"
+    server = SimpleNamespace(
+        ALLOWED_HOSTS={"hosted.example"}, ALLOWED_ORIGINS=set(), repository=target, core=ledger_core
+    )
+    with pytest.raises(APIError) as failure:
+        routes.dispatch(incoming, server)
+    assert failure.value.status == status
+    assert not target.exists("migration-proof")
+
+
+def test_migration_readback_reports_the_actual_hosted_document(stores, monkeypatch):
+    source, target = stores
+    snapshot = hosted.capture(source, "migration-proof")
+    hosted.restore(target, snapshot)
+    secret = secrets.token_hex(32)
+    monkeypatch.setenv("SWARM_SECRET", secret)
+    monkeypatch.setattr(hosted.time, "time", lambda: 1000)
+    incoming = request(snapshot, hosted.token(secret, "migration-proof", 1100))
+    incoming.command = "GET"
+    server = SimpleNamespace(
+        ALLOWED_HOSTS={"hosted.example"}, ALLOWED_ORIGINS=set(), repository=target, core=ledger_core
+    )
+    assert routes.dispatch(incoming, server) == {"data": hosted.manifest(snapshot)}
+
+
+def test_source_inventory_refuses_symbolic_links_and_missing_databases(stores, tmp_path):
+    source, _ = stores
+    folder = source.directory / "migration-proof.media"
+    existing = next(folder.iterdir())
+    (folder / ("a" * 64 + ".md")).symlink_to(existing)
+    with pytest.raises(ValueError, match="regular files"):
+        hosted.capture(source, "migration-proof")
+    with pytest.raises(ValueError, match="database"):
+        hosted.capture(SQLiteLedgerRepository(tmp_path / "missing" / DATABASE, ledger_core), "migration-proof")
+
+
+def test_import_refuses_corrupt_files_and_cross_ledger_registry_entries(stores):
+    source, target = stores
+    snapshot = hosted.capture(source, "migration-proof")
+    name = next(iter(snapshot["files"]))
+    corrupt = copy.deepcopy(snapshot)
+    corrupt["files"][name] = "!bad-base64!"
+    with pytest.raises(ValueError):
+        hosted.restore(target, corrupt)
+    corrupt = copy.deepcopy(snapshot)
+    corrupt["registries"][0][1] = "another-ledger"
+    with pytest.raises(ValueError, match="registry"):
+        hosted.restore(target, corrupt)
+    folder = target.directory / "migration-proof.media"
+    folder.mkdir(parents=True)
+    (folder / name).write_bytes(b"hosted file must remain")
+    with pytest.raises(ValueError, match="conflict"):
+        hosted.restore(target, snapshot)
+    assert (folder / name).read_bytes() == b"hosted file must remain"
+    assert not target.exists("migration-proof")
+
+
+def test_unknown_source_ledger_cannot_be_fenced(stores):
+    source, _ = stores
+    with pytest.raises(ValueError, match="no such ledger"):
+        hosted.fence(source, "absent", "https://hosted.example")
