@@ -131,7 +131,27 @@ def _segments(command: str) -> list[list[str]]:
     return segments
 
 
+def _migration(words: list[str]) -> bool:
+    module = "scripts.swarm_ledger.storage_migration.hosted"
+    if len(words) < 3 or not re.fullmatch(r"python(?:3(?:\.[0-9]+)?)?", PurePath(words[0]).name):
+        return False
+    if words[1:3] != ["-m", module]:
+        return False
+    position = 3
+    while position < len(words):
+        option = words[position]
+        if option == "--freeze":
+            position += 1
+        elif option in ("--source", "--url", "--slug") and position + 1 < len(words):
+            position += 2
+        else:
+            return False
+    return True
+
+
 def _arguments(words: list[str]) -> list[str]:
+    if _migration(words):
+        return words[:3]
     if not words or PurePath(words[0]).name not in WRITERS:
         return words
     return [words[0], *(word for word in words[1:] if not _prose(word))]

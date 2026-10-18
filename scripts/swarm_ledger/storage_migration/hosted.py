@@ -1,5 +1,6 @@
 import argparse
 import base64
+import fcntl
 import gzip
 import hashlib
 import hmac
@@ -9,6 +10,8 @@ import os
 import re
 import time
 import urllib.request
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from scripts.swarm_ledger.api.errors import APIError
@@ -46,6 +49,27 @@ def authorize(secret: str, slug: str, credential: str, now: int) -> bool:
     )
 
 
+@contextmanager
+def media_lock(directory: Path) -> Iterator[None]:
+    directory.mkdir(parents=True, exist_ok=True)
+    with (directory / ".ledger-media.lock").open("a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+@contextmanager
+def media_mutation(directory: Path, slug: str) -> Iterator[bool]:
+    with media_lock(directory), read_only(directory) as connection:
+        exists = (
+            connection is not None
+            and connection.execute("SELECT 1 FROM sqlite_master WHERE name='hosted_fences'").fetchone()
+        )
+        yield not (exists and connection.execute(FENCED, (slug,)).fetchone())
+
+
 def fence(repo: SQLiteLedgerRepository, slug: str, destination: str) -> None:
     with repo.domain.LOCK, repo.connect() as connection, connection:
         connection.execute("BEGIN IMMEDIATE")
@@ -69,7 +93,9 @@ def fence(repo: SQLiteLedgerRepository, slug: str, destination: str) -> None:
                     f"WHEN EXISTS(SELECT 1 FROM hosted_fences WHERE slug={reference}.{column}) "
                     "BEGIN SELECT RAISE(ABORT,'ledger moved to hosted service'); END"
                 )
-        connection.execute("INSERT OR IGNORE INTO hosted_fences VALUES (?,?)", (slug, destination))
+        with media_lock(repo.directory):
+            connection.execute("INSERT OR IGNORE INTO hosted_fences VALUES (?,?)", (slug, destination))
+            connection.commit()
 
 
 def capture(repo: SQLiteLedgerRepository, slug: str) -> dict:
@@ -229,6 +255,8 @@ def main() -> None:
         parser.error("hosted destination must use HTTPS")
     if args.freeze and not args.url:
         parser.error("freezing requires a hosted destination")
+    if args.url and not args.freeze:
+        parser.error("hosted transfers require source fencing with --freeze")
     from scripts.swarm_ledger import ledger_server
 
     repo = SQLiteLedgerRepository(args.source / DATABASE, ledger_server.core)
