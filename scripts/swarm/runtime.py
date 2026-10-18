@@ -92,6 +92,14 @@ def _ledger_token(slug, name):
     return {"AGENTIHOOKS_LEDGER_AGENT_TOKEN": agent_token(secret, slug, name)}
 
 
+def _ledger_environment(config, name):
+    credentials = _ledger_token(config.slug, name)
+    active = getattr(config, "api_url", "")
+    if (active or getattr(config, "pending_api_url", "")) and not credentials:
+        raise SpawnError("ledger launch needs a staged agent credential", "unavailable")
+    return {**credentials, **({"SWARM_URL": active} if active else {})}
+
+
 def _set(value):
     return "" if value in (None, "", AUTO) else value
 
@@ -818,7 +826,7 @@ class HerdrRuntime:
                 env={
                     **{key: value for key, value in os.environ.items() if key not in (PREDECESSOR, *TICK_ONLY)},
                     **({PREDECESSOR: predecessor} if predecessor else {}),
-                    **_ledger_token(config.slug, name),
+                    **_ledger_environment(config, name),
                     "AGENTIHOOKS_SWARM": config.slug,
                     "AGENTIHOOKS_SWARM_LANE": lane,
                     "AGENTIHOOKS_SWARM_TASK": task_id,
