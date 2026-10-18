@@ -17,7 +17,7 @@ DURATION_JOB = (
 )
 UNIT = {DURATION_JOB, "split", "unit", "shard-check", "test-count", "gate-required"}
 QUEUE = UNIT | {"queue-fail-fast"}
-PULL_REQUEST = UNIT | {"select", "lint", "semgrep", "sonar", "mutation-plan", "mutation-stats", "mutation"}
+PULL_REQUEST = UNIT | {"select", "lint", "docs", "semgrep", "sonar", "mutation-plan", "mutation-stats", "mutation"}
 SELECTED = PULL_REQUEST - {"split", "unit", "shard-check"} | {"unit-selected"}
 PROMOTION = (PULL_REQUEST - {"mutation-plan", "mutation-stats", "mutation", "lint", "semgrep", "test-count"}) | {
     "queue-fail-fast",
