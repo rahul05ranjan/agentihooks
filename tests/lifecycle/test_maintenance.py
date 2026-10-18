@@ -1,6 +1,6 @@
 import pytest
 
-from hooks.lifecycle import maintenance
+from hooks.lifecycle import maintenance, timer
 from hooks.lifecycle.run import sweep
 from scripts import gc_cli
 
@@ -44,12 +44,13 @@ def test_a_report_only_sweep_counts_objects_without_registering(repo, tmp_path):
     assert str(repo.primary.resolve()) not in _registered()
 
 
-def test_lifecycle_setup_registers_every_managed_primary(repo):
+def test_lifecycle_setup_registers_every_managed_primary(repo, monkeypatch):
     repo.worktree("held")
-    lines = maintenance.setup([repo.root()])
+    monkeypatch.setattr(maintenance, "load_roots", lambda: [repo.root()])
+    message = timer.install_timer("/venv/bin/python", "/opt/agentihooks")
     assert str(repo.primary.resolve()) in _registered()
-    assert lines == [f"[OK] git maintenance registered for {repo.primary}"]
-    assert maintenance.setup([repo.root()]) == []
+    assert message.endswith(f"\n  [OK] git maintenance registered for {repo.primary}")
+    assert "git maintenance" not in timer.install_timer("/venv/bin/python", "/opt/agentihooks")
 
 
 def test_gc_prints_the_object_backlog_per_checkout(monkeypatch, capsys):
