@@ -1058,6 +1058,13 @@ def _remote_control_text(agents):
     return "".join(f"{line}\n" for a in agents if (line := remote_control.line(a.__dict__)))
 
 
+def cmd_ledger_ready(store: RedisStore, args: argparse.Namespace) -> None:
+    from scripts.swarm import ledger_cutover
+
+    ledger_cutover.acknowledge(store, args.slug, Who.from_env())
+    print(json.dumps(ledger_cutover.readiness(store, args.slug)))
+
+
 def cmd_status(store, args):
     if args.json:
         store.config(args.slug)
@@ -2004,6 +2011,7 @@ def build_parser():
     sub.add_parser("set").add_argument("pairs", nargs="+")
     sub.add_parser("save-template").add_argument("template_name", metavar="name")
     sub.add_parser("status").add_argument("--json", action="store_true")
+    sub.add_parser("ledger-ready")
     for verb in ("freeze", "focus", "unfreeze"):
         frozen = sub.add_parser(verb)
         frozen.add_argument("target")
