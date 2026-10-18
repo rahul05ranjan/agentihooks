@@ -680,6 +680,14 @@ def test_a_declared_documentation_check_cannot_switch_to_legacy_aggregation(exis
     assert any("changes its steps" in problem for problem in problems), problems
 
 
+def test_unchanged_noncanonical_documentation_gate_preserves_its_protected_steps():
+    base, head = _workflow(), _workflow()
+    for workflow in (base, head):
+        workflow["jobs"]["docs"] = {"runs-on": "ubuntu-latest"}
+        workflow["jobs"]["gate"]["needs"].append("docs")
+    assert _grade({"test.yml": head}, base={"test.yml": base}) == []
+
+
 @pytest.mark.parametrize("change", ["outcome", "byte", "extra"])
 @pytest.mark.parametrize("selected", [False, True])
 def test_a_head_altering_the_queue_canonical_aggregation_is_red(change, selected):
