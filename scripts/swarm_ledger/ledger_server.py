@@ -99,25 +99,29 @@ def served_version():
     return served_page()[0]
 
 
-def page_view(state, fix_phase=""):
+def page_view(state, fix_phase="", watched=False):
     meta = {key: item for key, item in state.get("_meta", {}).items() if key not in ("seeds", "api_operations")}
-    marks = freeze.marks(state, hierarchy.project(state)[0], fix_phase)
+    marks = freeze.marks(state, hierarchy.project(state)[0], fix_phase, watched)
     return {**state, "marks": marks, "_meta": {**meta, "limits": PAGE_LIMITS}}
 
 
-def doctor_fix_phase(slug):
+def doctor_holds(slug):
     from redis import RedisError
 
     from scripts.swarm.store import SwarmError
 
     try:
-        return freeze.fix_phase(swarm_store().config(slug))
-    except (SwarmError, RedisError):
-        return ""
+        store = swarm_store()
+        fix = freeze.fix_phase(store.config(slug))
+        peer = store.peer(slug) if fix else ""
+        records = repository.get_document(peer).get("freezes") or [] if peer and repository.exists(peer) else []
+    except (SwarmError, RedisError, ValueError, OSError):
+        return "", False
+    return fix, any(r.get("verb") == "focus" for r in records)
 
 
 def ledger_view(state, slug=None):
-    view = page_view(state, doctor_fix_phase(slug) if slug else "")
+    view = page_view(state, *(doctor_holds(slug) if slug else ()))
     view["_meta"].update(page_version=served_version(), crew=ledger_gate.crew(state["_meta"]))
     return view
 

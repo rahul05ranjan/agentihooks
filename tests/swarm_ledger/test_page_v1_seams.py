@@ -46,9 +46,9 @@ DOC = {
 }
 
 
-def marks(freezes, fix_phase=""):
+def marks(freezes, fix_phase="", watched=False):
     doc = {**DOC, "freezes": freezes}
-    found = freeze.marks(doc, hierarchy.project(doc)[0], fix_phase)
+    found = freeze.marks(doc, hierarchy.project(doc)[0], fix_phase, watched)
     return {key: set(found[key]) for key in ("frozen", "held")}
 
 
@@ -77,6 +77,10 @@ def test_a_frozen_node_is_never_also_held():
     assert marks([record("plans/p2"), record("plans/p1", "focus")])["held"] == set()
 
 
+def test_a_watched_swarm_focus_holds_every_task_but_urgent_and_fix_phase_ones():
+    assert marks([], "ph2", watched=True)["held"] == {"tasks/t1", "tasks/t3"}
+
+
 def test_the_streamed_ledger_view_carries_the_marks_and_the_server_limits():
     from scripts.swarm_ledger import ledger_artifacts, ledger_core, ledger_server
 
@@ -101,7 +105,8 @@ def test_the_streamed_view_never_marks_a_doctor_fix_phase_task_held(monkeypatch)
     doc = {**DOC, "phases": [*DOC["phases"], {"id": loop.FIX_PHASE, "title": "Fix", "plan": "plans/p2"}]}
     doc = {**doc, "tasks": [*DOC["tasks"], task("t6", loop.FIX_PHASE)], "freezes": [record("plans/p1", "focus")]}
     config = SimpleNamespace(template=priming.TEMPLATE)
-    monkeypatch.setattr(ledger_server, "swarm_store", lambda: SimpleNamespace(config=lambda slug: config))
+    store = SimpleNamespace(config=lambda slug: config, peer=lambda slug: "no-such-ledger")
+    monkeypatch.setattr(ledger_server, "swarm_store", lambda: store)
     assert "tasks/t6" not in ledger_server.ledger_view(ledger_state(doc), "doctor")["marks"]["held"]
     assert "tasks/t6" in ledger_server.ledger_view(ledger_state(doc))["marks"]["held"]
 
@@ -174,7 +179,9 @@ def test_every_page_route_goes_through_version_one():
     assert "/artifacts/${SLUG}" not in routes
     constants = dict(re.findall(r"^export const (\w+) = (.*);$", source("config"), re.M))
     for call in re.findall(r"fetch\(([^,)]+)", source("api")):
-        assert "V1" in call or re.search(r"API_V1|/api/v1/", constants.get(call, "")) or call == "artifactUrl(id", call
+        names = re.findall(r"\b[A-Z][A-Z0-9_]*\b", call)
+        versioned = any(re.search(r"API_V1|/api/v1/", constants.get(name, "")) for name in names)
+        assert "V1" in call or versioned or call == "artifactUrl(id", call
 
 
 def test_the_page_copies_no_server_rule_or_limit():
