@@ -300,9 +300,28 @@ def test_prepare_creates_a_continuation_from_the_recorded_remote_branch(reposito
     result = publish.prepare("swarm", agent, str(repository), ledger)
     assert result["worktree"] == str(worktree)
     assert git(worktree, "rev-parse", "HEAD") == git(repository, "rev-parse", "origin/predecessor")
-    assert task["branch"] == result["branch"] == "engineer-test"
+    assert task["branch"] == result["branch"] == "predecessor"
     assert task["branch_repo"] == str(repository.parent / "remote.git")
-    assert task["repository_branches"] == {str(repository): "engineer-test"}
+    assert task["repository_branches"] == {str(repository): "predecessor"}
+    assert git(worktree, "rev-parse", "--abbrev-ref", "@{upstream}") == "origin/predecessor"
+
+    (worktree / "chosen.txt").write_text("after")
+    gate = worktree / "scripts" / "ci_prepush" / "__main__.py"
+    gate.write_text(
+        "import subprocess\nfrom pathlib import Path\n"
+        "head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True)\n"
+        "Path(subprocess.check_output(['git', 'rev-parse', '--absolute-git-dir'], text=True).strip(), 'ci_prepush').write_text(head)\n"
+    )
+    monkeypatch.chdir(worktree)
+    published = publish.publish(
+        "swarm", agent, str(repository), ledger, "Continue", ["chosen.txt", str(gate.relative_to(worktree))]
+    )
+
+    head = git(worktree, "rev-parse", "HEAD")
+    assert published["branch"] == task["branch"] == "predecessor"
+    assert task["repository_branches"] == {str(repository): "predecessor"}
+    assert git(repository, "ls-remote", "origin", "refs/heads/predecessor").split()[0] == head
+    assert git(repository, "ls-remote", "origin", "refs/heads/engineer-test") == ""
 
 
 def test_prepare_reuses_the_recorded_worktree_without_pushing(repository, tmp_path):
@@ -803,7 +822,7 @@ def test_parked_successor_restacks_and_publishes_with_predecessor_checkout_prese
     if prepared:
         result = publish.prepare("swarm", p.agent, str(repository), p.ledger)
         assert result["worktree"] == str(root)
-        assert p.task["branch"] == "engineer-test"
+        assert p.task["branch"] == "predecessor"
     predecessor = tmp_path / "predecessor"
     git(repository, "worktree", "add", "-b", "predecessor", str(predecessor), "origin/predecessor")
     monkeypatch.chdir(root)
