@@ -165,6 +165,7 @@ def prioritize(url: str, run=subprocess.run, journal=None) -> dict:
         raise SwarmError("queue priority requires an open pull request into dev")
     if raw["repository"]["mergeQueue"] is None:
         raise SwarmError("queue priority requires a dev merge queue")
+    staged_compatibility.require(url, raw["headRefOid"], raw.get("body") or "", run)
     require_green(url, raw["headRefOid"], run)
     waiting = waiting_ahead(url, raw["id"], run)
     before = journal.groups() if journal is not None else None
@@ -190,6 +191,7 @@ def prioritize(url: str, run=subprocess.run, journal=None) -> dict:
             try:
                 current = graphql(STATE, {"url": pull["url"]}, run)["resource"]
                 if current["mergeQueueEntry"] is None:
+                    staged_compatibility.require(pull["url"], pull["headRefOid"], current.get("body") or "", run)
                     steps.append(["restore", pull["url"]])
                     graphql(QUEUE, {"id": pull["id"], "head": pull["headRefOid"]}, run)
                     restored.append(pull["url"])

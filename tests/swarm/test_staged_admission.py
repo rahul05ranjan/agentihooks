@@ -188,6 +188,33 @@ def test_priority_refuses_unfinished_compatibility_before_displacing_entries():
     assert fake.mutations == []
 
 
+def test_priority_never_restores_an_unfinished_prerequisite():
+    from tests.swarm.test_merge_queue_priority import URL as PRIORITY_URL
+    from tests.swarm.test_merge_queue_priority import FakeQueue
+
+    fake = FakeQueue()
+    proof = declaration("queue seed dependency assertion")
+    proof["complete"] = False
+
+    def run(command, **kwargs):
+        done = fake.run(command, **kwargs)
+        data = json.loads(done.stdout)
+        if (
+            command[2] == "graphql"
+            and f"query={merge_queue.STATE}" in command
+            and "url=https://github.com/o/r/pull/2" in command
+        ):
+            data["data"]["resource"]["body"] = body(proof)
+        return subprocess.CompletedProcess(command, 0, json.dumps(data))
+
+    result = merge_queue.prioritize(PRIORITY_URL, run=run)
+    assert ("queue", 2) not in fake.mutations
+    assert ("queue", 3) in fake.mutations
+    assert result["displaced"] == ["https://github.com/o/r/pull/3"]
+    assert len(result["errors"]) == 1
+    assert "planned prerequisite edits" in result["errors"][0]
+
+
 @pytest.mark.parametrize(
     "change",
     [
