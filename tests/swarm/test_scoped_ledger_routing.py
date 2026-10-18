@@ -6,7 +6,7 @@ import pytest
 
 from scripts.swarm import cli, lease
 from scripts.swarm.store import RedisStore, SwarmConfig
-from scripts.swarm_ledger import ledger, ledger_link
+from scripts.swarm_ledger import ledger, ledger_link, ledger_route
 
 pytestmark = pytest.mark.xdist_group("fakeredis")
 
@@ -60,3 +60,18 @@ def test_a_pinned_native_ledger_command_resolves_its_own_swarm(store, monkeypatc
         ledger.main()
     assert seen == [("selected", "https://hosted.example", True)]
     assert not ledger_link.remote()
+
+
+def test_scoped_routes_match_the_slug_and_restore_after_a_refusal():
+    assert ledger_route.url("selected") == ""
+    with ledger_route.scoped("selected", "https://hosted.example/"):
+        assert ledger_route.url("selected") == "https://hosted.example"
+        assert ledger_route.url("other") == ""
+        assert ledger.base("selected") == "https://hosted.example"
+        assert not ledger_link.remote(slug="other")
+        with pytest.raises(ValueError):
+            with ledger_route.scoped("other", "https://other.example"):
+                assert ledger_route.url("selected") == ""
+                raise ValueError("refused")
+        assert ledger_route.url("selected") == "https://hosted.example"
+    assert ledger_route.url() == ""
