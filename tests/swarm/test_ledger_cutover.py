@@ -1,4 +1,5 @@
 import json
+import os
 import secrets
 
 import pytest
@@ -80,3 +81,39 @@ def test_normal_local_commands_acknowledge_the_staged_successor(pending, monkeyp
     report = json.loads(capsys.readouterr().out)
     assert set(report["missing"]) == {master.name for master in actors[1:]}
     assert not report["ready"]
+
+
+def test_endpoint_activation_requires_ready_executions_and_moves_the_controller_lease(pending, monkeypatch, capsys):
+    from argparse import Namespace
+
+    import fakeredis
+
+    from scripts.swarm import commands
+    from scripts.swarm.store import SwarmError
+    from scripts.swarm_ledger.api import controller_lease
+    from scripts.swarm_ledger.storage_migration import hosted
+
+    source, actors, secret = pending
+    destination = RedisStore(fakeredis.FakeRedis(decode_responses=True))
+    monkeypatch.setattr(controller_lease, "connect", lambda: destination)
+    monkeypatch.setattr(ledger_server.authority, "connect", lambda: destination)
+    monkeypatch.setattr(hosted, "server_secret", lambda: secret)
+    url = source.config(SLUG).pending_api_url
+    args = Namespace(slug=SLUG, pairs=[f"api-url={url}"])
+    old = lease.acquire(source, SLUG, commands.hive_id())
+    with pytest.raises(SwarmError, match="ready"):
+        cli.cmd_set(source, args)
+    assert source.config(SLUG).api_url == ""
+    assert lease.current(source, SLUG) == old
+    assert lease.current(destination, SLUG) is None
+    for actor in actors:
+        monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", actor.name)
+        monkeypatch.setenv("AGENTIHOOKS_LEDGER_AGENT_TOKEN", ledger_authority.agent_token(secret, SLUG, actor.name))
+        assert cli.main([SLUG, "ledger-ready"]) == 0
+        capsys.readouterr()
+    cli.cmd_set(source, args)
+    assert source.config(SLUG).api_url == url
+    assert lease.current(source, SLUG) is None
+    assert lease.current(destination, SLUG).epoch > old.epoch
+    assert lease.current(destination, SLUG).owner == old.owner
+    assert "SWARM_URL" not in os.environ
