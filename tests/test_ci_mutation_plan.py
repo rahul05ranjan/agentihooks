@@ -535,6 +535,8 @@ def test_estimate_names_the_file_whose_pragma_is_broken(tmp_path, monkeypatch):
 
 
 def test_main_writes_one_matrix_entry_per_shard(tmp_path, monkeypatch, capsys):
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests/test_sample.py").write_text("")
     output = tmp_path / "github-output"
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
