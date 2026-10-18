@@ -509,8 +509,8 @@ def cmd_tick(store, args):
             "the tick refused to run: AGENTIHOOKS_CONTROLLER_TICK_SECONDS is for controller installs, "
             "and the host timer ticks every 60 seconds"
         )
+    operator_env.classifier(os.environ)
     with authority_context.for_tick(store) as slugs:
-        operator_env.classifier(os.environ)
         if slugs:
             _reconcile_services()
             firsts, until = _Firsts(len(slugs)), time.monotonic() + EXTRA_TICKS_UNTIL
