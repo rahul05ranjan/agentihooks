@@ -208,6 +208,26 @@ def test_the_tick_fills_its_environment_before_any_spawn(tmp_path, monkeypatch):
     assert os.environ["PERSONAL_ONLY"] == "personal"
 
 
+def test_remote_tick_loads_the_server_secret_before_processing_ledgers(tmp_path, monkeypatch):
+    from scripts.swarm_ledger.storage_migration import hosted
+
+    _home(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("SWARM_URL", "https://hosted.example")
+    monkeypatch.delenv("SWARM_SECRET", raising=False)
+    trusted = "$TRUSTED_SWARM_SECRET"
+    monkeypatch.setattr(hosted, "server_secret", lambda: trusted, raising=False)
+    seen = []
+
+    class Store:
+        def slugs(self):
+            seen.append(os.environ.get("SWARM_SECRET"))
+            return []
+
+    swarm_cli.cmd_tick(Store(), None)
+    assert seen == [trusted]
+
+
 def _launcher(tmp_path, environ):
     env = {"XDG_RUNTIME_DIR": str(tmp_path / "run"), "SHELL": "/bin/bash", **environ}
     launcher, _ = init_agent._write_launcher(tmp_path, "grace", "", [], env, init_agent.AgentSpec())

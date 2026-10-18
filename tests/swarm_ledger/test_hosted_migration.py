@@ -171,7 +171,13 @@ def test_frozen_uploads_and_cleanup_preserve_fallback_files(stores, monkeypatch)
         ledger_artifacts.store("migration-proof", "new.md", b"new content")
     ledger_media.sweep("migration-proof", set(), 10**12)
     ledger_media.purge("migration-proof")
-    doc = {"artifacts": [], "artifact_trash": [{"file": {"id": existing.name}, "deleted_at": 0}]}
+    doc = {
+        **{name: [] for name in ledger_artifacts.core.THREADS},
+        "notes": [],
+        "chat": [],
+        "artifacts": [],
+        "artifact_trash": [{"file": {"id": existing.name}, "deleted_at": 0}],
+    }
     before = copy.deepcopy(doc)
     ledger_artifacts.sweep("migration-proof", doc, SimpleNamespace(at=10**12, dropped=[], dirty=False))
     assert doc == before
