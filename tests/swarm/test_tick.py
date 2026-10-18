@@ -98,6 +98,9 @@ class FakeLedger:
     def binned(self, slug):
         return slug in getattr(self, "bin", set())
 
+    def closed(self, slug):
+        return bool(self.state(slug).get("closed_at"))
+
     def rank_task(self, slug, task_id, rank, by, if_owned=False):
         self.ranks.append((task_id, rank, by))
         return {"id": task_id, "rank": rank}
@@ -1448,6 +1451,19 @@ def test_the_tick_hands_the_ci_budget_pass_its_store_and_clock(store, monkeypatc
     monkeypatch.setattr(defects, "refresh", lambda *args: seen.append(args) or ["updated"])
     assert "updated" in tick("sw", store, tasks(("t1", "eng")), FakeRuntime(), 1)
     assert [(args[0], args[2], args[3]) for args in seen] == [("sw", store, 1)]
+
+
+def test_tick_captures_panes_before_any_retirement(store, monkeypatch):
+    from scripts.swarm import pane_evidence
+    from scripts.swarm import tick as module
+
+    seen = []
+    rt = FakeRuntime()
+    monkeypatch.setattr(pane_evidence, "sweep", lambda *args: seen.append(("capture", args)) or ["captured"])
+    monkeypatch.setattr(module, "_recover_master", lambda *args: seen.append(("recover", args)) or ["recovered"])
+    assert tick("sw", store, tasks(("t1", "eng")), rt, 123)[:2] == ["captured", "recovered"]
+    assert seen[0] == ("capture", ("sw", store, rt, 123))
+    assert seen[1][0] == "recover"
 
 
 def test_the_tick_hands_the_flake_budget_pass_its_ledger(store, monkeypatch):
