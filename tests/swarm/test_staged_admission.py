@@ -241,21 +241,32 @@ def test_malformed_declarations_fail_closed(change):
 
 
 @pytest.mark.parametrize(
-    "bad_body",
+    "bad_body,diagnostic",
     [
-        "<!-- staged-compatibility",
-        "<!-- staged-compatibility invalid -->",
-        "<!-- staged-compatibility [] -->",
-        "<!-- staged-compatibility {} --><!-- staged-compatibility {} -->",
+        ("<!-- staged-compatibility", "staged compatibility: provide one complete declaration"),
+        ("<!-- staged-compatibility invalid -->", "staged compatibility: declaration must be valid JSON"),
+        (
+            "<!-- staged-compatibility [] -->",
+            "staged compatibility: finish all planned prerequisite edits and set complete to true",
+        ),
+        (
+            "<!-- staged-compatibility {} --><!-- staged-compatibility {} -->",
+            "staged compatibility: provide one complete declaration",
+        ),
+        (
+            '<!-- staged-compatibility {"complete": false} -->',
+            "staged compatibility: finish all planned prerequisite edits and set complete to true",
+        ),
     ],
 )
-def test_unreadable_declaration_keeps_the_ready_owner(monkeypatch, bad_body):
+def test_unreadable_declaration_keeps_the_ready_owner(monkeypatch, bad_body, diagnostic):
     pull = type("Pull", (), {"head": HEAD, "state": "OPEN", "body": bad_body, "queued": False})()
     agent = AgentRecord(name="ci-1", lane="ci", task="t1")
     monkeypatch.setattr(ready.stack, "shell", lambda cmd: subprocess.CompletedProcess(cmd, 0, "false"))
     monkeypatch.setattr(ready, "_checkout", lambda *args: pytest.fail("unfinished proof reached checkout release"))
-    with pytest.raises(SwarmError, match="staged compatibility"):
+    with pytest.raises(SwarmError) as error:
         ready.check({"kind": "ci", "pr_url": URL}, agent, "full", lambda url: pull, 1)
+    assert str(error.value) == diagnostic
 
 
 def test_compatibility_reads_all_job_pages():

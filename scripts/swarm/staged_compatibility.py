@@ -11,13 +11,14 @@ RUN = r"https://github\.com/([\w.-]+/[\w.-]+)/actions/runs/([1-9]\d*)"
 
 
 def declaration(body: str) -> dict | None:
-    if MARKER not in body:
+    _, marker, remainder = body.partition(MARKER)
+    if not marker:
         return None
-    matches = re.findall(r"<!-- staged-compatibility\s*(.*?)-->", body, re.DOTALL)
-    if len(matches) != 1 or body.count(MARKER) != 1:
+    encoded, closing, _ = remainder.partition("-->")
+    if not closing or MARKER in remainder:
         raise SwarmError("staged compatibility: provide one complete declaration")
     try:
-        proof = json.loads(matches[0])
+        proof = json.loads(encoded)
     except ValueError as exc:
         raise SwarmError("staged compatibility: declaration must be valid JSON") from exc
     if not isinstance(proof, dict) or proof.get("complete") is not True:
