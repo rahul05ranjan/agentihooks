@@ -959,6 +959,14 @@ def test_queue_gate_keeps_legacy_duration_admission_by_default():
     assert implicit != ci_reuse.gate_steps(queue_tier=True, consolidated=True)
 
 
+def test_suite_speed_admission_is_explicit_in_the_canonical_gate():
+    from scripts import ci_reuse
+
+    form = {"queue_tier": True, "promotion": True, "consolidated": True}
+    assert ci_reuse.gate_steps(**form) == ci_reuse.gate_steps(**form, suite_speed=False)
+    assert ci_reuse.gate_steps(**form) != ci_reuse.gate_steps(**form, suite_speed=True)
+
+
 @pytest.mark.parametrize("event", ["merge_group", "pull_request"])
 @pytest.mark.parametrize("promotion", [False, True])
 @pytest.mark.parametrize("admission", ["success", "failure", "skipped", "cancelled", None])
