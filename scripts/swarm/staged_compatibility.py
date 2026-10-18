@@ -18,7 +18,7 @@ def declaration(body: str) -> dict | None:
     if not closing or MARKER in remainder:
         raise SwarmError("staged compatibility: provide one complete declaration")
     try:
-        proof = json.loads(encoded)
+        proof = json.loads(encoded.lstrip())
     except ValueError as exc:
         raise SwarmError("staged compatibility: declaration must be valid JSON") from exc
     if not isinstance(proof, dict) or proof.get("complete") is not True:
