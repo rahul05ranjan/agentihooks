@@ -45,6 +45,10 @@ def dispatch(handler: object, server: ModuleType) -> dict | str | None:
     if principal is None:
         raise APIError(403, "forbidden", "Missing or wrong ledger credential")
     if handler.command == "GET":
+        if path == "controller-lease":
+            from . import controller_lease
+
+            return controller_lease.read(slug)
         query = pagination(handler.path)
         if path == "events" and handler.headers.get("Accept") == "text/event-stream":
             return events(handler, server, slug)
@@ -141,6 +145,10 @@ def ledger_operation(handler: object, server: ModuleType, slug: str, path: str, 
     if path in ("uploads/media", "uploads/artifacts"):
         return admin.upload(handler, server, slug, path)
     payload = body(handler, server)
+    if path == "controller-lease/actions":
+        from . import controller_lease
+
+        return controller_lease.act(slug, principal, payload)
     if path == "lifecycle/actions":
         return admin.lifecycle(server, principal, slug, payload)
     if path == "swarm/actions":
