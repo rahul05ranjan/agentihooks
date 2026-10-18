@@ -73,7 +73,6 @@ def snapshot_body(ledger=None, swarm=None):
 
 
 def served_ledger(ledger):
-    """The ledger as the server streams it: with freeze marks and limits, unless the test gives its own."""
     if not isinstance(ledger, dict):
         return ledger
     from scripts.swarm_ledger import ledger_server

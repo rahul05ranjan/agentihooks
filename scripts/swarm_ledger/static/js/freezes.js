@@ -31,10 +31,12 @@ export function held(d, key) {
 export function setFreeze(d, op, at) {
   if (d.freezes.some((r) => r.verb === op.verb && r.target === op.target)) return;
   d.freezes.push({ id: op.id, verb: op.verb, target: op.target, by: "operator", at, reason: op.reason || "" });
+  if (op.verb === "freeze" && !d.marks.frozen.includes(op.target)) d.marks.frozen.push(op.target);
 }
 
 export function clearFreeze(d, op) {
   d.freezes = d.freezes.filter((r) => r.target !== op.target);
+  d.marks.frozen = d.marks.frozen.filter((key) => key !== op.target);
 }
 
 export function targetText(d, target) {

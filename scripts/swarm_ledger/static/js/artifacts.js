@@ -38,7 +38,7 @@ function openArtifact(a) {
 }
 
 function daysLeft(deletedAt) {
-  return Math.max(0, Math.ceil((((meta.limits || {}).bin_days || 0) * DAY - (Date.now() - deletedAt)) / DAY));
+  return Math.max(0, Math.ceil((meta.limits.bin_days * DAY - (Date.now() - deletedAt)) / DAY));
 }
 
 export function renderArtifacts() {
@@ -59,7 +59,7 @@ export function renderArtifacts() {
   const trash = [...doc.artifact_trash].sort((a, b) => (b.deleted_at || 0) - (a.deleted_at || 0));
   $("art-trash-head").hidden = !trash.length;
   $("art-trash").replaceChildren(...firstPage("art-trash", trash, (a) => `artifact-${a.id}`).map((a) => h("li", { class: "notif-row art-row", id: `artifact-${a.id}` },
-    h("div", { class: "notif-meta", text: `${a.title} · ${daysLeft(a.deleted_at)} days left` }),
+    h("div", { class: "notif-meta", text: meta.limits ? `${a.title} · ${daysLeft(a.deleted_at)} days left` : a.title }),
     h("button", { class: "link", type: "button", text: "Restore", "aria-label": `Restore ${a.title}`,
       on: { click: () => queue({ op: "artifact_restore", id: newId("artback"), target: a.id }) } }))),
     moreButton("art-trash", trash.length, "more trashed artifacts", renderArtifacts) || "");

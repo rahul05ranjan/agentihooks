@@ -74,7 +74,7 @@ def covers(target: str, task: dict, chain: list) -> bool:
     return target in chain
 
 
-def marks(doc: dict, graph: dict, fix_phase: str = "") -> dict:
+def marks(doc: dict, graph: dict, fix: str = "") -> dict:
     records = doc.get("freezes") or []
     focus = [r["target"] for r in records if r["verb"] == "focus"]
     tasks = {
@@ -85,7 +85,7 @@ def marks(doc: dict, graph: dict, fix_phase: str = "") -> dict:
     for node, chain in chains.items():
         task = tasks.get(node)
         if task is not None:
-            cold, hold = frozen(task, records, chain), unfocused(task, records, chain, fix_phase)
+            cold, hold = frozen(task, records, chain), unfocused(task, records, chain, fix)
         else:
             cold = any(r["verb"] == "freeze" and r["target"] in chain for r in records)
             hold = bool(focus) and not any(_reaches(target, node, chains) for target in focus)
