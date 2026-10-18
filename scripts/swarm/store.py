@@ -27,6 +27,8 @@ SCALING = ("auto", "manual")
 AUTO_SCALING, MANUAL_SCALING = SCALING
 DEFAULT_LOAD_HIGH, DEFAULT_LOAD_LOW = 1.5, 1.0
 DEFAULT_MEMORY_PER_AGENT_MB = 700
+DEFAULT_MASTERS_STEP = 12
+DEFAULT_MASTER_MOVE_GRACE = 300
 MAX_LOAD = 10.0
 CODEX_TRANSPORTS = ("legacy", "app_server")
 LEGACY_TRANSPORT, APP_SERVER_TRANSPORT = CODEX_TRANSPORTS
@@ -70,6 +72,8 @@ class SwarmConfig:
     scratch: bool = False
     codex_inbox_transport: str = LEGACY_TRANSPORT
     master_claude_login: bool = False
+    masters_step: int = 0
+    master_move_grace: int = DEFAULT_MASTER_MOVE_GRACE
 
 
 def scaling_refusal(config):
@@ -120,6 +124,7 @@ class AgentRecord:
     route_kind: str = "subscription"
     transport: str = ""
     remote_control: dict = field(default_factory=dict)
+    desired_route_kind: str = ""
 
 
 class RedisStore:
@@ -199,6 +204,8 @@ class RedisStore:
             raw.get("scratch") == "True",
             raw.get("codex_inbox_transport") or LEGACY_TRANSPORT,
             raw.get("master_claude_login") == "True",
+            int(raw.get("masters_step") or 0),
+            int(raw.get("master_move_grace") or DEFAULT_MASTER_MOVE_GRACE),
         )
 
     def update(self, slug, **changes):
@@ -398,6 +405,7 @@ class RedisStore:
                 reason = "handed off"
             self.redis.rpush(self.key(slug, "history"), json.dumps({**row, "ended_at": ended, "reason": reason}))
         self.redis.hdel(self.key(slug, "agents"), name)
+        self.redis.hdel(self.key(slug, "desired-routes"), name)
         self.redis.hdel(self.key(slug, "state-since"), name)
         self.redis.hdel(self.key(slug, "retire-failures"), name)
         self.names.retire(name, ended)
