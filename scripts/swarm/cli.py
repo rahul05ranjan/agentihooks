@@ -361,6 +361,9 @@ def run_tick(store, slug, ledger=None, runtime=None, messenger=None, scheduled=F
                 from scripts.swarm import langfuse
 
                 actions += skip_refused(langfuse.refresh, store, slug, now_ms())
+                from scripts.swarm import grafana_alerts
+
+                actions += skip_refused(grafana_alerts.refresh, store.redis, slug, now_ms())
             found = timing.call(
                 findings, store, slug, config, doc.get("tasks", []), doc.get("_meta", {}).get("events", []), view
             )
@@ -550,12 +553,6 @@ def cmd_waker(store, args):
     from scripts.inbox import waker
 
     waker.run(store, delivery.HerdrMessenger(), now_ms)
-
-
-def cmd_alerts(store, args):
-    from scripts.swarm import alert_intake
-
-    alert_intake.serve(store.redis, alert_intake.settings(os.environ), now_ms)
 
 
 def cmd_prober(store, args):
@@ -2135,7 +2132,7 @@ def typed(argv):
 
 
 def dispatch(argv):
-    if argv and argv[0] in ("list", "tick", "templates", "rename", "waker", "alerts", "prober", "waits"):
+    if argv and argv[0] in ("list", "tick", "templates", "rename", "waker", "prober", "waits"):
         handler, args = globals()[f"cmd_{argv[0]}"], argparse.Namespace()
     else:
         if len(argv) > 1 and argv[1].partition("=")[0] in (
