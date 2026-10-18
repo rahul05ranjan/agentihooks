@@ -2179,6 +2179,10 @@ def dispatch(argv):
         route_slug = getattr(args, "slug", "")
         address = ledger_route.configured(store, route_slug) if route_slug else ""
         with ledger_route.scoped(route_slug, address):
+            if route_slug and handler is not cmd_ledger_ready:
+                from scripts.swarm import ledger_cutover
+
+                ledger_cutover.acknowledge(store, route_slug, who)
             before = (
                 control_notifications.master(store, args.slug) if action in control_notifications.CONTROLS else None
             )

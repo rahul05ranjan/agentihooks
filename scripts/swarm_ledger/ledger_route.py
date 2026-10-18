@@ -36,8 +36,13 @@ def session(slug: str) -> Iterator[None]:
         and os.environ.get("AGENTIHOOKS_DEPLOYMENT", "local") == "local"
         and not os.environ.get("SWARM_URL")
     ):
-        with scoped(slug, connect().config(slug).api_url):
+        store = connect()
+        with scoped(slug, store.config(slug).api_url):
             yield
+            from scripts.gates import Who
+            from scripts.swarm import ledger_cutover
+
+            ledger_cutover.acknowledge(store, slug, Who.from_env())
     else:
         yield
 
