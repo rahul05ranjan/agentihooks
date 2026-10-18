@@ -139,7 +139,7 @@ def test_ready_refuses_unfinished_staged_work_before_releasing_owner(monkeypatch
     proof = declaration("queue seed dependency assertion")
     proof["complete"] = False
     pull = type("Pull", (), {"head": HEAD, "state": "OPEN", "body": body(proof), "queued": False})()
-    agent = AgentRecord(name="ci-1", lane="ci", profile="cicd", pid=1, task="t1")
+    agent = AgentRecord(name="ci-1", lane="ci", profile="cicd", task="t1")
     monkeypatch.setattr(ready.stack, "shell", lambda cmd: subprocess.CompletedProcess(cmd, 0, "false"))
     monkeypatch.setattr(ready, "_checkout", lambda *args: "/worktree")
     with pytest.raises(SwarmError, match="planned prerequisite edits"):
