@@ -108,6 +108,18 @@ def test_registered_repos_read_every_global_entry_and_ignore_local_config(tmp_pa
     assert maintenance.registered_repos() == ["/first", "/second"]
 
 
+def test_registered_repos_ask_git_for_every_global_maintenance_entry(monkeypatch):
+    calls = []
+
+    def fake(path, *args, timeout=120):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, "/a\n/b\n", "")
+
+    monkeypatch.setattr(maintenance, "git", fake)
+    assert maintenance.registered_repos() == ["/a", "/b"]
+    assert calls == [("config", "--global", "--get-all", "maintenance.repo")]
+
+
 def test_only_linked_worktrees_name_a_primary(repo, tmp_path):
     held = repo.worktree("held")
     submodule = tmp_path / "sub"

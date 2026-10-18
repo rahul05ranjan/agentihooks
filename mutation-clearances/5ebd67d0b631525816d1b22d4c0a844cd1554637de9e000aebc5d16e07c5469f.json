@@ -1,6 +1,0 @@
-{
-  "hooks/lifecycle/maintenance.py:hooks.lifecycle.maintenance.x_registered_repos__mutmut_19:831a6e3e097fc4635fcb4448295e729c3309bd5ae491c44c19ff0fe65ebf5091": {
-    "reader": "Adversarial mutation reader for t379",
-    "reason": "Git config section and variable names are case insensitive, so MAINTENANCE.REPO reads the same values and exit status as maintenance.repo; confirmed on a scratch config file."
-  }
-}
