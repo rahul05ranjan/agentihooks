@@ -331,6 +331,15 @@ def test_whole_store_migration_makes_the_local_fallback_read_only(stores, monkey
     import sys
 
     source, _ = stores
+    original_fence = hosted.fence
+    transferred = []
+
+    def fence(repo, slug, destination):
+        if slug == "*":
+            source.import_document("racing-ledger", document())
+        original_fence(repo, slug, destination)
+
+    monkeypatch.setattr(hosted, "fence", fence)
     monkeypatch.setenv("SWARM_SECRET", secrets.token_hex(32))
     monkeypatch.setattr(
         sys, "argv", ["migration", "--source", str(source.directory), "--url", "https://hosted.example", "--freeze"]
@@ -340,14 +349,26 @@ def test_whole_store_migration_makes_the_local_fallback_read_only(stores, monkey
         with pytest.raises(sqlite3.IntegrityError, match="hosted"):
             source.import_document("late-ledger", document())
         with source.connect() as connection, pytest.raises(sqlite3.IntegrityError, match="hosted"):
-            source.save_registry(connection, "bin", {"late-ledger": 42})
-        with pytest.raises(ValueError, match="hosted"):
-            with hosted.media_mutation(source.directory, "late-ledger"):
-                pass
+            source.save_registry(connection, "bin", {**source.registry("bin", connection), "late-ledger": 42})
+        with hosted.media_mutation(source.directory, "late-ledger") as writable:
+            assert not writable
+        transferred.append(snapshot["slug"])
         return {"match": True}
 
     monkeypatch.setattr(hosted, "transfer", transfer)
     hosted.main()
+    assert transferred == ["migration-proof", "racing-ledger"]
+
+
+def test_whole_store_freeze_refuses_any_foreign_destination(stores):
+    source, _ = stores
+    source.import_document("second-proof", document())
+    hosted.fence(source, "migration-proof", "https://hosted.example")
+    hosted.fence(source, "second-proof", "https://another.example")
+    with pytest.raises(ValueError, match="^ledger already has a different hosted destination$"):
+        hosted.fence(source, "*", "https://hosted.example")
+    source.import_document("still-local", document())
+    assert source.export_document("still-local") == document()
 
 
 def test_server_secret_is_loaded_from_openbao_only_in_memory(monkeypatch, capsys):

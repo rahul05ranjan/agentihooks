@@ -23,7 +23,9 @@ MAX_EXPANDED = 256 << 20
 FILE_ID = re.compile(r"[0-9a-f]{64}\.[a-z0-9]+\Z")
 TABLE_ID = re.compile(r"[a-z_]+\Z")
 FENCES = "CREATE TABLE IF NOT EXISTS hosted_fences (slug TEXT PRIMARY KEY, destination TEXT NOT NULL)"
-FENCED = "SELECT destination FROM hosted_fences WHERE slug=?"
+FENCED = "SELECT destination FROM hosted_fences WHERE slug IN (?, '*')"
+FENCE_DESTINATIONS = "SELECT destination FROM hosted_fences WHERE slug IN (?, '*') OR ?='*'"
+CATALOG = "SELECT slug FROM ledgers ORDER BY slug"
 REGISTRIES = "SELECT slug,path,value FROM registry WHERE path=? ORDER BY slug,path"
 TOKEN_MESSAGE = "ledger-import:{slug}:{expires}"
 
@@ -74,10 +76,10 @@ def fence(repo: SQLiteLedgerRepository, slug: str, destination: str) -> None:
     with repo.domain.LOCK, repo.connect() as connection, connection:
         connection.execute("BEGIN IMMEDIATE")
         connection.execute(FENCES)
-        previous = connection.execute(FENCED, (slug,)).fetchone()
-        if previous and previous[0] != destination:
+        previous = connection.execute(FENCE_DESTINATIONS, (slug, slug)).fetchall()
+        if any(row[0] != destination for row in previous):
             raise ValueError("ledger already has a different hosted destination")
-        if not connection.execute("SELECT 1 FROM ledgers WHERE slug=?", (slug,)).fetchone():
+        if slug != "*" and not connection.execute("SELECT 1 FROM ledgers WHERE slug=?", (slug,)).fetchone():
             raise ValueError("no such ledger")
         tables = connection.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         for (table,) in tables:
@@ -90,7 +92,7 @@ def fence(repo: SQLiteLedgerRepository, slug: str, destination: str) -> None:
             for action, reference in (("INSERT", "NEW"), ("UPDATE", "OLD"), ("DELETE", "OLD")):
                 connection.execute(
                     f"CREATE TRIGGER IF NOT EXISTS hosted_{table}_{action} BEFORE {action} ON {table} "
-                    f"WHEN EXISTS(SELECT 1 FROM hosted_fences WHERE slug={reference}.{column}) "
+                    f"WHEN EXISTS(SELECT 1 FROM hosted_fences WHERE slug IN ({reference}.{column}, '*')) "
                     "BEGIN SELECT RAISE(ABORT,'ledger moved to hosted service'); END"
                 )
         with media_lock(repo.directory):
@@ -280,7 +282,10 @@ def main() -> None:
 
     repo = SQLiteLedgerRepository(args.source / DATABASE, ledger_server.core)
     with read_only(args.source) as connection:
-        slugs = args.slug or [row[0] for row in connection.execute("SELECT slug FROM ledgers ORDER BY slug")]
+        slugs = args.slug or [row[0] for row in connection.execute(CATALOG)]
+        if args.freeze and not args.slug:
+            fence(repo, "*", args.url)
+            slugs = [row[0] for row in connection.execute(CATALOG)]
     for slug in slugs:
         if args.freeze:
             fence(repo, slug, args.url)
