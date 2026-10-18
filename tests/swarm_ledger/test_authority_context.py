@@ -59,6 +59,8 @@ def source_calls():
                 name = aliases.get(first, first) + (dot + rest if dot else "")
                 owners = [item for item in functions if item.lineno <= node.lineno <= item.end_lineno]
                 owner = min(owners, key=lambda item: item.end_lineno - item.lineno).name if owners else "<module>"
+                if "__mutmut_" in owner:
+                    owner = owner.split("__mutmut_", 1)[0].removeprefix("x_")
                 result.append((str(path.relative_to(root)), node.lineno, name, owner))
     return result
 
