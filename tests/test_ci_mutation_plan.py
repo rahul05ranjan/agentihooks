@@ -585,7 +585,7 @@ def test_main_writes_one_matrix_entry_per_shard(tmp_path, monkeypatch, capsys):
 @pytest.mark.parametrize("source, matched", [("sample", False), ("sample", True), ("plain", False)])
 def test_planning_refuses_an_unmatched_module_before_publishing_statistics(tmp_path, monkeypatch, source, matched):
     _project(tmp_path, {})
-    (tmp_path / "tests/test_sample.py").write_text("from scripts.other import h\n")
+    (tmp_path / "tests/test_sample.py").unlink()
     if matched:
         (tmp_path / "tests/test_sample.py").write_text("from scripts.sample import f\n")
     monkeypatch.chdir(tmp_path)
