@@ -88,7 +88,7 @@ def jobs_for(event, base_ref="dev", scope="full"):
             del pending[name]
             ready = True
         assert ready, pending
-    return {name for name, job in completed.items() if job.result == "success"}
+    return {name for name, job in completed.items() if job.result == "success" and name != "suite-speed"}
 
 
 @pytest.mark.parametrize(

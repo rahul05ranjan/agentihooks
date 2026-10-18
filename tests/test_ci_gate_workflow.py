@@ -120,10 +120,14 @@ def test_required_gate_runs_after_parallel_unit_and_lint():
             "stage-budget",
             "select",
             "unit-selected",
+            "suite-speed",
         }
     )
     assert gate["if"] == "${{ always() }}"
-    assert jobs["unit"]["needs"] == ["split", "select", "reuse", "admission"]
+    assert jobs["unit"]["needs"] in (
+        ["split", "select", "reuse", "admission"],
+        ["split", "select", "reuse", "admission", "suite-speed"],
+    )
     assert jobs["split"]["needs"] in (
         ["durations", "select", "reuse", "admission"],
         ["select", "reuse", "admission"],
@@ -644,6 +648,36 @@ def test_required_gate_rejects_every_non_success_result(unit, lint):
     assert (result.returncode == 0) == (unit == lint == "success"), result.stdout + result.stderr
     if result.returncode:
         assert "::error::" in result.stdout
+
+
+@pytest.mark.parametrize("event", ["pull_request", "merge_group", "push"])
+@pytest.mark.parametrize("result", ["success", "failure", "cancelled", "skipped", "pending"])
+def test_required_gate_grades_early_suite_speed_only_on_pull_requests(event, result):
+    jobs = _workflow()["jobs"]
+    if "suite-speed" not in jobs:
+        return
+    from tests.contracts.ci_tiers.test_workflow import jobs_for
+
+    running = jobs_for(event)
+    running |= {"suite-speed"} if event == "pull_request" else set()
+    needs = {
+        name: {"result": "success" if name in running else "skipped", "outputs": {"scope": "full"}}
+        for name in jobs["gate-required"]["needs"]
+    }
+    needs["suite-speed"]["result"] = result
+    step = jobs["gate-required"]["steps"][0]
+    env = dict(
+        os.environ,
+        NEEDS=json.dumps(needs),
+        EVENT=event,
+        MUTATION=str(event == "pull_request").lower(),
+        KIND="true",
+        REUSED="false",
+    )
+    graded = subprocess.run(["bash", "-e", "-c", step["run"]], env=env, capture_output=True, text=True)
+    assert (graded.returncode == 0) == (result == ("success" if event == "pull_request" else "skipped")), (
+        graded.stdout + graded.stderr
+    )
 
 
 @pytest.mark.parametrize("durations", ["success", "failure", "skipped", "cancelled"])
