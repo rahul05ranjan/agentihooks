@@ -1,6 +1,7 @@
 import copy
 import inspect
 import json
+import signal
 import subprocess
 from pathlib import Path
 
@@ -540,3 +541,23 @@ def test_unreadable_proof_response_names_the_repair(response):
     invoke, _ = queue(proof, endpoints)
     with pytest.raises(SwarmError, match="unreadable compatibility proof"):
         invoke()
+
+
+def test_ready_bounds_unterminated_declaration_parsing(monkeypatch):
+    pull = ledger_events.pull_request({"state": "OPEN", "headRefOid": HEAD, "body": MARKER + " " * 65_000})
+    agent = AgentRecord(name="ci-1", lane="ci", task="t1")
+    monkeypatch.setattr(ready.stack, "shell", lambda cmd: subprocess.CompletedProcess(cmd, 0, "false"))
+    monkeypatch.setattr(ready, "_checkout", lambda *args: pytest.fail("unfinished proof reached checkout release"))
+
+    def deadline(signum, frame):
+        raise TimeoutError("declaration parsing exceeded three seconds")
+
+    previous_handler = signal.signal(signal.SIGALRM, deadline)
+    previous_timer = signal.setitimer(signal.ITIMER_REAL, 3)
+    try:
+        with pytest.raises(SwarmError, match="provide one complete declaration"):
+            ready.check({"kind": "ci", "pr_url": URL}, agent, "full", lambda url: pull, 1)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        signal.setitimer(signal.ITIMER_REAL, *previous_timer)
