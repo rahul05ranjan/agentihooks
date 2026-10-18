@@ -2356,6 +2356,12 @@ jobs:
           EVENT: ${{ github.event_name }}
           REUSED: ${{ needs.reuse.outputs.reused }}
         run: |
+          expected=skipped
+          [[ "${EVENT:-}" != pull_request ]] || expected=success
+          if ! jq -e --arg expected "$expected" '."suite-speed".result == $expected' <<< "$NEEDS"; then
+            echo "::error::The early suite speed gate must succeed on pull requests and be skipped on other events."
+            exit 1
+          fi
           if [[ "${EVENT:-}" == merge_group || "${EVENT:-}" == pull_request ]]; then
             if ! jq -e --arg event "$EVENT" --arg mutation "$MUTATION" '
               (.select.outputs.scope // "") as $scope
