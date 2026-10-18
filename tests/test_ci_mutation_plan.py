@@ -582,6 +582,29 @@ def test_main_writes_one_matrix_entry_per_shard(tmp_path, monkeypatch, capsys):
     )
 
 
+@pytest.mark.parametrize("source, matched", [("sample", False), ("sample", True), ("plain", False)])
+def test_planning_refuses_an_unmatched_module_before_publishing_statistics(tmp_path, monkeypatch, source, matched):
+    _project(tmp_path, {})
+    (tmp_path / "tests/test_sample.py").write_text("from scripts.other import h\n")
+    if matched:
+        (tmp_path / "tests/test_sample.py").write_text("from scripts.sample import f\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["plan"])
+    monkeypatch.setattr(plan, "own_bases", lambda *args: ["base"])
+    monkeypatch.setattr(plan, "discover_changes", lambda *args: {f"scripts/{source}.py": {2}})
+    output = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    if source == "sample" and not matched:
+        with pytest.raises(SystemExit) as refusal:
+            plan.main()
+        assert str(refusal.value) == "scripts/sample.py: not mutated, no matching or importing test modules"
+        assert not output.exists()
+        assert not (tmp_path / ".mutation-selection.json").exists()
+    else:
+        assert plan.main() == 0
+        assert "stats_parts=" in output.read_text()
+
+
 @pytest.mark.parametrize(
     ("estimated", "shards", "parts"),
     [
