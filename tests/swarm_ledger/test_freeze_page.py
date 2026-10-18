@@ -184,7 +184,8 @@ def test_unfreezing_a_phase_keeps_the_freezes_on_its_tasks_on_the_page(page):
     tab, sent = page
     tab.click('[data-focus="freeze:phases/p1"]')
     assert sent_ops(tab, sent, "freeze_clear") == [{"op": "freeze_clear", "target": "phases/p1"}]
-    tab.wait_for_function("() => !document.querySelector('#item-phases-p1').classList.contains('frozen')")
+    tab.wait_for_function("() => !document.querySelector('#item-tasks-t3').classList.contains('frozen')")
+    assert row_state(tab, "#item-phases-p1")["frozen"] is False
     assert row_state(tab, "#item-tasks-t1")["frozen"] is True
     assert freeze_text(tab, "#item-tasks-t1") == "unfreeze"
     assert row_state(tab, "#item-tasks-t3")["frozen"] is False
