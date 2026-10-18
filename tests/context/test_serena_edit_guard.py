@@ -8,6 +8,7 @@ import pytest
 
 from hooks.context.serena_edit_guard import check
 from hooks.hook_manager import BlockAction
+from hooks.targets.normalizer import _codex_tool_call
 
 
 @pytest.fixture
@@ -100,6 +101,66 @@ def test_shell_rewrites_of_worktree_python_are_blocked(trees, command):
 def test_shell_reads_and_new_files_are_allowed(trees, command):
     _, worktree = trees
     check(_tool("Bash", worktree, command=command))
+
+
+def _patch(*actions):
+    body = "\n".join(["*** Begin Patch", *actions, "*** End Patch"])
+    return _codex_tool_call("apply_patch", {"command": body})
+
+
+@pytest.fixture
+def sibling(trees):
+    primary, worktree = trees
+    other = worktree.parent / "other"
+    (other / "pkg").mkdir(parents=True)
+    (other / ".git").write_text(f"gitdir: {primary}/.git/worktrees/other\n")
+    (other / "pkg" / "mod.py").write_text("x = 1\n")
+    return other
+
+
+@pytest.mark.parametrize(
+    "command", ["git rm pkg/mod.py", "git rm -f pkg/mod.py", "rm pkg/mod.py", "rm -f pkg/mod.py && echo gone"]
+)
+def test_shell_deletion_of_own_worktree_python_is_allowed(trees, command):
+    _, worktree = trees
+    check(_tool("Bash", worktree, command=command))
+
+
+def test_patch_deletion_of_own_worktree_python_is_allowed(trees):
+    _, worktree = trees
+    name, tool_input = _patch(f"*** Delete File: {worktree / 'pkg' / 'mod.py'}")
+    check({"tool_name": name, "tool_input": tool_input, "cwd": str(worktree)})
+
+
+def test_patch_updating_worktree_python_beside_a_deletion_is_blocked(trees):
+    _, worktree = trees
+    (worktree / "pkg" / "gone.py").write_text("y = 1\n")
+    name, tool_input = _patch(
+        f"*** Delete File: {worktree / 'pkg' / 'gone.py'}",
+        f"*** Update File: {worktree / 'pkg' / 'mod.py'}",
+        "@@",
+        "-x = 1",
+        "+x = 2",
+    )
+    with pytest.raises(BlockAction, match="activate_project"):
+        check({"tool_name": name, "tool_input": tool_input, "cwd": str(worktree)})
+
+
+@pytest.mark.parametrize(
+    "command", ["git rm {path}", "rm -f {path}", "cd {root} && rm pkg/mod.py && cd -", "echo x; git rm -q {path}"]
+)
+def test_shell_deletion_of_python_in_another_worktree_is_blocked(trees, sibling, command):
+    _, worktree = trees
+    command = command.format(path=sibling / "pkg" / "mod.py", root=sibling)
+    with pytest.raises(BlockAction, match="another worktree"):
+        check(_tool("Bash", worktree, command=command))
+
+
+def test_patch_deletion_of_python_in_another_worktree_is_blocked(trees, sibling):
+    _, worktree = trees
+    name, tool_input = _patch(f"*** Delete File: {sibling / 'pkg' / 'mod.py'}")
+    with pytest.raises(BlockAction, match="another worktree"):
+        check({"tool_name": name, "tool_input": tool_input, "cwd": str(worktree)})
 
 
 def test_the_guard_can_be_turned_off(trees, monkeypatch):
