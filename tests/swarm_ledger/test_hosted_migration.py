@@ -209,8 +209,8 @@ def test_transfer_verifies_a_separate_read_and_blocks_redirects(stores, monkeypa
         return io.BytesIO(json.dumps({"data": answers.pop(0)}).encode())
 
     def opener(handler):
-        assert isinstance(handler, hosted.NoRedirect)
-        assert handler.redirect_request(None, None, 302, "redirect", {}, "https://elsewhere.example") is None
+        assert handler is hosted.NoRedirect
+        assert handler().redirect_request(None, None, 302, "redirect", {}, "https://elsewhere.example") is None
         return SimpleNamespace(open=opened)
 
     monkeypatch.setattr(hosted.urllib.request, "build_opener", opener)
@@ -266,3 +266,39 @@ def test_command_freezes_source_before_transferring_and_reports_comparison(store
     monkeypatch.setattr(hosted, "transfer", transfer)
     hosted.main()
     assert json.loads(capsys.readouterr().out) == {"match": True}
+
+
+def test_server_secret_is_loaded_from_openbao_only_in_memory(monkeypatch, capsys):
+    secret = secrets.token_hex(32)
+    monkeypatch.delenv("SWARM_SECRET", raising=False)
+    monkeypatch.setenv("OPENBAO_URL", "https://vault.example")
+    monkeypatch.setenv("OPENBAO_TOKEN", "$FIXTURE_OPENBAO_TOKEN")
+    calls = []
+
+    def opened(req, timeout):
+        calls.append((req, timeout))
+        return io.BytesIO(json.dumps({"data": {"data": {"SWARM_SECRET": secret}}}).encode())
+
+    monkeypatch.setattr(hosted.urllib.request, "build_opener", lambda *args: SimpleNamespace(open=opened))
+    assert hosted.server_secret() == secret
+    assert "SWARM_SECRET" not in hosted.os.environ
+    assert calls[0][0].full_url == "https://vault.example/v1/secret/data/k8s/swarm"
+    assert calls[0][0].get_header("X-vault-token") == "$FIXTURE_OPENBAO_TOKEN"
+    assert capsys.readouterr().out == ""
+
+
+def test_missing_trusted_credentials_never_freezes_the_source(stores, monkeypatch):
+    import sys
+
+    source, _ = stores
+    monkeypatch.setattr(
+        sys, "argv", ["migration", "--source", str(source.directory), "--url", "https://hosted.example", "--freeze"]
+    )
+
+    def missing():
+        raise ValueError("trusted credentials unavailable")
+
+    monkeypatch.setattr(hosted, "server_secret", missing, raising=False)
+    with pytest.raises(ValueError, match="trusted credentials"):
+        hosted.main()
+    source.import_document("migration-proof", document(), replace=True)
