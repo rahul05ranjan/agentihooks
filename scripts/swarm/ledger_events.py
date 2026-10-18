@@ -52,7 +52,7 @@ CONTEXT_NODES = (
 SUITE_NODES = "nodes{status conclusion workflowRun{databaseId createdAt event workflow{id resourcePath}}} pageInfo{hasNextPage endCursor}"
 PULL_QUERY = (
     "query($url:URI!){resource(url:$url){...on PullRequest{state mergedAt headRefOid mergeQueueEntry{id state} "
-    "mergeable isDraft "
+    "mergeable isDraft body "
     "commits(last:1){nodes{commit{id oid committedDate "
     'file(path:".github/workflows"){object{...on Tree{entries{name object{...on Blob{text}}}}}} '
     + "statusCheckRollup{contexts(first:100){"
@@ -89,6 +89,7 @@ class PullRequest:
     mergeable: str = ""
     draft: bool = False
     latest_run_cancelled: bool = False
+    body: str = ""
 
 
 def iso_ms(text):
@@ -160,6 +161,7 @@ def pull_request(raw):
         raw.get("mergeable") or "",
         bool(raw.get("isDraft")),
         _latest_run_cancelled(suites),
+        raw.get("body") or "",
     )
 
 

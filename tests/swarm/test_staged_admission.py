@@ -46,9 +46,11 @@ def staged(family):
         "repos/o/r/pulls/8": {"state": "open", "head": {"sha": CANDIDATE_HEAD}, "merged": False},
         f"repos/o/r/compare/{HEAD}...{CANDIDATE_HEAD}": {"status": "ahead"},
         "repos/o/r/actions/runs/42": {"status": "completed", "conclusion": "success", "head_sha": CANDIDATE_HEAD},
-        "repos/o/r/actions/runs/42/jobs?per_page=100": {
+        "repos/o/r/actions/runs/42/jobs?per_page=100&page=1": {
             "total_count": 1,
-            "jobs": [{"name": family, "status": "completed", "conclusion": "success", "head_sha": CANDIDATE_HEAD}],
+            "jobs": [
+                {"id": 1, "name": family, "status": "completed", "conclusion": "success", "head_sha": CANDIDATE_HEAD}
+            ],
         },
     }
     return proof, endpoints
@@ -70,7 +72,12 @@ def queue(proof, endpoints, *, candidate=False, conclusion="SUCCESS"):
             calls.append((command, kwargs))
             return subprocess.CompletedProcess(command, 0, json.dumps(endpoints[command[2]]))
         if candidate:
-            command = [part.replace(CANDIDATE, URL) for part in command]
+            command = [
+                part.replace(
+                    ledger_events.PULL_QUERY.replace("$number", "8"), ledger_events.PULL_QUERY.replace("$number", "7")
+                ).replace(CANDIDATE, URL)
+                for part in command
+            ]
         return base(command, **kwargs)
 
     return lambda: merge_queue.operate("queue", url, run=run), calls
@@ -109,7 +116,7 @@ def test_queue_refuses_unfinished_or_stale_staged_compatibility(family, fault, m
     elif fault == "missing family":
         proof["contracts"].append("outside the initially edited module")
     elif fault in ("red family", "skipped family"):
-        endpoints["repos/o/r/actions/runs/42/jobs?per_page=100"]["jobs"][0]["conclusion"] = (
+        endpoints["repos/o/r/actions/runs/42/jobs?per_page=100&page=1"]["jobs"][0]["conclusion"] = (
             "failure" if fault == "red family" else "skipped"
         )
     else:

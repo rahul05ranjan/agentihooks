@@ -2,14 +2,14 @@ import json
 import subprocess
 from collections.abc import Callable
 
-from scripts.swarm import ledger_events
+from scripts.swarm import ledger_events, staged_compatibility
 from scripts.swarm.store import SwarmError
 
 FRESHNESS = """query($url: URI!) { resource(url: $url) { ... on PullRequest {
     repository { nameWithOwner }
     baseRefName baseRef { branchProtectionRule { requiredStatusCheckContexts requiredStatusChecks { context app { databaseId } } } }
 } } }"""
-FIELDS = 'id state headRefOid baseRefName mergeQueueEntry { id position state } isDraft reviewDecision statusCheckRollup { state } repository { mergeQueue(branch: "dev") { id } }'
+FIELDS = 'id body state headRefOid baseRefName mergeQueueEntry { id position state } isDraft reviewDecision statusCheckRollup { state } repository { mergeQueue(branch: "dev") { id } }'
 STATE = "query($url: URI!) { resource(url: $url) { ... on PullRequest { " + FIELDS + " } } }"
 QUEUE = """mutation($id: ID!, $head: GitObjectID!) {
     enqueuePullRequest(input: {pullRequestId: $id, expectedHeadOid: $head}) { mergeQueueEntry { id } }
@@ -113,6 +113,7 @@ def operate(action: str, url: str, run=subprocess.run, admit=None, journal=None)
     if action != "state" and raw["baseRefName"] != "dev":
         raise SwarmError("swarm merge queue operations require a pull request into dev")
     if action == "queue" and raw["mergeQueueEntry"] is None:
+        staged_compatibility.require(url, raw["headRefOid"], raw.get("body") or "", run)
         if admit is not None:
             admit(raw["headRefOid"])
         if raw["repository"]["mergeQueue"] is None:
