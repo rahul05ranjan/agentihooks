@@ -29,7 +29,9 @@ def test_mark_merges_into_the_existing_registry_not_a_fresh_one():
 
 
 def test_a_transaction_holds_the_write_lock_on_the_shared_repository():
-    from scripts.swarm_ledger.repository import repository
+    from scripts.swarm_ledger.storage import default as default_repository
+
+    repository = default_repository()
 
     with bin_storage._transaction() as (held, connection):
         assert held is repository

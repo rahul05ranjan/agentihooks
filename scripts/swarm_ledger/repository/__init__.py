@@ -1,11 +1,12 @@
 import sys
+from contextlib import AbstractContextManager
 from typing import Protocol, runtime_checkable
 
 from scripts.swarm_ledger import HERE
 
 sys.path.insert(0, str(HERE))
 
-from .sqlite import Entry, SQLiteLedgerRepository
+from .entry import Entry
 
 
 @runtime_checkable
@@ -38,5 +39,14 @@ class LedgerRepository(Protocol):
 
     def import_document(self, slug: str, state: dict, token: str | None = None, replace: bool = False) -> None: ...
 
+    def transaction(self) -> AbstractContextManager: ...
 
-repository = SQLiteLedgerRepository()
+    def snapshot(self) -> AbstractContextManager: ...
+
+    def held_revisions(self) -> dict: ...
+
+    def hold_revision(self, kind: str, slug: str, revision: int) -> None: ...
+
+    def release_revisions(self, kind: str, slug: str, since: int, revision: int) -> None: ...
+
+    def drop_revisions(self, kind: str, slug: str) -> None: ...

@@ -30,7 +30,9 @@ import ledger_core as core  # noqa: E402
 import ledger_link  # noqa: E402
 import ledger_size  # noqa: E402
 
-from scripts.swarm_ledger.repository import repository
+from scripts.swarm_ledger import storage
+
+repository = storage.default()
 
 TEMPLATE = core.TEMPLATE
 LIMITS = {"overview": 200, "phase description": 100}

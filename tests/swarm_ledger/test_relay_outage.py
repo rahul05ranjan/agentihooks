@@ -279,7 +279,7 @@ def watch_passes(monkeypatch, held, replay, count=6):
         monkeypatch.setattr(ledger_server, name, lambda: None)
     monkeypatch.setattr(ledger_server.ledger_bin, "tidy", lambda: None)
     monkeypatch.setattr(ledger_server, "reloading", lambda *args: False)
-    monkeypatch.setattr(ledger_server, "unrelayed_path", lambda: held)
+    monkeypatch.setattr(ledger_server, "unrelayed", lambda: held)
     monkeypatch.setattr(ledger_server, "replay_unrelayed", lambda: replay(len(passes)))
     monkeypatch.setattr(ledger_server.time, "sleep", sleep)
     with pytest.raises(Stop):
@@ -289,8 +289,7 @@ def watch_passes(monkeypatch, held, replay, count=6):
 def test_the_watch_loop_replays_held_revisions_every_fifth_pass_and_survives_a_failed_replay(
     monkeypatch, tmp_path, capsys
 ):
-    held, replayed = tmp_path / "held.json", []
-    held.write_text("{}")
+    held, replayed = {ledger_server.RELAY: {SLUG: [1]}}, []
 
     def replay(at):
         replayed.append(at)
@@ -302,7 +301,7 @@ def test_the_watch_loop_replays_held_revisions_every_fifth_pass_and_survives_a_f
 
 def test_the_watch_loop_never_replays_when_nothing_is_held(monkeypatch, tmp_path):
     replayed = []
-    watch_passes(monkeypatch, tmp_path / "absent.json", replayed.append)
+    watch_passes(monkeypatch, {}, replayed.append)
     assert replayed == []
 
 
@@ -319,3 +318,22 @@ def test_each_operator_write_trimmed_before_its_relay_leaves_one_notice_for_the_
     notices = [row["text"] for row in state.get("notifications", []) if "left the ledger history" in row["text"]]
     assert len(notices) == len(set(notices)) == 2 and ledger_server.unrelayed() == {}
     assert len(mentions(outage.texts(BOSS.seat), "use the queue")) == 1
+
+
+def test_a_journal_an_older_server_left_in_its_own_file_is_held_once_and_the_file_removed(monkeypatch, tmp_path):
+    monkeypatch.setattr("hooks.config.AGENTIHOOKS_HOME", str(tmp_path))
+    legacy = tmp_path / ledger_server.UNRELAYED
+    legacy.write_text('{"relay": {"%s": [3, 5]}, "alerts": {"%s": [4]}}' % (SLUG, SLUG))
+    ledger_server.adopt_unrelayed()
+    assert not legacy.exists()
+    assert ledger_server.unrelayed() == {ledger_server.RELAY: {SLUG: [3, 5]}, ledger_server.ALERTS: {SLUG: [4]}}
+    ledger_server.adopt_unrelayed()
+    assert ledger_server.unrelayed() == {ledger_server.RELAY: {SLUG: [3, 5]}, ledger_server.ALERTS: {SLUG: [4]}}
+
+
+@pytest.mark.parametrize("text", ["not json", "[3]"])
+def test_an_unreadable_or_foreign_journal_file_holds_nothing(monkeypatch, tmp_path, text):
+    monkeypatch.setattr("hooks.config.AGENTIHOOKS_HOME", str(tmp_path))
+    (tmp_path / ledger_server.UNRELAYED).write_text(text)
+    ledger_server.adopt_unrelayed()
+    assert ledger_server.unrelayed() == {}

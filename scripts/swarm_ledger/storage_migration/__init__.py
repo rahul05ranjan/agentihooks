@@ -4,7 +4,10 @@ import functools
 import json
 from pathlib import Path
 
-from scripts.swarm_ledger.repository import legacy, repository
+from scripts.swarm_ledger import storage
+from scripts.swarm_ledger.repository import legacy
+
+repository = storage.default()
 
 EXPORT_JSON = functools.partial(json.dumps, indent=2, ensure_ascii=False)
 
