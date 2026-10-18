@@ -224,7 +224,7 @@ def _publish_tick_status(store, slug, doc):
 
 @timing.instrument_tick
 @outage.guard_tick
-@ledger_route.tick
+@ledger_route.service
 def run_tick(store, slug, ledger=None, runtime=None, messenger=None, scheduled=False):
     from scripts.swarm import command_runner, commands, controller, incidents, lease, tick_activity
 
@@ -401,6 +401,7 @@ def cmd_list(store, args):
         )
 
 
+@ledger_route.tick
 def _tick_one(store, slug):
     try:
         if not _tickable(slug):
@@ -446,6 +447,7 @@ def _reconcile_services():
         print(f"warning: the swarm user services could not be installed or enabled{why}", file=sys.stderr)
 
 
+@ledger_route.tick
 def run_waits(store: RedisStore, slug: str, ledger=None) -> list[str]:
     from scripts.swarm import commands, lease
 
