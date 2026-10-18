@@ -61,7 +61,7 @@ def _control_call(slug: str, route: str, payload: dict, headers: dict, environ) 
     request = urllib.request.Request(
         f"{ledger_link.base(environ)}/api/v1/proof-ledgers/{slug}/{route}",
         data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json", **headers},
+        headers={"Content-Type": "application/json", **ledger_link.access_headers(environ), **headers},
     )
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT) as response:

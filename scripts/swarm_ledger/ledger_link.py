@@ -10,7 +10,7 @@ from pathlib import Path
 
 START = "agentihooks ledger serve --ensure"
 LOOPBACK = ("127.0.0.1", "localhost")
-AGENT = "agentihooks-swarm"
+USER_AGENT = "agentihooks-swarm"
 
 
 def base(environ=os.environ) -> str:
@@ -31,7 +31,7 @@ def access_headers(environ=os.environ) -> dict:
     client, secret = environ.get("SWARM_ACCESS_CLIENT_ID"), environ.get("SWARM_ACCESS_CLIENT_SECRET")
     if not (client and secret):
         return {}
-    return {"CF-Access-Client-Id": client, "CF-Access-Client-Secret": secret, "User-Agent": AGENT}
+    return {"CF-Access-Client-Id": client, "CF-Access-Client-Secret": secret, "User-Agent": USER_AGENT}
 
 
 def shared_directory(environ=os.environ) -> bool:
