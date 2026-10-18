@@ -108,3 +108,59 @@ def test_pending_destination_stages_private_authority_without_routing_the_tick(s
     assert seen == [("private-staging-fixture", False)]
     assert "SWARM_SECRET" not in os.environ
     assert authority_context.secret() is None
+
+
+def test_timer_prechecks_and_waits_resolve_the_selected_route(store, monkeypatch):
+    seen = []
+    monkeypatch.setattr(cli, "_tickable", lambda slug: seen.append((slug, ledger.base())) or False)
+    cli._tick_one(store, "selected")
+    cli._tick_one(store, "other")
+    assert seen == [("selected", "https://hosted.example"), ("other", ledger.BASE or ledger_link.base())]
+    seen.clear()
+    monkeypatch.setattr(lease, "acquire", lambda _store, slug, owner: seen.append((slug, ledger.base())))
+    assert cli.run_waits(store, "selected") == []
+    assert cli.run_waits(store, "other") == []
+    assert seen == [("selected", "https://hosted.example"), ("other", ledger.BASE or ledger_link.base())]
+
+
+@pytest.mark.parametrize("active", [False, True])
+def test_an_agent_control_leaves_the_hosted_service_tick_to_its_trusted_runner(store, monkeypatch, active):
+    from types import SimpleNamespace
+
+    from scripts.swarm_ledger import authority_context
+
+    monkeypatch.setattr(cli.Who, "from_env", lambda: SimpleNamespace(pinned=True, name="master@a1b2c3-0001"))
+    store.update(
+        "selected",
+        api_url="https://hosted.example" if active else "",
+        pending_api_url="https://hosted.example",
+    )
+    acquired = []
+    monkeypatch.setattr(lease, "acquire", lambda *_: acquired.append(True))
+    with authority_context.bound(None):
+        actions = cli.run_tick(store, "selected", runtime=object())
+    assert not acquired
+    assert actions
+
+
+def test_a_native_control_notice_uses_its_callers_own_authority(store, monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts.swarm import ledger_client
+    from scripts.swarm_ledger import ledger_authority
+
+    master = "master@a1b2c3-0001"
+    monkeypatch.setattr(cli.Who, "from_env", lambda: SimpleNamespace(pinned=True, name=master))
+    delivered = []
+
+    def call(slug, ops, service):
+        assert slug == "selected"
+        assert not ledger_authority.refusal(master, ops[0])
+        assert not service
+        delivered.append(ops[0]["text"])
+        return {}
+
+    monkeypatch.setattr(ledger_client, "_ledger", lambda: SimpleNamespace(call=call, Missing=ledger.Missing))
+    with ledger_route.scoped("selected", store.config("selected").api_url):
+        ledger_client.LedgerClient().notify("selected", "The master paused the swarm")
+    assert delivered == ["The master paused the swarm"]
