@@ -28,7 +28,7 @@ def pool(label):
 
 
 MOVED = {
-    **({("test.yml", "suite-speed"): STANDARD} if "  suite-speed:\n" in (WORKFLOWS / "test.yml").read_text() else {}),
+    **({("test.yml", "suite-speed"): QUEUED} if "  suite-speed:\n" in (WORKFLOWS / "test.yml").read_text() else {}),
     ("mutation-refinement-proof.yml", "planning"): LIGHT,
     ("access-audit.yml", "audit"): LIGHT,
     ("branch-lanes.yml", "grade"): LIGHT,
