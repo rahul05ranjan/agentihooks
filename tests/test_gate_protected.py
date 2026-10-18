@@ -812,6 +812,9 @@ def test_the_early_suite_speed_gate_form_is_an_allowed_strict_transition(weakene
     head["jobs"]["gate-required"]["steps"] = ci_reuse.gate_steps(
         queue_tier=True, promotion=True, consolidated=True, suite_speed=True, docs=docs
     )
+    if docs:
+        head["jobs"]["docs"] = {"runs-on": "ubuntu-latest"}
+        head["jobs"]["gate-required"]["needs"].append("docs")
     if weakened:
         head["jobs"]["gate-required"]["steps"][0]["run"] += "true\n"
     problems = gate_protected.grade({"test.yml": base}, {}, {"test.yml": head}, {}, _TODAY)
