@@ -129,6 +129,13 @@ def test_migration_flags_and_redirects_preserve_guard_operands(ledger):
         assert check(bash(f"python -m {module} --source {ledger} {ending}"), env(ledger))
 
 
+def test_migration_flag_cannot_be_mistaken_for_the_configured_store(ledger):
+    folder = ledger / "--source"
+    put(folder, SLUG, {"artifacts": [{"file": {"id": PLAN}, "plan": True}]})
+    command = "python -m scripts.swarm_ledger.storage_migration.hosted --source /home/x/source"
+    assert check(bash(command), env(folder)) is None
+
+
 def test_grep_and_fetch_of_plan_refused(ledger):
     assert check({"tool_name": "Grep", "tool_input": {"pattern": "x", "path": stored(ledger)}}, env(ledger))
     url = f"http://127.0.0.1:8765/artifacts/{SLUG}/{PLAN}"
