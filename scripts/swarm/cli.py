@@ -67,10 +67,11 @@ from scripts.handoff import check as handoff_check
 from scripts.handoff import envelope as handoff_envelope
 from scripts.handoff import transfers
 from scripts.handoff.resolve import Resolver
-from scripts.inbox import exits, outbox, wake
+from scripts.inbox import exits, outbox, relay, wake
 from scripts.inbox.seats import CANON, DEFAULT_MATURITY, MATURITIES, SeatError, is_seat, seat_address
 from scripts.inbox.seats import PREFIX as SEAT_PREFIX
 from scripts.inbox.store import InboxError, InboxStore
+from scripts.routing.reservation import LaunchSlots
 from scripts.swarm import (
     affinity,
     agent_up,
@@ -105,6 +106,7 @@ from scripts.swarm import (
     prompt,
     ready,
     reaper,
+    release_wait,
     remote_control,
     review_rounds,
     snapshot,
@@ -114,6 +116,7 @@ from scripts.swarm import (
     take_master,
     templates,
     tick_master,
+    tick_stop,
     timer,
     timing,
     trace_plan,
@@ -137,6 +140,7 @@ from scripts.swarm.store import (
     ASSIST,
     AUTO_SCALING,
     AUTONOMY,
+    DEFAULT_MASTERS_STEP,
     DELEGATE,
     DISPATCH,
     MASTER,
@@ -155,6 +159,7 @@ SETTABLE = {
     "max-eng-agents": "max_eng",
     "max-ci-agents": "max_ci",
     "max-plan-agents": "max_plan",
+    "masters-step": "masters_step",
     "compact-limit": "compact_limit",
     "snapshot-minutes": "snapshot_minutes",
 }
@@ -213,6 +218,7 @@ def _publish_tick_status(store, slug, doc):
 def run_tick(store, slug, ledger=None, runtime=None, messenger=None, scheduled=False):
     from scripts.swarm import command_runner, commands, controller, incidents, lease, tick_activity
 
+    tick_stop.check()
     ledger = ledger or LedgerClient()
     outbox.flush(InboxStore(store.redis))
     runtime = runtime or routed(herdr=HerdrRuntime())
@@ -222,14 +228,18 @@ def run_tick(store, slug, ledger=None, runtime=None, messenger=None, scheduled=F
     token = controller.take_tick_lock(store, slug, held, TICK_LOCK_MS)
     if token is None:
         return ["another tick is running"]
-    keeping = timing.BEFORE_STEP.set(
-        lambda: tick_activity.keep(
-            store, slug, lambda: controller.keep_tick(store, slug, held, token, TICK_LOCK_MS), now_ms
-        )
-    )
+    tick_stop.hold(token, lambda: controller.release_tick_lock(store, slug, token))
+
+    def before_step():
+        tick_stop.check()
+        tick_activity.keep(store, slug, lambda: controller.keep_tick(store, slug, held, token, TICK_LOCK_MS), now_ms)
+
+    keeping = timing.BEFORE_STEP.set(before_step)
     doc = {}
     try:
         timing.keep()
+        timing.call(relay.relay, store.redis)
+        timing.call(LaunchSlots(store.redis).refresh_reported, now_ms())
         outage.providers(store, slug, runtime, now_ms())
         if isinstance(ledger, ledger_client.LedgerClient) and not outage.ledger_health(
             slug, now_ms(), lambda: isinstance(ledger.metadata(slug), dict)
@@ -243,7 +253,7 @@ def run_tick(store, slug, ledger=None, runtime=None, messenger=None, scheduled=F
             runtime or routed(herdr=HerdrRuntime()),
             os.environ.get("AGENTIHOOKS_DEPLOYMENT", controller.LOCAL),
         )
-        from scripts.swarm.health import prompt_backlog, spawn_stall
+        from scripts.swarm.health import prompt_backlog, spawn_stall, urgent_hold
 
         pressured = skip_refused(incidents.host_pressure, store, slug)
         restarted = pressured + timing.call(ledger_watchdog.watch, store, slug, ledger, runtime)
@@ -266,6 +276,7 @@ def run_tick(store, slug, ledger=None, runtime=None, messenger=None, scheduled=F
                 return (
                     [f"{exc}; agentihooks swarm remove {slug} clears this swarm once it has no agents"] if first else []
                 )
+            timing.call(urgent_hold.observe, store, slug, doc, now_ms())
             actions = skip_refused(phase_planning.planning_pass, inbox, store, slug, doc, ledger, store.config(slug))
             if actions:
                 doc = timing.call(ledger.state, slug)
@@ -331,6 +342,7 @@ def run_tick(store, slug, ledger=None, runtime=None, messenger=None, scheduled=F
                     lambda agent: runtime.retire(agent, homes=reaper.scratch_homes(slug, agent.task)),
                     lambda lane: ready_in_order(slug, store, rows, doc, lane),
                     now_ms(),
+                    released=release_wait.checker(config.repo),
                 ),
                 doc,
             )
@@ -367,6 +379,7 @@ def run_tick(store, slug, ledger=None, runtime=None, messenger=None, scheduled=F
             _publish_tick_status(store, slug, doc)
         finally:
             timing.BEFORE_STEP.reset(keeping)
+            tick_stop.drop(token)
             controller.release_tick_lock(store, slug, token)
 
 
@@ -405,7 +418,7 @@ def _tick_while_others_run(store, slug, firsts, until):
         firsts.done()
     while not firsts.settled.wait(max(0.0, started + TICK_SECONDS - time.monotonic())):
         started = time.monotonic()
-        if started > until:
+        if started > until or tick_stop.STOP.is_set():
             return
         _tick_one(store, slug)
 
@@ -464,6 +477,7 @@ def cmd_waits(store, args):
 def cmd_tick(store, args):
     from scripts import operator_env
 
+    started = time.monotonic()
     if why := timer.installed_refusal():
         raise SwarmError(f"the tick refused to run: {why}")
     operator_env.fill(os.environ)
@@ -477,8 +491,13 @@ def cmd_tick(store, args):
     if slugs:
         _reconcile_services()
         firsts, until = _Firsts(len(slugs)), time.monotonic() + EXTRA_TICKS_UNTIL
-        with ThreadPoolExecutor(max_workers=len(slugs)) as pool:
-            list(pool.map(lambda slug: _tick_while_others_run(store, slug, firsts, until), slugs))
+        if tick_stop.run(
+            slugs,
+            lambda slug: _tick_while_others_run(store, slug, firsts, until),
+            firsts.settled.set,
+            time.monotonic() - started,
+        ):
+            return
     from scripts import herdr_gc
 
     try:
@@ -548,6 +567,7 @@ def cmd_create(store, args):
         autonomy=template.autonomy or DELEGATE,
         scratch=not ledger_creator.shared(os.environ),
         codex_inbox_transport=APP_SERVER_TRANSPORT,
+        masters_step=DEFAULT_MASTERS_STEP,
     )
     store.create(config)
     from scripts.swarm import commands
@@ -859,9 +879,14 @@ def _store_master_rules(store, slug, rules):
         master_scale.set_rule(store.redis, slug, rule)
 
 
+def _manual_count_step(counts):
+    return {"masters_step": 0} if counts else {}
+
+
 def cmd_set(store, args):
     changes, lanes = {}, {key: dict(value) for key, value in store.config(args.slug).lanes.items()}
     counts, pairs = _split_master_pairs(args.pairs, "masters", masters.count_of)
+    changes.update(_manual_count_step(counts))
     rules, pairs = _split_master_pairs(pairs, "master-per", master_scale.rule_of)
     hives, pairs = masters.hive_pairs(args.slug, pairs)
     masters.MasterSeats(store.redis).check_hives(args.slug, counts, hives)
@@ -915,6 +940,7 @@ def cmd_set(store, args):
                 "max_eng": config.max_eng,
                 "max_ci": config.max_ci,
                 "max_plan": config.max_plan,
+                "masters_step": config.masters_step,
                 "compact_limit": config.compact_limit,
                 "autonomy": config.autonomy,
                 "snapshot_minutes": config.snapshot_minutes,
@@ -1015,7 +1041,7 @@ def cmd_status(store, args):
     counts = task_counts(tasks)
     found = findings(store, args.slug, config, tasks, ledger.events(args.slug))
     print(
-        f"{naming.swarm_name(config.code) or '-'}  {config.slug}  {config.state}  eng {config.max_eng}  ci {config.max_ci}  plan {config.max_plan}  scaling {config.scaling}  effort {config.effort_min} to {config.effort_max}  repo {config.repo}"
+        f"{naming.swarm_name(config.code) or '-'}  {config.slug}  {config.state}  eng {config.max_eng}  ci {config.max_ci}  plan {config.max_plan}  masters step {config.masters_step}  scaling {config.scaling}  effort {config.effort_min} to {config.effort_max}  repo {config.repo}"
     )
     print(
         "gate modes  "
