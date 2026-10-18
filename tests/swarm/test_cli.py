@@ -2741,6 +2741,8 @@ def _tick_all(monkeypatch, run_tick, slugs, tick_seconds=0.05):
         slugs=lambda: slugs,
         reconciled=reconciled,
         config=lambda slug: SwarmConfig(slug, "/repo", 0, 0),
+        redis=types.SimpleNamespace(hget=lambda *_: None),
+        key=lambda slug, tail: f"{slug}:{tail}",
     )
     cli.cmd_tick(store, None)
     assert filled == [os.environ]
