@@ -62,6 +62,24 @@ def test_a_pinned_native_ledger_command_resolves_its_own_swarm(store, monkeypatc
     assert not ledger_link.remote()
 
 
+def test_a_native_remote_command_never_opens_a_workstation_store(monkeypatch):
+    seen = []
+    monkeypatch.setenv("AGENTIHOOKS_SWARM", "selected")
+    monkeypatch.setenv("AGENTIHOOKS_DEPLOYMENT", "compose")
+    monkeypatch.setenv("LEDGER_URL", "https://hosted.example")
+    monkeypatch.delenv("SWARM_URL", raising=False)
+    monkeypatch.setattr(ledger, "BASE", "")
+    monkeypatch.setattr(ledger, "cmd_url", lambda args: seen.append(ledger.base()))
+
+    def refuse():
+        raise AssertionError("remote command opened the workstation store")
+
+    monkeypatch.setattr("scripts.swarm.store.connect", refuse)
+    with patch("sys.argv", ["ledger", "--slug", "selected", "url"]):
+        ledger.main()
+    assert seen == ["https://hosted.example"]
+
+
 def test_scoped_routes_match_the_slug_and_restore_after_a_refusal():
     assert ledger_route.url("selected") == ""
     with ledger_route.scoped("selected", "https://hosted.example/"):
