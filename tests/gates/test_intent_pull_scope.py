@@ -59,9 +59,11 @@ def test_the_stamped_parent_intent_names_the_declared_scope():
     doc = declared(DOC, kind="stage")
     task = {**doc["tasks"][0], "pr_url": OTHER}
     assert intent.section(doc, task) == intent.section(DOC, DOC["tasks"][0])
-    assert intent.section(doc, doc["tasks"][0]) == intent.section(DOC, DOC["tasks"][0]).replace(
-        f"\n{intent.END}", f"\n\n**This pull request, a declared stage:** {SCOPE}\n{intent.END}"
+    stamped = intent.section(doc, doc["tasks"][0])
+    assert stamped == intent.section(DOC, DOC["tasks"][0]).replace(
+        DOC["tasks"][0]["description"], f"declared stage: {SCOPE}"
     )
+    assert DOC["tasks"][0]["description"] not in stamped
 
 
 def test_the_body_stamp_reads_the_declaration_of_the_stamped_pull_request():
@@ -78,4 +80,4 @@ def test_the_body_stamp_reads_the_declaration_of_the_stamped_pull_request():
     assert patch == ["gh", "api", "--method", "PATCH", "repos/o/r/pulls/10", "--input", "-"]
     stamped = intent.section(doc, {**doc["tasks"][0], "pr_url": OTHER})
     assert json.loads(body) == {"body": stamped}
-    assert f"a declared stage:** {SCOPE}" in stamped
+    assert f"Intent check:** declared stage: {SCOPE}" in stamped

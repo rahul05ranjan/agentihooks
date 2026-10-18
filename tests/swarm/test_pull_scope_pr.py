@@ -53,3 +53,11 @@ def test_recording_a_declared_pull_request_without_a_declaration_drops_only_its_
     kept = {SECOND: {"kind": "prerequisite", "scope": "the tests"}}
     assert ledger.rows["t1"]["pull_scopes"] == kept
     assert stamped[-1][2]["pull_scopes"] == kept
+
+
+def test_swarm_pr_refuses_a_declaration_on_a_url_that_is_no_pull_request(started, capsys):  # noqa: F811
+    _, ledger, stamped = started
+    other = "https://example.com/o/r/pull/9"
+    assert run("sw", "pr", other, "--stage", "the gate") != 0
+    assert capsys.readouterr().err.strip().endswith(f"--stage needs a GitHub pull request URL, not {other}")
+    assert stamped == [] and not ledger.rows["t1"].get("pr_url")

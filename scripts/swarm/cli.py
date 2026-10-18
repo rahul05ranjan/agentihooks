@@ -1409,6 +1409,9 @@ def _split_binding(row, url, half):
     return {"split_pulls": [*pulls, url]}
 
 
+PULL_URL = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+")
+
+
 def _pull_scope(row, args):
     scopes = row.get("pull_scopes") or {}
     kind = "stage" if args.stage is not None else "prerequisite" if args.prerequisite is not None else ""
@@ -1417,6 +1420,8 @@ def _pull_scope(row, args):
     scope = getattr(args, kind).strip()
     if not scope:
         raise SwarmError(f"--{kind} needs the scope this pull request delivers")
+    if not PULL_URL.fullmatch(args.url):
+        raise SwarmError(f"--{kind} needs a GitHub pull request URL, not {args.url}")
     return {"pull_scopes": {**scopes, args.url: {"kind": kind, "scope": scope}}}
 
 

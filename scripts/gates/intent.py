@@ -93,11 +93,11 @@ def _same_phase(record, task):
 def section(doc, task):
     phase = _phase(doc, task)
     declared = _declared(task)
-    scope = f"\n\n**This pull request, a declared {declared['kind']}:** {declared['scope']}" if declared else ""
+    delivers = f"declared {declared['kind']}: {declared['scope']}" if declared else task["description"]
     return (
         f"{START}\n## Parent intent\n\n**Project:** {doc['overview']}\n\n"
         f"**Phase {phase.get('title', '')}:** {phase.get('description', '')}\n\n"
-        f"**Task {task['id']}, {task['title']}:** {task['description']}{scope}\n{END}"
+        f"**Task {task['id']}, {task['title']}:** {delivers}\n{END}"
     )
 
 
