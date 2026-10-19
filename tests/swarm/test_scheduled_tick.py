@@ -208,3 +208,51 @@ def test_a_tick_past_its_timeout_is_terminated_then_killed():
     assert scheduled_tick._finish(tick) == -9
     assert tick.waits == [540, 90, None]
     assert tick.signals == ["terminate", "kill"]
+
+
+def _delivering(monkeypatch, popen):
+    from types import SimpleNamespace
+
+    from scripts.scheduler.core import Scheduler
+
+    monkeypatch.setattr(scheduled_tick, "subprocess", SimpleNamespace(Popen=popen, DEVNULL=subprocess.DEVNULL))
+    scheduler = _scheduler()
+    scheduler.update(scheduled_tick.ensure(scheduler), lambda entry: entry.update(due=MINUTE_START))
+    return scheduler, Scheduler(scheduler.redis)
+
+
+def test_a_delivered_tick_records_the_delivering_root_and_minute(monkeypatch):
+    scheduler, here = _delivering(monkeypatch, lambda argv, **kwargs: None)
+    assert scheduled_tick.undelivered(here, scheduled_tick.ROOT, MINUTE_START) == (
+        "no scheduler has delivered a swarm tick yet"
+    )
+    assert scheduler.run_due(now=MINUTE_START + 1) == 1
+    assert scheduled_tick.undelivered(here, scheduled_tick.ROOT, MINUTE_START + 181) == ""
+    assert scheduled_tick.undelivered(here, scheduled_tick.ROOT, MINUTE_START + 182) == (
+        "the last swarm tick was delivered 181 seconds ago"
+    )
+    assert scheduled_tick.undelivered(here, "/installed", MINUTE_START + 1) == (
+        f"the last swarm tick was delivered by a scheduler running {scheduled_tick.ROOT}, not the installed /installed"
+    )
+
+
+def test_a_tick_that_cannot_start_records_no_delivery(monkeypatch):
+    def refuse(argv, **kwargs):
+        raise OSError("no python")
+
+    scheduler, here = _delivering(monkeypatch, refuse)
+    with pytest.raises(OSError, match="no python"):
+        scheduler.run_due(now=MINUTE_START + 1)
+    assert scheduled_tick.undelivered(here, scheduled_tick.ROOT, MINUTE_START + 1) == (
+        "no scheduler has delivered a swarm tick yet"
+    )
+
+
+def test_a_delivery_record_resolves_both_roots(tmp_path):
+    from scripts.scheduler.core import Scheduler
+
+    here = Scheduler(_scheduler().redis)
+    (tmp_path / "real").mkdir()
+    (tmp_path / "link").symlink_to(tmp_path / "real")
+    scheduled_tick.record(here.redis, tmp_path / "link", MINUTE_START)
+    assert scheduled_tick.undelivered(here, tmp_path / "real", MINUTE_START) == ""

@@ -275,6 +275,36 @@ def test_the_wait_command_accepts_an_empty_swarm_list(monkeypatch, capsys):
     assert capsys.readouterr() == ("", "")
 
 
+def test_every_wait_pass_guards_the_scheduled_tick(monkeypatch, capsys):
+    from argparse import Namespace
+    from types import SimpleNamespace
+
+    guarded = []
+    monkeypatch.setattr(cli.timer, "installed_refusal", lambda: "")
+    monkeypatch.setattr(cli.timer, "entry_point", lambda: "/installed/bin/agentihooks")
+    monkeypatch.setattr(cli.timer, "guard", lambda binary: guarded.append(binary) or True)
+    cli.cmd_waits(SimpleNamespace(slugs=lambda: []), Namespace())
+    cli.cmd_waits(SimpleNamespace(slugs=lambda: []), Namespace())
+    assert guarded == ["/installed/bin/agentihooks"] * 2
+    assert capsys.readouterr() == ("", "")
+
+
+def test_a_failed_tick_guard_is_logged_and_the_wait_pass_goes_on(monkeypatch, capsys):
+    from argparse import Namespace
+    from types import SimpleNamespace
+
+    def broken(binary):
+        raise OSError("no systemctl")
+
+    monkeypatch.setattr(cli.timer, "installed_refusal", lambda: "")
+    monkeypatch.setattr(cli.timer, "guard", broken)
+    monkeypatch.setattr(cli, "run_waits", lambda store, slug: ["wait checked"])
+    cli.cmd_waits(SimpleNamespace(slugs=lambda: ["sw"]), Namespace())
+    output = capsys.readouterr()
+    assert output.out == "sw: wait checked\n"
+    assert output.err == "the scheduled swarm tick guard failed: OSError: no systemctl\n"
+
+
 def test_the_wait_command_refuses_a_run_outside_the_install(monkeypatch):
     from argparse import Namespace
 
