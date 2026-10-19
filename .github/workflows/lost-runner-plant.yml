@@ -1,0 +1,47 @@
+name: Lost runner plant
+
+on:
+  push:
+    branches: [diffcheck/ci-323133-1258]
+
+concurrency:
+  group: ${{ format('hosted-lane-{0}', ((endsWith(github.run_id, '0') || endsWith(github.run_id, '1') || endsWith(github.run_id, '2')) && 'a') || ((endsWith(github.run_id, '3') || endsWith(github.run_id, '4') || endsWith(github.run_id, '5')) && 'b') || 'c') }}
+  queue: max
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sibling:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Fail a real test in red mode
+        run: |
+          [[ "$(cat .github/lost-runner-mode)" == red ]] || { echo "plant mode, sibling passes"; exit 0; }
+          python -m pip install -q pytest
+          printf 'def test_real_failure():\n    assert 1 + 1 == 3\n' > test_red.py
+          python -m pytest -q test_red.py
+
+  lost:
+    runs-on: anton-oss-light
+    timeout-minutes: 45
+    steps:
+      - name: Kill this job's runner
+        run: |
+          ps -eo pid,ppid,user,cmd
+          echo "killing every runner process on $RUNNER_NAME"
+          kill -9 -1 || true
+          sleep 900
+
+  after:
+    needs: [sibling, lost]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: echo after
