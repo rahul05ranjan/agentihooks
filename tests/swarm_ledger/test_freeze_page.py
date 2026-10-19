@@ -81,6 +81,7 @@ def page(browser, request):
         return ledger_server.page_view(ledger_state({**doc, "freezes": freezes}), "", False)
 
     context.route(is_events, lambda route: fulfill_events(route, view(), SWARM))
+    # The first server import inside the route handler can outlast the page load timeout on a loaded runner.
     view()
     tab = context.new_page()
     tab.set_default_timeout(3000)

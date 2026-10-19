@@ -100,7 +100,7 @@ def _chain(node: str, graph: dict, tasks: dict, below: tuple = ()) -> list:
         return ancestry(tasks[node], graph)
     chain = [*below, node]
     up = (graph.get(node) or (None, None))[1]
-    return _chain(up, graph, tasks, tuple(chain)) if up in graph.keys() - set(chain) else chain
+    return _chain(up, graph, tasks, tuple(chain)) if up not in (None, *chain) else chain
 
 
 def _reaches(target: str, node: str, chains: dict) -> bool:
