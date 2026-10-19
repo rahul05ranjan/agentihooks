@@ -10,11 +10,12 @@ import yaml
 from scripts.ci_queue_retry import _api, base_name, dependents
 
 WORKFLOWS = Path(".github/workflows")
-OPEN = ("in_progress", "queued")
+OPEN = ("in_progress", "queued", "pending", "waiting", "requested")
 RED = ("failure", "timed_out")
 HOSTED_GROUP = "GitHub Actions"
 ONLINE = '.runners[] | select(.status == "online") | .name'
 RUNS = ".workflow_runs[]"
+JOBS = ".jobs[]"
 GRACE_MINUTES = 10
 CONFIRM_SECONDS = 120
 CANCEL_POLLS = 18
@@ -62,7 +63,7 @@ def stalled(jobs: list[dict], lost: list[dict], workflow: dict) -> tuple[bool, s
 def decide(run: dict, jobs: list[dict]) -> tuple[str, str]:
     failed = [job["name"] for job in jobs if job.get("conclusion") in RED]
     if failed:
-        return "none", f"failed on its own: {', '.join(failed)}"
+        return "cancel", f"failed on its own: {', '.join(failed)}"
     if run["run_attempt"] != 1:
         return "cancel", f"attempt {run['run_attempt']} lost its runner again"
     return "rerun", "first attempt lost its runner"
@@ -83,8 +84,9 @@ def stop(repo: str, run_id: int) -> dict:
     return run
 
 
-def jobs_of(repo: str, run_id: int) -> dict:
-    return json.loads(_api(f"repos/{repo}/actions/runs/{run_id}/jobs?filter=latest&per_page=100"))
+def jobs_of(repo: str, run_id: int) -> list[dict]:
+    url = f"repos/{repo}/actions/runs/{run_id}/jobs?filter=latest&per_page=100"
+    return [json.loads(line) for line in _api("--paginate", url, "--jq", JOBS).splitlines()]
 
 
 def open_runs(repo: str, workflow: str) -> list[dict]:
@@ -96,36 +98,51 @@ def open_runs(repo: str, workflow: str) -> list[dict]:
 
 
 def assess(repo: str, run: dict, workflow: dict, grace: timedelta) -> tuple[bool, str, list[dict]]:
-    page = jobs_of(repo, run["id"])
-    jobs = page["jobs"]
-    if page["total_count"] != len(jobs):
-        return False, f"listed {len(jobs)} of {page['total_count']} jobs", jobs
+    jobs = jobs_of(repo, run["id"])
     lost = lost_jobs(jobs, live_runners(repo.split("/")[0]), datetime.now(UTC), grace)
     stuck, reason = stalled(jobs, lost, workflow)
     return stuck, reason, jobs
 
 
+def report(run: dict, action: str, reason: str) -> dict:
+    return {"run": run["id"], "attempt": run["run_attempt"], "action": action, "reason": reason}
+
+
+def first_look(repo: str, run: dict, workflow: dict, grace: timedelta) -> dict | None:
+    if run["status"] == "completed":
+        return report(run, "none", f"run completed with conclusion {run['conclusion']}")
+    stuck, reason, _ = assess(repo, run, workflow, grace)
+    return None if stuck else report(run, "none", reason)
+
+
 def watch(repo: str, run: dict, workflow: dict, grace: timedelta) -> dict:
-    report = {"run": run["id"], "attempt": run["run_attempt"], "action": "none"}
-    if run["status"] not in OPEN:
-        return {**report, "reason": f"run completed with conclusion {run['conclusion']}"}
     stuck, reason, jobs = assess(repo, run, workflow, grace)
-    if stuck:
-        time.sleep(CONFIRM_SECONDS)
-        stuck, reason, jobs = assess(repo, run, workflow, grace)
     if not stuck:
-        return {**report, "reason": reason}
+        return report(run, "none", reason)
     action, why = decide(run, jobs)
-    if action == "none":
-        return {**report, "reason": f"{reason}; {why}"}
     if run_state(repo, run["id"])["run_attempt"] != run["run_attempt"]:
-        return {**report, "reason": "the run was rerun meanwhile"}
-    if stop(repo, run["id"])["status"] != "completed":
-        return {**report, "action": "cancel", "reason": f"{reason}; the run did not end after force cancel"}
+        return report(run, "none", "the run was rerun meanwhile")
+    try:
+        ended = stop(repo, run["id"])
+    except subprocess.CalledProcessError:
+        ended = run_state(repo, run["id"])
+        if ended["status"] != "completed":
+            raise
+        if ended["conclusion"] != "cancelled":
+            return report(run, "none", "the run completed meanwhile")
+    if ended["status"] != "completed":
+        return report(run, "cancel", f"{reason}; the run did not end after force cancel")
     if action == "cancel":
-        return {**report, "action": "cancel", "reason": f"{reason}; {why}"}
+        return report(run, "cancel", f"{reason}; {why}")
     _api("-X", "POST", f"repos/{repo}/actions/runs/{run['id']}/rerun-failed-jobs")
-    return {**report, "action": "rerun", "reason": f"{reason}; {why}"}
+    return report(run, "rerun", f"{reason}; {why}")
+
+
+def guarded(step, repo: str, run: dict, workflow: dict, grace: timedelta) -> dict | None:
+    try:
+        return step(repo, run, workflow, grace)
+    except subprocess.CalledProcessError as error:
+        return report(run, "error", str(error))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -136,16 +153,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--grace-minutes", type=float, default=GRACE_MINUTES)
     args = parser.parse_args(argv)
     workflow = yaml.safe_load((WORKFLOWS / args.workflow).read_text())
+    grace = timedelta(minutes=args.grace_minutes)
     runs = [run_state(args.repo, run_id) for run_id in args.run_id] or open_runs(args.repo, args.workflow)
-    errors = 0
+    reports, suspects = [], []
     for run in runs:
-        try:
-            report = watch(args.repo, run, workflow, timedelta(minutes=args.grace_minutes))
-        except subprocess.CalledProcessError as error:
-            errors += 1
-            report = {"run": run["id"], "attempt": run["run_attempt"], "action": "error", "reason": str(error)}
-        print(json.dumps(report))
-    return 1 if errors else 0
+        found = guarded(first_look, args.repo, run, workflow, grace)
+        if found:
+            reports.append(found)
+            print(json.dumps(found), flush=True)
+        else:
+            suspects.append(run)
+    if suspects:
+        time.sleep(CONFIRM_SECONDS)
+    for run in suspects:
+        reports.append(guarded(watch, args.repo, run, workflow, grace))
+        print(json.dumps(reports[-1]), flush=True)
+    return 1 if any(found["action"] == "error" for found in reports) else 0
 
 
 if __name__ == "__main__":

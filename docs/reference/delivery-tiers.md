@@ -180,14 +180,14 @@ gh run view <run id> --log | grep -E '"requeue"|Log only'
 
 ### Stalled runs
 
-A job whose runner pod or node vanished can stay `in_progress` with no failure, so its Tests run never completes and Queue retry never sees it. The Lost runner workflow, `.github/workflows/lost-runner.yml`, is scheduled every ten minutes (GitHub can start scheduled runs late) on a hosted runner, queues on a shared hosted lane, and runs `python -m scripts.ci_lost_runner --repo <owner>/<repo>` with the TCC Main CI app token. It examines every queued or running Tests run, whatever its event. A run is stalled when:
+A job whose runner pod or node vanished can stay `in_progress` with no failure, so its Tests run never completes and Queue retry never sees it. The Lost runner workflow, `.github/workflows/lost-runner.yml`, is scheduled every ten minutes (GitHub can start scheduled runs late) on a hosted runner, queues on a shared hosted lane, and runs `python -m scripts.ci_lost_runner --repo <owner>/<repo>` with the TCC Main CI app token. It examines every unfinished Tests run (in progress, queued, pending, waiting or requested), whatever its event. A run is stalled when:
 
 - a job started at least ten minutes ago and runs on a self-hosted runner that is absent from or offline in the organization runner list,
 - no other job is running on a live runner,
 - every other unfinished job waits on a lost job, and
-- the same holds on a second read two minutes later.
+- the same holds on the second read.
 
-A stalled run where any job failed or timed out on its own is left alone. Otherwise it is cancelled, then force cancelled if a plain cancel does not end it, and on its first attempt its failed jobs are rerun once. A second loss is cancelled and not rerun, so the run ends cancelled. Each examined run prints one JSON line with its action, `none`, `cancel`, `rerun` or `error`, and the reason; a refused API call reports `error` for that run, the others are still examined, and the job fails. Like Queue retry, a scheduled workflow runs from `main`, so a change takes effect after promotion.
+A stalled run is cancelled, then force cancelled if a plain cancel does not end it. Its failed jobs are rerun once only when it is a first attempt and no job failed or timed out on its own; a run that failed on its own is never rerun, and a second loss ends cancelled. Every suspect run is confirmed on a second read at least two minutes after the first, and one tick waits only once. Each examined run prints one JSON line with its action, `none`, `cancel`, `rerun` or `error`, and the reason. A refused API call reports `error` for that run, the other runs are still examined, and the job fails. Like Queue retry, a scheduled workflow runs from `main`, so a change takes effect after promotion.
 
 ## Coverage grading
 
