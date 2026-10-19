@@ -1,6 +1,5 @@
 name: Lost runner
 
-# A job whose runner pod or node vanished stays in progress and its run never ends, so a merge group holds the queue.
 on:
   schedule:
     - cron: "*/10 * * * *"
