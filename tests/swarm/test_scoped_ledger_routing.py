@@ -11,8 +11,6 @@ from scripts.swarm_ledger import authority_context, ledger, ledger_link, ledger_
 from tests.swarm.test_cli import env as env
 from tests.swarm.test_cli import run
 
-pytestmark = pytest.mark.xdist_group("fakeredis")
-
 
 def test_set_stores_the_swarm_api_address_and_clears_it(env, capsys, monkeypatch):
     from scripts.swarm import ledger_cutover
