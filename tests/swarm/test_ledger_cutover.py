@@ -117,3 +117,19 @@ def test_endpoint_activation_requires_ready_executions_and_moves_the_controller_
     assert lease.current(destination, SLUG).epoch > old.epoch
     assert lease.current(destination, SLUG).owner == old.owner
     assert "SWARM_URL" not in os.environ
+
+
+def test_activation_never_loads_controller_authority_for_a_pinned_caller(pending, monkeypatch):
+    from scripts.swarm.store import SwarmError
+    from scripts.swarm_ledger import authority_context
+
+    source, actors, _ = pending
+    monkeypatch.setenv("AGENTIHOOKS_AGENT_NAME", actors[-1].name)
+    monkeypatch.setattr(ledger_cutover, "readiness", lambda *_: {"ready": True})
+
+    def refuse(*_):
+        raise AssertionError("caller loaded controller authority")
+
+    monkeypatch.setattr(authority_context, "for_tick", refuse)
+    with pytest.raises(SwarmError, match="controller authority"):
+        ledger_cutover._activate(source, SLUG, source.config(SLUG).pending_api_url)

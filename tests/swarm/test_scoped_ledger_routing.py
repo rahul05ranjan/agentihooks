@@ -114,6 +114,20 @@ def test_scoped_routes_match_the_slug_and_restore_after_a_refusal():
     assert ledger_route.url() == ""
 
 
+def test_an_active_successor_keeps_an_unrelated_swarm_local(store, monkeypatch):
+    from scripts.gates import Who
+
+    monkeypatch.setenv("AGENTIHOOKS_SWARM", "selected")
+    monkeypatch.setenv("SWARM_URL", "https://hosted.example")
+    who = Who(name="engineer@abcdef-0001", swarm="selected")
+    with ledger_route.command(store, "other", who):
+        assert not ledger_link.remote(slug="other")
+        assert ledger.base("other") != "https://hosted.example"
+    with ledger_route.command(store, "selected", who):
+        assert ledger_link.remote(slug="selected")
+        assert ledger.base("selected") == "https://hosted.example"
+
+
 def test_pending_destination_stages_private_authority_without_routing_the_tick(store, monkeypatch):
     from argparse import Namespace
 

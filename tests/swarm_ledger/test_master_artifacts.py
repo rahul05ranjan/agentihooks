@@ -4,7 +4,6 @@ import threading
 import urllib.request
 from http.server import ThreadingHTTPServer
 
-import fakeredis
 import ledger
 import ledger_core as core
 import pytest
@@ -19,9 +18,13 @@ MASTER = "master@abcdef-0001"
 WORKER = "engineer@abcdef-0002"
 CONTENT = b"# Requested audit\n\nDesign and architecture findings.\n"
 
+pytestmark = pytest.mark.xdist_group("fakeredis")
+
 
 @pytest.fixture
 def publication(ledger_dir, tmp_path, monkeypatch):
+    import fakeredis
+
     monkeypatch.setitem(sys.modules, "ledger_artifacts", artifacts)
     folder = tmp_path / "ledgers"
     folder.mkdir()
