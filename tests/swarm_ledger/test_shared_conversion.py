@@ -250,8 +250,10 @@ def test_the_command_names_itself_and_requires_a_source(monkeypatch, capsys):
     with pytest.raises(SystemExit):
         shared.main()
     error = capsys.readouterr().err
-    assert error.startswith("usage: python -m scripts.swarm_ledger.storage_migration.shared ")
-    assert "the following arguments are required: --source" in error
+    assert (
+        "\npython -m scripts.swarm_ledger.storage_migration.shared: error: the following arguments are required: --source\n"
+        in error
+    )
 
 
 def test_the_command_dry_run_rolls_back_and_leaves_the_folder_writable(stores, monkeypatch, capsys):
