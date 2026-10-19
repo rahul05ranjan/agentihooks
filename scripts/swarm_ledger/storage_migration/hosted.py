@@ -11,7 +11,7 @@ import re
 import time
 import urllib.request
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from email.message import Message
 from pathlib import Path
 
@@ -24,6 +24,7 @@ MAX_COMPRESSED = 64 << 20
 MAX_EXPANDED = 256 << 20
 FILE_ID = re.compile(r"[0-9a-f]{64}\.[a-z0-9]+\Z")
 DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+SOURCE, REPLACES = "X-Ledger-Source", "X-Ledger-Replaces"
 TOKEN_MESSAGE = "ledger-import:{slug}:{expires}"
 
 
@@ -182,8 +183,9 @@ def prune(repo: LedgerRepository, folder: Path, stale: dict) -> None:
     with request_metrics.locked(repo.domain.LOCK), media_lock(repo.directory):
         for name, written in stale.items():
             path = folder / name
-            if path.exists() and path.stat().st_mtime_ns == written:
-                path.unlink(missing_ok=True)
+            with suppress(FileNotFoundError):
+                if path.stat().st_mtime_ns == written:
+                    path.unlink()
 
 
 def displace(repo: LedgerRepository, snapshot: dict, expected: tuple[str, str] | None) -> dict:
@@ -214,15 +216,16 @@ def displace(repo: LedgerRepository, snapshot: dict, expected: tuple[str, str] |
 
 def leftover(repo: LedgerRepository, current: dict, snapshot: dict, replaced: str) -> bool:
     archive = repo.directory / f"{snapshot['slug']}.displaced" / f"{replaced}.json.gz"
-    if not archive.is_file() or {**current, "files": snapshot["files"]} != snapshot:
+    if not archive.is_file():
         return False
     extra = current["files"].keys() - snapshot["files"].keys()
+    kept = {name: data for name, data in current["files"].items() if name not in extra}
     archived = json.loads(gzip.decompress(archive.read_bytes()))["files"]
-    return snapshot["files"].items() <= current["files"].items() and extra <= archived.keys()
+    return {**current, "files": kept} == snapshot and extra <= archived.keys()
 
 
 def expectation(headers: Message | dict) -> tuple[str, str] | None:
-    expected = (headers.get("X-Ledger-Source"), headers.get("X-Ledger-Replaces"))
+    expected = (headers.get(SOURCE), headers.get(REPLACES))
     if expected == (None, None):
         return None
     if not all(isinstance(value, str) and DIGEST.fullmatch(value) for value in expected):
@@ -280,7 +283,7 @@ def transfer(url: str, snapshot: dict, secret: str, replaces: str | None = None)
     guard(url, headers)
     endpoint = url.rstrip("/") + "/api/v1/migrations/" + snapshot["slug"]
     opener = urllib.request.build_opener(NoRedirect)
-    refresh = {"X-Ledger-Source": manifest(snapshot)["digest"], "X-Ledger-Replaces": replaces} if replaces else {}
+    refresh = {SOURCE: manifest(snapshot)["digest"], REPLACES: replaces} if replaces else {}
     request = urllib.request.Request(endpoint, data=gzip.compress(encode(snapshot)), headers={**headers, **refresh})
     with opener.open(request, timeout=300) as response:
         result = json.load(response)["data"]
@@ -329,8 +332,8 @@ def main() -> None:
     from scripts.swarm_ledger import ledger_server
 
     repo = storage.build(args.source / storage.DATABASE, ledger_server.core)
-    if refresh and manifest(capture(repo, args.slug[0]))["digest"] != args.expect_source:
-        parser.error("frozen source differs from --expect-source")
+    if refresh:
+        checked(parser, capture(repo, args.slug[0]), args.expect_source)
     with repo.snapshot() as snapshot:
         slugs = args.slug or snapshot.slugs()
     if args.freeze and not args.slug:
@@ -340,11 +343,15 @@ def main() -> None:
     for slug in slugs:
         if args.freeze:
             fence(repo, slug, args.url)
-        snapshot = capture(repo, slug)
-        if refresh and manifest(snapshot)["digest"] != args.expect_source:
-            parser.error("frozen source differs from --expect-source")
+        snapshot = checked(parser, capture(repo, slug), args.expect_source)
         result = transfer(args.url, snapshot, secret, **refresh) if args.url else manifest(snapshot)
         print(json.dumps(result), flush=True)
+
+
+def checked(parser: argparse.ArgumentParser, snapshot: dict, expected: str | None) -> dict:
+    if expected and manifest(snapshot)["digest"] != expected:
+        parser.error("frozen source differs from --expect-source")
+    return snapshot
 
 
 def refresh_request(parser: argparse.ArgumentParser, args: argparse.Namespace) -> dict:

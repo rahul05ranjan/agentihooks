@@ -74,6 +74,11 @@ def test_refresh_replaces_the_expected_hosted_copy_and_archives_it(diverged):
     assert not (target.directory / f"{SLUG}.media" / hosted_only).exists()
     assert archived(target, displaced) == displaced
     assert hosted.restore(target, snapshot, expected) == result
+    media(target, b"Uploaded after the first refresh.")
+    newer = hosted.capture(target, SLUG)
+    assert hosted.restore(target, snapshot, (digest(snapshot), digest(newer))) == result
+    assert archived(target, newer) == newer
+    assert archived(target, displaced) == displaced
 
 
 def test_refresh_refuses_a_hosted_copy_that_changed_after_its_expected_digest(diverged):
@@ -173,8 +178,11 @@ def test_conflicting_later_file_removes_the_media_written_before_it(diverged):
 
 def test_retry_finishes_a_refresh_whose_media_cleanup_failed(diverged, monkeypatch):
     source, target = diverged
+    shared = hashlib.sha256(b"Kept on both sides.").hexdigest() + ".md"
+    (target.directory / f"{SLUG}.media" / shared).unlink()
     snapshot = hosted.capture(source, SLUG)
     displaced = hosted.capture(target, SLUG)
+    assert shared in snapshot["files"] and shared not in displaced["files"]
     expected = (digest(snapshot), digest(displaced))
     with monkeypatch.context() as patch:
         patch.setattr(hosted, "prune", lambda *args: (_ for _ in ()).throw(OSError("cleanup failed")))
@@ -245,6 +253,25 @@ def test_migration_api_refreshes_only_with_both_wellformed_digests(diverged, mon
     assert hosted.capture(target, SLUG) == snapshot
 
 
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"X-Ledger-Source": "a" * 64},
+        {"X-Ledger-Replaces": "a" * 64},
+        {"X-Ledger-Source": "A" * 64, "X-Ledger-Replaces": "a" * 64},
+        {"X-Ledger-Source": "a" * 64, "X-Ledger-Replaces": "a" * 63},
+    ],
+)
+def test_refresh_headers_name_both_lowercase_digests(headers):
+    with pytest.raises(ValueError, match="^a refresh names both expected digests$"):
+        hosted.expectation(headers)
+
+
+def test_refresh_headers_are_optional_and_returned_in_order():
+    assert hosted.expectation({}) is None
+    assert hosted.expectation({"X-Ledger-Source": "a" * 64, "X-Ledger-Replaces": "b" * 64}) == ("a" * 64, "b" * 64)
+
+
 def test_transfer_names_both_digests_only_for_a_refresh(diverged, monkeypatch):
     source, _ = diverged
     snapshot = hosted.capture(source, SLUG)
@@ -270,6 +297,26 @@ def test_transfer_names_both_digests_only_for_a_refresh(diverged, monkeypatch):
     }
     assert all(req.get_header("X-ledger-source") is None for req in calls)
     assert all(req.get_header("X-ledger-replaces") is None for req in calls)
+
+
+def test_refresh_command_refuses_a_source_written_before_its_fence(diverged, monkeypatch, capsys):
+    source, _ = diverged
+    snapshot = hosted.capture(source, SLUG)
+    monkeypatch.setenv("SWARM_SECRET", secrets.token_hex(32))
+    monkeypatch.setattr(hosted, "transfer", lambda *args, **kwargs: pytest.fail("transferred a changed source"))
+    original = hosted.fence
+
+    def late_write(repo, slug, destination):
+        repo.import_document(SLUG, {**document(), "title": "Written before the fence"}, replace=True)
+        original(repo, slug, destination)
+
+    monkeypatch.setattr(hosted, "fence", late_write)
+    extra = ("--slug", SLUG, "--replaces", "c" * 64, "--expect-source", digest(snapshot))
+    monkeypatch.setattr(sys, "argv", refresh_command(source, *extra))
+    with pytest.raises(SystemExit) as failure:
+        hosted.main()
+    assert failure.value.code == 2
+    assert capsys.readouterr().err.endswith("migration: error: frozen source differs from --expect-source\n")
 
 
 def refresh_command(source, *extra):
