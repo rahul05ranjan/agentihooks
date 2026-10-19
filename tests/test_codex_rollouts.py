@@ -1,6 +1,10 @@
 from pathlib import Path
 
+import pytest
+
 from tests.test_profile_render import _write, world  # noqa: F401
+
+pytestmark = pytest.mark.codex_rollouts
 
 
 def _rollout(sessions: Path, conversation: str) -> Path:
