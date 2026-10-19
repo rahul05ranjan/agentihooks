@@ -4,13 +4,30 @@ R=$GITHUB_REPOSITORY
 MODE=$(cat .github/lost-runner-mode)
 watchdog() { python -m scripts.ci_lost_runner --repo "$R" --workflow lost-runner-plant.yml --grace-minutes 0.5 "$@"; }
 state() { gh api "repos/$R/actions/runs/$PLANT" --jq '"\(.run_attempt) \(.status) \(.conclusion)"'; }
+lane() { case "${1: -1}" in 0|1|2) echo a ;; 3|4|5) echo b ;; *) echo c ;; esac; }
+MINE=$(lane "$GITHUB_RUN_ID")
+BRANCH="${GITHUB_REF_NAME}-plant-${GITHUB_RUN_ID}"
+git config user.name "lost-runner-proof"
+git config user.email "lost-runner-proof@users.noreply.github.com"
+trap 'git push -q "https://x-access-token:${GH_TOKEN}@github.com/${R}.git" --delete "$BRANCH" || true' EXIT
 PLANT=""
-for _ in $(seq 60); do
-  PLANT=$(gh api "repos/$R/actions/workflows/lost-runner-plant.yml/runs?head_sha=$GITHUB_SHA" --jq '.workflow_runs[0].id // empty')
-  [[ -n "$PLANT" ]] && break
-  sleep 10
+for try in $(seq 8); do
+  git commit -q --allow-empty -m "Plant a lost runner, try $try"
+  git push -q "https://x-access-token:${GH_TOKEN}@github.com/${R}.git" "HEAD:refs/heads/$BRANCH"
+  SHA=$(git rev-parse HEAD)
+  PLANT=""
+  for _ in $(seq 30); do
+    PLANT=$(gh api "repos/$R/actions/workflows/lost-runner-plant.yml/runs?head_sha=$SHA" --jq '.workflow_runs[0].id // empty')
+    [[ -n "$PLANT" ]] && break
+    sleep 5
+  done
+  [[ -n "$PLANT" ]] || { echo "::error::no plant run for $SHA"; exit 1; }
+  echo "try $try: plant run $PLANT on lane $(lane "$PLANT"), proof on lane $MINE"
+  [[ "$(lane "$PLANT")" != "$MINE" ]] && break
+  gh api -X POST "repos/$R/actions/runs/$PLANT/cancel" >/dev/null
+  PLANT=""
 done
-[[ -n "$PLANT" ]] || { echo "::error::no plant run for $GITHUB_SHA"; exit 1; }
+[[ -n "$PLANT" ]] || { echo "::error::every plant landed on the proof lane"; exit 1; }
 echo "mode $MODE, plant run $PLANT"
 until_acted() {
   local want=$1 line action

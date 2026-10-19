@@ -33,6 +33,8 @@ jobs:
           owner: ${{ github.repository_owner }}
           permission-actions: write
           permission-organization-self-hosted-runners: read
+          permission-contents: write
+          permission-workflows: write
       - name: Watch the planted run
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
