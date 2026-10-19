@@ -25,12 +25,13 @@ def comments(value) -> int:
     return (len(own) if isinstance(own, list) else 0) + sum(comments(item) for item in value.values())
 
 
-def counts(state: dict) -> dict:
+def counts(state: dict, registries: list) -> dict:
     return {
         "tasks": len(state.get("tasks", [])),
         "events": len(state["_meta"].get("events", [])),
         "comments": comments({key: value for key, value in state.items() if key != "_meta"}),
         "artifacts": len(state.get("artifacts", [])),
+        "registries": len(registries),
     }
 
 
@@ -59,8 +60,7 @@ def copy(source: LedgerRepository, target: LedgerRepository, slug: str, dry_run:
                 raise DryRun
     except DryRun:
         pass
-    source_counts = {**counts(state), "registries": len(registries)}
-    shared_counts = {**counts(converted), "registries": len(kept)}
+    source_counts, shared_counts = counts(state, registries), counts(converted, kept)
     match = source_counts == shared_counts and converted == state and kept == registries
     return {"slug": slug, "source": source_counts, "shared": shared_counts, "match": match}
 
@@ -69,9 +69,23 @@ def freeze(source: LedgerRepository) -> None:
     hosted.fence(source, "*", DESTINATION)
 
 
-def thaw(source: LedgerRepository) -> None:
+def thaw(source: LedgerRepository, target: LedgerRepository) -> list:
+    frozen = {}
+    with source.snapshot() as snapshot:
+        for slug in snapshot.slugs():
+            frozen[slug] = snapshot.export(slug), snapshot.registries(slug)
+    with target.transaction() as transaction:
+        present = [slug for slug in frozen if transaction.exists(slug)]
+        for slug in present:
+            if (transaction.export(slug), transaction.registries(slug)) != frozen[slug]:
+                raise ValueError(
+                    f"ledger {slug} changed in the shared database; unfencing would leave two writable stores"
+                )
+        for slug in present:
+            transaction.purge(slug)
     with source.transaction() as transaction:
         transaction.unfence(DESTINATION)
+    return present
 
 
 def convert(source: LedgerRepository, target: LedgerRepository, dry_run: bool = False) -> dict:
@@ -105,15 +119,15 @@ def main() -> None:
         sys.exit(f"shared conversion: {args.source} holds no ledger database")
     from scripts.swarm_ledger import ledger_server
 
-    source = sqlite.SQLiteLedgerRepository(args.source / sqlite.DATABASE, ledger_server.core)
-    if args.unfence:
-        thaw(source)
-        print(json.dumps({"read_only": sqlite.fenced(source.directory, "*")}), flush=True)
-        return
     address = postgres.url(os.environ)
     if not address:
         sys.exit(f"shared conversion: {postgres.URL} names no shared database")
+    source = sqlite.SQLiteLedgerRepository(args.source / sqlite.DATABASE, ledger_server.core)
     target = postgres.PostgresLedgerRepository(address, ledger_server.core)
+    if args.unfence:
+        removed = thaw(source, target)
+        print(json.dumps({"removed": removed, "read_only": sqlite.fenced(source.directory, "*")}), flush=True)
+        return
     print(json.dumps(convert(source, target, args.dry_run)), flush=True)
 
 

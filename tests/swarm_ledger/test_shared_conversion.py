@@ -31,10 +31,10 @@ def generation(repo, slug):
         return connection.execute("SELECT generation FROM ledgers WHERE slug=?", (slug,)).fetchone()[0]
 
 
-def test_counts_name_tasks_events_comments_and_artifacts_of_one_document():
-    assert shared.counts(document()) == COUNTS
+def test_counts_name_tasks_events_comments_artifacts_and_registries_of_one_document():
+    assert shared.counts(document(), [["bin", SLUG, "42"]]) == ROW
     nested = {"_meta": {"events": [], "comments": [1]}, "notes": [{"comments": [{"comments": [1, 2]}]}]}
-    assert shared.counts(nested) == {"tasks": 0, "events": 0, "comments": 3, "artifacts": 0}
+    assert shared.counts(nested, []) == {"tasks": 0, "events": 0, "comments": 3, "artifacts": 0, "registries": 0}
 
 
 def test_a_conversion_copies_full_history_token_and_registries_then_fences_the_source(stores):
@@ -164,15 +164,62 @@ def test_the_command_refuses_a_folder_without_a_ledger_database(monkeypatch, tmp
         shared.main()
 
 
-def test_unfencing_rolls_a_converted_folder_back_to_writable(stores, monkeypatch, capsys):
+def shared_store(monkeypatch, target):
+    opened = []
+
+    def build(address, domain):
+        opened.append(address)
+        return target
+
+    monkeypatch.setenv("AGENTIHOOKS_SWARM_DATABASE_URL", "postgresql://ledger@shared/ledger")
+    monkeypatch.setattr(shared.postgres, "PostgresLedgerRepository", build)
+    return opened
+
+
+def test_the_command_converts_into_the_shared_database_its_url_names(stores, monkeypatch, capsys):
+    source, target = stores
+    opened = shared_store(monkeypatch, target)
+    monkeypatch.setattr("sys.argv", ["shared", "--source", str(source.directory)])
+    shared.main()
+    report = json.loads(capsys.readouterr().out)
+    assert opened == ["postgresql://ledger@shared/ledger"]
+    assert (report["match"], report["read_only"], report["totals"]["shared"]) == (True, True, ROW)
+    assert target.export_document(SLUG) == document()
+
+
+def test_unfencing_removes_the_untouched_copies_and_reopens_the_folder(stores, monkeypatch, capsys):
     source, target = stores
     shared.convert(source, target)
-    monkeypatch.delenv("AGENTIHOOKS_SWARM_DATABASE_URL", raising=False)
+    shared_store(monkeypatch, target)
     monkeypatch.setattr("sys.argv", ["shared", "--source", str(source.directory), "--unfence"])
     shared.main()
-    assert json.loads(capsys.readouterr().out) == {"read_only": False}
+    assert json.loads(capsys.readouterr().out) == {"removed": [SLUG], "read_only": False}
+    assert not target.exists(SLUG)
+    with target.connect() as connection:
+        assert SLUG not in target.registry("bin", connection)
     source.import_document("after", document())
     assert source.exists("after")
+
+
+def test_unfencing_is_refused_once_the_shared_copy_took_a_write(stores):
+    source, target = stores
+    shared.convert(source, target)
+    target.import_document(SLUG, {**document(), "title": "Shared write"}, replace=True)
+    with pytest.raises(ValueError, match=f"^ledger {SLUG} changed in the shared database; unfencing would leave"):
+        shared.thaw(source, target)
+    assert sqlite.fenced(source.directory, "*")
+    assert target.export_document(SLUG)["title"] == "Shared write"
+
+
+def test_unfencing_is_refused_once_the_shared_registry_rows_changed(stores):
+    source, target = stores
+    shared.convert(source, target)
+    with target.connect() as connection, connection:
+        target.save_registry(connection, "bin", {SLUG: 5})
+    with pytest.raises(ValueError, match="two writable stores$"):
+        shared.thaw(source, target)
+    assert sqlite.fenced(source.directory, "*")
+    assert target.exists(SLUG)
 
 
 def test_a_dry_run_and_an_unfence_cannot_be_combined(stores, monkeypatch):

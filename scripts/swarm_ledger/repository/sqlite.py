@@ -283,6 +283,10 @@ class Transaction:
     def registries(self, slug: str) -> list:
         return [list(row) for row in self.connection.execute(REGISTRIES, (slug,))]
 
+    def purge(self, slug: str) -> None:
+        self.repository.purge(slug, self.connection)
+        self.connection.execute(DROP_REGISTRIES, (slug,))
+
     def export(self, slug: str) -> dict:
         return self.repository._export(self.connection, slug)
 
