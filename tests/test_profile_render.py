@@ -1750,9 +1750,11 @@ def test_isolated_codex_render_keeps_session_state_private(world):
 
     out = render.render_codex("rb-role", isolate=True)
 
-    for item in ("sessions", "history.jsonl", "session_index.jsonl"):
+    for item in ("history.jsonl", "session_index.jsonl"):
         assert not (out / item).exists()
         assert not (out / item).is_symlink()
+    for item in ("sessions", "archived_sessions"):
+        assert os.readlink(out / item) == str(render.rendered_root() / ".rollouts" / "rb-role" / "codex" / item)
     for item in ("auth.json", "hooks.json"):
         assert os.readlink(out / item) == str(home / ".codex" / item)
     doc = tomllib.loads((out / "config.toml").read_text())
@@ -1769,7 +1771,7 @@ def test_codex_render_refreshes_when_session_isolation_changes(world):
     assert isolated is not None
     assert isolated != shared
     assert (shared / "sessions").is_symlink()
-    assert not (isolated / "sessions").is_symlink()
+    assert os.readlink(isolated / "sessions") != os.readlink(shared / "sessions")
 
     restored = render.render_codex("rb-role")
 
@@ -1784,10 +1786,48 @@ def test_swarm_codex_preparation_renders_isolated_storage(world):
     env, _ = select_profile.prepare("rb-role", "codex", "", "", [], {"AGENTIHOOKS_SWARM": "crew"})
     out = Path(env["CODEX_HOME"])
 
-    for item in ("sessions", "history.jsonl", "session_index.jsonl"):
+    for item in ("history.jsonl", "session_index.jsonl"):
         assert not (out / item).is_symlink()
+    assert Path(os.readlink(out / "sessions")).parts[-4:] == (".rollouts", "rb-role", "codex", "sessions")
     assert (out / "hooks.json").is_symlink()
     assert tomllib.loads((out / "config.toml").read_text())["sqlite_home"] == str(out)
+
+
+def _rollout(sessions: Path, conversation: str) -> Path:
+    return _write(sessions / "2026" / "10" / "18" / f"rollout-2026-10-18T16-13-16-{conversation}.jsonl", "{}\n")
+
+
+def test_a_codex_rollout_survives_a_re_render_of_its_isolated_home(world):
+    from scripts.profiles import render
+
+    first = render.render_codex("rb-role", isolate=True)
+    _rollout(first / "sessions", "01a14f5c")
+
+    second = render.render_codex("rb-role", isolate=True, force=True)
+
+    assert second.resolve() != first.resolve()
+    assert list((second / "sessions").rglob("*01a14f5c.jsonl"))
+    assert render.has_codex_rollout("rb-role", [], "01a14f5c")
+    assert not render.has_codex_rollout("rb-role", [], "02b25e6d")
+    assert not render.has_codex_rollout("rb-role", [], "")
+
+
+def test_an_isolated_home_rendered_before_the_rollout_folder_is_adopted(world):
+    from scripts.profiles import homes, render
+
+    out = render.render_codex("rb-role", isolate=True)
+    for item in homes.CODEX_ROLLOUTS:
+        (out / item).unlink()
+    (out / "archived_sessions").mkdir()
+    _rollout(out / "sessions", "01a14f5c")
+    _write(out / "archived_sessions" / "rollout-2026-10-17T10-00-00-0aa.jsonl", "{}\n")
+
+    again = render.render_codex("rb-role", isolate=True)
+
+    assert again is not None
+    assert list((again / "sessions").rglob("*01a14f5c.jsonl"))
+    assert list((again / "archived_sessions").rglob("*0aa.jsonl"))
+    assert not list((out / "sessions").rglob("*.jsonl"))
 
 
 def _hooks_entries(hooks: Path) -> list[str]:
