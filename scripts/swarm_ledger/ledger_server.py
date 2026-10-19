@@ -1227,6 +1227,13 @@ def metrics_journal(action, *args):
         sys.stderr.write(f"request metrics journal: {exc}\n")
 
 
+def container_main(proc=Path("/proc")) -> bool:
+    try:
+        return (proc / str(os.getppid()) / "comm").read_text().startswith("containerd-shim")
+    except OSError:
+        return False
+
+
 def reload_if_changed(started, server, code_dirs=CODE_DIRS, hand_off=server_handoff.hand_off, force=False, loaded=None):
     """None once a successor took the socket and this server stopped accepting, else the code stamp to compare
     next; with loaded, code whose content still hashes to it reads as unchanged."""
@@ -1237,9 +1244,13 @@ def reload_if_changed(started, server, code_dirs=CODE_DIRS, hand_off=server_hand
         server_code.record(PIDFILE.parent, os.getpid(), stamp, code_dirs, loaded)
         return stamp
     argv = [sys.executable, str(CODE_DIR / "ledger_server.py"), "--serve"]
-    if os.getpid() == 1:
+    if container_main():
         metrics_journal(request_metrics.stop)
-        os.execv(sys.executable, argv)
+        try:
+            os.execv(sys.executable, argv)
+        except OSError as exc:
+            sys.stderr.write(f"reload: could not restart in place: {exc}; this server keeps serving\n")
+            return stamp
     try:
         held = hand_off(server.socket, argv, extra={WATCHED: ",".join(HUB.watched()), MODULES: loaded_modules()})
     except OSError as exc:
@@ -1269,14 +1280,14 @@ def take_carry():
     try:
         text = path.read_text()
     except FileNotFoundError:
-        return []
+        return None
     path.unlink()
     try:
         carried = json.loads(text)
         stored.adopt_carried(carried)
     except Exception as exc:  # a broken carry leaves its ledgers to load from their rows
         sys.stderr.write(f"carry: {exc}\n")
-        return []
+        return None
     return list(carried)
 
 
@@ -1387,7 +1398,13 @@ def warm(passes=WARM_PASSES):
 
 
 def loaded_modules(modules=sys.modules) -> str:
-    return ",".join(sorted(name for name, module in modules.items() if module is not None and name != "__main__"))
+    return ",".join(
+        sorted(
+            name
+            for name, module in modules.items()
+            if module is not None and name != "__main__" and not name.endswith("ledger_server")
+        )
+    )
 
 
 def warm_modules(environ=os.environ, load=importlib.import_module) -> None:
@@ -1398,7 +1415,8 @@ def warm_modules(environ=os.environ, load=importlib.import_module) -> None:
             continue
 
 
-def warm_streams(environ=os.environ):
+def warm_streams(environ=os.environ) -> list[str]:
+    warmed = []
     for slug in filter(None, environ.pop(WATCHED, "").split(",")):
         try:
             HUB.open(slug, lambda slug=slug: stream_resources(slug))
@@ -1406,6 +1424,8 @@ def warm_streams(environ=os.environ):
             sys.stderr.write(f"warm stream {slug}: {exc}\n")
             continue
         HUB.close(slug)
+        warmed.append(slug)
+    return warmed
 
 
 def follow_shared(interval=FOLLOW_S):
@@ -1422,11 +1442,11 @@ def follow_shared(interval=FOLLOW_S):
 def serve():
     core.LEDGER_DIR.mkdir(parents=True, exist_ok=True)
     listener = server_handoff.inherited()
-    carried = []
+    warmed, carried = [], []
     if listener is not None:
         warm_modules()
         warm()
-        warm_streams()
+        warmed = warm_streams()
         server_handoff.announce(json.dumps(stored.generations()).encode())
     try:
         writer = ledger_writer.WriterLease(core.LEDGER_DIR).acquire(
@@ -1443,7 +1463,7 @@ def serve():
     watching = threading.Event()
     threading.Thread(target=watch_ledgers, args=(server,), kwargs={"stopping": watching}, daemon=True).start()
     threading.Thread(target=answer_reloads, args=(server,), daemon=True).start()
-    threading.Thread(target=refresh_streams, args=(carried,), daemon=True).start()
+    threading.Thread(target=refresh_streams, args=(warmed if carried is None else carried,), daemon=True).start()
     if storage.shared():
         threading.Thread(target=follow_shared, daemon=True).start()
     stopped = server_lifetime.watch(server, core.LEDGER_DIR, PORT)
@@ -1569,9 +1589,8 @@ def recorded_pid() -> str:
 
 
 def reload(wait=RELOAD_WAIT_S):
-    if server_compose.used(core.LEDGER_DIR):
-        stop()
-        return ensure()
+    if server_compose.used(core.LEDGER_DIR) and (error := server_compose.start(core.LEDGER_DIR)):
+        sys.exit(f"could not start the ledger service: {error}")
     if not server_process_alive():
         return ensure()
     pid = recorded_pid()

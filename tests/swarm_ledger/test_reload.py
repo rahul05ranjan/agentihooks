@@ -53,7 +53,7 @@ class Reload(unittest.TestCase):
                 (
                     self.server.socket,
                     [sys.executable, str(server.CODE_DIR / "ledger_server.py"), "--serve"],
-                    {"extra": {server.WATCHED: ""}},
+                    {"extra": {server.WATCHED: "", server.MODULES: server.loaded_modules()}},
                 )
             ],
         )

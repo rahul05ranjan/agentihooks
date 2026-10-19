@@ -1,4 +1,5 @@
 import inspect
+import os
 import re
 import sys
 from pathlib import Path
@@ -544,7 +545,7 @@ def test_a_reload_with_an_unreadable_ready_payload_carries_every_ledger(monkeypa
 
 def test_a_container_s_main_server_reloads_in_place(monkeypatch):
     ran = []
-    monkeypatch.setattr(server.os, "getpid", lambda: 1)
+    monkeypatch.setattr(server, "container_main", lambda: True)
     monkeypatch.setattr(server, "metrics_journal", lambda step: ran.append(step))
 
     def execv(path, argv):
@@ -558,6 +559,32 @@ def test_a_container_s_main_server_reloads_in_place(monkeypatch):
         server.request_metrics.stop,
         (sys.executable, [sys.executable, str(server.CODE_DIR / "ledger_server.py"), "--serve"]),
     ]
+
+
+def test_a_container_s_main_server_that_cannot_restart_in_place_keeps_serving(monkeypatch, capsys):
+    monkeypatch.setattr(server, "container_main", lambda: True)
+    monkeypatch.setattr(server, "metrics_journal", lambda step: None)
+
+    def execv(path, argv):
+        raise OSError("exec format error")
+
+    monkeypatch.setattr(server.os, "execv", execv)
+    started = server.code_stamp(())
+    handed = server.reload_if_changed(1, Handed(), (), lambda *args, **kwargs: pytest.fail("handed off"), force=True)
+    assert handed == started
+    assert capsys.readouterr().err == (
+        "reload: could not restart in place: exec format error; this server keeps serving\n"
+    )
+
+
+@pytest.mark.parametrize(("comm", "main"), [("containerd-shim\n", True), ("python\n", False), (None, False)])
+def test_a_server_whose_parent_is_the_container_shim_is_the_container_s_main_process(tmp_path, comm, main):
+    parent = tmp_path / str(os.getppid())
+    parent.mkdir()
+    if comm is not None:
+        (parent / "comm").write_text(comm)
+    assert server.container_main(tmp_path) is main
+    assert server.container_main() is (Path(f"/proc/{os.getppid()}/comm").read_text().startswith("containerd-shim"))
 
 
 def test_a_hangup_asks_for_a_hand_off(monkeypatch):
@@ -749,14 +776,27 @@ def test_reload_starts_a_server_when_the_signalled_one_dies_without_handing_off(
     assert sent == [(41, server.signal.SIGHUP), "ensure"]
 
 
-def test_reload_restarts_a_compose_service_through_stop_and_ensure(monkeypatch):
+def test_reload_applies_the_compose_service_then_hands_off(tmp_path, monkeypatch):
+    pidfile = tmp_path / ".server.pid"
+    pidfile.write_text("41")
     sent, used = [], []
+    monkeypatch.setattr(server, "PIDFILE", pidfile)
     monkeypatch.setattr(server.server_compose, "used", lambda folder: used.append(folder) or True)
-    monkeypatch.setattr(server, "stop", lambda: sent.append("stop"))
+    monkeypatch.setattr(server.server_compose, "start", lambda folder: sent.append(("start", folder)) or "")
+    monkeypatch.setattr(server, "server_process_alive", lambda: True)
     monkeypatch.setattr(server, "ensure", lambda: sent.append("ensure") or "started")
-    monkeypatch.setattr(server.os, "kill", lambda pid, sig: sent.append((pid, sig)))
+    monkeypatch.setattr(server.os, "kill", lambda pid, sig: sent.append((pid, sig)) or pidfile.write_text("42"))
     assert server.reload() == "started"
-    assert (sent, used) == (["stop", "ensure"], [server.core.LEDGER_DIR])
+    assert sent == [("start", server.core.LEDGER_DIR), (41, server.signal.SIGHUP), "ensure"]
+    assert used == [server.core.LEDGER_DIR]
+
+
+def test_reload_stops_when_the_compose_service_cannot_start(monkeypatch):
+    monkeypatch.setattr(server.server_compose, "used", lambda folder: True)
+    monkeypatch.setattr(server.server_compose, "start", lambda folder: "no such image")
+    monkeypatch.setattr(server.os, "kill", lambda pid, sig: pytest.fail("signalled"))
+    with pytest.raises(SystemExit, match="could not start the ledger service: no such image"):
+        server.reload()
 
 
 def test_the_reload_flag_runs_reload(monkeypatch):
@@ -786,7 +826,7 @@ def test_a_carry_goes_from_the_old_server_to_its_successor_once(tmp_path, monkey
     server.write_carry({"demo": 6})
     assert sorted(p.name for p in folder.iterdir()) == [server.CARRY]
     assert server.take_carry() == ["demo"]
-    assert server.take_carry() == []
+    assert server.take_carry() is None
     assert adopted == [{"demo": [7, "{}"]}]
     assert list(folder.iterdir()) == []
 
@@ -797,7 +837,7 @@ def test_a_broken_carry_is_dropped_and_the_successor_goes_on(tmp_path, monkeypat
     monkeypatch.setattr(server.core, "LEDGER_DIR", folder)
     (folder / server.CARRY).write_text("{not json")
     monkeypatch.setattr(server.stored, "adopt_carried", lambda carried: pytest.fail("adopted a broken carry"))
-    assert server.take_carry() == []
+    assert server.take_carry() is None
     assert list(folder.iterdir()) == []
     assert capsys.readouterr().err.startswith("carry: ")
 
@@ -812,7 +852,7 @@ def test_a_carry_the_repository_refuses_names_no_ledger_to_refresh(tmp_path, mon
         raise ValueError("bad rows")
 
     monkeypatch.setattr(server.stored, "adopt_carried", refuse)
-    assert server.take_carry() == []
+    assert server.take_carry() is None
     assert capsys.readouterr().err == "carry: bad rows\n"
 
 
@@ -821,7 +861,14 @@ def stream_view(slug):
 
 
 def test_the_loaded_modules_are_named_in_order_without_the_main_script():
-    modules = {"zlib": object(), "__main__": object(), "json": object(), "gone": None}
+    modules = {
+        "zlib": object(),
+        "__main__": object(),
+        "json": object(),
+        "gone": None,
+        "ledger_server": object(),
+        "scripts.swarm_ledger.ledger_server": object(),
+    }
     assert server.loaded_modules(modules) == "json,zlib"
     assert server.MODULES == "LEDGER_MODULES"
     assert "json" in server.loaded_modules().split(",")
@@ -855,7 +902,7 @@ def test_warming_streams_builds_each_watched_view_and_leaves_it_unwatched(monkey
     monkeypatch.setattr(server, "HUB", hub)
     monkeypatch.setattr(server, "stream_resources", stream_view)
     environ = {server.WATCHED: "demo,other", "KEEP": "1"}
-    server.warm_streams(environ)
+    assert server.warm_streams(environ) == ["demo", "other"]
     assert environ == {"KEEP": "1"}
     assert hub.resource("demo", "ledger") == {"_meta": {"rev": 1}, "slug": "demo"}
     assert hub.resource("other", "ledger") == {"_meta": {"rev": 1}, "slug": "other"}
@@ -882,7 +929,7 @@ def test_a_stream_view_that_fails_to_build_is_left_for_the_page(monkeypatch, cap
         return stream_view(slug)
 
     monkeypatch.setattr(server, "stream_resources", resources)
-    server.warm_streams({server.WATCHED: "broken,demo"})
+    assert server.warm_streams({server.WATCHED: "broken,demo"}) == ["demo"]
     assert hub.resource("broken", "ledger") is None
     assert hub.resource("demo", "ledger") == {"_meta": {"rev": 1}, "slug": "demo"}
     assert hub.watched() == []

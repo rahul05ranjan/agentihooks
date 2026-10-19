@@ -31,7 +31,15 @@ process. The interface is `scripts.swarm_v2.ledger_writer`.
   has stopped. The old server then stops
   accepting, ends its event streams, finishes its requests, hands over the ledgers written since and releases
   the lease, and the successor takes it within `LEASE_WAIT_S`. Connections that arrive meanwhile wait in the
-  socket's backlog.
+  socket's backlog. The successor imports the modules the old server had loaded before it reports ready.
+  Requests still running when the drain bound ends keep the lease until the old process exits; the successor
+  then refreshes every stream view it built. Once the successor reported ready the old server does not take
+  the socket back, so a successor that fails after ready leaves the port closed until the next start.
+- The compose service runs `server_supervisor.py` as the container's main process. It adopts the successor the
+  old server leaves behind and exits once no server remains, so a handoff keeps the container up.
+  `ledger_server.py --reload` applies the compose service first, then hands off. A server whose parent is the
+  container runtime itself (a container started before the supervisor) restarts in place instead: its
+  socket closes until the new code binds and its requests and streams end.
 - `flock` coordinates processes that share one kernel's view of the volume: a local disk or a
   `ReadWriteOnce` volume. It does not coordinate writers across NFS or another shared network
   filesystem; never put the ledger folder on one.

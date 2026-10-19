@@ -223,6 +223,47 @@ def test_a_successor_warms_reports_ready_then_waits_for_the_lease_and_takes_the_
     assert server.HANDOFF == {}
 
 
+def test_a_successor_without_a_carry_refreshes_every_view_it_warmed(monkeypatch, tmp_path):
+    class Lease:
+        def __init__(self, directory):
+            pass
+
+        def acquire(self, claimant, wait):
+            return self
+
+        def release(self):
+            pass
+
+    monkeypatch.setattr(server.server_handoff, "inherited", lambda: object())
+    monkeypatch.setattr(server.server_handoff, "announce", lambda held: None)
+    monkeypatch.setattr(server.stored, "generations", lambda: {})
+    monkeypatch.setattr(server, "warm_modules", lambda: None)
+    monkeypatch.setattr(server, "warm", lambda: None)
+    monkeypatch.setattr(server, "warm_streams", lambda: ["demo", "other"])
+    monkeypatch.setattr(server, "take_carry", lambda: None)
+    monkeypatch.setattr(
+        server,
+        "listening",
+        lambda held: SimpleNamespace(
+            serve_forever=lambda poll: None, drained=lambda timeout: True, server_close=lambda: None
+        ),
+    )
+    monkeypatch.setattr(server.ledger_writer, "WriterLease", Lease)
+    monkeypatch.setattr(server.legacy, "adopt", lambda stored: None)
+    monkeypatch.setattr(server, "adopt_unrelayed", lambda: None)
+    threads = []
+    monkeypatch.setattr(
+        server.threading, "Thread", lambda **kwargs: threads.append(kwargs) or SimpleNamespace(start=lambda: None)
+    )
+    monkeypatch.setattr(server.server_lifetime, "watch", lambda *args: threading.Event())
+    monkeypatch.setattr(server.server_code, "record", lambda *args, **kwargs: None)
+    monkeypatch.setattr(server, "HUB", SimpleNamespace(drain=lambda: None))
+    monkeypatch.setattr(server, "HANDOFF", {})
+    monkeypatch.setattr(server, "PIDFILE", tmp_path / ".server.pid")
+    server.serve()
+    assert [t["args"] for t in threads if t["target"] is server.refresh_streams] == [(["demo", "other"],)]
+
+
 def test_a_carry_that_cannot_be_written_still_releases_the_lease(monkeypatch, tmp_path):
     released = []
 
