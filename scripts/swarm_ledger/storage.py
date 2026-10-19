@@ -24,6 +24,10 @@ def fenced(directory, slug: str) -> bool:
     return sqlite.fenced(store(directory), slug)
 
 
+def folder_fenced(directory, slug: str) -> bool:
+    return sqlite.fenced(directory, slug)
+
+
 def read_document(directory, slug: str) -> dict | None:
     return sqlite.read_document(store(directory), slug)
 

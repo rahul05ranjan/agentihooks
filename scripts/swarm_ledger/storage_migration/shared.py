@@ -1,11 +1,11 @@
 import argparse
 import json
-import os
 import secrets
 import sys
 from pathlib import Path
 
-from scripts.swarm_ledger.repository import LedgerRepository, postgres, sqlite
+from scripts.swarm_ledger import storage
+from scripts.swarm_ledger.repository import LedgerRepository, postgres
 from scripts.swarm_ledger.storage_migration import hosted
 
 DESTINATION = "shared database"
@@ -101,7 +101,7 @@ def convert(source: LedgerRepository, target: LedgerRepository, dry_run: bool = 
         "ledgers": ledgers,
         "totals": {"ledgers": len(ledgers), **totals},
         "match": all(row["match"] for row in ledgers),
-        "read_only": sqlite.fenced(source.directory, "*"),
+        "read_only": storage.folder_fenced(source.directory, "*"),
         "dry_run": dry_run,
     }
 
@@ -115,18 +115,17 @@ def main() -> None:
     mode.add_argument("--dry-run", action="store_true")
     mode.add_argument("--unfence", action="store_true")
     args = parser.parse_args()
-    if not (args.source / sqlite.DATABASE).is_file():
+    if not (args.source / storage.DATABASE).is_file():
         sys.exit(f"shared conversion: {args.source} holds no ledger database")
     from scripts.swarm_ledger import ledger_server
 
-    address = postgres.url(os.environ)
-    if not address:
+    if not storage.shared():
         sys.exit(f"shared conversion: {postgres.URL} names no shared database")
-    source = sqlite.SQLiteLedgerRepository(args.source / sqlite.DATABASE, ledger_server.core)
-    target = postgres.PostgresLedgerRepository(address, ledger_server.core)
+    source = storage.build(args.source / storage.DATABASE, ledger_server.core)
+    target = storage.build(None, ledger_server.core)
     if args.unfence:
         removed = thaw(source, target)
-        print(json.dumps({"removed": removed, "read_only": sqlite.fenced(source.directory, "*")}), flush=True)
+        print(json.dumps({"removed": removed, "read_only": storage.folder_fenced(source.directory, "*")}), flush=True)
         return
     print(json.dumps(convert(source, target, args.dry_run)), flush=True)
 

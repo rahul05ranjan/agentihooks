@@ -137,9 +137,9 @@ def test_a_differing_count_is_reported_as_no_match(stores, monkeypatch):
     original = shared.counts
     calls = []
 
-    def skewed(state):
+    def skewed(state, registries):
         calls.append(state)
-        result = original(state)
+        result = original(state, registries)
         return {**result, "events": result["events"] + 1} if len(calls) % 2 == 0 else result
 
     monkeypatch.setattr(shared, "counts", skewed)
@@ -166,13 +166,16 @@ def test_the_command_refuses_a_folder_without_a_ledger_database(monkeypatch, tmp
 
 def shared_store(monkeypatch, target):
     opened = []
+    build = shared.storage.build
 
-    def build(address, domain):
-        opened.append(address)
+    def built(path=None, domain=None):
+        if path is not None:
+            return build(path, domain)
+        opened.append(shared.storage.shared())
         return target
 
     monkeypatch.setenv("AGENTIHOOKS_SWARM_DATABASE_URL", "postgresql://ledger@shared/ledger")
-    monkeypatch.setattr(shared.postgres, "PostgresLedgerRepository", build)
+    monkeypatch.setattr(shared.storage, "build", built)
     return opened
 
 
