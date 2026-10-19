@@ -130,9 +130,13 @@ def restart(host: Host, pid: int, command: list[str], reason: str) -> str:
             _signal(host, pid, signal.SIGKILL, reason)
     except OSError as exc:
         return str(exc)
+    return relaunch(host, command, "--ensure")
+
+
+def relaunch(host: Host, command: list[str], flag: str) -> str:
     try:
         done = host.run(
-            [*command, "--ensure"],
+            [*command, flag],
             env={**os.environ, "LEDGER_DIR": str(host.folder)},
             capture_output=True,
             text=True,
@@ -221,7 +225,7 @@ def watch(store, slug: str, ledger, runtime, host: Host | None = None) -> list[s
     if not _claimed(store, host.folder, pid, found[0]):
         return []
     kind, reason = found
-    if error := restart(host, pid, command, reason):
+    if error := restart(host, pid, command, reason) if kind == RUNAWAY else relaunch(host, command, "--reload"):
         text = DOWN_TEXT.format(why=reason, error=error)
         store.redis.hset(incidents.key("ledger"), "watchdog", text)
         store.redis.set(DOWN_KEY, pid, px=DOWN_MS)

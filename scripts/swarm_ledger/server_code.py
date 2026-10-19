@@ -30,7 +30,6 @@ def code_stamp(code_dirs: tuple[Path, ...] = CODE_DIRS) -> int:
 
 
 def code_digest(code_dirs: tuple[Path, ...] = CODE_DIRS) -> str:
-    """A hash of every code file's path and content, so a touched but unchanged file reads as the same code."""
     digest = hashlib.sha256()
     for path in sorted(p for d in code_dirs for p in d.rglob("*") if p.suffix in SUFFIXES):
         try:
@@ -41,9 +40,12 @@ def code_digest(code_dirs: tuple[Path, ...] = CODE_DIRS) -> str:
     return digest.hexdigest()
 
 
-def record(folder: Path, pid: int, stamp: int, code_dirs: tuple[Path, ...] = CODE_DIRS) -> None:
+def record(
+    folder: Path, pid: int, stamp: int, code_dirs: tuple[Path, ...] = CODE_DIRS, digest: str | None = None
+) -> None:
     written = folder / f"{RECORD}.{pid}"
-    written.write_text(json.dumps({"pid": pid, "stamp": stamp, "dirs": [str(d) for d in code_dirs]}))
+    held = {"pid": pid, "stamp": stamp, "dirs": [str(d) for d in code_dirs], "digest": digest or code_digest(code_dirs)}
+    written.write_text(json.dumps(held))
     written.replace(folder / RECORD)
 
 
@@ -64,4 +66,5 @@ def stale(folder: Path, pid: int) -> bool:
     held = loaded(folder)
     if held is None or held.get("pid") != pid:
         return True
-    return code_stamp(tuple(Path(d) for d in held.get("dirs", ()))) != held.get("stamp")
+    dirs = tuple(Path(d) for d in held.get("dirs", ()))
+    return code_stamp(dirs) != held.get("stamp") and code_digest(dirs) != held.get("digest")

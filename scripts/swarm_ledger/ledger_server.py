@@ -83,6 +83,8 @@ WATCHED = "LEDGER_WATCHED"
 RELOAD = threading.Event()
 HANDING = threading.Lock()
 HANDED = threading.Event()
+NEVER = threading.Event()
+WATCH_PASS = threading.Lock()
 HANDOFF = {}
 THREADS_EXHAUSTED = 75
 TLS_HANDSHAKE_S = 10
@@ -1229,6 +1231,7 @@ def reload_if_changed(started, server, code_dirs=CODE_DIRS, hand_off=server_hand
     if stamp == started and not force:
         return started
     if loaded is not None and not force and code_digest(code_dirs) == loaded:
+        server_code.record(PIDFILE.parent, os.getpid(), stamp, code_dirs, loaded)
         return stamp
     held = hand_off(
         server.socket,
@@ -1292,7 +1295,6 @@ def hand_over(started, server, force=False):
 
 
 def answer_reloads(server, requested=RELOAD):
-    """Hangups are answered on their own thread, so a reload still hands over while the watch loop is stalled or dead."""
     while requested.wait():
         requested.clear()
         if hand_over(code_stamp(), server, force=True) is None:
@@ -1316,30 +1318,33 @@ def scheduled_wait(interval: float) -> None:
     time.sleep(interval)
 
 
-def watch_ledgers(server=None, interval=2.0):
-    started = code_stamp()
+def watch_ledgers(server=None, interval=2.0, stopping=NEVER):
+    started = LOADED_STAMP
     reload = reloading()
     for passes in itertools.count():
         if reload:
             started = hand_over(started, server)
             if started is None:
                 return
-        try:
-            ledger_bin.tidy()
-        except OSError as exc:
-            sys.stderr.write(f"bin purge: {exc}\n")
-        if passes % BIN_SWEEP_EVERY == 0:
-            bin_closed_without_swarm()
-        if passes and passes % BIN_SWEEP_EVERY == 0:
-            expire_alerts()
-        if passes % REPLAY_EVERY == 0:
+        with WATCH_PASS:
+            if stopping.is_set():
+                return
             try:
-                if unrelayed():
-                    replay_unrelayed()
-            except Exception as exc:  # the watch loop also tidies the bin, expires alerts and samples streams
-                sys.stderr.write(f"unrelayed replay: {exc}\n")
-        sample_streams()
-        metrics_journal(request_metrics.persist)
+                ledger_bin.tidy()
+            except OSError as exc:
+                sys.stderr.write(f"bin purge: {exc}\n")
+            if passes % BIN_SWEEP_EVERY == 0:
+                bin_closed_without_swarm()
+            if passes and passes % BIN_SWEEP_EVERY == 0:
+                expire_alerts()
+            if passes % REPLAY_EVERY == 0:
+                try:
+                    if unrelayed():
+                        replay_unrelayed()
+                except Exception as exc:  # the watch loop also tidies the bin, expires alerts and samples streams
+                    sys.stderr.write(f"unrelayed replay: {exc}\n")
+            sample_streams()
+            metrics_journal(request_metrics.persist)
         scheduled_wait(interval)
 
 
@@ -1356,8 +1361,7 @@ def listening(listener=None):
 
 
 def warm(passes=WARM_PASSES):
-    """Load every open ledger, then again while a pass still finds one written since, so the successor that runs this
-    takes over with current copies."""
+    """Load every open ledger, again while a pass still finds one written since, at most passes times."""
     held = {}
     for _ in range(passes):
         loaded = {}
@@ -1373,7 +1377,6 @@ def warm(passes=WARM_PASSES):
 
 
 def warm_streams(environ=os.environ):
-    """Load the stream view of each ledger a page watched on the old server, so the page's reconnect finds it built."""
     for slug in filter(None, environ.pop(WATCHED, "").split(",")):
         try:
             HUB.open(slug, lambda slug=slug: stream_resources(slug))
@@ -1403,11 +1406,12 @@ def serve():
     adopt_unrelayed()
     metrics_journal(request_metrics.restore, core.LEDGER_DIR / request_metrics.JOURNAL_NAME)
     server = listening(listener)
-    threading.Thread(target=watch_ledgers, args=(server,), daemon=True).start()
+    watching = threading.Event()
+    threading.Thread(target=watch_ledgers, args=(server,), kwargs={"stopping": watching}, daemon=True).start()
     threading.Thread(target=answer_reloads, args=(server,), daemon=True).start()
     threading.Thread(target=refresh_streams, args=(carried,), daemon=True).start()
     stopped = server_lifetime.watch(server, core.LEDGER_DIR, PORT)
-    server_code.record(PIDFILE.parent, os.getpid(), LOADED_STAMP)
+    server_code.record(PIDFILE.parent, os.getpid(), LOADED_STAMP, digest=LOADED_DIGEST)
     PIDFILE.write_text(str(os.getpid()))
     print(f"ledger server on {BASE}, dir {core.LEDGER_DIR}", flush=True)
     try:
@@ -1417,10 +1421,14 @@ def serve():
         HUB.drain()
         server.drained(DRAIN_S)
         server.server_close()
+        with WATCH_PASS:
+            watching.set()
         metrics_journal(request_metrics.stop)
-        if "since" in HANDOFF:
-            write_carry(HANDOFF.pop("since"))
-        writer.release()
+        try:
+            if "since" in HANDOFF:
+                write_carry(HANDOFF.pop("since"))
+        finally:
+            writer.release()
 
 
 def port_held() -> bool:
@@ -1525,7 +1533,10 @@ def reload(wait=RELOAD_WAIT_S):
     if not server_process_alive():
         return ensure()
     pid = recorded_pid()
-    os.kill(int(pid), signal.SIGHUP)
+    try:
+        os.kill(int(pid), signal.SIGHUP)
+    except (ValueError, ProcessLookupError):
+        return ensure()
     deadline = time.monotonic() + wait
     while recorded_pid() == pid:
         if time.monotonic() >= deadline:

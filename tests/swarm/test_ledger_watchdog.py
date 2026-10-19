@@ -17,6 +17,7 @@ from tests.swarm.test_tick import FakeLedger, FakeRuntime
 PID = 4242
 PYTHON = "/venv/bin/python3"
 REASON = "its code changed on disk"
+RUNAWAY_REASON = "it ran 169 threads, over the limit of 150"
 
 
 @pytest.fixture
@@ -232,12 +233,22 @@ def test_a_restart_whose_record_cannot_be_written_sends_no_signal_and_reports_wh
 
 def test_a_watched_restart_records_why_it_stopped_the_server(store, tmp_path):
     host = Host(tmp_path)
+    plant(host.proc, host.argv, threads=169)
+    current(host, tmp_path)
+    ledger_watchdog.watch(store, "sw", ProbedLedger(Clock()), FakeRuntime(), host)
+    assert [(entry["reason"], entry["signal"], entry["pid"]) for entry in watchdog_log(host)] == [
+        (RUNAWAY_REASON, "SIGTERM", PID)
+    ]
+
+
+def test_a_server_on_stale_code_is_reloaded_without_a_signal(store, tmp_path):
+    host = Host(tmp_path)
     plant(host.proc, host.argv)
     (host.folder / ".server.pid").write_text(str(PID))
     ledger_watchdog.watch(store, "sw", ProbedLedger(Clock()), FakeRuntime(), host)
-    assert [(entry["reason"], entry["signal"], entry["pid"]) for entry in watchdog_log(host)] == [
-        (REASON, "SIGTERM", PID)
-    ]
+    assert [call[0] for call in host.calls] == ["run"]
+    assert host.calls[0][1][-1] == "--reload"
+    assert not (host.folder / ledger_watchdog.LOG).exists()
 
 
 def test_a_pid_taken_by_another_program_during_the_stop_is_never_killed(tmp_path):
@@ -261,8 +272,8 @@ def test_a_server_gone_before_the_stop_is_still_started(tmp_path):
 
 def test_a_server_the_tick_may_not_signal_is_reported_and_never_started_again(store, tmp_path):
     host = Host(tmp_path)
-    plant(host.proc, host.argv)
-    (host.folder / ".server.pid").write_text(str(PID))
+    plant(host.proc, host.argv, threads=169)
+    current(host, tmp_path)
 
     def refused(pid, sig):
         raise PermissionError(1, "Operation not permitted")
@@ -270,19 +281,19 @@ def test_a_server_the_tick_may_not_signal_is_reported_and_never_started_again(st
     host.kill = refused
     assert ledger_watchdog.restart(host, PID, host.argv[:2], REASON) == "[Errno 1] Operation not permitted"
     assert ledger_watchdog.watch(store, "sw", ProbedLedger(Clock()), FakeRuntime(), host) == [
-        "the ledger server needed a restart because its code changed on disk, and the restart failed: "
+        f"the ledger server needed a restart because {RUNAWAY_REASON}, and the restart failed: "
         "[Errno 1] Operation not permitted"
     ]
     assert host.calls == [] and store.redis.get(ledger_watchdog.STARTED_KEY) is None
     assert len(master_mail(store)) == 0
-    store.redis.delete(ledger_watchdog.LOCK_KEY)
+    store.redis.delete(ledger_watchdog.LOCK_KEY, ledger_watchdog.RUNAWAY_KEY)
     assert ledger_watchdog.watch(store, "sw", ProbedLedger(Clock()), FakeRuntime(), host) != []
     assert len(master_mail(store)) == 0
     assert 0 < store.redis.pttl(ledger_watchdog.DOWN_KEY) <= 3_600_000
     assert ledger_watchdog.DOWN_KEY == f"{PREFIX}:ledger-server-restart-failed"
     (host.folder / ".server.pid").write_text("4243")
-    plant(host.proc, host.argv, pid=4243)
-    store.redis.delete(ledger_watchdog.LOCK_KEY)
+    plant(host.proc, host.argv, pid=4243, threads=169)
+    store.redis.delete(ledger_watchdog.LOCK_KEY, ledger_watchdog.RUNAWAY_KEY)
     ledger_watchdog.watch(store, "sw", ProbedLedger(Clock()), FakeRuntime(), host)
     assert len(master_mail(store)) == 0
 
@@ -359,7 +370,7 @@ def test_a_stale_server_is_restarted_and_three_fast_writes_alert_nobody(store, t
     assert ledger_watchdog.watch(store, "sw", ledger, FakeRuntime(), host) == [
         "restarted the ledger server on new code; three writes took 0.3 seconds, 0.3 seconds and 0.3 seconds"
     ]
-    assert host.calls[0] == ("kill", PID, signal.SIGTERM)
+    assert host.calls == [("run", [*host.argv[:2], "--reload"], str(host.folder), 210, False, True)]
     assert len(ledger.writes) == 3 and master_mail(store) == [] and ledger.notes == []
     assert store.redis.get(ledger_watchdog.STARTED_KEY) == "5151"
 
@@ -371,7 +382,7 @@ def test_a_server_started_with_a_relative_script_is_restarted_from_its_own_folde
     (host.proc / str(PID) / "cwd").symlink_to(tmp_path / "repo")
     (host.folder / ".server.pid").write_text(str(PID))
     assert ledger_watchdog.watch(store, "sw", ProbedLedger(Clock()), FakeRuntime(), host) != []
-    assert host.calls[-1][1] == [sys.executable, host.argv[1], "--ensure"]
+    assert host.calls[-1][1] == [sys.executable, host.argv[1], "--reload"]
 
 
 def test_the_writes_after_a_stale_restart_carry_this_swarm_s_inputs(store, tmp_path, monkeypatch):

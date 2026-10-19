@@ -264,7 +264,7 @@ def test_a_stopping_server_persists_a_stop_before_it_releases_the_writer(tmp_pat
     monkeypatch.setattr(server, "ThreadingHTTPServer", Server)
     monkeypatch.setattr(server.threading, "Thread", lambda **kwargs: SimpleNamespace(start=lambda: None))
     monkeypatch.setattr(server.server_lifetime, "watch", lambda *args: threading.Event())
-    monkeypatch.setattr(server.server_code, "record", lambda *args: None)
+    monkeypatch.setattr(server.server_code, "record", lambda *args, **kwargs: None)
     monkeypatch.setattr(server.legacy, "adopt", lambda stored: None)
     monkeypatch.setattr(server, "adopt_unrelayed", lambda: None)
     monkeypatch.setattr(server, "HUB", SimpleNamespace(drain=lambda: None))

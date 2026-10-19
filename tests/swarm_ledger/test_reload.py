@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts" / "swarm_ledger"
 sys.path.insert(0, str(SCRIPTS))
@@ -92,10 +93,17 @@ class Reload(unittest.TestCase):
         started = server.code_stamp((self.dir,))
         loaded = server.code_digest((self.dir,))
         os.utime(self.page, ns=(2, 2_000_000_000))
-        self.assertEqual(
-            server.reload_if_changed(started, self.server, (self.dir,), self.hand_off, loaded=loaded), 2_000_000_000
-        )
+        with mock.patch.object(server, "PIDFILE", self.dir / ".server.pid"):
+            self.assertEqual(
+                server.reload_if_changed(started, self.server, (self.dir,), self.hand_off, loaded=loaded),
+                2_000_000_000,
+            )
         self.assertEqual(self.calls, [])
+        self.assertEqual(
+            server.server_code.loaded(self.dir),
+            {"pid": os.getpid(), "stamp": 2_000_000_000, "dirs": [str(self.dir)], "digest": loaded},
+        )
+        self.assertFalse(server.server_code.stale(self.dir, os.getpid()))
 
     def test_new_content_hands_off_even_with_a_loaded_digest(self):
         started = server.code_stamp((self.dir,))

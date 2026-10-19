@@ -37,7 +37,7 @@ def listening(monkeypatch, ledger_port, tmp_path):
     monkeypatch.setattr(server, "watch_ledgers", lambda *args: None)
     monkeypatch.setattr(server, "HUB", server.Hub())
     monkeypatch.setattr(server.server_lifetime, "watch", lambda *args: threading.Event())
-    monkeypatch.setattr(server.server_code, "record", lambda *args: None)
+    monkeypatch.setattr(server.server_code, "record", lambda *args, **kwargs: None)
     document = new_ledger.build_doc({"title": "Burst", "phases": [{"title": "Proof"} for _ in range(16)]})
     page = legacy_page.render(document, SLUG, ledger_port)
     html, _ = legacy_page.paths(SLUG, server.core)

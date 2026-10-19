@@ -110,7 +110,7 @@ def test_the_seed_watcher_reloads_code_only_when_asked(monkeypatch, value, calls
         monkeypatch.delenv("SWARM_RELOAD", raising=False)
     else:
         monkeypatch.setenv("SWARM_RELOAD", value)
-    monkeypatch.setattr(server, "code_stamp", lambda: 42)
+    monkeypatch.setattr(server, "LOADED_STAMP", 42)
     monkeypatch.setattr(server, "reload_if_changed", Mock())
     monkeypatch.setattr(server.ledger_bin, "tidy", Mock())
     monkeypatch.setattr(server, "bin_closed_without_swarm", Mock())

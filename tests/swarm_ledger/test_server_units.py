@@ -142,6 +142,8 @@ def test_serve_runs_the_ledger_watch_on_a_daemon_thread(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "PIDFILE", tmp_path / ".server.pid")
     server.serve()
     assert waits == [0.0]
+    watching = threads[0].pop("kwargs")["stopping"]
+    assert watching.is_set()
     assert [{**t, "args": tuple(type(a) for a in t["args"])} for t in threads] == [
         {"target": server.watch_ledgers, "args": (Server,), "daemon": True},
         {"target": server.answer_reloads, "args": (Server,), "daemon": True},
@@ -197,7 +199,7 @@ def test_a_successor_warms_reports_ready_then_waits_for_the_lease_and_takes_the_
         server.threading, "Thread", lambda **kwargs: threads.append(kwargs) or SimpleNamespace(start=lambda: None)
     )
     monkeypatch.setattr(server.server_lifetime, "watch", lambda *args: threading.Event())
-    monkeypatch.setattr(server.server_code, "record", lambda *args: None)
+    monkeypatch.setattr(server.server_code, "record", lambda *args, **kwargs: None)
     monkeypatch.setattr(server, "HUB", SimpleNamespace(drain=lambda: None))
     monkeypatch.setattr(server, "HANDOFF", {"since": {"demo": 6}})
     monkeypatch.setattr(server, "PIDFILE", tmp_path / ".server.pid")
@@ -216,6 +218,45 @@ def test_a_successor_warms_reports_ready_then_waits_for_the_lease_and_takes_the_
         "release",
     ]
     assert server.HANDOFF == {}
+
+
+def test_a_carry_that_cannot_be_written_still_releases_the_lease(monkeypatch, tmp_path):
+    released = []
+
+    class Lease:
+        def __init__(self, directory):
+            pass
+
+        def acquire(self, claimant, wait):
+            return self
+
+        def release(self):
+            released.append(True)
+
+    def broken(since):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(server.server_handoff, "inherited", lambda: None)
+    monkeypatch.setattr(server, "write_carry", broken)
+    monkeypatch.setattr(
+        server,
+        "listening",
+        lambda held: SimpleNamespace(
+            serve_forever=lambda poll: None, drained=lambda timeout: None, server_close=lambda: None
+        ),
+    )
+    monkeypatch.setattr(server.ledger_writer, "WriterLease", Lease)
+    monkeypatch.setattr(server.legacy, "adopt", lambda stored: None)
+    monkeypatch.setattr(server, "adopt_unrelayed", lambda: None)
+    monkeypatch.setattr(server.threading, "Thread", lambda **kwargs: SimpleNamespace(start=lambda: None))
+    monkeypatch.setattr(server.server_lifetime, "watch", lambda *args: threading.Event())
+    monkeypatch.setattr(server.server_code, "record", lambda *args, **kwargs: None)
+    monkeypatch.setattr(server, "HUB", SimpleNamespace(drain=lambda: None))
+    monkeypatch.setattr(server, "HANDOFF", {"since": {}})
+    monkeypatch.setattr(server, "PIDFILE", tmp_path / ".server.pid")
+    with pytest.raises(OSError, match="disk full"):
+        server.serve()
+    assert released == [True]
 
 
 def test_the_ledger_watch_sleeps_two_seconds_between_passes(monkeypatch):

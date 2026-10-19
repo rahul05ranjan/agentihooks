@@ -603,10 +603,39 @@ def test_the_watch_loop_stops_once_the_code_reload_handed_over(monkeypatch):
     seen = []
     monkeypatch.setattr(server, "HANDED", server.threading.Event())
     monkeypatch.setattr(server, "reloading", lambda: True)
-    monkeypatch.setattr(server, "code_stamp", lambda: 7)
+    monkeypatch.setattr(server, "LOADED_STAMP", 7)
     monkeypatch.setattr(server, "reload_if_changed", lambda *args, **kwargs: seen.append((args, kwargs)))
     assert server.watch_ledgers("httpd") is None
     assert seen == [((7, "httpd"), {"force": False, "loaded": server.LOADED_DIGEST})]
+
+
+def test_the_watch_loop_ends_once_its_server_stops(monkeypatch):
+    stopping = server.threading.Event()
+    stopping.set()
+    monkeypatch.setattr(server, "reloading", lambda: False)
+    monkeypatch.setattr(server.ledger_bin, "tidy", lambda: pytest.fail("tidied after the server stopped"))
+    assert server.watch_ledgers(stopping=stopping) is None
+    assert inspect.signature(server.watch_ledgers).parameters["stopping"].default is server.NEVER
+    assert not server.NEVER.is_set()
+
+
+def test_a_watch_pass_holds_the_pass_lock_but_its_wait_does_not(monkeypatch):
+    held = []
+    monkeypatch.setattr(server, "reloading", lambda: False)
+    monkeypatch.setattr(server.ledger_bin, "tidy", lambda: held.append(server.WATCH_PASS.locked()))
+    monkeypatch.setattr(server, "bin_closed_without_swarm", lambda: None)
+    monkeypatch.setattr(server, "unrelayed", lambda: False)
+    monkeypatch.setattr(server, "sample_streams", lambda: None)
+    monkeypatch.setattr(server, "metrics_journal", lambda *args: None)
+
+    def wait(interval):
+        held.append(server.WATCH_PASS.locked())
+        raise StopIteration
+
+    monkeypatch.setattr(server, "scheduled_wait", wait)
+    with pytest.raises(StopIteration):
+        server.watch_ledgers()
+    assert held == [True, False]
 
 
 def test_reload_signals_the_running_server_and_waits_for_its_successor(tmp_path, monkeypatch):
@@ -626,6 +655,24 @@ def test_reload_signals_the_running_server_and_waits_for_its_successor(tmp_path,
     server.reload()
     assert sent == [(41, server.signal.SIGHUP), "ensure"]
     assert naps == [0.1]
+
+
+@pytest.mark.parametrize(("pid", "kill"), [("", None), ("41", ProcessLookupError)])
+def test_reload_starts_a_server_when_the_recorded_one_is_unreadable_or_gone(tmp_path, monkeypatch, pid, kill):
+    pidfile = tmp_path / ".server.pid"
+    pidfile.write_text(pid)
+    sent = []
+
+    def signal_it(target, sig):
+        sent.append((target, sig))
+        raise kill()
+
+    monkeypatch.setattr(server, "PIDFILE", pidfile)
+    monkeypatch.setattr(server, "server_process_alive", lambda: True)
+    monkeypatch.setattr(server, "ensure", lambda: "started")
+    monkeypatch.setattr(server.os, "kill", signal_it)
+    assert server.reload() == "started"
+    assert sent == ([] if kill is None else [(41, server.signal.SIGHUP)])
 
 
 def test_reload_starts_a_server_when_none_runs(monkeypatch):
