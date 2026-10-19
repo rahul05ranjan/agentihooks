@@ -6,7 +6,12 @@ import unittest
 from tests.swarm_ledger.ledger_page import page_source
 from tests.swarm_ledger.test_flat_buttons import css_rules, declarations
 
-PROSE_CELLS = {".sw-table .sw-empty td", "#health-table td:nth-child(3)"}
+PROSE_CELLS = {
+    ".sw-table .sw-empty td",
+    "#health-table td:nth-child(3)",
+    "#recovery-table td:nth-child(4)",
+    "#recovery-table td:nth-child(5)",
+}
 FAKE_DOM = """
 const document = { createElement: (tag) => ({ tag, attrs: {}, kids: [],
   setAttribute(k, v) { this.attrs[k] = v; }, append(k) { this.kids.push(k); }, addEventListener() {},
