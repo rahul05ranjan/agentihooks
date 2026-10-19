@@ -362,6 +362,23 @@ def test_the_ledger_watch_sleeps_two_seconds_between_passes(monkeypatch):
     assert slept == [2.0]
 
 
+def test_a_bin_purge_that_fails_is_reported_and_the_watch_goes_on(monkeypatch, capsys):
+    def tidy():
+        raise OSError("read only folder")
+
+    def sleep(seconds):
+        raise StopIteration
+
+    monkeypatch.setattr(server, "reloading", lambda: False)
+    monkeypatch.setattr(server.ledger_bin, "tidy", tidy)
+    monkeypatch.setattr(server, "bin_closed_without_swarm", lambda: None)
+    monkeypatch.setattr(server, "sample_streams", lambda: None)
+    monkeypatch.setattr(server, "scheduled_wait", sleep)
+    with pytest.raises(StopIteration):
+        server.watch_ledgers()
+    assert capsys.readouterr().err.startswith("bin purge: read only folder\n")
+
+
 def test_serve_follows_a_shared_database_on_its_own_daemon_thread(monkeypatch, tmp_path):
     threads = []
 

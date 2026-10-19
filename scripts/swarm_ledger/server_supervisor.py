@@ -33,7 +33,7 @@ def reap(wait=os.wait) -> int:
     status = 0
     while True:
         try:
-            status = wait()[1]
+            _, status = wait()
         except ChildProcessError:
             code = os.waitstatus_to_exitcode(status)
             return code if code >= 0 else 128 - code

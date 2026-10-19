@@ -113,13 +113,13 @@ def test_reaping_with_no_child_returns_zero():
     assert server_supervisor.reap(wait) == 0
 
 
-def test_supervising_adopts_orphans_forwards_stop_signals_and_reaps(tmp_path):
-    libc, installed, spawned = Libc(), {}, []
-    child = subprocess.Popen([sys.executable, "-c", "import time\ntime.sleep(30)"])
+def test_supervising_adopts_orphans_forwards_stop_signals_and_reaps(tmp_path, monkeypatch):
+    libc, installed, spawned, forwarded = Libc(), {}, [], []
+    monkeypatch.setattr(server_supervisor, "forward", lambda *args: forwarded.append(args))
     status = server_supervisor.supervise(
         ["serve"],
         tmp_path / ".server.pid",
-        spawn=lambda argv: spawned.append(argv) or SimpleNamespace(pid=child.pid),
+        spawn=lambda argv: spawned.append(argv) or SimpleNamespace(pid=52),
         libc=libc,
         wait=lambda: (_ for _ in ()).throw(ChildProcessError),
         install=lambda signum, handler: installed.update({signum: handler}),
@@ -127,7 +127,7 @@ def test_supervising_adopts_orphans_forwards_stop_signals_and_reaps(tmp_path):
     assert (status, spawned, libc.calls) == (0, [["serve"]], [(36, 1, 0, 0, 0)])
     assert set(installed) == {signal.SIGTERM, signal.SIGINT}
     installed[signal.SIGTERM](signal.SIGTERM, None)
-    assert child.wait(timeout=10) == -signal.SIGTERM
+    assert forwarded == [(tmp_path / ".server.pid", signal.SIGTERM, (52,))]
 
 
 def test_the_supervisor_runs_this_folder_s_server_on_the_ledger_folder_pidfile(monkeypatch):

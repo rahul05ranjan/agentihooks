@@ -269,6 +269,8 @@ def test_a_stale_server_that_does_not_hand_off_is_stopped_and_started(store, tmp
         ("run", "--ensure"),
     ]
     first = json.loads((host.folder / ledger_watchdog.LOG).read_text().splitlines()[0])
+    assert sorted(first) == ["at", "error", "pid", "reason", "reload"]
+    assert isinstance(first["at"], float)
     assert (first["reload"], first["error"], first["pid"], first["reason"]) == (
         "failed",
         "did not hand off",

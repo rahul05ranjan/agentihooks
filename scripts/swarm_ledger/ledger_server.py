@@ -1241,7 +1241,7 @@ def reload_if_changed(started, server, code_dirs=CODE_DIRS, hand_off=server_hand
     if stamp == started and not force:
         return started
     if loaded is not None and not force and code_digest(code_dirs) == loaded:
-        server_code.record(PIDFILE.parent, os.getpid(), stamp, code_dirs, loaded)
+        server_code.record(PIDFILE.parent, os.getpid(), stamp, code_dirs)
         return stamp
     argv = [sys.executable, str(CODE_DIR / "ledger_server.py"), "--serve"]
     if container_main():
@@ -1261,7 +1261,7 @@ def reload_if_changed(started, server, code_dirs=CODE_DIRS, hand_off=server_hand
         sys.stderr.write("reload: the successor never reported ready; this server keeps serving\n")
         return stamp
     try:
-        HANDOFF["since"] = json.loads(held or b"{}")
+        HANDOFF["since"] = json.loads(held)
     except ValueError:
         HANDOFF["since"] = {}
     server.shutdown()
