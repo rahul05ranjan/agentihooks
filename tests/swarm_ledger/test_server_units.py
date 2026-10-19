@@ -187,6 +187,7 @@ def test_a_successor_warms_reports_ready_then_waits_for_the_lease_and_takes_the_
     monkeypatch.setattr(server.server_handoff, "inherited", lambda: listener)
     monkeypatch.setattr(server.server_handoff, "announce", lambda held: steps.append(("announce", held)))
     monkeypatch.setattr(server.stored, "generations", lambda: {"demo": 5})
+    monkeypatch.setattr(server, "warm_modules", lambda: steps.append("warm modules"))
     monkeypatch.setattr(server, "warm", lambda: steps.append("warm"))
     monkeypatch.setattr(server, "warm_streams", lambda: steps.append("warm streams"))
     monkeypatch.setattr(server, "take_carry", lambda: steps.append("take carry") or ["demo"])
@@ -207,6 +208,7 @@ def test_a_successor_warms_reports_ready_then_waits_for_the_lease_and_takes_the_
     server.serve()
     assert [t["args"] for t in threads if t["target"] is server.refresh_streams] == [(["demo"],)]
     assert steps == [
+        "warm modules",
         "warm",
         "warm streams",
         ("announce", b'{"demo": 5}'),

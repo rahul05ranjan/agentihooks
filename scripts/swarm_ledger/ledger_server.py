@@ -19,6 +19,7 @@ import errno
 import functools
 import html
 import http.server
+import importlib
 import itertools
 import json
 import os
@@ -80,6 +81,7 @@ RELOAD_WAIT_S = 100.0
 WARM_PASSES = 5
 CARRY = ".server.carry.json"
 WATCHED = "LEDGER_WATCHED"
+MODULES = "LEDGER_MODULES"
 RELOAD = threading.Event()
 HANDING = threading.Lock()
 HANDED = threading.Event()
@@ -1239,7 +1241,7 @@ def reload_if_changed(started, server, code_dirs=CODE_DIRS, hand_off=server_hand
         metrics_journal(request_metrics.stop)
         os.execv(sys.executable, argv)
     try:
-        held = hand_off(server.socket, argv, extra={WATCHED: ",".join(HUB.watched())})
+        held = hand_off(server.socket, argv, extra={WATCHED: ",".join(HUB.watched()), MODULES: loaded_modules()})
     except OSError as exc:
         sys.stderr.write(f"reload: the successor did not start: {exc}; this server keeps serving\n")
         return stamp
@@ -1384,6 +1386,18 @@ def warm(passes=WARM_PASSES):
         held.update(loaded)
 
 
+def loaded_modules(modules=sys.modules) -> str:
+    return ",".join(sorted(name for name, module in modules.items() if module is not None and name != "__main__"))
+
+
+def warm_modules(environ=os.environ, load=importlib.import_module) -> None:
+    for name in filter(None, environ.pop(MODULES, "").split(",")):
+        try:
+            load(name)
+        except Exception:  # a module the new code no longer has stays unloaded
+            continue
+
+
 def warm_streams(environ=os.environ):
     for slug in filter(None, environ.pop(WATCHED, "").split(",")):
         try:
@@ -1410,6 +1424,7 @@ def serve():
     listener = server_handoff.inherited()
     carried = []
     if listener is not None:
+        warm_modules()
         warm()
         warm_streams()
         server_handoff.announce(json.dumps(stored.generations()).encode())

@@ -510,8 +510,9 @@ def test_a_reload_names_the_watched_ledgers_to_its_successor(monkeypatch):
         seen.append((listener, extra))
         return b"{}"
 
+    monkeypatch.setattr(server, "loaded_modules", lambda: "json,ledger_core")
     assert server.reload_if_changed(1, Handed(), (), hand_off, force=True) is None
-    assert seen == [("socket", {server.WATCHED: "demo,other"})]
+    assert seen == [("socket", {server.WATCHED: "demo,other", server.MODULES: "json,ledger_core"})]
 
 
 def test_a_reload_whose_successor_never_got_ready_says_so_and_keeps_serving(monkeypatch, capsys):
@@ -817,6 +818,36 @@ def test_a_carry_the_repository_refuses_names_no_ledger_to_refresh(tmp_path, mon
 
 def stream_view(slug):
     return {"ledger": {"_meta": {"rev": 1}, "slug": slug}}
+
+
+def test_the_loaded_modules_are_named_in_order_without_the_main_script():
+    modules = {"zlib": object(), "__main__": object(), "json": object(), "gone": None}
+    assert server.loaded_modules(modules) == "json,zlib"
+    assert server.MODULES == "LEDGER_MODULES"
+    assert "json" in server.loaded_modules().split(",")
+
+
+def test_a_successor_loads_the_modules_its_predecessor_held_and_skips_missing_ones():
+    loaded = []
+
+    def load(name):
+        loaded.append(name)
+        if name == "gone":
+            raise ModuleNotFoundError(name)
+
+    environ = {server.MODULES: "json,gone,ledger_core", "KEEP": "1"}
+    server.warm_modules(environ, load)
+    assert loaded == ["json", "gone", "ledger_core"]
+    assert environ == {"KEEP": "1"}
+    server.warm_modules({server.MODULES: ""}, load)
+    server.warm_modules({}, load)
+    assert loaded == ["json", "gone", "ledger_core"]
+
+
+def test_warming_modules_imports_them(monkeypatch):
+    monkeypatch.delitem(sys.modules, "colorsys", raising=False)
+    server.warm_modules({server.MODULES: "colorsys"})
+    assert "colorsys" in sys.modules
 
 
 def test_warming_streams_builds_each_watched_view_and_leaves_it_unwatched(monkeypatch):
