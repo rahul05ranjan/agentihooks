@@ -4,8 +4,7 @@ import json
 import re
 from pathlib import Path
 
-from scripts.hive import registry, reports
-from scripts.swarm_ledger import plan_read
+from scripts.swarm_ledger import plan_read, ports
 
 PART_RE = re.compile(r"[A-Za-z0-9][\w.-]{0,127}")
 CONTRACT_LABELS = (("must", "Must be true"), ("check", "Checked by"), ("judge", "Judged by"))
@@ -85,7 +84,7 @@ def portable(slug, task_id):
 
 
 def named(slug, agent, recorded=""):
-    if reports.host(agent):
+    if ports.hive().reports.host(agent):
         return portable(slug, agent.task)
     return recorded or str(folder(slug, agent.task))
 
@@ -115,7 +114,7 @@ def materialize(slug, task_id, sent):
 
 
 def synced_key(hive):
-    return f"{registry.key(hive)}:workspaces"
+    return f"{ports.hive().registry.key(hive)}:workspaces"
 
 
 def sync(redis, hive, hosted, ttl):
@@ -139,7 +138,7 @@ def published(store, slug, ledger):
     for task in ledger.get("tasks", []):
         if not task.get("workspace"):
             continue
-        host = reports.host(ran[task["id"]]) if task["id"] in ran else ""
+        host = ports.hive().reports.host(ran[task["id"]]) if task["id"] in ran else ""
         if not host:
             found[task["id"]] = tails(slug, task["id"])
             continue
