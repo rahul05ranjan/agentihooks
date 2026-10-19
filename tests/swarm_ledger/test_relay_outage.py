@@ -324,7 +324,7 @@ def test_the_watch_loop_survives_a_failed_journal_read(monkeypatch, capsys):
 
     monkeypatch.setattr(ledger_server, "unrelayed", unreadable)
     passes = []
-    monkeypatch.setattr(ledger_server.time, "sleep", lambda _: passes.append(1) or len(passes) == 6 and stop())
+    monkeypatch.setattr(ledger_server, "scheduled_wait", lambda _: passes.append(1) or len(passes) == 6 and stop())
     for name in ("bin_closed_without_swarm", "expire_alerts", "sample_streams"):
         monkeypatch.setattr(ledger_server, name, lambda: None)
     monkeypatch.setattr(ledger_server.ledger_bin, "tidy", lambda: None)
