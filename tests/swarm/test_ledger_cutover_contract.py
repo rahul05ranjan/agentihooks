@@ -142,6 +142,12 @@ def test_a_receipt_needs_a_pinned_token_a_staged_destination_and_a_fresh_executi
     assert receipts(store) == {}
 
 
+def test_an_execution_launched_at_the_staging_time_counts_as_fresh(store, probe):
+    agent = start(store, "eng", f"eng-2@{SLUG}", launched_at=NOW)
+    assert ledger_cutover.acknowledge(store, SLUG, who(agent), TOKEN) is True
+    assert list(receipts(store)) == [agent.name]
+
+
 def test_an_unreachable_destination_records_no_receipt(store, worker, probe):
     probe.error = OSError("refused")
     assert ledger_cutover.acknowledge(store, SLUG, who(worker), TOKEN) is False
