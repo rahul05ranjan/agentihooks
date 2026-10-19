@@ -303,7 +303,7 @@ def test_credentials_and_calls_for_another_swarm_stay_local_while_one_is_routed(
 
 def test_the_ledger_base_asks_the_link_for_its_own_swarm(monkeypatch):
     monkeypatch.setattr(ledger, "BASE", "")
-    monkeypatch.setattr(ledger_link, "base", lambda environ=None, slug="": f"http://link.test/{slug}")
+    monkeypatch.setattr(ledger.ledger_link, "base", lambda environ=None, slug="": f"http://link.test/{slug}")
     assert ledger.base("other") == "http://link.test/other"
 
 
