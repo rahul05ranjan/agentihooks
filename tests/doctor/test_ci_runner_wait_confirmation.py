@@ -1,0 +1,147 @@
+import json
+from datetime import datetime
+from types import SimpleNamespace
+from urllib.parse import urlsplit
+
+import pytest
+
+from scripts.doctor import ci_speed, ci_speed_read, cli
+from scripts.inbox.store import InboxStore
+from tests.doctor.test_ci_speed_timer import DOCTOR, WATCHED, snapshot, store  # noqa: F401
+
+pytestmark = pytest.mark.unit
+
+REFINE = {
+    "completed_at": "2026-10-19T15:34:05Z",
+    "conclusion": "success",
+    "created_at": "2026-10-19T15:31:56Z",
+    "id": 118148964043,
+    "labels": ["anton-oss-light"],
+    "name": "refine",
+    "run_attempt": 1,
+    "run_id": 39278021878,
+    "runner_group_name": "anton-oss",
+    "runner_id": 350958,
+    "runner_name": "anton-oss-light-cpwxt-runner-q9qv5",
+    "started_at": "2026-10-19T15:32:02Z",
+    "status": "completed",
+}
+STALE = {
+    **REFINE,
+    "completed_at": None,
+    "conclusion": None,
+    "runner_id": None,
+    "runner_name": None,
+    "runner_group_name": None,
+    "started_at": "2026-10-19T15:31:56Z",
+    "status": "queued",
+}
+PREFLIGHT = {
+    "id": 39278021878,
+    "name": "Mutation preflight",
+    "status": "in_progress",
+    "event": "push",
+    "run_attempt": 1,
+    "path": ".github/workflows/mutation-preflight.yml",
+}
+HELD = {
+    "created_at": "2026-10-19T16:44:19Z",
+    "event": "push",
+    "head_branch": "dev",
+    "id": 39287956231,
+    "name": "Tests",
+    "path": ".github/workflows/test.yml",
+    "run_attempt": 1,
+    "status": "pending",
+    "updated_at": "2026-10-19T16:44:33Z",
+}
+FOUND_AT = int(datetime.fromisoformat("2026-10-19T15:37:32+00:00").timestamp() * 1000)
+WAIT_ID = 'ci-runner-wait/39278021878-1-["anton-oss-light"]'
+AGE_ID = 'ci-queue-age-unconfirmed/39278021878-1-["anton-oss-light"]'
+
+
+def actions(runs, jobs, reread):
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append(args[2])
+        path = urlsplit(args[2]).path
+        if path.endswith("/jobs"):
+            body = {"total_count": len(jobs), "jobs": list(jobs)}
+        elif path.endswith("/runs"):
+            body = {"total_count": len(runs), "workflow_runs": list(runs)}
+        elif "/actions/jobs/" in path:
+            body = reread[int(path.rsplit("/", 1)[1])]
+        else:
+            body = runs[0]
+        return SimpleNamespace(stdout=json.dumps(body))
+
+    return run, calls
+
+
+def test_a_recorded_stale_queued_snapshot_of_a_job_started_in_seconds_raises_no_runner_wait():
+    run, calls = actions([PREFLIGHT], [STALE], {REFINE["id"]: REFINE})
+    result = ci_speed_read.read(FOUND_AT - 60000, FOUND_AT, run=run)
+    assert result["complete"] is True
+    assert ci_speed.findings(result["runs"], FOUND_AT - 60000, FOUND_AT) == []
+    assert any(call.endswith(f"/actions/jobs/{REFINE['id']}") for call in calls)
+
+
+def test_a_wait_the_reread_cannot_confirm_is_queue_age_not_runner_wait():
+    run, _ = actions([PREFLIGHT], [STALE], {REFINE["id"]: STALE})
+    result = ci_speed_read.read(FOUND_AT - 60000, FOUND_AT, run=run)
+    [finding] = ci_speed.findings(result["runs"], FOUND_AT - 60000, FOUND_AT)
+    assert finding.id == AGE_ID
+    assert finding.measure == 336
+    assert finding.threshold == "unconfirmed queue age over 5 minutes"
+
+
+def test_a_fresh_queued_job_is_not_reread():
+    young = {**STALE, "created_at": "2026-10-19T15:37:00Z", "started_at": "2026-10-19T15:37:00Z"}
+    run, calls = actions([PREFLIGHT], [young], {})
+    ci_speed_read.read(FOUND_AT - 60000, FOUND_AT, run=run)
+    assert not any("/actions/jobs/" in call for call in calls)
+
+
+def test_a_runner_assignment_confirms_the_start_of_a_job_still_marked_queued():
+    assigned = {**REFINE, "status": "queued", "completed_at": None}
+    assert ci_speed.findings([{**PREFLIGHT, "jobs": [assigned]}], FOUND_AT - 60000, FOUND_AT) == []
+    late = {**assigned, "started_at": "2026-10-19T15:37:00Z"}
+    [finding] = ci_speed.findings([{**PREFLIGHT, "jobs": [late]}], FOUND_AT - 60000, FOUND_AT)
+    assert finding.id == WAIT_ID and finding.measure == 304
+
+
+def test_a_confirmed_long_wait_remains_a_runner_wait():
+    late = {**REFINE, "started_at": "2026-10-19T15:37:00Z"}
+    [finding] = ci_speed.findings([{**PREFLIGHT, "jobs": [late]}], FOUND_AT - 60000, FOUND_AT)
+    assert finding.id == WAIT_ID
+    assert finding.threshold == "runner queue wait over 5 minutes"
+
+
+def test_a_recorded_concurrency_held_run_is_labelled_a_hold_not_runner_supply():
+    queued = {**STALE, "created_at": "2026-10-19T16:44:19Z", "started_at": "2026-10-19T16:44:19Z", "run_id": HELD["id"]}
+    now = int(datetime.fromisoformat("2026-10-19T16:50:00+00:00").timestamp() * 1000)
+    [finding] = ci_speed.findings([{**HELD, "jobs": [queued]}], now - 60000, now)
+    assert finding.id == 'ci-concurrency-hold/39287956231-1-["anton-oss-light"]'
+    assert finding.threshold == "concurrency hold over 5 minutes"
+    assert "concurrency group" in finding.summary
+
+
+def test_a_job_held_by_its_own_concurrency_group_is_labelled_a_hold():
+    pending = {**STALE, "status": "pending"}
+    [finding] = ci_speed.findings([{**PREFLIGHT, "jobs": [pending]}], FOUND_AT - 60000, FOUND_AT)
+    assert finding.kind == "ci concurrency hold"
+
+
+def test_a_finding_superseded_by_a_corrected_read_is_retracted(store, monkeypatch):  # noqa: F811
+    reads = iter([[{**PREFLIGHT, "jobs": [STALE]}], [{**PREFLIGHT, "jobs": [REFINE]}]])
+    monkeypatch.setattr(ci_speed_read, "read", lambda *args, **kwargs: snapshot(next(reads)))
+    cli.timer(store, DOCTOR, FOUND_AT, False)
+    details = store.redis.hgetall(store.key(DOCTOR, "doctor-details"))
+    [raised] = [key for key in details if key.endswith('39278021878-1-["anton-oss-light"]')]
+    cli.timer(store, DOCTOR, FOUND_AT + 60000, False)
+    assert raised not in store.redis.hgetall(store.key(DOCTOR, "doctor-details"))
+    assert raised not in store.redis.hgetall(store.key(DOCTOR, "doctor-findings"))
+    for slug in (DOCTOR, WATCHED):
+        texts = [item.text for item in InboxStore(store.redis).inbox(f"master@{slug}")]
+        assert any("Retracted" in text and raised in text for text in texts)
