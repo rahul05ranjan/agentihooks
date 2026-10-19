@@ -196,6 +196,11 @@ def test_readiness_reports_every_field_and_counts_each_master_seat(store, worker
     assert ledger_cutover.readiness(store, SLUG)["missing_masters"] == []
 
 
+def test_readiness_names_the_first_master_seat_while_no_master_runs(store, worker, probe):
+    masters.MasterSeats(store.redis).set_count(SLUG, 1)
+    assert ledger_cutover.readiness(store, SLUG)["missing_masters"] == [f"{masters.seat(1)}@{SLUG}"]
+
+
 def test_settings_refuse_a_mixed_or_unstaged_endpoint_change(store):
     with pytest.raises(SwarmError) as mixed:
         ledger_cutover.settings(store, SLUG, {"api_url": DEST, "max_eng": 2})
@@ -373,6 +378,7 @@ def test_lease_calls_for_another_swarm_stay_local_while_one_is_routed(store, mon
         assert lease.current(store, SLUG) == held
         assert lease.renew(store, SLUG, held).epoch == held.epoch
         assert lease.release(store, SLUG, held) is True
+        assert lease.transfer(store, SLUG, "hive", 0, 0).epoch == held.epoch + 1
         assert lease._address(SLUG) == ""
 
 

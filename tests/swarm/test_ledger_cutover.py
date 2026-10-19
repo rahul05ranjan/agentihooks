@@ -171,6 +171,21 @@ def test_a_first_activation_starts_the_hosted_lease_at_epoch_one(pending, monkey
     assert lease.current(destination, SLUG).epoch == 1
 
 
+def test_an_activation_moves_a_live_hosted_lease_its_controller_already_holds(pending, monkeypatch, capsys):
+    from argparse import Namespace
+
+    from scripts.swarm import commands
+
+    source, destination = _ready_destination(pending, monkeypatch, capsys)
+    held = {"owner": commands.hive_id(), "epoch": 3, "expires_at": 10000 + lease.ttl_ms()}
+    destination.redis.set(destination.key(SLUG, "control-owner"), json.dumps(held))
+    destination.redis.set(destination.key(SLUG, "control-epoch"), 3)
+    url = source.config(SLUG).pending_api_url
+    cli.cmd_set(source, Namespace(slug=SLUG, pairs=[f"api-url={url}"]))
+    assert lease.current(destination, SLUG).epoch == 4
+    assert source.config(SLUG).api_url == url
+
+
 def test_an_activation_that_loses_its_commit_releases_the_moved_lease(pending, monkeypatch, capsys):
     from argparse import Namespace
 
