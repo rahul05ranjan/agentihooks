@@ -676,7 +676,44 @@ def _resuming(tmp_path, reported, harness="claude"):
         profile="engineer",
         conversation_id="c0ffee",
     )
+    if harness == "codex":
+        _saved_rollout("engineer", "c0ffee")
     return runtime, config, agent, seen
+
+
+def _saved_rollout(key, conversation):
+    from scripts.profiles import homes, render
+
+    sessions = homes.rollouts(render.rendered_root(), key) / "sessions" / "2026" / "10" / "19"
+    sessions.mkdir(parents=True, exist_ok=True)
+    (sessions / f"rollout-2026-10-19T08-02-11-{conversation}.jsonl").write_text("{}\n")
+
+
+def test_a_codex_resume_without_its_saved_rollout_fails_before_any_launch(tmp_path):
+    from scripts.profiles import homes, render
+    from scripts.swarm.tick import SpawnError
+
+    runtime, config, agent, seen = _resuming(tmp_path, "c0ffee", harness="codex")
+    for rollout in (homes.rollouts(render.rendered_root(), "engineer") / "sessions").rglob("*.jsonl"):
+        rollout.unlink()
+    with pytest.raises(SpawnError, match="no saved rollout for conversation c0ffee") as error:
+        runtime.resume(config, agent, "you were restored")
+    assert error.value.status == "unsupported"
+    assert seen["runs"] == []
+
+
+def test_a_codex_resume_finds_its_rollout_in_an_earlier_rendered_home(tmp_path):
+    from scripts.profiles import homes, render
+
+    runtime, config, agent, seen = _resuming(tmp_path, "c0ffee", harness="codex")
+    for rollout in (homes.rollouts(render.rendered_root(), "engineer") / "sessions").rglob("*.jsonl"):
+        rollout.unlink()
+    earlier = render.rendered_root() / homes.HOMES / "engineer" / "9e1049fb7b28-old" / "codex" / "sessions" / "2026"
+    earlier.mkdir(parents=True)
+    (earlier / "rollout-2026-10-18T16-13-16-c0ffee.jsonl").write_text("{}\n")
+    placed = runtime.resume(config, agent, "you were restored")
+    assert placed.conversation_id == "c0ffee"
+    assert "--resume" in seen["runs"][0]
 
 
 def test_resume_relaunches_the_same_harness_name_task_and_account_into_its_conversation(tmp_path):
