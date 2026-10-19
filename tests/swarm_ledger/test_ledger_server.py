@@ -521,6 +521,44 @@ def test_a_reload_whose_successor_never_got_ready_says_so_and_keeps_serving(monk
     assert capsys.readouterr().err == "reload: the successor never reported ready; this server keeps serving\n"
 
 
+def test_a_reload_whose_successor_cannot_start_says_so_and_keeps_serving(monkeypatch, capsys):
+    monkeypatch.setattr(server, "HUB", SimpleNamespace(watched=lambda: []))
+
+    def refused(*args, **kwargs):
+        raise OSError("no such interpreter")
+
+    started = server.code_stamp(())
+    assert server.reload_if_changed(1, Handed(), (), refused, force=True) == started
+    assert capsys.readouterr().err == (
+        "reload: the successor did not start: no such interpreter; this server keeps serving\n"
+    )
+
+
+def test_a_reload_with_an_unreadable_ready_payload_carries_every_ledger(monkeypatch):
+    monkeypatch.setattr(server, "HUB", SimpleNamespace(watched=lambda: []))
+    monkeypatch.setattr(server, "HANDOFF", {})
+    assert server.reload_if_changed(1, Handed(), (), lambda *args, **kwargs: b"{broken", force=True) is None
+    assert server.HANDOFF == {"since": {}}
+
+
+def test_a_container_s_main_server_reloads_in_place(monkeypatch):
+    ran = []
+    monkeypatch.setattr(server.os, "getpid", lambda: 1)
+    monkeypatch.setattr(server, "metrics_journal", lambda step: ran.append(step))
+
+    def execv(path, argv):
+        ran.append((path, argv))
+        raise SystemExit(0)
+
+    monkeypatch.setattr(server.os, "execv", execv)
+    with pytest.raises(SystemExit):
+        server.reload_if_changed(1, Handed(), (), lambda *args, **kwargs: ran.append("handed"), force=True)
+    assert ran == [
+        server.request_metrics.stop,
+        (sys.executable, [sys.executable, str(server.CODE_DIR / "ledger_server.py"), "--serve"]),
+    ]
+
+
 def test_a_hangup_asks_for_a_hand_off(monkeypatch):
     requested = server.threading.Event()
     monkeypatch.setattr(server, "RELOAD", requested)
@@ -695,6 +733,29 @@ def test_reload_fails_when_the_server_never_hands_off(tmp_path, monkeypatch):
     monkeypatch.setattr(server.time, "sleep", lambda seconds: None)
     with pytest.raises(SystemExit, match="pid 41 did not hand off within 2 s"):
         server.reload(wait=2.0)
+
+
+def test_reload_starts_a_server_when_the_signalled_one_dies_without_handing_off(tmp_path, monkeypatch):
+    pidfile = tmp_path / ".server.pid"
+    pidfile.write_text("41")
+    alive, sent = iter([True, False]), []
+    monkeypatch.setattr(server, "PIDFILE", pidfile)
+    monkeypatch.setattr(server, "server_process_alive", lambda: next(alive))
+    monkeypatch.setattr(server, "ensure", lambda: sent.append("ensure") or "started")
+    monkeypatch.setattr(server.os, "kill", lambda pid, sig: sent.append((pid, sig)))
+    monkeypatch.setattr(server.time, "sleep", lambda seconds: sent.append(("sleep", seconds)))
+    assert server.reload() == "started"
+    assert sent == [(41, server.signal.SIGHUP), "ensure"]
+
+
+def test_reload_restarts_a_compose_service_through_stop_and_ensure(monkeypatch):
+    sent, used = [], []
+    monkeypatch.setattr(server.server_compose, "used", lambda folder: used.append(folder) or True)
+    monkeypatch.setattr(server, "stop", lambda: sent.append("stop"))
+    monkeypatch.setattr(server, "ensure", lambda: sent.append("ensure") or "started")
+    monkeypatch.setattr(server.os, "kill", lambda pid, sig: sent.append((pid, sig)))
+    assert server.reload() == "started"
+    assert (sent, used) == (["stop", "ensure"], [server.core.LEDGER_DIR])
 
 
 def test_the_reload_flag_runs_reload(monkeypatch):

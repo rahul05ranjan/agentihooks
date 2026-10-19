@@ -225,7 +225,11 @@ def watch(store, slug: str, ledger, runtime, host: Host | None = None) -> list[s
     if not _claimed(store, host.folder, pid, found[0]):
         return []
     kind, reason = found
-    if error := restart(host, pid, command, reason) if kind == RUNAWAY else relaunch(host, command, "--reload"):
+    if kind == RUNAWAY:
+        error = restart(host, pid, command, reason)
+    else:
+        error = relaunch(host, command, "--reload") and restart(host, pid, command, reason)
+    if error:
         text = DOWN_TEXT.format(why=reason, error=error)
         store.redis.hset(incidents.key("ledger"), "watchdog", text)
         store.redis.set(DOWN_KEY, pid, px=DOWN_MS)

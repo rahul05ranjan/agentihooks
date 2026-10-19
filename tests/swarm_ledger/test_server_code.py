@@ -144,7 +144,7 @@ def test_serve_records_the_code_it_loaded_beside_its_pid_file(monkeypatch, tmp_p
             pass
 
         def drained(self, timeout):
-            pass
+            return True
 
         def server_close(self):
             pass

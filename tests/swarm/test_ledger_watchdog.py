@@ -251,6 +251,25 @@ def test_a_server_on_stale_code_is_reloaded_without_a_signal(store, tmp_path):
     assert not (host.folder / ledger_watchdog.LOG).exists()
 
 
+def test_a_stale_server_that_does_not_hand_off_is_stopped_and_started(store, tmp_path):
+    host = Host(tmp_path)
+    plant(host.proc, host.argv)
+    (host.folder / ".server.pid").write_text(str(PID))
+    replies = iter([subprocess.CompletedProcess([], 1, stderr="did not hand off\n"), None])
+
+    def run(argv, **kw):
+        host.calls.append(("run", argv[-1]))
+        return next(replies) or subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    host.run = run
+    assert ledger_watchdog.watch(store, "sw", ProbedLedger(Clock()), FakeRuntime(), host) != []
+    assert [call[:3] if call[0] == "kill" else call for call in host.calls] == [
+        ("run", "--reload"),
+        ("kill", PID, signal.SIGTERM),
+        ("run", "--ensure"),
+    ]
+
+
 def test_a_pid_taken_by_another_program_during_the_stop_is_never_killed(tmp_path):
     host = Host(tmp_path, survives=True)
     plant(host.proc, host.argv)

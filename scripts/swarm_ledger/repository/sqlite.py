@@ -453,7 +453,7 @@ class SQLiteLedgerRepository:
         }
 
     def adopt_carried(self, carried: dict) -> None:
-        """Cache the committed copies another process carried over, unless one as new is already cached."""
+        """Cache the committed copies another process carried over, unless a copy at least as new is already cached."""
         held = self.generations()
         for slug, (generation, text) in carried.items():
             if slug not in held or held[slug] < generation:

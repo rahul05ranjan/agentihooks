@@ -115,6 +115,7 @@ def test_serve_runs_the_ledger_watch_on_a_daemon_thread(monkeypatch, tmp_path):
 
         def drained(self, timeout):
             steps.append(("drained", timeout))
+            return True
 
         def server_close(self):
             steps.append("close")
@@ -179,7 +180,7 @@ def test_a_successor_warms_reports_ready_then_waits_for_the_lease_and_takes_the_
         steps.append(("listening", held is listener))
         return SimpleNamespace(
             serve_forever=lambda poll: steps.append("serve"),
-            drained=lambda timeout: None,
+            drained=lambda timeout: True,
             server_close=lambda: None,
         )
 
@@ -242,7 +243,7 @@ def test_a_carry_that_cannot_be_written_still_releases_the_lease(monkeypatch, tm
         server,
         "listening",
         lambda held: SimpleNamespace(
-            serve_forever=lambda poll: None, drained=lambda timeout: None, server_close=lambda: None
+            serve_forever=lambda poll: None, drained=lambda timeout: True, server_close=lambda: None
         ),
     )
     monkeypatch.setattr(server.ledger_writer, "WriterLease", Lease)
@@ -257,6 +258,47 @@ def test_a_carry_that_cannot_be_written_still_releases_the_lease(monkeypatch, tm
     with pytest.raises(OSError, match="disk full"):
         server.serve()
     assert released == [True]
+
+
+def test_requests_still_running_at_the_drain_bound_keep_the_lease_until_the_process_ends(monkeypatch, tmp_path, capsys):
+    steps = []
+
+    class Lease:
+        def __init__(self, directory):
+            pass
+
+        def acquire(self, claimant, wait):
+            return self
+
+        def release(self):
+            steps.append("release")
+
+    monkeypatch.setattr(server.server_handoff, "inherited", lambda: None)
+    monkeypatch.setattr(server, "write_carry", lambda since: steps.append(("write carry", since)))
+    monkeypatch.setattr(
+        server,
+        "listening",
+        lambda held: SimpleNamespace(
+            serve_forever=lambda poll: None,
+            drained=lambda timeout: steps.append(("drained", timeout)) or False,
+            server_close=lambda: steps.append("close"),
+        ),
+    )
+    monkeypatch.setattr(server.ledger_writer, "WriterLease", Lease)
+    monkeypatch.setattr(server.legacy, "adopt", lambda stored: None)
+    monkeypatch.setattr(server, "adopt_unrelayed", lambda: None)
+    monkeypatch.setattr(server.threading, "Thread", lambda **kwargs: SimpleNamespace(start=lambda: None))
+    monkeypatch.setattr(server.server_lifetime, "watch", lambda *args: threading.Event())
+    monkeypatch.setattr(server.server_code, "record", lambda *args, **kwargs: None)
+    monkeypatch.setattr(server, "HUB", SimpleNamespace(drain=lambda: None))
+    monkeypatch.setattr(server, "HANDOFF", {"since": {"demo": 6}})
+    monkeypatch.setattr(server, "PIDFILE", tmp_path / ".server.pid")
+    server.serve()
+    assert steps == [("drained", server.DRAIN_S), "close"]
+    assert server.HANDOFF == {"since": {"demo": 6}}
+    assert capsys.readouterr().err.endswith(
+        "drain: requests still ran at the bound; the lease ends with this process\n"
+    )
 
 
 def test_the_ledger_watch_sleeps_two_seconds_between_passes(monkeypatch):
@@ -301,7 +343,7 @@ def test_serve_follows_a_shared_database_on_its_own_daemon_thread(monkeypatch, t
             pass
 
         def drained(self, timeout):
-            pass
+            return True
 
         def server_close(self):
             pass

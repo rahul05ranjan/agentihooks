@@ -253,7 +253,7 @@ def test_a_stopping_server_persists_a_stop_before_it_releases_the_writer(tmp_pat
             request_metrics.record("POST", OPERATIONS, 1.0, 0.0, 0.0)
 
         def drained(self, timeout):
-            pass
+            return True
 
         def server_close(self):
             pass
@@ -486,7 +486,12 @@ def test_serve_restores_then_stops_the_journal(monkeypatch, tmp_path, now):
             pass
 
         server_bind = server_activate = server_close = lambda self: None
-        serve_forever = drained = lambda self, seconds: None
+
+        def serve_forever(self, seconds):
+            pass
+
+        def drained(self, seconds):
+            return True
 
     monkeypatch.setattr(server.core, "LEDGER_DIR", tmp_path)
     monkeypatch.setattr(server, "PIDFILE", tmp_path / ".server.pid")

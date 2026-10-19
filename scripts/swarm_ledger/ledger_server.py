@@ -1234,15 +1234,22 @@ def reload_if_changed(started, server, code_dirs=CODE_DIRS, hand_off=server_hand
     if loaded is not None and not force and code_digest(code_dirs) == loaded:
         server_code.record(PIDFILE.parent, os.getpid(), stamp, code_dirs, loaded)
         return stamp
-    held = hand_off(
-        server.socket,
-        [sys.executable, str(CODE_DIR / "ledger_server.py"), "--serve"],
-        extra={WATCHED: ",".join(HUB.watched())},
-    )
+    argv = [sys.executable, str(CODE_DIR / "ledger_server.py"), "--serve"]
+    if os.getpid() == 1:
+        metrics_journal(request_metrics.stop)
+        os.execv(sys.executable, argv)
+    try:
+        held = hand_off(server.socket, argv, extra={WATCHED: ",".join(HUB.watched())})
+    except OSError as exc:
+        sys.stderr.write(f"reload: the successor did not start: {exc}; this server keeps serving\n")
+        return stamp
     if held is None:
         sys.stderr.write("reload: the successor never reported ready; this server keeps serving\n")
         return stamp
-    HANDOFF["since"] = json.loads(held or b"{}")
+    try:
+        HANDOFF["since"] = json.loads(held or b"{}")
+    except ValueError:
+        HANDOFF["since"] = {}
     server.shutdown()
     return None
 
@@ -1321,9 +1328,9 @@ def scheduled_wait(interval: float) -> None:
 
 def watch_ledgers(server=None, interval=2.0, stopping=NEVER):
     started = LOADED_STAMP
-    reload = reloading()
+    reloads = reloading()
     for passes in itertools.count():
-        if reload:
+        if reloads:
             started = hand_over(started, server)
             if started is None:
                 return
@@ -1433,16 +1440,19 @@ def serve():
     finally:
         stopped.set()
         HUB.drain()
-        server.drained(DRAIN_S)
+        drained = server.drained(DRAIN_S)
         server.server_close()
         with WATCH_PASS:
             watching.set()
         metrics_journal(request_metrics.stop)
-        try:
-            if "since" in HANDOFF:
-                write_carry(HANDOFF.pop("since"))
-        finally:
-            writer.release()
+        if drained:
+            try:
+                if "since" in HANDOFF:
+                    write_carry(HANDOFF.pop("since"))
+            finally:
+                writer.release()
+        else:
+            sys.stderr.write("drain: requests still ran at the bound; the lease ends with this process\n")
 
 
 def port_held() -> bool:
@@ -1544,6 +1554,9 @@ def recorded_pid() -> str:
 
 
 def reload(wait=RELOAD_WAIT_S):
+    if server_compose.used(core.LEDGER_DIR):
+        stop()
+        return ensure()
     if not server_process_alive():
         return ensure()
     pid = recorded_pid()
@@ -1552,7 +1565,7 @@ def reload(wait=RELOAD_WAIT_S):
     except (ValueError, ProcessLookupError):
         return ensure()
     deadline = time.monotonic() + wait
-    while recorded_pid() == pid:
+    while recorded_pid() == pid and server_process_alive():
         if time.monotonic() >= deadline:
             sys.exit(f"the ledger server pid {pid} did not hand off within {wait:.0f} s; see {LOGFILE}")
         time.sleep(0.1)
