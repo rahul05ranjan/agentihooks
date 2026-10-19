@@ -253,6 +253,27 @@ def test_work_folder_seeds_are_read_and_written_as_utf8(homes, monkeypatch):
     assert all(encoding and codecs.lookup(encoding).name == "utf-8" for _, encoding in used)
 
 
+def test_published_tails_cover_every_task_in_the_ledger(setup, homes, monkeypatch):
+    from dataclasses import replace
+
+    agents = [
+        replace(setup.agent, task="here", runtime_target={"host_id": "controller"}),
+        replace(setup.agent, task="far", runtime_target={"host_id": "unsynced"}),
+        replace(setup.agent, task="near", runtime_target={"host_id": "elsewhere"}),
+    ]
+    monkeypatch.setattr(setup.store, "agents", lambda slug: agents)
+    setup.redis.set(ledger_workspace.synced_key("elsewhere"), json.dumps({"other": {"near": {"latest_proof": "x"}}}))
+    ledger = {"tasks": [{"id": "bare"}, *({"id": task, "workspace": "w"} for task in ("here", "far", "near"))]}
+    with at(homes.controller), patch.object(commands, "hive_id", return_value="controller"):
+        ledger_workspace.materialize("fixture", "here", {"progress.md": "here step\n"})
+        assert ledger_workspace.published(setup.store, "fixture", ledger) == {
+            "here": {"latest_progress": "here step"},
+            "far": {},
+            "near": {},
+        }
+        assert ledger_workspace.published(setup.store, "fixture", {}) == {}
+
+
 def test_a_local_task_reads_its_own_folder(setup, homes):
     carry(setup, homes)
     ledger = {"tasks": [{"id": "task", "workspace": TASK["workspace"]}]}
