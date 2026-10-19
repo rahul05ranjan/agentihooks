@@ -32,7 +32,7 @@ finish() {
   if [[ -n $terminal ]]; then
     wait "$terminal" || true
   fi
-  rm -f "$load_lock"
+  rm -f "$load_lock" "${ledger_values:-}"
   if [[ -n $route ]]; then
     wait "$route" || true
   fi
@@ -149,7 +149,6 @@ if [[ $planted != *"container controller references the ledger only Secret swarm
   printf 'the chart check did not flag a planted shared reference to the ledger only Secret: %s\n' "$planted" >&2
   exit 1
 fi
-rm -f "$ledger_values"
 printf 'only the ledger container reads the ledger secret env\n'
 printf 'the TLS ledger rolls when its TLS secret renews and a plain ledger watches no secret\n'
 digest="sha256:$(printf 'a%.0s' $(seq 64))"
