@@ -1141,6 +1141,49 @@ every 60 seconds. Redis server time determines expiry. The owner comes
 from `SWARM_HIVE_ID`, falling back to the hostname. Ledger and spawn writes carry the epoch; stale controllers
 are refused. The tick lock prevents two ticks in the same epoch and lets a higher epoch take over.
 
+### Controller lease during long steps
+
+A tick pass can run longer than its lease: the lease lasts three ticks (180 seconds by default), and a pass is
+stopped only at its 450 second deadline, with 30 seconds of grace. The pass keeps the lease in two ways.
+
+- **Before every step.** Each timed step of the pass, including every step wrapped to skip a refused ledger write,
+  first renews the lease, extends the tick lock and records the swarm's last tick activity. Renewal happens only at
+  step boundaries, so a single step longer than the lease still loses it.
+- **During a step that can outlast the lease.** Such a step runs inside a lease heartbeat: a background thread renews
+  the lease once per tick interval until the step returns. The thread stops for good when the lease is no longer
+  this controller's (a higher epoch took over) and tries again at the next beat after a Redis error. Today the
+  Doctor timer of a `doctor` swarm runs this way.
+
+The automatic snapshot never runs inside the pass. Step 12 of the list above only starts the detached snapshot job
+and returns, so a snapshot that takes minutes cannot cost the lease. The job takes the swarm's snapshot lock for at
+most 30 minutes once it starts; a tick that finds the lock held starts no second job. Two jobs started before
+either holds the lock race for it: the first to take it writes the snapshot, the other exits without one.
+
+A lease that expires mid pass ends the pass at its next step, fenced ledger call or spawn with this journal line:
+
+```text
+rig-grade-swarm: SwarmError: the controller lease is stale
+```
+
+Find these lines and the step that ran long before them:
+
+```bash
+journalctl --user -t agentihooks-swarm --since "-12h" | grep "controller lease is stale"
+journalctl --user -t agentihooks-swarm --since "-12h" | grep '"event": "swarm_tick_step"' | grep '"phase": "finished"'
+```
+
+The finished step records carry each step's name, outcome and `wall_s` duration. The step that
+ran longer than the lease before the error is the one to move inside a heartbeat. Any tick step that can run longer than the lease
+belongs inside the heartbeat, the way the Doctor timer does:
+
+```python
+with lease.kept(store, slug, held):
+    actions += skip_refused(doctor.timer, store, slug, now_ms(), scheduled)
+```
+
+The next pass acquires a new lease with a higher epoch when no other controller holds it, so one stale pass loses
+only the rest of that pass's work.
+
 ### Staged and prerequisite pull requests
 
 A task that lands in stages, or registers a prerequisite pull request before its own, declares the scope each such pull request delivers when it records it:
