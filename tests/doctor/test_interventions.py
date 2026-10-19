@@ -238,7 +238,7 @@ def test_the_ledger_server_restarts_only_when_its_code_changed(store, tmp_path):
     os.utime(code / "ledger_server.py", (300, 300))
     os.utime(code / "ledger_gate.py", (300, 300))
     line = interventions.apply(ctx, "restart-ledger-server", args())
-    assert [call[-1] for call in ctx.run.calls] == ["--stop", "--ensure"]
+    assert [call[-1] for call in ctx.run.calls] == ["--reload"]
     assert line == restarted(
         "scripts/swarm_ledger/ledger_gate.py, scripts/swarm_ledger/ledger_server.py changed since it started"
     )
@@ -258,7 +258,7 @@ def test_rewritten_pidfile_does_not_hide_code_newer_than_the_process(store, tmp_
 
     line = interventions.apply(ctx, "restart-ledger-server", args())
 
-    assert [call[-1] for call in ctx.run.calls] == ["--stop", "--ensure"]
+    assert [call[-1] for call in ctx.run.calls] == ["--reload"]
     assert line == restarted("scripts/swarm_ledger/ledger_server.py changed since it started")
     assert logged_on_both(ctx)
 
@@ -325,7 +325,7 @@ def test_legacy_restart_preserves_nanosecond_process_start_boundary(store, tmp_p
 
     if newer:
         line = interventions.apply(ctx, "restart-ledger-server", args())
-        assert [call[-1] for call in ctx.run.calls] == ["--stop", "--ensure"]
+        assert [call[-1] for call in ctx.run.calls] == ["--reload"]
         assert line == restarted("scripts/swarm_ledger/ledger_server.py changed since it started")
         assert logged_on_both(ctx)
     else:
@@ -349,7 +349,7 @@ def test_a_change_to_any_module_the_server_imports_allows_the_restart_and_names_
     os.utime(tmp_path / changed, (300, 300))
     ctx = context(store, code=code, pidfile=pidfile)
     line = interventions.apply(ctx, "restart-ledger-server", args())
-    assert [call[-1] for call in ctx.run.calls] == ["--stop", "--ensure"]
+    assert [call[-1] for call in ctx.run.calls] == ["--reload"]
     assert line == restarted(f"{changed} changed since it started") and logged_on_both(ctx)
 
 
@@ -375,7 +375,7 @@ def test_a_server_without_a_pidfile_is_restarted(store, tmp_path):
     pidfile.unlink()
     ctx = context(store, code=code, pidfile=pidfile)
     line = interventions.apply(ctx, "restart-ledger-server", args())
-    assert [call[-1] for call in ctx.run.calls] == ["--stop", "--ensure"]
+    assert [call[-1] for call in ctx.run.calls] == ["--ensure"]
     assert line == restarted("no running server recorded its start") and logged_on_both(ctx)
 
 

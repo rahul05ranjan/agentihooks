@@ -422,3 +422,41 @@ def test_the_default_retention_is_bounded():
     hub = Hub()
     opened(hub)
     assert hub.channels[SLUG].log.maxlen == events_hub.RETAINED
+
+
+def test_draining_wakes_every_waiting_reader_with_closed():
+    hub = Hub()
+    seq, _ = opened(hub)
+    caught = []
+
+    def wait():
+        try:
+            hub.wait(SLUG, seq, 30)
+        except events_hub.Closed as exc:
+            caught.append(exc)
+
+    timer = threading.Timer(0.05, hub.drain)
+    timer.start()
+    bounded(wait, limit=10)
+    timer.join()
+    assert len(caught) == 1
+
+
+def test_a_drained_hub_answers_closed_at_once():
+    hub = Hub()
+    seq, _ = opened(hub)
+    hub.drain()
+    caught = []
+
+    def wait():
+        try:
+            hub.wait(SLUG, seq, 30)
+        except events_hub.Closed as exc:
+            caught.append(exc)
+
+    bounded(wait, limit=10)
+    assert len(caught) == 1
+
+
+def test_closed_is_not_expired():
+    assert not issubclass(events_hub.Closed, Expired)

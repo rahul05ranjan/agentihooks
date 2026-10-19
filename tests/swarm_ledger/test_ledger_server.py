@@ -346,3 +346,158 @@ def test_the_home_shell_bins_nothing_and_the_watch_loop_bins_closed_ledgers_with
     ):
         server.watch_ledgers()
     assert "served-closed" in ledger_bin.entries()
+
+
+def test_draining_waits_for_the_requests_in_flight():
+    import http.server
+    import threading
+    import urllib.request
+
+    release = threading.Event()
+
+    class Slow(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            release.wait(10)
+            self.send_response(204)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    httpd = server.ThreadingHTTPServer(("127.0.0.1", 0), Slow)
+    threading.Thread(target=httpd.serve_forever, args=(0.01,), daemon=True).start()
+    port = httpd.server_address[1]
+    client = threading.Thread(
+        target=lambda: urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=10).close(), daemon=True
+    )
+    try:
+        assert httpd.drained(0.05) is True
+        client.start()
+        with httpd.idle:
+            assert httpd.idle.wait_for(lambda: httpd.active == 1, 10)
+        assert httpd.drained(0.05) is False
+        release.set()
+        assert httpd.drained(10) is True
+        assert httpd.active == 0
+    finally:
+        release.set()
+        httpd.shutdown()
+        httpd.server_close()
+        client.join(10)
+
+
+def test_an_inherited_socket_is_served_without_binding():
+    import socket
+
+    with socket.socket() as held:
+        held.bind(("127.0.0.1", 0))
+        held.listen(8)
+        httpd = server.listening(held)
+        try:
+            assert httpd.socket is held
+            assert httpd.request_queue_size == 128
+        finally:
+            httpd.socket = None
+
+
+def test_a_fresh_server_binds_its_own_port(monkeypatch):
+    import socket
+
+    with socket.socket() as spare:
+        spare.bind(("127.0.0.1", 0))
+        port = spare.getsockname()[1]
+    monkeypatch.setattr(server, "HOST", "127.0.0.1")
+    monkeypatch.setattr(server, "PORT", port)
+    httpd = server.listening()
+    try:
+        assert httpd.socket.getsockname() == ("127.0.0.1", port)
+        assert httpd.request_queue_size == 128
+    finally:
+        httpd.server_close()
+
+
+def test_warming_loads_every_open_ledger_and_survives_a_broken_one(monkeypatch):
+    loaded = []
+
+    def current(slug):
+        loaded.append(slug)
+        if slug == "broken":
+            raise ValueError("bad rows")
+
+    monkeypatch.setattr(server, "ledger_summaries", lambda: [{"slug": "broken"}, {"slug": "fine"}])
+    monkeypatch.setattr(server.stored, "current", current)
+    server.warm()
+    assert loaded == ["broken", "fine"]
+
+
+def test_a_hangup_asks_the_watch_loop_to_hand_off(monkeypatch):
+    requested = server.threading.Event()
+    monkeypatch.setattr(server, "RELOAD", requested)
+    server.request_reload(1, None)
+    assert requested.is_set()
+
+
+def test_the_watch_loop_hands_off_on_request_and_then_stops(monkeypatch):
+    requested = server.threading.Event()
+    requested.set()
+    seen = []
+    monkeypatch.setattr(server, "RELOAD", requested)
+    monkeypatch.setattr(server, "reloading", lambda: False)
+    monkeypatch.setattr(server, "code_stamp", lambda: 7)
+
+    def reload_if_changed(started, httpd, force):
+        seen.append((started, httpd, force))
+
+    monkeypatch.setattr(server, "reload_if_changed", reload_if_changed)
+    assert server.watch_ledgers("httpd") is None
+    assert seen == [(7, "httpd", True)]
+    assert not requested.is_set()
+
+
+def test_reload_signals_the_running_server_and_waits_for_its_successor(tmp_path, monkeypatch):
+    pidfile = tmp_path / ".server.pid"
+    pidfile.write_text("41")
+    sent, naps = [], []
+    monkeypatch.setattr(server, "PIDFILE", pidfile)
+    monkeypatch.setattr(server, "server_process_alive", lambda: True)
+    monkeypatch.setattr(server, "ensure", lambda: sent.append("ensure"))
+    monkeypatch.setattr(server.os, "kill", lambda pid, sig: sent.append((pid, sig)))
+
+    def nap(seconds):
+        naps.append(seconds)
+        pidfile.write_text("42")
+
+    monkeypatch.setattr(server.time, "sleep", nap)
+    server.reload()
+    assert sent == [(41, server.signal.SIGHUP), "ensure"]
+    assert naps == [0.1]
+
+
+def test_reload_starts_a_server_when_none_runs(monkeypatch):
+    sent = []
+    monkeypatch.setattr(server, "server_process_alive", lambda: False)
+    monkeypatch.setattr(server, "ensure", lambda: sent.append("ensure"))
+    monkeypatch.setattr(server.os, "kill", lambda pid, sig: sent.append((pid, sig)))
+    server.reload()
+    assert sent == ["ensure"]
+
+
+def test_reload_fails_when_the_server_never_hands_off(tmp_path, monkeypatch):
+    pidfile = tmp_path / ".server.pid"
+    pidfile.write_text("41")
+    clock = iter([0.0, 1.0, 2.0])
+    monkeypatch.setattr(server, "PIDFILE", pidfile)
+    monkeypatch.setattr(server, "server_process_alive", lambda: True)
+    monkeypatch.setattr(server.os, "kill", lambda pid, sig: None)
+    monkeypatch.setattr(server.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(server.time, "sleep", lambda seconds: None)
+    with pytest.raises(SystemExit, match="pid 41 did not hand off within 2 s"):
+        server.reload(wait=2.0)
+
+
+def test_the_reload_flag_runs_reload(monkeypatch):
+    ran = []
+    monkeypatch.setattr(server, "reload", lambda: ran.append("reload"))
+    monkeypatch.setattr(sys, "argv", ["ledger_server.py", "--reload"])
+    server.main()
+    assert ran == ["reload"]
