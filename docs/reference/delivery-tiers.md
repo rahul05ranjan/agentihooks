@@ -185,9 +185,9 @@ A job whose runner pod or node vanished can stay `in_progress` with no failure, 
 - a job started at least ten minutes ago and runs on a self-hosted runner that is absent from or offline in the organization runner list,
 - no other job is running on a live runner,
 - every other unfinished job waits on a lost job, and
-- the same holds on a second read two minutes later.
+- the same holds on the second read.
 
-A stalled run where any job failed or timed out on its own is left alone. Otherwise it is cancelled, then force cancelled if a plain cancel does not end it, and on its first attempt its failed jobs are rerun once. A second loss is cancelled and not rerun, so the run ends cancelled. Each examined run prints one JSON line with its action, `none`, `cancel`, `rerun` or `error`, and the reason; a refused API call reports `error` for that run, the others are still examined, and the job fails. Like Queue retry, a scheduled workflow runs from `main`, so a change takes effect after promotion.
+A stalled run is cancelled, then force cancelled if a plain cancel does not end it. Its failed jobs are rerun once only when it is a first attempt and no job failed or timed out on its own; a run that failed on its own is never rerun, and a second loss ends cancelled. Every suspect run is confirmed on one second read two minutes later, so one tick waits once. Each examined run prints one JSON line with its action, `none`, `cancel`, `rerun` or `error`, and the reason. A refused API call reports `error` for that run, the other runs are still examined, and the job fails. Like Queue retry, a scheduled workflow runs from `main`, so a change takes effect after promotion.
 
 ## Coverage grading
 
