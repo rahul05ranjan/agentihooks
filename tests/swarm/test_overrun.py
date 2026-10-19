@@ -2,7 +2,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from scripts.inbox.store import InboxStore
-from scripts.swarm import overrun
+from scripts.swarm import idle, overrun
 from scripts.swarm.store import MASTER, AgentRecord, RedisStore, SwarmConfig
 
 SLUG = "sw"
@@ -243,8 +243,24 @@ def test_a_pane_missing_for_one_tick_keeps_the_ask_and_its_grace():
     swarm.live = set()
     assert swarm.tick(PARK + MINUTE) == []
     swarm.live = {OWNER}
-    assert len(swarm.tick(ENDED)) == 1
-    assert swarm.retired == [OWNER] and len(swarm.agent_inbox()) == 1
+    assert swarm.tick(PARK + 2 * MINUTE) == [] and len(swarm.agent_inbox()) == 1
+    assert len(swarm.tick(ENDED)) == 1 and swarm.retired == [OWNER]
+
+
+def test_a_wait_on_the_merge_queue_holds_the_ask_and_the_end_but_not_the_report():
+    swarm = Swarm(task={"state": "pr"})
+    on = {"kind": "merge", "target": "https://github.com/o/r/pull/7"}
+    idle.declare_wait(swarm.store.redis, SLUG, OWNER, ENDED + 60 * MINUTE, "queued", START, on=on)
+    assert swarm.tick(PARK) == [f"overrun: told master@sw that {OWNER} has run 150 minutes on task t1"]
+    assert swarm.tick(ENDED + MINUTE) == []
+    assert swarm.agent_inbox() == [] and swarm.retired == []
+
+
+def test_an_ended_merge_wait_or_a_checks_wait_holds_nothing():
+    for on, until in (({"kind": "merge", "target": "u"}, PARK), ({"kind": "checks", "target": "u"}, PARK + MINUTE)):
+        swarm = Swarm()
+        idle.declare_wait(swarm.store.redis, SLUG, OWNER, until, "waiting", START, on=on)
+        assert len(swarm.tick(PARK)) == 2 and len(swarm.agent_inbox()) == 1
 
 
 def test_a_mark_left_from_another_task_starts_over():

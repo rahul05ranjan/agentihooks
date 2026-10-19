@@ -1,6 +1,7 @@
 """Wall time per claimed task: past one limit the master hears of it, past a second the agent is asked to push and
 hand off, and an agent still live a grace period after that ask is ended and its task reopened for the next engineer.
-Declared waits count toward the age: the time an overrunning agent loses is mostly spent waiting on blockers."""
+Declared waits count toward the age, since an overrunning agent loses its time waiting on blockers; only a wait on
+the merge queue holds the ask and the end, because an agent keeps its seat there until the merge."""
 
 import json
 from collections.abc import Callable
@@ -8,7 +9,7 @@ from dataclasses import dataclass
 
 from scripts.inbox import exits
 from scripts.inbox.store import InboxStore
-from scripts.swarm import outage
+from scripts.swarm import idle, outage
 from scripts.swarm.health.findings import MINUTE_MS
 from scripts.swarm.ledger_events import Mail
 from scripts.swarm_ledger import ledger_workspace
@@ -16,7 +17,7 @@ from scripts.swarm_ledger import ledger_workspace
 REPORT_MINUTES, PARK_MINUTES, GRACE_MINUTES = 90, 150, 15
 SENDER, KEY, CAUSE = "swarm", "overrun", "overrun"
 HELD, LANES = ("claimed", "pr"), ("eng", "ci")
-FINISHED, STOPPED = "finished", "stopped"
+FINISHED, STOPPED, MERGE = "finished", "stopped", "merge"
 NO_STEPS = "no steps recorded in progress.md"
 REPORT = (
     "Overrun on swarm {slug}: {agent} has run {minutes} minutes on task {task} without finishing it. Last steps: "
@@ -26,9 +27,8 @@ REPORT = (
 ASK = (
     "Overrun on swarm {slug}: you have run {minutes} minutes on task {task}, past the {park} minute limit. Finish the "
     "step you are on, push your work with agentihooks swarm {slug} publish, write a Handoff v2 naming what blocks you, "
-    "run agentihooks swarm {slug} handoff <doc> and stop; a successor continues the task. If your pull request is "
-    "green and in the merge queue, release with agentihooks swarm {slug} ready <doc> instead. Still running in "
-    "{grace} minutes, you are ended and the task reopens for the next engineer."
+    "run agentihooks swarm {slug} handoff <doc> and stop; a successor continues the task. Still running in {grace} "
+    "minutes, you are ended and the task reopens for the next engineer."
 )
 ENDED = (
     "Overrun on swarm {slug}: {agent} was still running {grace} minutes after the ask to hand off task {task}, "
@@ -67,9 +67,11 @@ def overrun_pass(watch, doc):
             actions += _step(watch, mail, agent, mark)
         if mark and "ended" not in mark:
             kept[agent.name] = json.dumps({**mark, "task": agent.task})
-    watch.store.redis.delete(key)
+    pipe = watch.store.redis.pipeline()
+    pipe.delete(key)
     if kept:
-        watch.store.redis.hset(key, mapping=kept)
+        pipe.hset(key, mapping=kept)
+    pipe.execute()
     return actions
 
 
@@ -88,11 +90,18 @@ def _holding(watch, agent, rows):
     )
 
 
+def _queued(watch, agent):
+    held = idle.wait(watch.store.redis, watch.slug, agent.name) or {}
+    return held.get("until", 0) > watch.now_ms and (held.get("on") or {}).get("kind") == MERGE
+
+
 def _step(watch, mail, agent, mark):
     minutes, actions = _minutes(watch, agent.started_at), []
     if minutes >= REPORT_MINUTES and "reported" not in mark:
         mark["reported"] = watch.now_ms
         actions.append(_report(watch, mail, agent, minutes))
+    if _queued(watch, agent):
+        return actions
     if minutes >= PARK_MINUTES and "asked" not in mark:
         mark["asked"] = watch.now_ms
         actions.append(_ask(watch, mail, agent, minutes))
