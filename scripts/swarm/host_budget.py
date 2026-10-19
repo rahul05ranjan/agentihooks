@@ -9,6 +9,7 @@ from scripts.swarm.store import SwarmConfig
 
 MEMORY_PER_AGENT_MB = 700
 SWAP_FULL_SHARE = 0.9
+MEMINFO_KEYS = frozenset({"MemAvailable", "SwapTotal", "SwapFree"})
 LOAD_HIGH = 1.5
 LOAD_LOW = 1.0
 LOAD, MEMORY, UNKNOWN = "load", "memory", "unknown"
@@ -70,7 +71,7 @@ def memory_room(sample: HostSample, thresholds: Thresholds) -> int:
 
 
 def swap_full(sample: HostSample, thresholds: Thresholds) -> bool:
-    return sample.swap_total_mb > 0 and sample.swap_used_mb > thresholds.swap_full_share * sample.swap_total_mb
+    return sample.swap_used_mb > thresholds.swap_full_share * sample.swap_total_mb
 
 
 def per_agent_mb(sample: HostSample, thresholds: Thresholds) -> int:
@@ -132,7 +133,8 @@ def _memory_mb(proc: Path) -> tuple[int, int, int]:
     fields = {}
     for line in (proc / "meminfo").read_text().splitlines():
         name, _, rest = line.partition(":")
-        fields[name] = int(rest.split()[0])
+        if name in MEMINFO_KEYS:
+            fields[name] = int(rest.split()[0])
     total = fields.get("SwapTotal", 0)
     return fields["MemAvailable"] // 1024, (total - fields.get("SwapFree", total)) // 1024, total // 1024
 
@@ -154,6 +156,8 @@ def _children(proc: Path) -> dict[int, list[int]]:
 
 
 def agent_memory(proc: Path, roots: Iterable[int]) -> tuple[int, int]:
+    if not roots:
+        return 0, 0
     children = _children(proc)
     trees = []
     for root in roots:
@@ -179,7 +183,16 @@ def read_host(proc: Path = Path("/proc")) -> HostSample | None:
         agent_mb, measured = agent_memory(proc, sessions)
     except (OSError, ValueError, IndexError, KeyError):
         return None
-    return HostSample(load1, cpus, available_mb, agents, swap_used_mb, swap_total_mb, agent_mb, measured)
+    return HostSample(
+        load1=load1,
+        cpus=cpus,
+        available_mb=available_mb,
+        agents=agents,
+        swap_used_mb=swap_used_mb,
+        swap_total_mb=swap_total_mb,
+        agent_mb=agent_mb,
+        measured_agents=measured,
+    )
 
 
 def deployed(environ: Mapping[str, str]) -> bool:

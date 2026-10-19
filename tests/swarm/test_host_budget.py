@@ -1,3 +1,5 @@
+import pytest
+
 from scripts.swarm import host_budget
 from scripts.swarm.host_budget import HostSample, Thresholds
 from scripts.swarm.store import SwarmConfig
@@ -148,6 +150,13 @@ def _swapped(available_mb: int, swap_used_mb: int, swap_total_mb: int, agent_mb:
 
 def test_swap_in_use_comes_off_available_memory():
     assert host_budget.memory_room(_swapped(7000, 2800, 8000), LIMITS) == 6
+    assert host_budget.memory_room(_swapped(300, 600, 10000), LIMITS) == 0
+
+
+def test_no_agent_roots_skip_the_process_scan(tmp_path, monkeypatch):
+    monkeypatch.setattr(host_budget, "_children", lambda proc: pytest.fail("scanned processes without agent roots"))
+
+    assert host_budget.agent_memory(tmp_path, {}) == (0, 0)
 
 
 def test_memory_room_is_zero_above_the_swap_use_share():
@@ -201,7 +210,7 @@ def _process(proc, pid: int, ppid: int, rss_kb: int | None) -> None:
 def test_read_host_reads_swap_and_measures_live_agent_process_trees(tmp_path, monkeypatch):
     (tmp_path / "loadavg").write_text("2.00 1.00 1.00 3/900 4242\n")
     (tmp_path / "meminfo").write_text(
-        "MemAvailable:    5120000 kB\nSwapTotal:       4194304 kB\nSwapFree:          98304 kB\n"
+        "MemAvailable:    5120000 kB\nDirectMap4k:     unknown\nSwapTotal:       4194304 kB\nSwapFree:          98304 kB\n"
     )
     for pid, ppid, rss in ((10, 1, 300000), (11, 10, 200000), (12, 11, 100000), (20, 1, 400000), (30, 1, 999999)):
         _process(tmp_path, pid, ppid, rss)
