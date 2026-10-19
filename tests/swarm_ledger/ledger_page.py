@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 MODULES = Path(__file__).resolve().parents[2] / "scripts" / "swarm_ledger" / "static" / "js"
 SHELL = MODULES.parents[1] / "shell.html"
 PAGE_URL = "http://127.0.0.1:9/ledger"
+NAVIGATION_MS = 15000
 ORDER = (
     "config",
     "dom",
@@ -107,7 +108,7 @@ def fulfill_events(route, ledger=None, swarm=None):
 def show(tab, html, url=PAGE_URL, ledger=None, swarm=None):
     tab.route(url, lambda route: route.fulfill(body=html, content_type="text/html; charset=utf-8"))
     serve_modules(tab, ledger, swarm)
-    tab.goto(url)
+    tab.goto(url, timeout=NAVIGATION_MS)
     if ledger is not None:
         loaded(tab)
 
@@ -153,7 +154,7 @@ def reload_after_folds(tab, selector):
         }""",
         arg={"boxes": state, "keys": keys},
     )
-    tab.reload()
+    tab.reload(timeout=NAVIGATION_MS)
     loaded(tab)
 
 
