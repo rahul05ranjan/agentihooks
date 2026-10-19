@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_profile_render import _write, world  # noqa: F401
+from tests.test_profile_render import _write, overlays, world  # noqa: F401
 
 pytestmark = pytest.mark.codex_rollouts
 
@@ -99,14 +99,14 @@ def test_a_tie_keeps_the_stable_rollout(tmp_path):
     assert target.read_text() == "stable\n"
 
 
-def test_an_overlay_home_keeps_its_own_rollout_folder(world):  # noqa: F811
+def test_an_overlay_home_keeps_its_own_rollout_folder(world, overlays):  # noqa: F811
     import os
 
     from scripts.profiles import homes, render
 
-    out = render.render_codex("rb-role", overlays=["rb-other"], isolate=True)
-    _rollout(homes.rollouts(render.rendered_root(), "rb-role+rb-other") / "sessions", "0ee")
+    out = render.render_codex("rb-eng", overlays=["ov-a"], isolate=True)
+    _rollout(homes.rollouts(render.rendered_root(), "rb-eng+ov-a") / "sessions", "0ee")
 
-    assert Path(os.readlink(out / "sessions")).parts[-3] == "rb-role+rb-other"
-    assert render.has_codex_rollout("rb-role", ["rb-other"], "0ee")
-    assert not render.has_codex_rollout("rb-role", [], "0ee")
+    assert Path(os.readlink(out / "sessions")).parts[-3] == "rb-eng+ov-a"
+    assert render.has_codex_rollout("rb-eng", ["ov-a"], "0ee")
+    assert not render.has_codex_rollout("rb-eng", [], "0ee")
