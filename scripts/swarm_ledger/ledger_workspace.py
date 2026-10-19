@@ -4,6 +4,7 @@ import json
 import re
 from pathlib import Path
 
+from scripts.hive import registry, reports
 from scripts.swarm_ledger import plan_read
 
 PART_RE = re.compile(r"[A-Za-z0-9][\w.-]{0,127}")
@@ -12,6 +13,7 @@ TAILS = (("latest_progress", "progress.md"), ("latest_proof", "proof.md"))
 TAIL_LINES = 3
 TAIL_BYTES = 4096
 SEEDS = ("steering.md", "progress.md", "proof.md")
+SEED_CHARS = 65536
 ENDED = ("ended", "finished")
 
 
@@ -83,8 +85,6 @@ def portable(slug, task_id):
 
 
 def named(slug, agent, recorded=""):
-    from scripts.hive import reports
-
     if reports.host(agent):
         return portable(slug, agent.task)
     return recorded or str(folder(slug, agent.task))
@@ -92,7 +92,7 @@ def named(slug, agent, recorded=""):
 
 def seeds(slug, task_id):
     path = folder(slug, task_id)
-    return {name: (path / name).read_text(encoding="utf-8") for name in SEEDS if (path / name).is_file()}
+    return {name: (path / name).read_text(encoding="utf-8")[-SEED_CHARS:] for name in SEEDS if (path / name).is_file()}
 
 
 def materialize(slug, task_id, sent):
@@ -114,8 +114,6 @@ def materialize(slug, task_id, sent):
 
 
 def synced_key(hive):
-    from scripts.hive import registry
-
     return f"{registry.key(hive)}:workspaces"
 
 
@@ -127,18 +125,14 @@ def sync(redis, hive, hosted, ttl):
 
 
 def published(store, slug, ledger):
-    """Each task's latest work folder lines: the hive's synced copy when its execution runs on another hive."""
-    from scripts.hive import reports
-
-    remote = {
-        agent.task: host for agent in store.agents(slug) if agent.state not in ENDED and (host := reports.host(agent))
-    }
+    """Each task's latest work folder lines: the synced copy of the hive that runs, or last ran, its execution."""
+    latest = {agent.task: agent for agent in sorted(store.agents(slug), key=lambda agent: agent.state not in ENDED)}
     copies = {}
     found = {}
     for task in ledger.get("tasks", []):
         if not task.get("workspace"):
             continue
-        host = remote.get(task["id"])
+        host = reports.host(latest[task["id"]]) if task["id"] in latest else ""
         if not host:
             found[task["id"]] = tails(slug, task["id"])
             continue

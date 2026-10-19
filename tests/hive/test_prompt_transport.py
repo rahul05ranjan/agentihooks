@@ -118,7 +118,7 @@ def carry(setup, homes):
         folder = ledger_workspace.scaffold("fixture", TASK)
         (folder / "progress.md").write_text("controller step\n", encoding="utf-8")
         request = SpawnRequest(setup.config, "eng", setup.agent.name, TASK)
-        text = orders.opening(request)
+        text = orders.build_opening(request)
         payload = orders.carried("fixture", TASK, text)
     setup.redis.set("prompt", json.dumps(payload))
     return text, payload
@@ -155,13 +155,15 @@ def test_the_hive_keeps_its_own_progress_on_relaunch(homes):
     assert (folder / "steering.md").read_text(encoding="utf-8") == "new\n"
 
 
-@pytest.mark.parametrize("change", ["opening", "digest"])
+@pytest.mark.parametrize("change", ["opening", "digest", "no opening", "no digest"])
 def test_a_changed_opening_is_refused_before_launch(setup, homes, change):
     _, payload = carry(setup, homes)
     if change == "opening":
         payload[orders.OPENING] += " and something else"
-    else:
+    elif change == "digest":
         payload[orders.DIGEST] = "0" * 64
+    else:
+        del payload[orders.OPENING if change == "no opening" else orders.DIGEST]
     setup.redis.set("prompt", json.dumps(payload))
     with at(homes.hive):
         ack = setup.consumer.apply(setup.order)
@@ -185,6 +187,31 @@ def test_hive_progress_lines_reach_the_ledger(setup, homes):
             command_runner.publish(setup.store, "fixture", ledger)
     assert tails == {"task": {"latest_progress": "controller step\nhive step one\nhive step two"}}
     assert commands.workspaces(setup.store, "fixture") == tails
+
+
+def test_a_finished_remote_task_keeps_its_synced_lines(setup, homes):
+    from dataclasses import replace
+
+    carry(setup, homes)
+    with at(homes.hive):
+        setup.consumer.apply(setup.order)
+        agent = setup.store.execution_registry.get("fixture", setup.agent.execution_id)
+        setup.store.execution_registry.update("fixture", replace(agent, state="finished"))
+        setup.consumer.sync_workspaces(45)
+    ledger = {"tasks": [{"id": "task", "workspace": TASK["workspace"]}]}
+    with at(homes.controller), patch.object(commands, "hive_id", return_value="controller"):
+        (ledger_workspace.folder("fixture", "task") / "proof.md").write_text("controller only\n", encoding="utf-8")
+        tails = ledger_workspace.published(setup.store, "fixture", ledger)
+    assert tails == {"task": {"latest_progress": "controller step"}}
+
+
+def test_seeds_carry_only_the_latest_text(homes):
+    with at(homes.controller):
+        folder = ledger_workspace.scaffold("fixture", TASK)
+        (folder / "progress.md").write_text("x" * ledger_workspace.SEED_CHARS + "last\n", encoding="utf-8")
+        sent = ledger_workspace.seeds("fixture", "task")
+    assert len(sent["progress.md"]) == ledger_workspace.SEED_CHARS
+    assert sent["progress.md"].endswith("last\n")
 
 
 def test_a_local_task_reads_its_own_folder(setup, homes):

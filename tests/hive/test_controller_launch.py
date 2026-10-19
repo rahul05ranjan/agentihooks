@@ -395,7 +395,7 @@ def write_hive(setup, **changes):
 
 
 def live_order(setup, route="subscription"):
-    from scripts.hive.orders import Consumer
+    from scripts.hive.orders import Consumer, carried
     from scripts.swarm import lease
     from scripts.swarm.tick import Placed
     from scripts.swarm_v2.runtime.base import Outcome, Status
@@ -405,7 +405,7 @@ def live_order(setup, route="subscription"):
     request = request_for(setup, route=route)
     selected = setup.launcher.select(setup.config, "eng", request.task)
     order = replace(order_for(setup, request, selected), expires_at=lease.now_ms(setup.store) + 60000)
-    setup.store.redis.set("prompt", json.dumps(request.task))
+    setup.store.redis.set("prompt", json.dumps(carried("fixture", request.task, "opening")))
     setup.store.redis.hset(setup.store.key("fixture", "controller-launch-orders"), "task", json.dumps(order.__dict__))
     setup.launcher.slots.reserve("claude:account", order.execution_id, 6, 300000)
     runtime = Mock()
