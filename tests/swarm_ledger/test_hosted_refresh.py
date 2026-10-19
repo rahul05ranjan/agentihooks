@@ -4,7 +4,9 @@ import io
 import json
 import os
 import secrets
+import sqlite3
 import sys
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -134,6 +136,37 @@ def test_refused_history_removes_the_media_the_refresh_wrote(diverged, monkeypat
 
     monkeypatch.setattr(hosted, "store", refused)
     with pytest.raises(ValueError, match="^imported history differs from source$"):
+        hosted.restore(target, snapshot, (digest(snapshot), digest(before)))
+    assert hosted.capture(target, SLUG) == before
+
+
+def test_failed_commit_removes_the_media_the_refresh_wrote(diverged, monkeypatch):
+    source, target = diverged
+    snapshot = hosted.capture(source, SLUG)
+    before = hosted.capture(target, SLUG)
+    original = target.transaction
+
+    @contextmanager
+    def failing():
+        with original() as transaction:
+            yield transaction
+            raise sqlite3.OperationalError("database or disk is full")
+
+    monkeypatch.setattr(target, "transaction", failing)
+    with pytest.raises(sqlite3.OperationalError, match="disk is full"):
+        hosted.restore(target, snapshot, (digest(snapshot), digest(before)))
+    assert hosted.capture(target, SLUG) == before
+
+
+def test_conflicting_later_file_removes_the_media_written_before_it(diverged):
+    source, target = diverged
+    second = media(source, b"A second file only the source holds.")
+    snapshot = hosted.capture(source, SLUG)
+    created = sorted(snapshot["files"].keys() - hosted.capture(target, SLUG)["files"].keys())
+    (target.directory / f"{SLUG}.media" / created[-1]).write_bytes(b"Corrupt hosted bytes.")
+    before = hosted.capture(target, SLUG)
+    assert second in created and len(created) == 2
+    with pytest.raises(ValueError, match="^hosted file conflict$"):
         hosted.restore(target, snapshot, (digest(snapshot), digest(before)))
     assert hosted.capture(target, SLUG) == before
 

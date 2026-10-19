@@ -117,9 +117,8 @@ def file_bytes(files: dict) -> dict:
     return result
 
 
-def write_files(folder: Path, files: dict) -> list:
+def write_files(folder: Path, files: dict, created: list) -> None:
     folder.mkdir(exist_ok=True)
-    created = []
     for name, data in files.items():
         path = folder / name
         if path.is_symlink() or (path.exists() and path.read_bytes() != data):
@@ -129,7 +128,6 @@ def write_files(folder: Path, files: dict) -> list:
             temporary.write_bytes(data)
             temporary.replace(path)
             created.append(path)
-    return created
 
 
 def restore(repo: LedgerRepository, snapshot: dict, expected: tuple[str, str] | None = None) -> dict:
@@ -142,21 +140,22 @@ def restore(repo: LedgerRepository, snapshot: dict, expected: tuple[str, str] | 
     if expected and manifest(snapshot)["digest"] != expected[0]:
         raise ValueError("snapshot differs from its expected source digest")
     folder = repo.directory / f"{slug}.media"
-    with repo.transaction() as transaction:
-        displaced = displace(repo, snapshot, expected) if transaction.exists(slug) else None
-        if displaced == snapshot:
-            return manifest(snapshot)
-        if expected and displaced is None:
-            raise ValueError("no hosted ledger to refresh")
-        created = write_files(folder, files)
-        try:
+    created = []
+    try:
+        with repo.transaction() as transaction:
+            displaced = displace(repo, snapshot, expected) if transaction.exists(slug) else None
+            if displaced == snapshot:
+                return manifest(snapshot)
+            if expected and displaced is None:
+                raise ValueError("no hosted ledger to refresh")
+            write_files(folder, files, created)
             store(transaction, snapshot, displaced)
-        except BaseException:
-            for path in created:
-                path.unlink(missing_ok=True)
-            raise
-        displaced_only = displaced["files"].keys() - files.keys() if displaced else set()
-        stale = {name: (folder / name).stat().st_mtime_ns for name in displaced_only}
+            displaced_only = displaced["files"].keys() - files.keys() if displaced else set()
+            stale = {name: (folder / name).stat().st_mtime_ns for name in displaced_only}
+    except BaseException:
+        for path in created:
+            path.unlink(missing_ok=True)
+        raise
     if stale:
         prune(repo, folder, stale)
     return manifest(capture(repo, slug))
@@ -185,7 +184,7 @@ def prune(repo: LedgerRepository, folder: Path, stale: dict) -> None:
         for name, written in stale.items():
             path = folder / name
             if path.exists() and path.stat().st_mtime_ns == written:
-                path.unlink()
+                path.unlink(missing_ok=True)
 
 
 def displace(repo: LedgerRepository, snapshot: dict, expected: tuple[str, str] | None) -> dict:
