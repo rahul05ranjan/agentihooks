@@ -360,7 +360,7 @@ def test_a_second_server_on_a_held_folder_exits_before_touching_it(serving, leas
 def test_the_server_holds_the_lease_while_it_serves_and_releases_it_after(serving):
     seen = []
 
-    def serve_forever():
+    def serve_forever(poll_interval):
         seen.append(ledger_writer.holder(serving)["pid"])
         with pytest.raises(ledger_writer.WriterConflict):
             ledger_writer.WriterLease(serving).acquire(OTHER)

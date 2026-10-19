@@ -5,6 +5,7 @@ Usage:
   ledger_server.py --ensure   start it detached if it is not answering, print the base URL
   ledger_server.py --serve    run in the foreground
   ledger_server.py --stop     stop the detached server
+  ledger_server.py --reload   hand the running server's socket to a fresh process on the current code
 
 Env: LEDGER_DIR (default ~/development-ledger), LEDGER_HOST (127.0.0.1), LEDGER_PORT (8765),
 SWARM_PUBLIC_URL and SWARM_ALLOWED_HOSTS (comma list) beside loopback, LEDGER_TLS_CERT and LEDGER_TLS_KEY to serve
@@ -53,6 +54,7 @@ from scripts.swarm_ledger import (  # noqa: E402
     request_metrics,
     server_code,
     server_compose,
+    server_handoff,
     server_lifetime,
     storage,
 )
@@ -62,7 +64,7 @@ from scripts.swarm_ledger.repository import (
     hierarchy,  # noqa: E402
     legacy,  # noqa: E402
 )
-from scripts.swarm_ledger.server_code import CODE_DIRS, code_stamp  # noqa: E402
+from scripts.swarm_ledger.server_code import CODE_DIRS, code_digest, code_stamp  # noqa: E402
 from scripts.swarm_v2 import front_door, ledger_writer, master_fence  # noqa: E402
 
 HOST, PORT = ledger_link.address()
@@ -71,6 +73,14 @@ PIDFILE = core.LEDGER_DIR / ".server.pid"
 LOGFILE = core.LEDGER_DIR / ".server.log"
 SERVER_WAIT = 5.0
 COMPOSE_WAIT = 180.0
+POLL_S = 0.05
+DRAIN_S = 5.0
+LEASE_WAIT_S = 20.0
+RELOAD_WAIT_S = 100.0
+WARM_PASSES = 5
+CARRY = ".server.carry.json"
+RELOAD = threading.Event()
+HANDOFF = {}
 THREADS_EXHAUSTED = 75
 TLS_HANDSHAKE_S = 10
 PROBE_FILE = ".healthz"
@@ -86,6 +96,7 @@ LOGO = ROOT / "media" / "agentihooks-logo.png"
 HUB = Hub()
 BIN_SWEEP_EVERY = 15
 LOADED_STAMP = code_stamp()
+LOADED_DIGEST = code_digest()
 
 
 @functools.cache
@@ -732,15 +743,34 @@ class Handshake(Exception):
 
 
 class ThreadingHTTPServer(http.server.ThreadingHTTPServer):
+    def __init__(self, *args, **kwargs):
+        self.active = 0
+        self.idle = threading.Condition()
+        super().__init__(*args, **kwargs)
+
     def handle_error(self, *args):
         if not isinstance(sys.exc_info()[1], Handshake):
             super().handle_error(*args)
 
     def process_request(self, request: socket.socket, client_address: tuple[str, int]) -> None:
+        with self.idle:
+            self.active += 1
         try:
             super().process_request(request, client_address)
         except RuntimeError:
             os._exit(THREADS_EXHAUSTED)
+
+    def process_request_thread(self, request: socket.socket, client_address: tuple[str, int]) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            with self.idle:
+                self.active -= 1
+                self.idle.notify_all()
+
+    def drained(self, timeout: float) -> bool:
+        with self.idle:
+            return self.idle.wait_for(lambda: not self.active, timeout)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1138,12 +1168,45 @@ def metrics_journal(action, *args):
         sys.stderr.write(f"request metrics journal: {exc}\n")
 
 
-def reload_if_changed(started, code_dirs=CODE_DIRS, execv=os.execv):
-    if code_stamp(code_dirs) == started:
-        return False
-    metrics_journal(request_metrics.stop)
-    execv(sys.executable, [sys.executable, str(CODE_DIR / "ledger_server.py"), "--serve"])
-    return True
+def reload_if_changed(started, server, code_dirs=CODE_DIRS, hand_off=server_handoff.hand_off, force=False, loaded=None):
+    """None once a successor took the socket and this server stopped accepting, else the code stamp to compare
+    next; with loaded, code whose content still hashes to it reads as unchanged."""
+    stamp = code_stamp(code_dirs)
+    if stamp == started and not force:
+        return started
+    if loaded is not None and not force and code_digest(code_dirs) == loaded:
+        return stamp
+    held = hand_off(server.socket, [sys.executable, str(CODE_DIR / "ledger_server.py"), "--serve"])
+    if held is None:
+        sys.stderr.write("reload: the successor never reported ready; this server keeps serving\n")
+        return stamp
+    HANDOFF["since"] = json.loads(held or b"{}")
+    server.shutdown()
+    return None
+
+
+def write_carry(since):
+    path = core.LEDGER_DIR / CARRY
+    staged = path.with_name(f"{CARRY}.{os.getpid()}")
+    staged.write_text(json.dumps(stored.carry(since)))
+    staged.replace(path)
+
+
+def take_carry():
+    path = core.LEDGER_DIR / CARRY
+    try:
+        text = path.read_text()
+    except FileNotFoundError:
+        return
+    path.unlink()
+    try:
+        stored.adopt_carried(json.loads(text))
+    except Exception as exc:  # a broken carry leaves its ledgers to load from their rows
+        sys.stderr.write(f"carry: {exc}\n")
+
+
+def request_reload(signum, frame):
+    RELOAD.set()
 
 
 def reloading(environ=os.environ) -> bool:
@@ -1156,12 +1219,15 @@ def scheduled_wait(interval: float) -> None:
     wait(interval)
 
 
-def watch_ledgers(interval=2.0):
+def watch_ledgers(server=None, interval=2.0):
     started = code_stamp()
     reload = reloading()
     for passes in itertools.count():
-        if reload:
-            reload_if_changed(started)
+        if reload or RELOAD.is_set():
+            started = reload_if_changed(started, server, force=RELOAD.is_set(), loaded=LOADED_DIGEST)
+            RELOAD.clear()
+            if started is None:
+                return
         try:
             ledger_bin.tidy()
         except OSError as exc:
@@ -1181,30 +1247,70 @@ def watch_ledgers(interval=2.0):
         scheduled_wait(interval)
 
 
+def listening(listener=None):
+    server = ThreadingHTTPServer((HOST, PORT), Handler, bind_and_activate=False)
+    server.request_queue_size = 128
+    if listener is None:
+        server.server_bind()
+        server.server_activate()
+    else:
+        server.socket.close()
+        server.socket = listener
+    return server
+
+
+def warm(passes=WARM_PASSES):
+    """Load every open ledger, then again while a pass still finds one written since, so the successor that runs this
+    takes over with current copies."""
+    held = {}
+    for _ in range(passes):
+        changed = False
+        for summary in ledger_summaries():
+            slug = summary["slug"]
+            try:
+                entry = stored.current(slug)
+            except Exception as exc:  # a ledger that fails to load stays cold and the handoff goes on
+                sys.stderr.write(f"warm {slug}: {exc}\n")
+                continue
+            changed = changed or held.get(slug) is not entry
+            held[slug] = entry
+        if not changed:
+            return
+
+
 def serve():
     core.LEDGER_DIR.mkdir(parents=True, exist_ok=True)
+    listener = server_handoff.inherited()
+    if listener is not None:
+        warm()
+        server_handoff.announce(json.dumps(stored.generations()).encode())
     try:
-        writer = ledger_writer.WriterLease(core.LEDGER_DIR).acquire(ledger_writer.owner())
+        writer = ledger_writer.WriterLease(core.LEDGER_DIR).acquire(
+            ledger_writer.owner(), wait=0.0 if listener is None else LEASE_WAIT_S
+        )
     except ledger_writer.WriterConflict as conflict:
         sys.exit(str(conflict))
+    if listener is not None:
+        take_carry()
     legacy.adopt(stored)
     adopt_unrelayed()
     metrics_journal(request_metrics.restore, core.LEDGER_DIR / request_metrics.JOURNAL_NAME)
-    threading.Thread(target=watch_ledgers, daemon=True).start()
-    server = ThreadingHTTPServer((HOST, PORT), Handler, bind_and_activate=False)
-    server.request_queue_size = 128
-    server.server_bind()
-    server.server_activate()
+    server = listening(listener)
+    threading.Thread(target=watch_ledgers, args=(server,), daemon=True).start()
     stopped = server_lifetime.watch(server, core.LEDGER_DIR, PORT)
     server_code.record(PIDFILE.parent, os.getpid(), LOADED_STAMP)
     PIDFILE.write_text(str(os.getpid()))
     print(f"ledger server on {BASE}, dir {core.LEDGER_DIR}", flush=True)
     try:
-        server.serve_forever()
+        server.serve_forever(POLL_S)
     finally:
         stopped.set()
+        HUB.drain()
+        server.drained(DRAIN_S)
         server.server_close()
         metrics_journal(request_metrics.stop)
+        if "since" in HANDOFF:
+            write_carry(HANDOFF.pop("since"))
         writer.release()
 
 
@@ -1299,17 +1405,41 @@ def stop():
     print("stopped")
 
 
+def recorded_pid() -> str:
+    try:
+        return PIDFILE.read_text()
+    except OSError:
+        return ""
+
+
+def reload(wait=RELOAD_WAIT_S):
+    if not server_process_alive():
+        return ensure()
+    pid = recorded_pid()
+    os.kill(int(pid), signal.SIGHUP)
+    deadline = time.monotonic() + wait
+    while recorded_pid() == pid:
+        if time.monotonic() >= deadline:
+            sys.exit(f"the ledger server pid {pid} did not hand off within {wait:.0f} s; see {LOGFILE}")
+        time.sleep(0.1)
+    return ensure()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--ensure", action="store_true")
     group.add_argument("--serve", action="store_true")
     group.add_argument("--stop", action="store_true")
+    group.add_argument("--reload", action="store_true")
     args = parser.parse_args()
     if args.serve:
+        signal.signal(signal.SIGHUP, request_reload)
         serve()
     elif args.ensure:
         ensure()
+    elif args.reload:
+        reload()
     else:
         stop()
 

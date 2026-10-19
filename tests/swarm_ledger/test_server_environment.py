@@ -6,7 +6,7 @@ import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -102,7 +102,9 @@ def test_code_reload_runs_only_when_swarm_reload_is_one(value, expected):
     assert server.reloading({} if value is None else {"SWARM_RELOAD": value}) is expected
 
 
-@pytest.mark.parametrize(("value", "calls"), [(None, []), ("0", []), ("1", [((42,),)])])
+@pytest.mark.parametrize(
+    ("value", "calls"), [(None, []), ("0", []), ("1", [call(42, None, force=False, loaded=server.LOADED_DIGEST)])]
+)
 def test_the_seed_watcher_reloads_code_only_when_asked(monkeypatch, value, calls):
     if value is None:
         monkeypatch.delenv("SWARM_RELOAD", raising=False)

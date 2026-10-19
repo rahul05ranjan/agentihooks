@@ -30,10 +30,11 @@ class Reload(unittest.TestCase):
         self.calls = []
         self.server = FakeServer()
         self.ready = True
+        self.addCleanup(server.HANDOFF.clear)
 
     def hand_off(self, *args):
         self.calls.append(args)
-        return self.ready
+        return b'{"demo": 6}' if self.ready else None
 
     def test_unchanged_code_keeps_the_server(self):
         started = server.code_stamp((self.dir,))
@@ -49,6 +50,12 @@ class Reload(unittest.TestCase):
             self.calls, [(self.server.socket, [sys.executable, str(server.CODE_DIR / "ledger_server.py"), "--serve"])]
         )
         self.assertEqual(self.server.shutdowns, 1)
+        self.assertEqual(server.HANDOFF, {"since": {"demo": 6}})
+
+    def test_a_successor_that_sent_no_generations_gets_every_written_ledger(self):
+        started = server.code_stamp((self.dir,))
+        self.assertIsNone(server.reload_if_changed(started, self.server, (self.dir,), lambda *args: b"", force=True))
+        self.assertEqual(server.HANDOFF, {"since": {}})
 
     def test_a_successor_that_never_got_ready_leaves_the_server_serving_until_the_next_change(self):
         started = server.code_stamp((self.dir,))
@@ -57,6 +64,7 @@ class Reload(unittest.TestCase):
         self.assertEqual(server.reload_if_changed(started, self.server, (self.dir,), self.hand_off), 2_000_000_000)
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(self.server.shutdowns, 0)
+        self.assertEqual(server.HANDOFF, {})
 
     def test_a_requested_reload_hands_off_unchanged_code(self):
         started = server.code_stamp((self.dir,))
@@ -70,6 +78,31 @@ class Reload(unittest.TestCase):
         new.write_text("")
         os.utime(new, ns=(3, 3_000_000_000))
         self.assertIsNone(server.reload_if_changed(started, self.server, (self.dir,), self.hand_off))
+
+    def test_a_touched_file_with_the_loaded_content_keeps_the_server(self):
+        started = server.code_stamp((self.dir,))
+        loaded = server.code_digest((self.dir,))
+        os.utime(self.page, ns=(2, 2_000_000_000))
+        self.assertEqual(
+            server.reload_if_changed(started, self.server, (self.dir,), self.hand_off, loaded=loaded), 2_000_000_000
+        )
+        self.assertEqual(self.calls, [])
+
+    def test_new_content_hands_off_even_with_a_loaded_digest(self):
+        started = server.code_stamp((self.dir,))
+        loaded = server.code_digest((self.dir,))
+        self.page.write_text("<p>new</p>")
+        os.utime(self.page, ns=(2, 2_000_000_000))
+        self.assertIsNone(server.reload_if_changed(started, self.server, (self.dir,), self.hand_off, loaded=loaded))
+        self.assertEqual(len(self.calls), 1)
+
+    def test_a_requested_reload_ignores_the_loaded_digest(self):
+        started = server.code_stamp((self.dir,))
+        loaded = server.code_digest((self.dir,))
+        self.assertIsNone(
+            server.reload_if_changed(started, self.server, (self.dir,), self.hand_off, force=True, loaded=loaded)
+        )
+        self.assertEqual(len(self.calls), 1)
 
     def test_the_real_package_has_a_stamp(self):
         self.assertGreater(server.code_stamp(), 0)
@@ -97,7 +130,7 @@ class ImportedCode(unittest.TestCase):
 
     def hand_off(self, *args):
         self.calls.append(args)
-        return True
+        return b"{}"
 
     def assert_reloads_after(self, changed):
         started = server.code_stamp(self.dirs)

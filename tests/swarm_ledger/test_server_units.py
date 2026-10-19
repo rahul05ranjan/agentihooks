@@ -91,7 +91,7 @@ def test_a_save_to_a_ledger_without_tasks_checks_against_no_task_ids(quiet, monk
 
 
 def test_serve_runs_the_ledger_watch_on_a_daemon_thread(monkeypatch, tmp_path):
-    threads = []
+    threads, steps = [], []
 
     class Thread:
         def __init__(self, **kwargs):
@@ -105,26 +105,94 @@ def test_serve_runs_the_ledger_watch_on_a_daemon_thread(monkeypatch, tmp_path):
             pass
 
         def server_bind(self):
-            pass
+            steps.append("bind")
 
         def server_activate(self):
-            pass
+            steps.append("activate")
 
-        def serve_forever(self):
-            pass
+        def serve_forever(self, poll_interval):
+            steps.append(("serve", poll_interval))
+
+        def drained(self, timeout):
+            steps.append(("drained", timeout))
 
         def server_close(self):
-            pass
+            steps.append("close")
 
     monkeypatch.setattr(server.threading, "Thread", Thread)
     monkeypatch.setattr(server, "ThreadingHTTPServer", Server)
+    monkeypatch.setattr(server, "HUB", SimpleNamespace(drain=lambda: steps.append("drain")))
     monkeypatch.setattr(server.server_lifetime, "watch", lambda *args: threading.Event())
     adopted = []
     monkeypatch.setattr(server.legacy, "adopt", adopted.append)
     monkeypatch.setattr(server, "PIDFILE", tmp_path / ".server.pid")
     server.serve()
-    assert threads == [{"target": server.watch_ledgers, "daemon": True}]
+    assert [{**t, "args": tuple(type(a) for a in t["args"])} for t in threads] == [
+        {"target": server.watch_ledgers, "args": (Server,), "daemon": True}
+    ]
     assert adopted == [server.stored]
+    assert steps == [
+        "bind",
+        "activate",
+        ("serve", server.POLL_S),
+        "drain",
+        ("drained", server.DRAIN_S),
+        "close",
+    ]
+
+
+def test_a_successor_warms_reports_ready_then_waits_for_the_lease_and_takes_the_carry(monkeypatch, tmp_path):
+    steps = []
+    listener = object()
+
+    class Lease:
+        def __init__(self, directory):
+            pass
+
+        def acquire(self, claimant, wait):
+            steps.append(("acquire", wait))
+            return self
+
+        def release(self):
+            steps.append("release")
+
+    def listening(held):
+        steps.append(("listening", held is listener))
+        return SimpleNamespace(
+            serve_forever=lambda poll: steps.append("serve"),
+            drained=lambda timeout: None,
+            server_close=lambda: None,
+        )
+
+    monkeypatch.setattr(server.server_handoff, "inherited", lambda: listener)
+    monkeypatch.setattr(server.server_handoff, "announce", lambda held: steps.append(("announce", held)))
+    monkeypatch.setattr(server.stored, "generations", lambda: {"demo": 5})
+    monkeypatch.setattr(server, "warm", lambda: steps.append("warm"))
+    monkeypatch.setattr(server, "take_carry", lambda: steps.append("take carry"))
+    monkeypatch.setattr(server, "write_carry", lambda since: steps.append(("write carry", since)))
+    monkeypatch.setattr(server, "listening", listening)
+    monkeypatch.setattr(server.ledger_writer, "WriterLease", Lease)
+    monkeypatch.setattr(server.legacy, "adopt", lambda stored: steps.append("adopt"))
+    monkeypatch.setattr(server, "adopt_unrelayed", lambda: None)
+    monkeypatch.setattr(server.threading, "Thread", lambda **kwargs: SimpleNamespace(start=lambda: None))
+    monkeypatch.setattr(server.server_lifetime, "watch", lambda *args: threading.Event())
+    monkeypatch.setattr(server.server_code, "record", lambda *args: None)
+    monkeypatch.setattr(server, "HUB", SimpleNamespace(drain=lambda: None))
+    monkeypatch.setattr(server, "HANDOFF", {"since": {"demo": 6}})
+    monkeypatch.setattr(server, "PIDFILE", tmp_path / ".server.pid")
+    server.serve()
+    assert steps == [
+        "warm",
+        ("announce", b'{"demo": 5}'),
+        ("acquire", server.LEASE_WAIT_S),
+        "take carry",
+        "adopt",
+        ("listening", True),
+        "serve",
+        ("write carry", {"demo": 6}),
+        "release",
+    ]
+    assert server.HANDOFF == {}
 
 
 def test_the_ledger_watch_sleeps_two_seconds_between_passes(monkeypatch):

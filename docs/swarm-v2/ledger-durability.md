@@ -25,8 +25,11 @@ process. The interface is `scripts.swarm_v2.ledger_writer`.
   before it touches the folder. Each refusal appends one line to `.ledger-writer-conflicts.jsonl`;
   `conflicts_total(dir)` reads it as `ledger_writer_conflicts_total`.
 - The kernel drops the lease when the holder exits, crashes or is killed, so a restart needs no cleanup.
-  A code reload (`SWARM_RELOAD=1`) re-executes the same process; the lock descriptor closes on exec and
-  the new image takes the lease again.
+  A code reload (`SWARM_RELOAD=1` on changed code content, or `ledger_server.py --reload`) starts a successor
+  that inherits the listening socket, loads the open ledgers and reports ready; the old server then stops
+  accepting, ends its event streams, finishes its requests, hands over the ledgers written since and releases
+  the lease, and the successor takes it within `LEASE_WAIT_S`. Connections that arrive meanwhile wait in the
+  socket's backlog.
 - `flock` coordinates processes that share one kernel's view of the volume: a local disk or a
   `ReadWriteOnce` volume. It does not coordinate writers across NFS or another shared network
   filesystem; never put the ledger folder on one.

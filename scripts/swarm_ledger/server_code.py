@@ -1,5 +1,6 @@
 """The ledger server's code folders and the code stamp it loaded."""
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -26,6 +27,18 @@ def _mtime(path: Path) -> int:
 
 def code_stamp(code_dirs: tuple[Path, ...] = CODE_DIRS) -> int:
     return max((_mtime(p) for d in code_dirs for p in d.rglob("*") if p.suffix in SUFFIXES), default=0)
+
+
+def code_digest(code_dirs: tuple[Path, ...] = CODE_DIRS) -> str:
+    """A hash of every code file's path and content, so a touched but unchanged file reads as the same code."""
+    digest = hashlib.sha256()
+    for path in sorted(p for d in code_dirs for p in d.rglob("*") if p.suffix in SUFFIXES):
+        try:
+            content = path.read_bytes()
+        except OSError:
+            continue
+        digest.update(str(path).encode() + b"\0" + hashlib.sha256(content).digest())
+    return digest.hexdigest()
 
 
 def record(folder: Path, pid: int, stamp: int, code_dirs: tuple[Path, ...] = CODE_DIRS) -> None:

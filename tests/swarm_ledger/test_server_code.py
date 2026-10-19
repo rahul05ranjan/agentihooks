@@ -56,6 +56,29 @@ def test_a_code_file_that_cannot_be_read_counts_as_no_change(tmp_path):
     assert server_code.code_stamp((only,)) == 0
 
 
+def test_the_digest_follows_content_and_names_but_not_file_times(tmp_path):
+    page = tmp_path / "page.py"
+    page.write_text("old = 1\n")
+    (tmp_path / "notes.txt").write_text("ignored")
+    first = server_code.code_digest((tmp_path,))
+    os.utime(page, ns=(5, 5_000_000_000))
+    (tmp_path / "notes.txt").write_text("still ignored")
+    assert server_code.code_digest((tmp_path,)) == first
+    page.write_text("new = 1\n")
+    changed = server_code.code_digest((tmp_path,))
+    assert changed != first
+    page.rename(tmp_path / "renamed.py")
+    assert server_code.code_digest((tmp_path,)) not in (first, changed)
+
+
+def test_a_code_file_that_vanished_is_left_out_of_the_digest(tmp_path):
+    (tmp_path / "kept.py").write_text("kept = 1\n")
+    alone = server_code.code_digest((tmp_path,))
+    (tmp_path / "gone.py").symlink_to(tmp_path / "missing.py")
+    assert server_code.code_digest((tmp_path,)) == alone
+    assert len(alone) == 64
+
+
 def test_a_record_without_folders_is_current_while_its_stamp_is_zero(tmp_path):
     (tmp_path / ".server.code").write_text('{"pid": 4242, "stamp": 0}')
     assert not server_code.stale(tmp_path, 4242)
@@ -103,7 +126,10 @@ def test_serve_records_the_code_it_loaded_beside_its_pid_file(monkeypatch, tmp_p
         def server_activate(self):
             pass
 
-        def serve_forever(self):
+        def serve_forever(self, poll_interval):
+            pass
+
+        def drained(self, timeout):
             pass
 
         def server_close(self):

@@ -383,7 +383,8 @@ def test_draining_waits_for_the_requests_in_flight():
         release.set()
         httpd.shutdown()
         httpd.server_close()
-        client.join(10)
+        if client.ident is not None:
+            client.join(10)
 
 
 def test_an_inherited_socket_is_served_without_binding():
@@ -417,17 +418,39 @@ def test_a_fresh_server_binds_its_own_port(monkeypatch):
 
 
 def test_warming_loads_every_open_ledger_and_survives_a_broken_one(monkeypatch):
-    loaded = []
+    loaded, entries = [], {"fine": object()}
 
     def current(slug):
         loaded.append(slug)
         if slug == "broken":
             raise ValueError("bad rows")
+        return entries[slug]
 
     monkeypatch.setattr(server, "ledger_summaries", lambda: [{"slug": "broken"}, {"slug": "fine"}])
     monkeypatch.setattr(server.stored, "current", current)
     server.warm()
-    assert loaded == ["broken", "fine"]
+    assert loaded == ["broken", "fine", "broken", "fine"]
+
+
+def test_warming_repeats_while_a_ledger_changed_up_to_its_passes(monkeypatch):
+    loaded = []
+
+    def current(slug):
+        loaded.append(slug)
+        return object() if slug == "busy" else "same"
+
+    monkeypatch.setattr(server, "ledger_summaries", lambda: [{"slug": "busy"}, {"slug": "quiet"}])
+    monkeypatch.setattr(server.stored, "current", current)
+    server.warm(passes=3)
+    assert loaded == ["busy", "quiet"] * 3
+
+
+def test_warming_stops_after_one_pass_without_ledgers(monkeypatch):
+    calls = []
+    monkeypatch.setattr(server, "ledger_summaries", lambda: calls.append("listed") or [])
+    server.warm()
+    assert calls == ["listed"]
+    assert server.WARM_PASSES == 5
 
 
 def test_a_hangup_asks_the_watch_loop_to_hand_off(monkeypatch):
@@ -445,12 +468,12 @@ def test_the_watch_loop_hands_off_on_request_and_then_stops(monkeypatch):
     monkeypatch.setattr(server, "reloading", lambda: False)
     monkeypatch.setattr(server, "code_stamp", lambda: 7)
 
-    def reload_if_changed(started, httpd, force):
-        seen.append((started, httpd, force))
+    def reload_if_changed(started, httpd, force, loaded):
+        seen.append((started, httpd, force, loaded))
 
     monkeypatch.setattr(server, "reload_if_changed", reload_if_changed)
     assert server.watch_ledgers("httpd") is None
-    assert seen == [(7, "httpd", True)]
+    assert seen == [(7, "httpd", True, server.LOADED_DIGEST)]
     assert not requested.is_set()
 
 
@@ -501,3 +524,34 @@ def test_the_reload_flag_runs_reload(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["ledger_server.py", "--reload"])
     server.main()
     assert ran == ["reload"]
+
+
+def test_serving_listens_for_a_hangup_before_it_serves(monkeypatch):
+    seen = []
+    monkeypatch.setattr(server.signal, "signal", lambda sig, handler: seen.append((sig, handler)))
+    monkeypatch.setattr(server, "serve", lambda: seen.append("serve"))
+    monkeypatch.setattr(sys, "argv", ["ledger_server.py", "--serve"])
+    server.main()
+    assert seen == [(server.signal.SIGHUP, server.request_reload), "serve"]
+
+
+def test_a_carry_goes_from_the_old_server_to_its_successor_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(server.core, "LEDGER_DIR", tmp_path)
+    monkeypatch.setattr(server.stored, "carry", lambda since: {"demo": [7, "{}"]} if since == {"demo": 6} else {})
+    adopted = []
+    monkeypatch.setattr(server.stored, "adopt_carried", adopted.append)
+    server.write_carry({"demo": 6})
+    assert sorted(p.name for p in tmp_path.iterdir()) == [server.CARRY]
+    server.take_carry()
+    server.take_carry()
+    assert adopted == [{"demo": [7, "{}"]}]
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_broken_carry_is_dropped_and_the_successor_goes_on(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(server.core, "LEDGER_DIR", tmp_path)
+    (tmp_path / server.CARRY).write_text("{not json")
+    monkeypatch.setattr(server.stored, "adopt_carried", lambda carried: pytest.fail("adopted a broken carry"))
+    server.take_carry()
+    assert list(tmp_path.iterdir()) == []
+    assert capsys.readouterr().err.startswith("carry: ")
