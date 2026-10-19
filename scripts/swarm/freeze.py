@@ -95,13 +95,12 @@ def marks(doc: dict, graph: dict, fix: str, watched: bool) -> dict:
     return found
 
 
-def _chain(node: str, graph: dict, tasks: dict) -> list:
+def _chain(node: str, graph: dict, tasks: dict, below: tuple = ()) -> list:
     if node in tasks:
         return ancestry(tasks[node], graph)
-    chain = [node]
-    while (up := (graph.get(chain[-1]) or (None, None))[1]) not in (None, *chain):
-        chain.append(up)
-    return chain
+    chain = [*below, node]
+    up = (graph.get(node) or (None, None))[1]
+    return _chain(up, graph, tasks, tuple(chain)) if up in graph.keys() - set(chain) else chain
 
 
 def _reaches(target: str, node: str, chains: dict) -> bool:
