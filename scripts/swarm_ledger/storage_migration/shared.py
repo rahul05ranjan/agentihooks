@@ -24,7 +24,7 @@ def rollback() -> None:
     raise DryRun
 
 
-def comments(value) -> int:
+def comments(value: object) -> int:
     if isinstance(value, list):
         return sum(comments(item) for item in value)
     if not isinstance(value, dict):

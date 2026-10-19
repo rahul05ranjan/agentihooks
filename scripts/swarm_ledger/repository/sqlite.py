@@ -237,6 +237,10 @@ def read_document(directory, slug: str) -> dict | None:
             return None
 
 
+def registry_rows(connection, slug: str) -> list:
+    return [list(row) for row in connection.execute(REGISTRIES, (slug,))]
+
+
 def without_events(state: dict) -> dict:
     """The document as its rows hold it: the event log lives in its own table."""
     return {**state, "_meta": {key: value for key, value in state["_meta"].items() if key != "events"}}
@@ -290,7 +294,7 @@ class Transaction:
         self.add_registries(rows)
 
     def registries(self, slug: str) -> list:
-        return [list(row) for row in self.connection.execute(REGISTRIES, (slug,))]
+        return registry_rows(self.connection, slug)
 
     def purge(self, slug: str) -> None:
         self.repository.purge(slug, self.connection)
@@ -365,7 +369,7 @@ class Snapshot:
         return self.repository._export(self.connection, slug)
 
     def registries(self, slug: str) -> list:
-        return [list(row) for row in self.connection.execute(REGISTRIES, (slug,))]
+        return registry_rows(self.connection, slug)
 
     def token(self, slug: str) -> str | None:
         row = self.connection.execute(TOKEN, (slug,)).fetchone()
