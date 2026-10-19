@@ -17,6 +17,9 @@ until_acted() {
   for _ in $(seq 160); do
     line=$(watchdog --run-id "$PLANT")
     echo "$(date -u +%T) $line"
+    for name in $(gh api "repos/$R/actions/runs/$PLANT/jobs?filter=latest" --jq '.jobs[] | select(.status == "in_progress") | .runner_name'); do
+      echo "  runner $name: $(gh api --paginate "orgs/${R%%/*}/actions/runners?per_page=100" --jq ".runners[] | select(.name == \"$name\") | \"\(.status) busy=\(.busy)\"")"
+    done
     action=$(jq -r .action <<<"$line")
     if [[ "$action" != none ]]; then
       [[ "$action" == "$want" ]] || { echo "::error::expected $want, got $action"; exit 1; }
