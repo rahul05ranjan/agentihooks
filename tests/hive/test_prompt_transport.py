@@ -195,6 +195,8 @@ def test_a_finished_remote_task_keeps_its_synced_lines(setup, homes):
     carry(setup, homes)
     with at(homes.hive):
         setup.consumer.apply(setup.order)
+        with (ledger_workspace.folder("fixture", "task") / "proof.md").open("a", encoding="utf-8") as fh:
+            fh.write("hive proof\n")
         agent = setup.store.execution_registry.get("fixture", setup.agent.execution_id)
         setup.store.execution_registry.update("fixture", replace(agent, state="finished"))
         setup.consumer.sync_workspaces(45)
@@ -202,16 +204,28 @@ def test_a_finished_remote_task_keeps_its_synced_lines(setup, homes):
     with at(homes.controller), patch.object(commands, "hive_id", return_value="controller"):
         (ledger_workspace.folder("fixture", "task") / "proof.md").write_text("controller only\n", encoding="utf-8")
         tails = ledger_workspace.published(setup.store, "fixture", ledger)
-    assert tails == {"task": {"latest_progress": "controller step"}}
+    assert tails == {"task": {"latest_progress": "controller step", "latest_proof": "hive proof"}}
+
+
+def test_the_latest_execution_of_a_task_wins(setup):
+    from dataclasses import replace
+
+    older = replace(setup.agent, name="older", state="finished", started_at=1, runtime_target={"host_id": "a"})
+    newer = replace(setup.agent, name="newer", state="ended", started_at=2, runtime_target={"host_id": "b"})
+    live = replace(setup.agent, name="live", state="working", started_at=0)
+    assert ledger_workspace.latest([newer, older])["task"].name == "newer"
+    assert ledger_workspace.latest([live, newer, older])["task"].name == "live"
 
 
 def test_seeds_carry_only_the_latest_text(homes):
     with at(homes.controller):
         folder = ledger_workspace.scaffold("fixture", TASK)
         (folder / "progress.md").write_text("x" * ledger_workspace.SEED_CHARS + "last\n", encoding="utf-8")
+        (folder / "steering.md").write_text("# task\n" + "y" * ledger_workspace.SEED_CHARS, encoding="utf-8")
         sent = ledger_workspace.seeds("fixture", "task")
     assert len(sent["progress.md"]) == ledger_workspace.SEED_CHARS
     assert sent["progress.md"].endswith("last\n")
+    assert sent["steering.md"] == "# task\n" + "y" * ledger_workspace.SEED_CHARS
 
 
 def test_a_local_task_reads_its_own_folder(setup, homes):

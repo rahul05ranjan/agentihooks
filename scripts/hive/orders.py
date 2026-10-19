@@ -197,9 +197,9 @@ class Consumer:
 
     def sync_workspaces(self, ttl: int) -> None:
         hosted = [
-            (slug, agent.task)
+            (slug, task)
             for slug in self.store.slugs()
-            for agent in self.store.agents(slug)
+            for task, agent in ledger_workspace.latest(self.store.agents(slug)).items()
             if agent.execution_id and agent.lane != MASTER and agent.runtime_target.get("host_id") == self.hive
         ]
         ledger_workspace.sync(self.store.redis, self.hive, hosted, ttl)

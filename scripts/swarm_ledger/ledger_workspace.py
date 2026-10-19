@@ -92,7 +92,8 @@ def named(slug, agent, recorded=""):
 
 def seeds(slug, task_id):
     path = folder(slug, task_id)
-    return {name: (path / name).read_text(encoding="utf-8")[-SEED_CHARS:] for name in SEEDS if (path / name).is_file()}
+    sent = {name: (path / name).read_text(encoding="utf-8") for name in SEEDS if (path / name).is_file()}
+    return {name: text if name == "steering.md" else text[-SEED_CHARS:] for name, text in sent.items()}
 
 
 def materialize(slug, task_id, sent):
@@ -124,15 +125,21 @@ def sync(redis, hive, hosted, ttl):
     redis.set(synced_key(hive), json.dumps(copy), ex=ttl)
 
 
+def latest(agents):
+    """Each task's live execution, else the one that started last."""
+    ordered = sorted(agents, key=lambda agent: (agent.state not in ENDED, agent.started_at))
+    return {agent.task: agent for agent in ordered}
+
+
 def published(store, slug, ledger):
     """Each task's latest work folder lines: the synced copy of the hive that runs, or last ran, its execution."""
-    latest = {agent.task: agent for agent in sorted(store.agents(slug), key=lambda agent: agent.state not in ENDED)}
+    ran = latest(store.agents(slug))
     copies = {}
     found = {}
     for task in ledger.get("tasks", []):
         if not task.get("workspace"):
             continue
-        host = reports.host(latest[task["id"]]) if task["id"] in latest else ""
+        host = reports.host(ran[task["id"]]) if task["id"] in ran else ""
         if not host:
             found[task["id"]] = tails(slug, task["id"])
             continue
