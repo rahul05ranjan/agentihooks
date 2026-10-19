@@ -348,43 +348,72 @@ def test_the_home_shell_bins_nothing_and_the_watch_loop_bins_closed_ledgers_with
     assert "served-closed" in ledger_bin.entries()
 
 
+def unbound_server():
+    return server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler, bind_and_activate=False)
+
+
 def test_draining_waits_for_the_requests_in_flight():
-    import http.server
     import threading
-    import urllib.request
 
-    release = threading.Event()
-
-    class Slow(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):
-            release.wait(10)
-            self.send_response(204)
-            self.end_headers()
-
-        def log_message(self, *args):
-            pass
-
-    httpd = server.ThreadingHTTPServer(("127.0.0.1", 0), Slow)
-    threading.Thread(target=httpd.serve_forever, args=(0.01,), daemon=True).start()
-    port = httpd.server_address[1]
-    client = threading.Thread(
-        target=lambda: urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=10).close(), daemon=True
-    )
+    httpd = unbound_server()
     try:
         assert httpd.drained(0.05) is True
-        client.start()
         with httpd.idle:
-            assert httpd.idle.wait_for(lambda: httpd.active == 1, 10)
+            httpd.active = 1
         assert httpd.drained(0.05) is False
-        release.set()
+
+        def finish():
+            with httpd.idle:
+                httpd.active = 0
+                httpd.idle.notify_all()
+
+        threading.Timer(0.1, finish).start()
         assert httpd.drained(10) is True
+    finally:
+        httpd.server_close()
+
+
+def test_a_request_counts_as_in_flight_from_accept_until_its_thread_ends():
+    httpd = unbound_server()
+    started = []
+    httpd.process_request_thread = lambda request, address: started.append((request, address, httpd.active))
+    httpd.process_request("request", ("127.0.0.1", 1))
+    httpd.server_close()
+    assert started == [("request", ("127.0.0.1", 1), 1)]
+    assert httpd.active == 1
+
+
+def test_a_finished_request_thread_leaves_flight_and_wakes_the_drain():
+    httpd = unbound_server()
+    handled, woken = [], []
+    httpd.finish_request = lambda request, address: handled.append(httpd.active)
+    httpd.shutdown_request = lambda request: None
+    httpd.active = 2
+    httpd.idle.notify_all = lambda: woken.append(httpd.active)
+    try:
+        httpd.process_request_thread("request", ("127.0.0.1", 1))
+        assert handled == [2]
+        assert httpd.active == 1
+        assert woken == [1]
+    finally:
+        httpd.server_close()
+
+
+def test_a_request_thread_that_fails_still_leaves_flight():
+    httpd = unbound_server()
+
+    def broken(request, address):
+        raise OSError("reset")
+
+    httpd.finish_request = broken
+    httpd.shutdown_request = lambda request: None
+    httpd.handle_error = lambda request, address: None
+    httpd.active = 1
+    try:
+        httpd.process_request_thread("request", ("127.0.0.1", 1))
         assert httpd.active == 0
     finally:
-        release.set()
-        httpd.shutdown()
         httpd.server_close()
-        if client.ident is not None:
-            client.join(10)
 
 
 def test_an_inherited_socket_is_served_without_binding():
