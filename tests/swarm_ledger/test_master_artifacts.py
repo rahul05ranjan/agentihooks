@@ -4,10 +4,12 @@ import threading
 import urllib.request
 from http.server import ThreadingHTTPServer
 
+import fakeredis
 import ledger
 import ledger_core as core
 import pytest
 
+from scripts.swarm.store import RedisStore, SwarmConfig
 from scripts.swarm_ledger import ledger_artifacts as artifacts
 from scripts.swarm_ledger import ledger_server as server
 from tests.swarm_ledger import legacy_page  # noqa: E402
@@ -25,6 +27,9 @@ def publication(ledger_dir, tmp_path, monkeypatch):
     folder.mkdir()
     monkeypatch.setattr(core, "LEDGER_DIR", folder)
     slug = "master-artifacts"
+    store = RedisStore(fakeredis.FakeRedis(decode_responses=True))
+    store.create(SwarmConfig(slug, str(tmp_path), 1, 0))
+    monkeypatch.setattr("scripts.swarm.store.connect", lambda: store)
     html, _ = make_ledger(slug)
     token = legacy_page.stored_token(html)
     core.sync(slug, ops=[{"op": "join", "id": "join", "by": MASTER, "role": "orchestrator"}])
