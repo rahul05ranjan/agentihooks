@@ -1,5 +1,6 @@
 """Wall time per claimed task: past one limit the master hears of it, past a second the agent is asked to push and
-hand off, and an agent still live a grace period after that ask is ended and its task reopened for the next engineer."""
+hand off, and an agent still live a grace period after that ask is ended and its task reopened for the next engineer.
+Declared waits count toward the age: the time an overrunning agent loses is mostly spent waiting on blockers."""
 
 import json
 from collections.abc import Callable
@@ -7,14 +8,14 @@ from dataclasses import dataclass
 
 from scripts.inbox import exits
 from scripts.inbox.store import InboxStore
-from scripts.swarm import capacity, outage
+from scripts.swarm import outage
 from scripts.swarm.health.findings import MINUTE_MS
 from scripts.swarm.ledger_events import Mail
 from scripts.swarm_ledger import ledger_workspace
 
 REPORT_MINUTES, PARK_MINUTES, GRACE_MINUTES = 90, 150, 15
 SENDER, KEY, CAUSE = "swarm", "overrun", "overrun"
-HELD = ("claimed", "pr")
+HELD, LANES = ("claimed", "pr"), ("eng", "ci")
 FINISHED, STOPPED = "finished", "stopped"
 NO_STEPS = "no steps recorded in progress.md"
 REPORT = (
@@ -57,13 +58,15 @@ def overrun_pass(watch, doc):
     mail = Mail(InboxStore(watch.store.redis), watch.store, watch.slug, doc)
     actions, kept = [], {}
     for agent in watch.store.agents(watch.slug):
-        if not _holding(watch, agent, rows):
+        if agent.state == FINISHED:
             continue
         mark = json.loads(marks.get(agent.name) or "{}")
-        if not outage.held(watch.store, watch.slug, agent.name):
+        if mark.get("task") != agent.task:
+            mark = {}
+        if _holding(watch, agent, rows) and not outage.held(watch.store, watch.slug, agent.name):
             actions += _step(watch, mail, agent, mark)
         if mark and "ended" not in mark:
-            kept[agent.name] = json.dumps(mark)
+            kept[agent.name] = json.dumps({**mark, "task": agent.task})
     watch.store.redis.delete(key)
     if kept:
         watch.store.redis.hset(key, mapping=kept)
@@ -77,8 +80,7 @@ def _minutes(watch, since):
 def _holding(watch, agent, rows):
     row = rows.get(agent.task) or {}
     return (
-        agent.lane in capacity.LANES
-        and agent.state != FINISHED
+        agent.lane in LANES
         and agent.started_at > 0
         and agent.name in watch.live
         and row.get("state") in HELD
@@ -132,7 +134,11 @@ def _end(watch, mail, agent, minutes, mark):
         return []
     if not watch.retire(agent):
         return [f"overrun: could not end {agent.name} on task {tid}, retrying next tick"]
-    watch.ledger.update_task(watch.slug, tid, {"state": "open", "claimed_by": "", "awaiting": ""}, if_state=HELD)
+    reopened = watch.ledger.update_task(
+        watch.slug, tid, {"state": "open", "claimed_by": "", "awaiting": ""}, if_state=HELD
+    )
+    if reopened.get("state") != "open" or reopened.get("claimed_by"):
+        return []
     watch.store.mark_restart(watch.slug, tid, CAUSE)
     watch.store.release(watch.slug, tid, agent.name)
     watch.store.drop_agent(watch.slug, agent.name)

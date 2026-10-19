@@ -1,4 +1,5 @@
 from dataclasses import replace
+from pathlib import Path
 
 from scripts.inbox.store import InboxStore
 from scripts.swarm import overrun
@@ -69,8 +70,8 @@ class Swarm:
         return [a.name for a in self.store.agents(SLUG) if a.state != "finished"]
 
 
-def _progress(home, lines):
-    folder = home / ".agentihooks" / "swarm" / SLUG / "tasks" / "t1"
+def _progress(lines):
+    folder = Path.home() / ".agentihooks" / "swarm" / SLUG / "tasks" / "t1"
     folder.mkdir(parents=True)
     (folder / "progress.md").write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
 
@@ -85,9 +86,8 @@ def test_an_agent_under_the_report_limit_is_left_alone():
     assert swarm.master() == [] and swarm.agent_inbox() == []
 
 
-def test_past_the_report_limit_the_master_hears_the_task_its_age_and_last_steps_once(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    _progress(tmp_path, ["opened the issue", "pushed the red test", "fixed the push guard", "waiting on the queue"])
+def test_past_the_report_limit_the_master_hears_the_task_its_age_and_last_steps_once():
+    _progress(["opened the issue", "pushed the red test", "fixed the push guard", "waiting on the queue"])
     swarm = Swarm()
     actions = swarm.tick(REPORT)
     [item] = swarm.master()
@@ -100,16 +100,14 @@ def test_past_the_report_limit_the_master_hears_the_task_its_age_and_last_steps_
     assert len(swarm.master()) == 1
 
 
-def test_a_report_without_progress_lines_says_none_were_recorded(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
+def test_a_report_without_progress_lines_says_none_were_recorded():
     swarm = Swarm()
     swarm.tick(REPORT)
     [item] = swarm.master()
     assert overrun.NO_STEPS in item.text
 
 
-def test_past_the_park_limit_the_agent_is_asked_once_to_push_and_hand_off(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
+def test_past_the_park_limit_the_agent_is_asked_once_to_push_and_hand_off():
     swarm = Swarm()
     swarm.tick(REPORT)
     actions = swarm.tick(PARK)
@@ -123,15 +121,13 @@ def test_past_the_park_limit_the_agent_is_asked_once_to_push_and_hand_off(monkey
     assert len(swarm.agent_inbox()) == 1
 
 
-def test_an_agent_first_seen_past_the_park_limit_is_reported_and_asked_in_one_tick(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
+def test_an_agent_first_seen_past_the_park_limit_is_reported_and_asked_in_one_tick():
     swarm = Swarm()
     actions = swarm.tick(PARK)
     assert len(actions) == 2 and len(swarm.master()) == 1 and len(swarm.agent_inbox()) == 1
 
 
-def test_an_agent_still_live_after_the_grace_is_ended_and_its_task_reopened(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
+def test_an_agent_still_live_after_the_grace_is_ended_and_its_task_reopened():
     swarm = Swarm()
     swarm.tick(PARK)
     assert swarm.tick(ENDED - MINUTE) == [] and swarm.retired == []
@@ -152,8 +148,7 @@ def test_an_agent_still_live_after_the_grace_is_ended_and_its_task_reopened(monk
     assert swarm.store.redis.hgetall(swarm.store.key(SLUG, overrun.KEY)) == {}
 
 
-def test_an_agent_that_handed_off_inside_the_grace_is_never_ended(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
+def test_an_agent_that_handed_off_inside_the_grace_is_never_ended():
     swarm = Swarm()
     swarm.tick(PARK)
     [agent] = swarm.store.agents(SLUG)
@@ -162,8 +157,7 @@ def test_an_agent_that_handed_off_inside_the_grace_is_never_ended(monkeypatch, t
     assert swarm.retired == [] and swarm.ledger.rows["t1"]["claimed_by"] == OWNER
 
 
-def test_a_failed_end_keeps_the_task_claimed_and_retries_next_tick(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
+def test_a_failed_end_keeps_the_task_claimed_and_retries_next_tick():
     swarm = Swarm(retires=False)
     swarm.tick(PARK)
     assert swarm.tick(ENDED) == [f"overrun: could not end {OWNER} on task t1, retrying next tick"]
@@ -174,8 +168,7 @@ def test_a_failed_end_keeps_the_task_claimed_and_retries_next_tick(monkeypatch, 
     assert swarm.retired == [OWNER, OWNER] and swarm.ledger.rows["t1"]["state"] == "open"
 
 
-def test_a_task_that_moved_on_is_not_reopened(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
+def test_a_task_that_moved_on_is_not_reopened():
     swarm = Swarm()
     swarm.tick(PARK)
     swarm.ledger.task = lambda slug, task_id: {**swarm.ledger.rows[task_id], "state": "done"}
@@ -183,8 +176,7 @@ def test_a_task_that_moved_on_is_not_reopened(monkeypatch, tmp_path):
     assert swarm.retired == [] and swarm.ledger.updates == []
 
 
-def test_a_pull_request_task_counts_as_claimed(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
+def test_a_pull_request_task_counts_as_claimed():
     swarm = Swarm(task={"state": "pr"})
     swarm.tick(PARK)
     swarm.tick(ENDED)
@@ -218,8 +210,7 @@ def test_a_master_an_agent_off_its_claim_or_a_dead_pane_is_skipped():
         assert swarm.master() == [] and swarm.retired == []
 
 
-def test_a_new_life_on_the_same_task_starts_its_own_clock(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
+def test_a_new_life_on_the_same_task_starts_its_own_clock():
     swarm = Swarm()
     swarm.tick(PARK)
     swarm.store.drop_agent(SLUG, OWNER)
@@ -229,3 +220,39 @@ def test_a_new_life_on_the_same_task_starts_its_own_clock(monkeypatch, tmp_path)
     swarm.live = {successor}
     assert swarm.tick(ENDED) == []
     assert swarm.store.redis.hgetall(swarm.store.key(SLUG, overrun.KEY)) == {}
+
+
+def test_a_planner_is_never_watched():
+    swarm = Swarm(agent=AgentRecord(OWNER, "plan", "t1", seat=SEAT, started_at=START))
+    assert swarm.tick(PARK) == [] and swarm.tick(ENDED) == []
+    assert swarm.master() == [] and swarm.retired == []
+
+
+def test_a_refused_reopen_leaves_the_claim_and_the_agent_record():
+    swarm = Swarm()
+    swarm.tick(PARK)
+    swarm.ledger.update_task = lambda slug, task_id, fields, by="swarm", if_state=(): dict(swarm.ledger.rows[task_id])
+    assert swarm.tick(ENDED) == []
+    assert swarm.store.claimant(SLUG, "t1") == OWNER and swarm.working() == [OWNER]
+    assert swarm.store.take_restart(SLUG, "t1") == "" and swarm.ledger.comments == []
+
+
+def test_a_pane_missing_for_one_tick_keeps_the_ask_and_its_grace():
+    swarm = Swarm()
+    swarm.tick(PARK)
+    swarm.live = set()
+    assert swarm.tick(PARK + MINUTE) == []
+    swarm.live = {OWNER}
+    assert len(swarm.tick(ENDED)) == 1
+    assert swarm.retired == [OWNER] and len(swarm.agent_inbox()) == 1
+
+
+def test_a_mark_left_from_another_task_starts_over():
+    swarm = Swarm()
+    swarm.tick(PARK)
+    [agent] = swarm.store.agents(SLUG)
+    swarm.store.put_agent(SLUG, replace(agent, task="t2"))
+    swarm.ledger.rows["t2"] = {**swarm.ledger.rows["t1"], "id": "t2"}
+    actions = swarm.tick(ENDED)
+    assert swarm.retired == [] and len(actions) == 2
+    assert len(swarm.agent_inbox()) == 2
