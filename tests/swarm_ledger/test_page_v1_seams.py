@@ -59,6 +59,12 @@ def test_a_frozen_plan_marks_every_node_under_it_and_the_tasks_folded_into_them(
     }
 
 
+def test_a_frozen_phase_marks_itself_and_its_slices_but_not_its_plan():
+    frozen = marks([record("phases/ph1")])["frozen"]
+    assert {"phases/ph1", "slices/s1", "tasks/t1", "tasks/t3"} <= frozen
+    assert "plans/p1" not in frozen
+
+
 def test_a_focus_holds_what_lies_outside_it_but_never_urgent_or_fix_phase_tasks():
     assert marks([record("plans/p1", "focus")])["held"] == {"plans/p2", "phases/ph2", "tasks/t2"}
     assert marks([record("plans/p1", "focus")], fix_phase="ph2")["held"] == {"plans/p2", "phases/ph2"}
