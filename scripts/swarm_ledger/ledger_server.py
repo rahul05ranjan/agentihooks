@@ -1250,6 +1250,7 @@ def reload_if_changed(started, server, code_dirs=CODE_DIRS, hand_off=server_hand
             os.execv(sys.executable, argv)
         except OSError as exc:
             sys.stderr.write(f"reload: could not restart in place: {exc}; this server keeps serving\n")
+            metrics_journal(request_metrics.restore, core.LEDGER_DIR / request_metrics.JOURNAL_NAME)
             return stamp
     try:
         held = hand_off(server.socket, argv, extra={WATCHED: ",".join(HUB.watched()), MODULES: loaded_modules()})
@@ -1267,14 +1268,14 @@ def reload_if_changed(started, server, code_dirs=CODE_DIRS, hand_off=server_hand
     return None
 
 
-def write_carry(since):
+def write_carry(since: dict) -> None:
     path = core.LEDGER_DIR / CARRY
     staged = path.with_name(f"{CARRY}.{os.getpid()}")
     staged.write_text(json.dumps(stored.carry(since)))
     staged.replace(path)
 
 
-def take_carry():
+def take_carry() -> list[str] | None:
     """The slugs whose committed copies the old server carried over."""
     path = core.LEDGER_DIR / CARRY
     try:
@@ -1291,7 +1292,7 @@ def take_carry():
     return list(carried)
 
 
-def refresh_streams(slugs):
+def refresh_streams(slugs: list[str]) -> None:
     """Bring a warmed stream view up to a ledger the old server wrote after the successor built it."""
     for slug in slugs:
         if HUB.has(slug):
@@ -1301,11 +1302,11 @@ def refresh_streams(slugs):
                 sys.stderr.write(f"refresh stream {slug}: {exc}\n")
 
 
-def request_reload(signum, frame):
+def request_reload(signum: int, frame: object) -> None:
     RELOAD.set()
 
 
-def hand_over(started, server, force=False):
+def hand_over(started: int, server: ThreadingHTTPServer, force: bool = False) -> int | None:
     with HANDING:
         if HANDED.is_set():
             return None
@@ -1315,7 +1316,7 @@ def hand_over(started, server, force=False):
         return started
 
 
-def answer_reloads(server, requested=RELOAD):
+def answer_reloads(server: ThreadingHTTPServer, requested: threading.Event = RELOAD) -> None:
     while requested.wait():
         requested.clear()
         if hand_over(code_stamp(), server, force=True) is None:
@@ -1369,7 +1370,7 @@ def watch_ledgers(server=None, interval=2.0, stopping=NEVER):
         scheduled_wait(interval)
 
 
-def listening(listener=None):
+def listening(listener: socket.socket | None = None) -> ThreadingHTTPServer:
     server = ThreadingHTTPServer((HOST, PORT), Handler, bind_and_activate=False)
     server.request_queue_size = 128
     if listener is None:
@@ -1381,7 +1382,7 @@ def listening(listener=None):
     return server
 
 
-def warm(passes=WARM_PASSES):
+def warm(passes: int = WARM_PASSES) -> None:
     """Load every open ledger, again while a pass still finds one written since, at most passes times."""
     held = {}
     for _ in range(passes):
@@ -1402,7 +1403,7 @@ def loaded_modules(modules=sys.modules) -> str:
         sorted(
             name
             for name, module in modules.items()
-            if module is not None and name != "__main__" and not name.endswith("ledger_server")
+            if module is not None and name != "__main__" and name.rsplit(".", 1)[-1] != "ledger_server"
         )
     )
 
@@ -1588,7 +1589,7 @@ def recorded_pid() -> str:
         return ""
 
 
-def reload(wait=RELOAD_WAIT_S):
+def reload(wait: float = RELOAD_WAIT_S) -> str | None:
     if server_compose.used(core.LEDGER_DIR) and (error := server_compose.start(core.LEDGER_DIR)):
         sys.exit(f"could not start the ledger service: {error}")
     if not server_process_alive():

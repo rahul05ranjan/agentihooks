@@ -119,6 +119,12 @@ def _ours(pid: int, proc: Path) -> bool:
     return facts is not None and script(facts["argv"]) is not None
 
 
+def failed_reload(host: Host, pid: int, reason: str, error: str) -> None:
+    record = {"at": time.time(), "reason": reason, "reload": "failed", "error": error, "pid": pid}
+    with (host.folder / LOG).open("a") as log:
+        log.write(json.dumps(record) + "\n")
+
+
 def restart(host: Host, pid: int, command: list[str], reason: str) -> str:
     try:
         _signal(host, pid, signal.SIGTERM, reason)
@@ -228,7 +234,10 @@ def watch(store, slug: str, ledger, runtime, host: Host | None = None) -> list[s
     if kind == RUNAWAY:
         error = restart(host, pid, command, reason)
     else:
-        error = relaunch(host, command, "--reload") and restart(host, pid, command, reason)
+        error = relaunch(host, command, "--reload")
+        if error:
+            failed_reload(host, pid, reason, error)
+            error = restart(host, pid, command, reason)
     if error:
         text = DOWN_TEXT.format(why=reason, error=error)
         store.redis.hset(incidents.key("ledger"), "watchdog", text)

@@ -5,6 +5,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,11 +16,12 @@ PR_GET_CHILD_SUBREAPER = 37
 
 
 class Libc:
-    def __init__(self):
-        self.calls = []
+    def __init__(self, answer=0):
+        self.calls, self.answer = [], answer
 
     def prctl(self, *args):
         self.calls.append(args)
+        return self.answer
 
 
 def test_subreaping_asks_the_kernel_to_adopt_orphaned_descendants():
@@ -27,6 +29,11 @@ def test_subreaping_asks_the_kernel_to_adopt_orphaned_descendants():
     server_supervisor.subreap(libc)
     assert libc.calls == [(36, 1, 0, 0, 0)]
     assert server_supervisor.PR_SET_CHILD_SUBREAPER == 36
+
+
+def test_a_refused_subreaper_stops_the_supervisor_before_it_starts_a_server():
+    with pytest.raises(OSError, match="prctl refused PR_SET_CHILD_SUBREAPER"):
+        server_supervisor.subreap(Libc(answer=-1))
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="child subreapers are a Linux feature")
@@ -41,32 +48,38 @@ def test_subreaping_without_a_library_marks_this_process_a_subreaper():
     assert held.value == 1
 
 
-def test_a_forwarded_signal_reaches_the_server_named_in_the_pidfile(tmp_path):
+def test_a_forwarded_signal_reaches_the_pidfile_server_and_every_held_child(tmp_path):
     pidfile = tmp_path / ".server.pid"
     pidfile.write_text("41")
     sent = []
-    server_supervisor.forward(pidfile, signal.SIGTERM, lambda pid, sig: sent.append((pid, sig)))
-    assert sent == [(41, signal.SIGTERM)]
+    server_supervisor.forward(pidfile, signal.SIGTERM, (52, 41), lambda pid, sig: sent.append((pid, sig)))
+    assert sent == [(41, signal.SIGTERM), (52, signal.SIGTERM)]
 
 
 @pytest.mark.parametrize("text", [None, "", "x"])
-def test_a_forward_without_a_readable_server_is_dropped(tmp_path, text):
+def test_a_forward_without_a_readable_pidfile_still_reaches_the_held_child(tmp_path, text):
     pidfile = tmp_path / ".server.pid"
     if text is not None:
         pidfile.write_text(text)
     sent = []
-    server_supervisor.forward(pidfile, signal.SIGTERM, lambda pid, sig: sent.append((pid, sig)))
-    assert sent == []
+    server_supervisor.forward(pidfile, signal.SIGTERM, (52,), lambda pid, sig: sent.append((pid, sig)))
+    assert sent == [(52, signal.SIGTERM)]
+    server_supervisor.forward(pidfile, signal.SIGTERM, kill=lambda pid, sig: sent.append((pid, sig)))
+    assert sent == [(52, signal.SIGTERM)]
 
 
-def test_a_forward_to_a_server_already_gone_is_dropped(tmp_path):
+def test_a_forward_goes_on_past_a_server_already_gone(tmp_path):
     pidfile = tmp_path / ".server.pid"
     pidfile.write_text("41")
+    sent = []
 
-    def gone(pid, sig):
-        raise ProcessLookupError(pid)
+    def kill(pid, sig):
+        sent.append(pid)
+        if pid == 41:
+            raise ProcessLookupError(pid)
 
-    server_supervisor.forward(pidfile, signal.SIGTERM, gone)
+    server_supervisor.forward(pidfile, signal.SIGTERM, (52,), kill)
+    assert sent == [41, 52]
 
 
 def test_reaping_waits_until_no_child_remains_and_returns_the_last_exit_code():
@@ -80,6 +93,17 @@ def test_reaping_waits_until_no_child_remains_and_returns_the_last_exit_code():
     assert server_supervisor.reap(wait) == 3
 
 
+def test_reaping_a_server_ended_by_a_signal_returns_the_shell_code():
+    statuses = iter([(10, signal.SIGTERM)])
+
+    def wait():
+        for status in statuses:
+            return status
+        raise ChildProcessError
+
+    assert server_supervisor.reap(wait) == 128 + signal.SIGTERM
+
+
 def test_reaping_with_no_child_returns_zero():
     def wait():
         raise ChildProcessError
@@ -89,18 +113,17 @@ def test_reaping_with_no_child_returns_zero():
 
 def test_supervising_adopts_orphans_forwards_stop_signals_and_reaps(tmp_path):
     libc, installed, spawned = Libc(), {}, []
+    child = subprocess.Popen([sys.executable, "-c", "import time\ntime.sleep(30)"])
     status = server_supervisor.supervise(
         ["serve"],
         tmp_path / ".server.pid",
-        spawn=spawned.append,
+        spawn=lambda argv: spawned.append(argv) or SimpleNamespace(pid=child.pid),
         libc=libc,
         wait=lambda: (_ for _ in ()).throw(ChildProcessError),
         install=lambda signum, handler: installed.update({signum: handler}),
     )
     assert (status, spawned, libc.calls) == (0, [["serve"]], [(36, 1, 0, 0, 0)])
     assert set(installed) == {signal.SIGTERM, signal.SIGINT}
-    child = subprocess.Popen([sys.executable, "-c", "import time\ntime.sleep(30)"])
-    (tmp_path / ".server.pid").write_text(str(child.pid))
     installed[signal.SIGTERM](signal.SIGTERM, None)
     assert child.wait(timeout=10) == -signal.SIGTERM
 
@@ -120,6 +143,7 @@ ORPHANING = (
 )
 
 
+@pytest.mark.wall_clock
 @pytest.mark.skipif(sys.platform != "linux", reason="child subreapers are a Linux feature")
 def test_the_supervisor_outlives_a_server_that_leaves_its_successor_behind(tmp_path):
     marker = tmp_path / "successor"

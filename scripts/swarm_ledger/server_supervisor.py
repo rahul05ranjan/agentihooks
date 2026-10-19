@@ -10,14 +10,22 @@ FORWARDED = (signal.SIGTERM, signal.SIGINT)
 
 
 def subreap(libc=None) -> None:
-    (libc or ctypes.CDLL(None)).prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0)
+    lib = libc or ctypes.CDLL(None, use_errno=True)
+    if lib.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), "prctl refused PR_SET_CHILD_SUBREAPER")
 
 
-def forward(pidfile: Path, signum: int, kill=os.kill) -> None:
+def forward(pidfile: Path, signum: int, held: tuple[int, ...] = (), kill=os.kill) -> None:
+    pids = set(held)
     try:
-        kill(int(pidfile.read_text()), signum)
+        pids.add(int(pidfile.read_text()))
     except (OSError, ValueError):
         pass
+    for pid in sorted(pids):
+        try:
+            kill(pid, signum)
+        except OSError:
+            continue
 
 
 def reap(wait=os.wait) -> int:
@@ -26,16 +34,17 @@ def reap(wait=os.wait) -> int:
         try:
             status = wait()[1]
         except ChildProcessError:
-            return os.waitstatus_to_exitcode(status)
+            code = os.waitstatus_to_exitcode(status)
+            return code if code >= 0 else 128 - code
 
 
 def supervise(
     argv: list[str], pidfile: Path, spawn=subprocess.Popen, libc=None, wait=os.wait, install=signal.signal
 ) -> int:
     subreap(libc)
+    child = spawn(argv)
     for signum in FORWARDED:
-        install(signum, lambda received, frame: forward(pidfile, received))
-    spawn(argv)
+        install(signum, lambda received, frame: forward(pidfile, received, (child.pid,)))
     return reap(wait)
 
 

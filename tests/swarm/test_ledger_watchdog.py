@@ -268,6 +268,13 @@ def test_a_stale_server_that_does_not_hand_off_is_stopped_and_started(store, tmp
         ("kill", PID, signal.SIGTERM),
         ("run", "--ensure"),
     ]
+    first = json.loads((host.folder / ledger_watchdog.LOG).read_text().splitlines()[0])
+    assert (first["reload"], first["error"], first["pid"], first["reason"]) == (
+        "failed",
+        "did not hand off",
+        PID,
+        REASON,
+    )
 
 
 def test_a_pid_taken_by_another_program_during_the_stop_is_never_killed(tmp_path):

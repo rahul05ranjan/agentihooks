@@ -562,8 +562,9 @@ def test_a_container_s_main_server_reloads_in_place(monkeypatch):
 
 
 def test_a_container_s_main_server_that_cannot_restart_in_place_keeps_serving(monkeypatch, capsys):
+    journal = []
     monkeypatch.setattr(server, "container_main", lambda: True)
-    monkeypatch.setattr(server, "metrics_journal", lambda step: None)
+    monkeypatch.setattr(server, "metrics_journal", lambda step, *args: journal.append((step, *args)))
 
     def execv(path, argv):
         raise OSError("exec format error")
@@ -575,6 +576,10 @@ def test_a_container_s_main_server_that_cannot_restart_in_place_keeps_serving(mo
     assert capsys.readouterr().err == (
         "reload: could not restart in place: exec format error; this server keeps serving\n"
     )
+    assert journal == [
+        (server.request_metrics.stop,),
+        (server.request_metrics.restore, server.core.LEDGER_DIR / server.request_metrics.JOURNAL_NAME),
+    ]
 
 
 @pytest.mark.parametrize(("comm", "main"), [("containerd-shim\n", True), ("python\n", False), (None, False)])
@@ -868,8 +873,9 @@ def test_the_loaded_modules_are_named_in_order_without_the_main_script():
         "gone": None,
         "ledger_server": object(),
         "scripts.swarm_ledger.ledger_server": object(),
+        "old_ledger_server": object(),
     }
-    assert server.loaded_modules(modules) == "json,zlib"
+    assert server.loaded_modules(modules) == "json,old_ledger_server,zlib"
     assert server.MODULES == "LEDGER_MODULES"
     assert "json" in server.loaded_modules().split(",")
 
