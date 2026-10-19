@@ -125,9 +125,11 @@ def watch(repo: str, run: dict, workflow: dict, grace: timedelta) -> dict:
     try:
         ended = stop(repo, run["id"])
     except subprocess.CalledProcessError:
-        if run_state(repo, run["id"])["status"] != "completed":
+        ended = run_state(repo, run["id"])
+        if ended["status"] != "completed":
             raise
-        return report(run, "none", "the run completed meanwhile")
+        if ended["conclusion"] != "cancelled":
+            return report(run, "none", "the run completed meanwhile")
     if ended["status"] != "completed":
         return report(run, "cancel", f"{reason}; the run did not end after force cancel")
     if action == "cancel":
@@ -158,13 +160,14 @@ def main(argv: list[str] | None = None) -> int:
         found = guarded(first_look, args.repo, run, workflow, grace)
         if found:
             reports.append(found)
+            print(json.dumps(found), flush=True)
         else:
             suspects.append(run)
     if suspects:
         time.sleep(CONFIRM_SECONDS)
-    reports += [guarded(watch, args.repo, run, workflow, grace) for run in suspects]
-    for found in reports:
-        print(json.dumps(found))
+    for run in suspects:
+        reports.append(guarded(watch, args.repo, run, workflow, grace))
+        print(json.dumps(reports[-1]), flush=True)
     return 1 if any(found["action"] == "error" for found in reports) else 0
 
 

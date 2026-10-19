@@ -302,12 +302,19 @@ def refused_cancel(monkeypatch, after):
     api = Api({JOBS: lines(*stalled_run()), RUNS: [json.dumps(RUN), json.dumps(after)], RUNNER_LIST: ""})
 
     def refusing(*args):
-        if args[0] == "-X":
+        if args == ("-X", "POST", f"{RUNS}/cancel"):
             raise subprocess.CalledProcessError(1, ["gh", "api", *args])
         return api(*args)
 
     monkeypatch.setattr(ci_lost_runner, "_api", refusing)
     return api
+
+
+def test_a_cancel_whose_answer_was_lost_still_reruns_the_cancelled_run(monkeypatch, no_sleep):
+    api = refused_cancel(monkeypatch, {**RUN, "status": "completed", "conclusion": "cancelled"})
+    report = ci_lost_runner.watch("o/r", RUN, WORKFLOW, GRACE)
+    assert report["action"] == "rerun"
+    assert api.posts() == [post(f"{RUNS}/rerun-failed-jobs")]
 
 
 def test_a_cancel_refused_because_the_run_completed_is_left_alone(monkeypatch, no_sleep):
