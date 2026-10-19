@@ -117,7 +117,7 @@ def file_bytes(files: dict) -> dict:
     return result
 
 
-def write_files(folder: Path, files: dict, created: list) -> None:
+def write_files(folder: Path, files: dict, created: dict) -> None:
     folder.mkdir(exist_ok=True)
     for name, data in files.items():
         path = folder / name
@@ -127,7 +127,7 @@ def write_files(folder: Path, files: dict, created: list) -> None:
             temporary = path.with_suffix(path.suffix + ".part")
             temporary.write_bytes(data)
             temporary.replace(path)
-            created.append(path)
+            created[name] = path.stat().st_mtime_ns
 
 
 def restore(repo: LedgerRepository, snapshot: dict, expected: tuple[str, str] | None = None) -> dict:
@@ -140,7 +140,7 @@ def restore(repo: LedgerRepository, snapshot: dict, expected: tuple[str, str] | 
     if expected and manifest(snapshot)["digest"] != expected[0]:
         raise ValueError("snapshot differs from its expected source digest")
     folder = repo.directory / f"{slug}.media"
-    created = []
+    created = {}
     try:
         with repo.transaction() as transaction:
             displaced = displace(repo, snapshot, expected) if transaction.exists(slug) else None
@@ -153,8 +153,7 @@ def restore(repo: LedgerRepository, snapshot: dict, expected: tuple[str, str] | 
             displaced_only = displaced["files"].keys() - files.keys() if displaced else set()
             stale = {name: (folder / name).stat().st_mtime_ns for name in displaced_only}
     except BaseException:
-        for path in created:
-            path.unlink(missing_ok=True)
+        prune(repo, folder, created)
         raise
     if stale:
         prune(repo, folder, stale)
