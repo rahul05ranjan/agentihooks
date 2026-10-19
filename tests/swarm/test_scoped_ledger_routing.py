@@ -189,6 +189,25 @@ def test_an_agent_control_leaves_the_hosted_service_tick_to_its_trusted_runner(s
     assert actions
 
 
+@pytest.mark.parametrize("active", [False, True])
+def test_a_deployed_controller_tick_runs_a_hosted_swarm_without_the_host_credential(store, monkeypatch, active):
+    from scripts.swarm import controller
+
+    monkeypatch.setenv("AGENTIHOOKS_DEPLOYMENT", "distributed")
+    monkeypatch.setattr(cli.outbox, "flush", lambda *_: None)
+    store.update(
+        "selected",
+        api_url="https://hosted.example" if active else "",
+        pending_api_url="https://hosted.example",
+    )
+    acquired = []
+    monkeypatch.setattr(lease, "acquire", lambda _store, slug, _hive: acquired.append(slug))
+    with authority_context.bound(None):
+        actions = controller.run_once(store, runtime=object())
+    assert "selected" in acquired
+    assert actions["selected"] == ["the swarm belongs to another hive"]
+
+
 def test_a_native_control_notice_uses_its_callers_own_authority(store, monkeypatch):
     from types import SimpleNamespace
 
