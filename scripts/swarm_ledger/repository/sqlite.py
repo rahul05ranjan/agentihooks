@@ -49,6 +49,7 @@ RELEASE = "DELETE FROM relay_journal WHERE kind=? AND slug=? AND revision BETWEE
 DROP = "DELETE FROM relay_journal WHERE kind=? AND slug=?"
 REGISTRIES = "SELECT slug,path,value FROM registry WHERE path=? ORDER BY slug,path"
 ADD_REGISTRY = "INSERT INTO registry VALUES (?,?,?)"
+DROP_REGISTRIES = "DELETE FROM registry WHERE path=?"
 TABLES_SQL = "SELECT name FROM sqlite_master WHERE type='table'"
 FENCES = "CREATE TABLE IF NOT EXISTS hosted_fences (slug TEXT PRIMARY KEY, destination TEXT NOT NULL)"
 FENCED = "SELECT destination FROM hosted_fences WHERE slug IN (?, '*')"
@@ -262,6 +263,12 @@ class Transaction:
 
     def add_registries(self, rows: list) -> None:
         self.connection.executemany(ADD_REGISTRY, rows)
+
+    def drop_registries(self, slug: str) -> None:
+        self.connection.execute(DROP_REGISTRIES, (slug,))
+
+    def token(self, slug: str) -> str:
+        return self.connection.execute(TOKEN, (slug,)).fetchone()[0]
 
     def export(self, slug: str) -> dict:
         return self.repository._export(self.connection, slug)

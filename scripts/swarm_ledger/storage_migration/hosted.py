@@ -22,6 +22,7 @@ LIFETIME = 900
 MAX_COMPRESSED = 64 << 20
 MAX_EXPANDED = 256 << 20
 FILE_ID = re.compile(r"[0-9a-f]{64}\.[a-z0-9]+\Z")
+DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 TOKEN_MESSAGE = "ledger-import:{slug}:{expires}"
 
 
@@ -127,18 +128,21 @@ def write_files(folder: Path, files: dict) -> None:
             temporary.replace(path)
 
 
-def restore(repo: LedgerRepository, snapshot: dict) -> dict:
+def restore(repo: LedgerRepository, snapshot: dict, expected: tuple[str, str] | None = None) -> dict:
     slug, state = snapshot["slug"], snapshot["state"]
     if snapshot["version"] != 1 or not repo.domain.SLUG_RE.fullmatch(slug):
         raise ValueError("invalid migration identity")
     files = file_bytes(snapshot["files"])
     if any(path != slug for _, path, _ in snapshot["registries"]):
         raise ValueError("invalid migration registry")
+    if expected and manifest(snapshot)["digest"] != expected[0]:
+        raise ValueError("snapshot differs from its expected source digest")
     with repo.transaction() as transaction:
-        if transaction.exists(slug):
-            if capture(repo, slug) != snapshot:
-                raise ValueError("hosted ledger conflict")
+        displaced = displace(repo, snapshot, expected) if transaction.exists(slug) else None
+        if displaced == snapshot:
             return manifest(snapshot)
+        if expected and displaced is None:
+            raise ValueError("no hosted ledger to refresh")
         write_files(repo.directory / f"{slug}.media", files)
         stored = json.loads(encode(state))
         seeds = stored["_meta"].get("seeds")
@@ -146,11 +150,43 @@ def restore(repo: LedgerRepository, snapshot: dict) -> dict:
             stored["_meta"]["seeds"] = {}
         import secrets
 
-        transaction.insert(slug, stored, seeds, secrets.token_urlsafe())
+        if displaced:
+            transaction.drop_registries(slug)
+        transaction.insert(slug, stored, seeds, transaction.token(slug) if displaced else secrets.token_urlsafe())
         transaction.add_registries(snapshot["registries"])
         if transaction.export(slug) != state:
             raise ValueError("imported history differs from source")
+    if displaced:
+        with media_lock(repo.directory):
+            for name in displaced["files"].keys() - files.keys():
+                (repo.directory / f"{slug}.media" / name).unlink(missing_ok=True)
     return manifest(capture(repo, slug))
+
+
+def displace(repo: LedgerRepository, snapshot: dict, expected: tuple[str, str] | None) -> dict:
+    current = capture(repo, snapshot["slug"])
+    if current == snapshot:
+        return current
+    if expected is None:
+        raise ValueError("hosted ledger conflict")
+    digest = manifest(current)["digest"]
+    if digest != expected[1]:
+        raise ValueError("hosted ledger changed since its expected digest")
+    folder = repo.directory / f"{snapshot['slug']}.displaced"
+    folder.mkdir(exist_ok=True)
+    temporary = folder / f"{digest}.json.gz.part"
+    temporary.write_bytes(gzip.compress(encode(current)))
+    temporary.replace(folder / f"{digest}.json.gz")
+    return current
+
+
+def expectation(headers) -> tuple[str, str] | None:
+    expected = (headers.get("X-Ledger-Source"), headers.get("X-Ledger-Replaces"))
+    if expected == (None, None):
+        return None
+    if not all(isinstance(value, str) and DIGEST.fullmatch(value) for value in expected):
+        raise ValueError("a refresh names both expected digests")
+    return expected
 
 
 def route(handler: object, server: object, parts: list) -> dict:
@@ -178,7 +214,7 @@ def route(handler: object, server: object, parts: list) -> dict:
         snapshot = json.loads(data)
         if snapshot["slug"] != slug:
             raise ValueError("migration slug differs from route")
-        result = restore(server.repository, snapshot)
+        result = restore(server.repository, snapshot, expectation(handler.headers))
     except (ValueError, KeyError, TypeError, EOFError, OSError) as error:
         raise APIError(400, "migration_invalid", "Migration refused: invalid data or existing conflict") from error
     return {"data": result}
@@ -189,7 +225,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def transfer(url: str, snapshot: dict, secret: str) -> dict:
+def transfer(url: str, snapshot: dict, secret: str, replaces: str | None = None) -> dict:
     headers = {
         "User-Agent": "agentihooks-swarm",
         "Content-Type": "application/gzip",
@@ -203,14 +239,16 @@ def transfer(url: str, snapshot: dict, secret: str) -> dict:
     guard(url, headers)
     endpoint = url.rstrip("/") + "/api/v1/migrations/" + snapshot["slug"]
     opener = urllib.request.build_opener(NoRedirect)
-    request = urllib.request.Request(endpoint, data=gzip.compress(encode(snapshot)), headers=headers)
+    refresh = {"X-Ledger-Source": manifest(snapshot)["digest"], "X-Ledger-Replaces": replaces} if replaces else {}
+    request = urllib.request.Request(endpoint, data=gzip.compress(encode(snapshot)), headers={**headers, **refresh})
     with opener.open(request, timeout=300) as response:
         result = json.load(response)["data"]
     with opener.open(urllib.request.Request(endpoint, headers=headers), timeout=300) as response:
         verified = json.load(response)["data"]
     if result != verified or verified != manifest(snapshot):
         raise ValueError("hosted comparison differs; do not cut over")
-    return {"source": manifest(snapshot), "hosted": verified, "match": True}
+    report = {"source": manifest(snapshot), "hosted": verified, "match": True}
+    return {**report, "replaced": replaces} if replaces else report
 
 
 def server_secret() -> str:
@@ -236,6 +274,8 @@ def main() -> None:
     parser.add_argument("--url")
     parser.add_argument("--slug", action="append")
     parser.add_argument("--freeze", action="store_true")
+    parser.add_argument("--expect-source")
+    parser.add_argument("--replaces")
     args = parser.parse_args()
     if args.url and not args.url.startswith("https://"):
         parser.error("hosted destination must use HTTPS")
@@ -243,6 +283,7 @@ def main() -> None:
         parser.error("freezing requires a hosted destination")
     if args.url and not args.freeze:
         parser.error("hosted transfers require source fencing with --freeze")
+    refresh = refresh_request(parser, args)
     secret = server_secret() if args.url else None
     from scripts.swarm_ledger import ledger_server
 
@@ -257,8 +298,25 @@ def main() -> None:
         if args.freeze:
             fence(repo, slug, args.url)
         snapshot = capture(repo, slug)
-        result = transfer(args.url, snapshot, secret) if args.url else manifest(snapshot)
+        if refresh and manifest(snapshot)["digest"] != args.expect_source:
+            parser.error("frozen source differs from --expect-source")
+        result = transfer(args.url, snapshot, secret, **refresh) if args.url else manifest(snapshot)
         print(json.dumps(result), flush=True)
+
+
+def refresh_request(parser: argparse.ArgumentParser, args: argparse.Namespace) -> dict:
+    digests = (args.expect_source, args.replaces)
+    if digests == (None, None):
+        return {}
+    if None in digests:
+        parser.error("a hosted refresh names both --expect-source and --replaces")
+    if not all(DIGEST.fullmatch(value) for value in digests):
+        parser.error("hosted refresh digests are 64 lowercase hexadecimal characters")
+    if not args.url:
+        parser.error("a hosted refresh requires a hosted destination")
+    if len(args.slug or []) != 1:
+        parser.error("a hosted refresh names exactly one --slug")
+    return {"replaces": args.replaces}
 
 
 if __name__ == "__main__":
