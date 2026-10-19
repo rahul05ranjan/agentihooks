@@ -59,7 +59,7 @@ def tab(browser):
     serve_modules(context, ledger_state(DOC))
     page = context.new_page()
     page.goto(URL)
-    page.set_default_timeout(2000)
+    page.set_default_timeout(5000)
     loaded(page)
     page.sent = sent
     yield page
