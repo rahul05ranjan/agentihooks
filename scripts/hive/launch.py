@@ -116,7 +116,10 @@ class HiveLaunch:
         for row in sorted(candidates, key=lambda row: (row.sessions, row.name)):
             choice = placement.choose(role, "claude", row.name, route_kind, config.repo, hives, now)
             if isinstance(choice, placement.Choice):
-                selected = Selection(decision, choice.hive, row, route_kind, fallback=choice.fallback)
+                fallback = (
+                    f"the task is pinned to {task['hive']}" if choice.fallback and task.get("hive") else choice.fallback
+                )
+                selected = Selection(decision, choice.hive, row, route_kind, fallback=fallback)
                 return self._record_wait(lane, task, selected)
             reason = choice
         return self._record_wait(lane, task, reason)

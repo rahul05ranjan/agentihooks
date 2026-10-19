@@ -53,6 +53,14 @@ def test_a_full_headless_fleet_falls_back_to_the_workstation_with_the_reason_rec
     assert admitted.profile_decision["placement_fallback"] == "no headless hive for eng has room"
 
 
+def test_a_task_pinned_to_a_ui_hive_records_the_pin_as_its_reason(setup):
+    two_hosts(setup)
+    selected = setup.launcher.select(setup.config, "eng", {"id": "task", "hive": "workstation"})
+    assert (selected.hive, selected.fallback) == ("workstation", "the task is pinned to workstation")
+    selected = setup.launcher.select(setup.config, "eng", {"id": "task", "hive": "anton"})
+    assert (selected.hive, selected.fallback) == ("anton", "")
+
+
 def test_an_account_a_headless_hive_advertises_wins_over_an_earlier_account_that_only_fits_the_workstation(setup):
     from scripts.hive import registry
     from scripts.swarm.capacity import Account
