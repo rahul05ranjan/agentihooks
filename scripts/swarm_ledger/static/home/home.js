@@ -45,7 +45,7 @@ function shell() {
   document.title = heading;
   main.prepend(h("header", {}, h("a", { class: "logo-link", href: "/", "aria-label": "HOME" }, h("span", { class: "logo", "aria-hidden": "true" })),
     h("span", { class: "brand", text: "agentihooks" }), h("h1", { text: heading }), view === "bin" ? h("span", { class: "total", id: "total" }) : null));
-  else main.before(h("div", { class: "watermark", "aria-hidden": "true" }));
+  if (view === "home") main.before(h("div", { class: "watermark", "aria-hidden": "true" }));
   main.querySelector(".row.head").replaceChildren(...HEADS[view].map(headCell));
   main.after(h("a", { class: "fab", id, href, "aria-label": label }, icon(name)));
 }

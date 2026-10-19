@@ -124,13 +124,11 @@ export async function flush(unloading) {
   try {
     const resp = await writeLedger(body, unloading);
     if (!resp.ok) throw new Error(String(resp.status));
-    const before = rev;
-    rev = Math.max(rev, ((await resp.json())._meta || {}).rev || rev);
+    const ack = await resp.json();
+    rev = Math.max(rev, (ack._meta || {}).rev || rev);
     ops = ops.slice(sentOps.length);
-    if (rev === before) {
-      settlePending(doc, sentOps);
-      render();
-    }
+    const rejected = new Set(ack.rejected || []);
+    if (settlePending(doc, sentOps.filter((op) => rejected.has(op.id)))) render();
     for (const c of sentChecks) if (checks[c.path] && checks[c.path].value === c.value) delete checks[c.path];
     lsWrite();
     status("saved " + new Date().toLocaleTimeString());

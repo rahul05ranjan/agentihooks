@@ -202,7 +202,7 @@ function taskProof(item) {
 function rankPick(key, item) {
   const sending = pendingOf(doc, key), rank = sending && sending.op === "task_rank" ? sending.rank : taskRank(item);
   const pick = h("select", { class: `rank-pick rank-${rank}${sending ? " pending" : ""}`, "aria-label": `Queue rank of ${item.title}`, "data-focus": `rank:${key}`,
-    disabled: item.state === "done" || frozen(doc, key) ? "" : false, on: { change: () => queue({ op: "task_rank", id: newId("rank"), item: key, rank: pick.value }) } },
+    disabled: sending || item.state === "done" || frozen(doc, key) ? "" : false, on: { change: () => queue({ op: "task_rank", id: newId("rank"), item: key, rank: pick.value }) } },
     ...taskRanks().map((r) => h("option", { value: r, text: r })));
   pick.value = rank;
   return pick;

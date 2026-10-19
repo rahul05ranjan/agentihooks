@@ -102,7 +102,7 @@ function alertRow(a) {
       h("span", { text: `For the ${a.target}` }),
       h("span", { class: "alert-state", text: sending ? "sending" : a.state === "claimed" ? `Claimed by ${a.claimed_by}` : "Open" }),
       h("span", { class: "alert-acts" },
-        a.state === "open" && h("button", { class: "link alert-claim", type: "button", text: "Claim", on: { click: () => queue({ op: "alert_claim", id: newId("alert"), target: a.id }) } }),
+        a.state === "open" && h("button", { class: "link alert-claim", type: "button", text: "Claim", disabled: sending ? "" : false, on: { click: () => queue({ op: "alert_claim", id: newId("alert"), target: a.id }) } }),
         h("button", { class: "link alert-done", type: "button", text: "Mark done", on: { click: openForm } }))),
     h("div", { class: "notif-text", text: a.text }), form);
 }

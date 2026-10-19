@@ -62,10 +62,9 @@ export function pendingOf(d, key) {
 }
 
 export function settlePending(d, sent) {
-  for (const op of sent) {
-    const key = pendingKey(op);
-    if (key && d.pending[key] && d.pending[key].id === op.id) delete d.pending[key];
-  }
+  const settled = sent.map(pendingKey).filter((key, i) => key && d.pending[key] && d.pending[key].id === sent[i].id);
+  for (const key of settled) delete d.pending[key];
+  return settled.length > 0;
 }
 
 export function applyOp(d, op) {
