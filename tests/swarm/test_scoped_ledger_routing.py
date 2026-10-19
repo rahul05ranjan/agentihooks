@@ -191,7 +191,7 @@ def test_an_agent_control_leaves_the_hosted_service_tick_to_its_trusted_runner(s
 
 @pytest.mark.parametrize("active", [False, True])
 @pytest.mark.parametrize("pinned", [False, True])
-def test_a_deployed_controller_tick_runs_a_hosted_swarm_without_the_host_credential(store, monkeypatch, active, pinned):
+def test_a_deployed_tick_keeps_its_own_ledger_while_the_swarm_names_a_control_api(store, monkeypatch, active, pinned):
     from types import SimpleNamespace
 
     from scripts.swarm import controller
@@ -204,16 +204,14 @@ def test_a_deployed_controller_tick_runs_a_hosted_swarm_without_the_host_credent
         api_url="https://hosted.example" if active else "",
         pending_api_url="https://hosted.example",
     )
-    acquired = []
-    monkeypatch.setattr(lease, "acquire", lambda _store, slug, _hive: acquired.append(slug))
+    routes = {}
+    monkeypatch.setattr(lease, "acquire", lambda _store, slug, _hive: routes.update({slug: ledger_route.url(slug)}))
     with authority_context.bound(None):
         actions = controller.run_once(store, runtime=object())
-    if pinned:
-        assert "selected" not in acquired
-        assert actions["selected"] == ["the host tick will apply the settings"]
-    else:
-        assert "selected" in acquired
-        assert actions["selected"] == ["the swarm belongs to another hive"]
+    with ledger_route.command(store, "selected", cli.Who.from_env()):
+        assert ledger_route.url("selected") == ""
+    assert routes["selected"] == ""
+    assert actions["selected"] == ["the swarm belongs to another hive"]
 
 
 def test_a_native_control_notice_uses_its_callers_own_authority(store, monkeypatch):
