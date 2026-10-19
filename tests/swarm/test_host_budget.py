@@ -170,6 +170,11 @@ def test_measured_agent_memory_sets_the_per_agent_figure():
     assert host_budget.memory_room(_swapped(7000, 0, 4096), LIMITS) == 10
 
 
+def test_the_configured_figure_is_the_floor_under_a_lighter_measured_agent():
+    assert host_budget.memory_room(_swapped(7000, 0, 4096, agent_mb=433, measured=20), LIMITS) == 10
+    assert host_budget.per_agent_mb(_swapped(7000, 0, 4096, agent_mb=701, measured=1), LIMITS) == 701
+
+
 def test_host_room_line_names_swap_and_the_per_agent_figure():
     measured = host_budget.room(_swapped(7000, 1400, 8000, agent_mb=1400, measured=3), LIMITS)
     configured = host_budget.room(_swapped(7000, 1400, 8000), LIMITS)
@@ -177,9 +182,9 @@ def test_host_room_line_names_swap_and_the_per_agent_figure():
 
     assert measured.reason == (
         "one minute load 0.00 per CPU is below the low watermark; 7000 MB available memory less 1400 MB swap "
-        "in use fits 4 at 1400 MB each measured over 3 agent trees"
+        "in use fits 4 at 1400 MB each, the larger of 1400 MB measured over 3 agent trees and the configured 700 MB"
     )
-    assert configured.reason.endswith("fits 8 at 700 MB each from the configured figure")
+    assert configured.reason.endswith("fits 8 at 700 MB each, the configured figure")
     assert (full.room, full.limit) == (0, "memory")
     assert full.reason.endswith("swap 3700 of 4096 MB in use is above the 90% share, no memory room")
 
@@ -200,15 +205,18 @@ def test_read_host_reads_swap_and_measures_live_agent_process_trees(tmp_path, mo
     for pid, ppid, rss in ((10, 1, 300000), (11, 10, 200000), (12, 11, 100000), (20, 1, 400000), (30, 1, 999999)):
         _process(tmp_path, pid, ppid, rss)
     _process(tmp_path, 13, 10, None)
+    _process(tmp_path, 50, 1, None)
     monkeypatch.setattr(host_budget.os, "cpu_count", lambda: 4)
-    monkeypatch.setattr(host_budget.account_sessions, "live_sessions", lambda proc: {10: "a", 20: "b", 40: "c"})
+    monkeypatch.setattr(
+        host_budget.account_sessions, "live_sessions", lambda proc: {10: "a", 20: "b", 40: "c", 50: "d"}
+    )
     monkeypatch.setattr(host_budget.account_sessions, "live_codex_sessions", lambda proc: 1)
 
     assert host_budget.read_host(tmp_path) == HostSample(
         load1=2.0,
         cpus=4,
         available_mb=5000,
-        agents=4,
+        agents=5,
         swap_used_mb=4000,
         swap_total_mb=4096,
         agent_mb=488,
