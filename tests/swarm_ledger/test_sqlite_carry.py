@@ -62,7 +62,7 @@ def test_a_carry_of_a_ledger_the_reader_never_loaded_is_adopted(pair, monkeypatc
     reader.adopt_carried(carried)
     monkeypatch.setattr(sqlite, "read_rows", refused)
     assert reader.current("ledger").generation == carried["ledger"][0]
-    assert reader.current("ledger").value == writer.current("ledger").value
+    assert reader.current("ledger").state == writer.current("ledger").state
 
 
 def test_an_older_carry_never_replaces_a_newer_copy(pair):
