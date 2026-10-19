@@ -964,7 +964,13 @@ def test_a_planner_publishes_a_plan_and_plan_read_prints_its_sliced_task(live, t
     from tests.swarm_ledger.test_ledger_authority import admin_put, core, ledger, operation
 
     planner = "planner@323133-0258"
-    assert admin_put(live, operation("join", by=planner))[0] == 200
+    seed = [
+        operation("join", by=planner),
+        operation("task_add", task="tp", title="Slice the proof phase", lane="plan", kind="plan", phase="p1"),
+        operation("task_update", by="swarm", item="tasks/tp", fields={"claimed_by": planner, "state": "claimed"}),
+    ]
+    status, reply = admin_put(live, *seed)
+    assert (status, [op["id"] for op in seed if op["id"] in reply["rejected"]]) == (200, [])
     monkeypatch.setattr(ledger_core, "LEDGER_DIR", core.LEDGER_DIR)
     one = "".join(f"One detail {n}\n" for n in range(12))
     three = "".join(f"Three detail {n}\n" for n in range(12))
