@@ -1,5 +1,8 @@
+import json
 from dataclasses import replace
 from pathlib import Path
+
+import pytest
 
 from scripts.inbox.store import InboxStore
 from scripts.swarm import idle, overrun
@@ -10,7 +13,8 @@ OWNER = "engineer@abc-0001"
 SEAT = "eng-1@sw"
 MINUTE = 60_000
 START = 10_000_000
-REPORT = START + overrun.REPORT_MINUTES * MINUTE
+REPORT_MS = overrun.REPORT_MINUTES * MINUTE
+REPORT = START + REPORT_MS
 PARK = START + overrun.PARK_MINUTES * MINUTE
 ENDED = PARK + overrun.GRACE_MINUTES * MINUTE
 
@@ -92,8 +96,9 @@ def test_past_the_report_limit_the_master_hears_the_task_its_age_and_last_steps_
     actions = swarm.tick(REPORT)
     [item] = swarm.master()
     assert "t1" in item.text and OWNER in item.text and " 90 minutes " in item.text
-    assert "pushed the red test" in item.text and "waiting on the queue" in item.text
-    assert "opened the issue" not in item.text
+    assert "Last steps: pushed the red test; fixed the push guard; waiting on the queue. " in item.text
+    assert item.text.startswith("Overrun on swarm sw: ") and " At 150 minutes " in item.text
+    assert "; 15 minutes after that" in item.text and (item.ref, item.task) == ("sw:overrun:t1", "t1")
     assert actions == [f"overrun: told master@sw that {OWNER} has run 90 minutes on task t1"]
     assert swarm.agent_inbox() == []
     assert swarm.tick(REPORT + 10 * MINUTE) == []
@@ -115,8 +120,11 @@ def test_past_the_park_limit_the_agent_is_asked_once_to_push_and_hand_off():
     assert " 150 minutes " in ask.text and "t1" in ask.text
     assert "agentihooks swarm sw publish" in ask.text and "agentihooks swarm sw handoff" in ask.text
     assert f" {overrun.GRACE_MINUTES} minutes" in ask.text
+    assert "past the 150 minute limit" in ask.text and (ask.ref, ask.task) == ("sw:overrun:t1", "t1")
     assert actions == [f"overrun: asked {OWNER} to push and hand off task t1 after 150 minutes"]
     assert swarm.retired == [] and swarm.working() == [OWNER]
+    mark = json.loads(swarm.store.redis.hget(swarm.store.key(SLUG, overrun.KEY), OWNER))
+    assert mark == {"reported": REPORT, "asked": PARK, "ask": ask.id, "task": "t1"}
     assert swarm.tick(PARK + MINUTE) == []
     assert len(swarm.agent_inbox()) == 1
 
@@ -130,6 +138,7 @@ def test_an_agent_first_seen_past_the_park_limit_is_reported_and_asked_in_one_ti
 def test_an_agent_still_live_after_the_grace_is_ended_and_its_task_reopened():
     swarm = Swarm()
     swarm.tick(PARK)
+    [ask] = swarm.agent_inbox()
     assert swarm.tick(ENDED - MINUTE) == [] and swarm.retired == []
     actions = swarm.tick(ENDED)
     assert swarm.retired == [OWNER]
@@ -144,8 +153,24 @@ def test_an_agent_still_live_after_the_grace_is_ended_and_its_task_reopened():
     assert " 165 minutes " in comment and f" {overrun.GRACE_MINUTES} minutes " in comment
     ended = swarm.master()[-1]
     assert OWNER in ended.text and "t1" in ended.text and "reopened" in ended.text
+    assert (ended.ref, ended.task) == ("sw:overrun:t1", "t1")
     assert actions == [f"overrun: ended {OWNER} on task t1 after 165 minutes and reopened the task"]
     assert swarm.store.redis.hgetall(swarm.store.key(SLUG, overrun.KEY)) == {}
+    inbox = InboxStore(swarm.store.redis)
+    closed = inbox.get(ask.id)
+    assert (closed.state, closed.reason) == ("done", "done: the overrun watch ended the agent it asked")
+    exit_record = inbox.seats.exit_of(OWNER)
+    assert (exit_record["seat"], exit_record["reason"]) == (SEAT, "stopped")
+    assert inbox.open_items(SEAT) == []
+
+
+def test_an_ask_the_agent_closed_itself_does_not_hold_the_end():
+    swarm = Swarm()
+    swarm.tick(PARK)
+    [ask] = swarm.agent_inbox()
+    InboxStore(swarm.store.redis).close(ask.id, OWNER, "done", "read it")
+    assert len(swarm.tick(ENDED)) == 1 and swarm.retired == [OWNER]
+    assert InboxStore(swarm.store.redis).get(ask.id).reason == "done: read it"
 
 
 def test_an_agent_that_handed_off_inside_the_grace_is_never_ended():
@@ -184,14 +209,20 @@ def test_a_pull_request_task_counts_as_claimed():
 
 
 def test_outage_time_does_not_count_toward_the_age(monkeypatch):
-    monkeypatch.setattr(overrun.outage, "paused_ms", lambda slug, since, now: 30 * MINUTE)
+    monkeypatch.setattr(
+        overrun.outage,
+        "paused_ms",
+        lambda slug, since, now: 30 * MINUTE if (slug, since) == (SLUG, START) and now > since else 0,
+    )
     swarm = Swarm()
     assert swarm.tick(REPORT + 29 * MINUTE) == []
     assert len(swarm.tick(REPORT + 30 * MINUTE)) == 1
 
 
 def test_an_outage_holds_every_step(monkeypatch):
-    monkeypatch.setattr(overrun.outage, "held", lambda store, slug, name: "ledger health probe failed")
+    monkeypatch.setattr(
+        overrun.outage, "held", lambda store, slug, name: "probe failed" if (slug, name) == (SLUG, OWNER) else ""
+    )
     swarm = Swarm()
     assert swarm.tick(ENDED + 60 * MINUTE) == []
     assert swarm.master() == [] and swarm.retired == []
@@ -222,6 +253,31 @@ def test_a_new_life_on_the_same_task_starts_its_own_clock():
     assert swarm.store.redis.hgetall(swarm.store.key(SLUG, overrun.KEY)) == {}
 
 
+def test_one_tick_reports_every_overrunning_agent_past_a_finished_one():
+    swarm = Swarm(agent=AgentRecord("engineer@abc-0000", "eng", "t0", state="finished", started_at=START))
+    others = ("engineer@abc-0002", "engineer@abc-0003")
+    for name, task in ((OWNER, "t1"), *zip(others, ("t2", "t3"), strict=True)):
+        swarm.store.put_agent(SLUG, AgentRecord(name, "eng", task, seat=SEAT, started_at=START))
+        swarm.ledger.rows[task] = {"id": task, "state": "claimed", "claimed_by": name}
+    swarm.live = {OWNER, *others}
+    assert len(swarm.tick(REPORT)) == 3 and len(swarm.master()) == 3
+
+
+def test_an_agent_started_in_the_first_millisecond_is_still_watched():
+    swarm = Swarm(agent=AgentRecord(OWNER, "eng", "t1", seat=SEAT, started_at=1))
+    assert len(swarm.tick(1 + REPORT_MS)) == 1
+
+
+def test_the_report_routes_through_the_ledger_document(monkeypatch):
+    seen, real = [], overrun.Mail
+    monkeypatch.setattr(
+        overrun, "Mail", lambda inbox, store, slug, doc: seen.append(doc) or real(inbox, store, slug, doc)
+    )
+    swarm = Swarm()
+    swarm.tick(REPORT)
+    assert seen == [swarm.ledger.state(SLUG)]
+
+
 def test_a_planner_is_watched_like_an_engineer():
     swarm = Swarm(agent=AgentRecord(OWNER, "plan", "t1", seat=SEAT, started_at=START))
     assert len(swarm.tick(PARK)) == 2
@@ -236,10 +292,13 @@ def test_an_agent_released_through_ready_is_never_asked():
     assert swarm.tick(PARK) == [] and swarm.tick(ENDED) == []
 
 
-def test_a_refused_reopen_leaves_the_claim_and_the_agent_record():
+@pytest.mark.parametrize(
+    "answer", [{"state": "claimed", "claimed_by": OWNER}, {"state": "open", "claimed_by": "other"}]
+)
+def test_a_refused_reopen_leaves_the_claim_and_the_agent_record(answer):
     swarm = Swarm()
     swarm.tick(PARK)
-    swarm.ledger.update_task = lambda slug, task_id, fields, by="swarm", if_state=(): dict(swarm.ledger.rows[task_id])
+    swarm.ledger.update_task = lambda slug, task_id, fields, by="swarm", if_state=(): dict(answer)
     assert swarm.tick(ENDED) == [f"overrun: ended {OWNER} but could not reopen task t1, the stall watch reopens it"]
     assert swarm.store.claimant(SLUG, "t1") == OWNER and swarm.working() == [OWNER]
     assert swarm.store.take_restart(SLUG, "t1") == "" and swarm.ledger.comments == []

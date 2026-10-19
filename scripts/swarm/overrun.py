@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from scripts.inbox import exits
-from scripts.inbox.store import InboxStore
+from scripts.inbox.store import CLOSED, InboxStore
 from scripts.swarm import capacity, idle, outage
 from scripts.swarm.health.findings import MINUTE_MS
 from scripts.swarm.ledger_events import Mail
@@ -16,7 +16,8 @@ from scripts.swarm_ledger import ledger_workspace
 REPORT_MINUTES, PARK_MINUTES, GRACE_MINUTES = 90, 150, 15
 SENDER, KEY, CAUSE = "swarm", "overrun", "overrun"
 HELD = ("claimed", "pr")
-FINISHED, STOPPED, MERGE = "finished", "stopped", "merge"
+FINISHED, STOPPED, MERGE, DONE = "finished", "stopped", "merge", "done"
+ASK_CLOSED = "the overrun watch ended the agent it asked"
 NO_STEPS = "no steps recorded in progress.md"
 REPORT = (
     "Overrun on swarm {slug}: {agent} has run {minutes} minutes on task {task} without finishing it. Last steps: "
@@ -64,7 +65,7 @@ def overrun_pass(watch, doc):
             mark = {}
         if _holding(watch, agent, rows) and not outage.held(watch.store, watch.slug, agent.name):
             actions += _step(watch, mail, agent, mark)
-        if mark and "ended" not in mark:
+        if mark:
             kept[agent.name] = json.dumps({**mark, "task": agent.task})
     pipe = watch.store.redis.pipeline()
     pipe.delete(key)
@@ -90,22 +91,22 @@ def _holding(watch, agent, rows):
 
 
 def _queued(watch, agent):
-    held = idle.wait(watch.store.redis, watch.slug, agent.name) or {}
-    return held.get("until", 0) > watch.now_ms and (held.get("on") or {}).get("kind") == MERGE
+    held = idle.wait(watch.store.redis, watch.slug, agent.name)
+    return held is not None and held["until"] > watch.now_ms and (held.get("on") or {}).get("kind") == MERGE
 
 
 def _step(watch, mail, agent, mark):
     minutes, actions = _minutes(watch, agent.started_at), []
-    if minutes >= REPORT_MINUTES and "reported" not in mark:
+    if minutes >= REPORT_MINUTES and not mark.get("reported"):
         mark["reported"] = watch.now_ms
         actions.append(_report(watch, mail, agent, minutes))
     if _queued(watch, agent):
         return actions
     if minutes >= PARK_MINUTES and "asked" not in mark:
         mark["asked"] = watch.now_ms
-        actions.append(_ask(watch, mail, agent, minutes))
+        actions.append(_ask(watch, mail, agent, minutes, mark))
     elif "asked" in mark and _minutes(watch, mark["asked"]) >= GRACE_MINUTES:
-        actions += _end(watch, mail, agent, minutes, mark)
+        return actions + _end(watch, mail, agent, minutes, mark)
     return actions
 
 
@@ -129,9 +130,10 @@ def _report(watch, mail, agent, minutes):
     return f"overrun: told {address} that {agent.name} has run {minutes} minutes on task {agent.task}"
 
 
-def _ask(watch, mail, agent, minutes):
+def _ask(watch, mail, agent, minutes, mark):
     text = ASK.format(slug=watch.slug, minutes=minutes, task=agent.task, park=PARK_MINUTES, grace=GRACE_MINUTES)
-    mail.inbox.send(SENDER, agent.name, text, ref=f"{watch.slug}:{KEY}:{agent.task}", task=agent.task)
+    item = mail.inbox.send(SENDER, agent.name, text, ref=f"{watch.slug}:{KEY}:{agent.task}", task=agent.task)
+    mark["ask"] = item.id
     return f"overrun: asked {agent.name} to push and hand off task {agent.task} after {minutes} minutes"
 
 
@@ -150,9 +152,11 @@ def _end(watch, mail, agent, minutes, mark):
     watch.store.mark_restart(watch.slug, tid, CAUSE)
     watch.store.release(watch.slug, tid, agent.name)
     watch.store.drop_agent(watch.slug, agent.name)
+    if mail.inbox.get(mark["ask"]).state not in CLOSED:
+        mail.inbox.close(mark["ask"], SENDER, DONE, ASK_CLOSED)
     exits.settle(mail.inbox, agent.name, agent.seat, STOPPED)
     said = {"slug": watch.slug, "agent": agent.name, "minutes": minutes, "task": tid, "grace": GRACE_MINUTES}
     watch.ledger.comment(watch.slug, tid, COMMENT.format(**said), by=SENDER)
     mail.inbox.send(SENDER, mail.owner(f"tasks/{tid}"), ENDED.format(**said), ref=f"{watch.slug}:{KEY}:{tid}", task=tid)
-    mark["ended"] = watch.now_ms
+    mark.clear()
     return [f"overrun: ended {agent.name} on task {tid} after {minutes} minutes and reopened the task"]
