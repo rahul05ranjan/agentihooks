@@ -42,7 +42,7 @@ if helm template proof "$chart" --set workers.replicas=2 --set workers.joinUrl=h
   echo 'one time code accepted for multiple replicas' >&2
   exit 1
 fi
-grep -q 'workers.replicas above 1' "$out/reused.err"
+grep -q 'one time join codes require workers.replicas=1' "$out/reused.err"
 helm template proof "$chart" --set workers.replicas=1 --set workers.joinUrl=https://join.example.test \
   --set workers.joinCodeSecret.name=code --set workers.joinCodeSecret.key=code > "$out/joined.yaml"
 python3 - "$out/joined.yaml" <<'PY'
