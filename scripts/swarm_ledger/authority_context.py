@@ -3,8 +3,6 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from scripts.swarm.store import RedisStore
-
 _current = None
 
 
@@ -38,7 +36,7 @@ def bound(value: str | None) -> Iterator[None]:
 
 
 @contextmanager
-def for_tick(store: RedisStore) -> Iterator[list[str]]:
+def for_tick(store: object) -> Iterator[list[str]]:
     from scripts.swarm_ledger.storage_migration.hosted import server_secret
 
     value = server_secret() if os.environ.get("SWARM_URL") else None
