@@ -58,6 +58,7 @@ DROP_REGISTRIES = "DELETE FROM registry WHERE path=?"
 TABLES_SQL = "SELECT name FROM sqlite_master WHERE type='table'"
 FENCES = "CREATE TABLE IF NOT EXISTS hosted_fences (slug TEXT PRIMARY KEY, destination TEXT NOT NULL)"
 FENCED = "SELECT destination FROM hosted_fences WHERE slug IN (?, '*')"
+UNFENCE = "DELETE FROM hosted_fences WHERE destination=?"
 FENCE_DESTINATIONS = "SELECT destination FROM hosted_fences WHERE slug IN (?, '*') OR ?='*'"
 TABLE_ID = re.compile(r"[a-z_]+\Z")
 # a fenced ledger's last relay must still be able to hold its revision
@@ -310,6 +311,10 @@ class Transaction:
     def fence(self, slug: str, destination: str) -> None:
         self.connection.execute("INSERT OR IGNORE INTO hosted_fences VALUES (?,?)", (slug, destination))
         self.connection.commit()
+
+    def unfence(self, destination: str) -> None:
+        self.connection.execute(FENCES)
+        self.connection.execute(UNFENCE, (destination,))
 
 
 class Snapshot:

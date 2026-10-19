@@ -9,7 +9,7 @@ from scripts.swarm_ledger.repository import LedgerRepository, postgres, sqlite
 from scripts.swarm_ledger.storage_migration import hosted
 
 DESTINATION = "shared database"
-COUNTED = ("tasks", "events", "comments", "artifacts")
+COUNTED = ("tasks", "events", "comments", "artifacts", "registries")
 
 
 class DryRun(Exception):
@@ -59,13 +59,19 @@ def copy(source: LedgerRepository, target: LedgerRepository, slug: str, dry_run:
                 raise DryRun
     except DryRun:
         pass
-    source_counts, shared_counts = counts(state), counts(converted)
+    source_counts = {**counts(state), "registries": len(registries)}
+    shared_counts = {**counts(converted), "registries": len(kept)}
     match = source_counts == shared_counts and converted == state and kept == registries
     return {"slug": slug, "source": source_counts, "shared": shared_counts, "match": match}
 
 
 def freeze(source: LedgerRepository) -> None:
     hosted.fence(source, "*", DESTINATION)
+
+
+def thaw(source: LedgerRepository) -> None:
+    with source.transaction() as transaction:
+        transaction.unfence(DESTINATION)
 
 
 def convert(source: LedgerRepository, target: LedgerRepository, dry_run: bool = False) -> dict:
@@ -91,16 +97,22 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(prog="python -m scripts.swarm_ledger.storage_migration.shared")
     parser.add_argument("--source", type=Path, required=True)
-    parser.add_argument("--dry-run", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true")
+    mode.add_argument("--unfence", action="store_true")
     args = parser.parse_args()
-    address = postgres.url(os.environ)
-    if not address:
-        sys.exit(f"shared conversion: {postgres.URL} names no shared database")
     if not (args.source / sqlite.DATABASE).is_file():
         sys.exit(f"shared conversion: {args.source} holds no ledger database")
     from scripts.swarm_ledger import ledger_server
 
     source = sqlite.SQLiteLedgerRepository(args.source / sqlite.DATABASE, ledger_server.core)
+    if args.unfence:
+        thaw(source)
+        print(json.dumps({"read_only": sqlite.fenced(source.directory, "*")}), flush=True)
+        return
+    address = postgres.url(os.environ)
+    if not address:
+        sys.exit(f"shared conversion: {postgres.URL} names no shared database")
     target = postgres.PostgresLedgerRepository(address, ledger_server.core)
     print(json.dumps(convert(source, target, args.dry_run)), flush=True)
 

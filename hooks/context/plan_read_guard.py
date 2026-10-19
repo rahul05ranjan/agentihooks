@@ -15,8 +15,8 @@ SED_RANGE = re.compile(r"\s*sed\s+-n\s+(['\"]?)([1-9][0-9]*),([1-9][0-9]*)p\1\s+
 FIELDS = {"Read": ("file_path",), "Grep": ("path", "glob"), "Bash": ("command",), "WebFetch": ("url",)}
 COMMAND = "agentihooks plan read"
 MIGRATIONS = {
-    "scripts.swarm_ledger.storage_migration.hosted": ("--freeze", ("--source", "--url", "--slug")),
-    "scripts.swarm_ledger.storage_migration.shared": ("--dry-run", ("--source",)),
+    "scripts.swarm_ledger.storage_migration.hosted": (("--freeze",), ("--source", "--url", "--slug")),
+    "scripts.swarm_ledger.storage_migration.shared": (("--dry-run", "--unfence"), ("--source",)),
 }
 WRITERS = {"echo", "printf"}
 SINKS = WRITERS | {"cat", "tee"}
@@ -140,11 +140,11 @@ def _migration(words: list[str]) -> bool:
         return False
     if words[1] != "-m" or words[2] not in MIGRATIONS:
         return False
-    flag, valued = MIGRATIONS[words[2]]
+    flags, valued = MIGRATIONS[words[2]]
     position = 3
     while position < len(words):
         option = words[position]
-        if option == flag:
+        if option in flags:
             position += 1
         elif option in valued and position + 1 < len(words):
             position += 2

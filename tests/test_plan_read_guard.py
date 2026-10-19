@@ -134,6 +134,7 @@ def test_shared_conversion_and_its_dry_run_pass_without_allowing_other_flags(led
     for command in (
         f"python -m {module} --source {ledger}",
         f"/venv/bin/python -m {module} --dry-run --source {ledger} > /home/x/scratch/dry-run.json",
+        f"python -m {module} --source {ledger} --unfence",
     ):
         assert check(bash(command), env(ledger)) is None
     for ending in ("--freeze", "--url https://hosted.example", "--slug demo"):

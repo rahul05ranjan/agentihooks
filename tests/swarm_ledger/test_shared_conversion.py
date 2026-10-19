@@ -1,3 +1,4 @@
+import json
 import sqlite3
 
 import pytest
@@ -12,6 +13,7 @@ pytestmark = pytest.mark.unit
 
 SLUG = "conversion-proof"
 COUNTS = {"tasks": 2, "events": 1, "comments": 1, "artifacts": 1}
+ROW = {**COUNTS, "registries": 1}
 
 
 @pytest.fixture
@@ -39,8 +41,8 @@ def test_a_conversion_copies_full_history_token_and_registries_then_fences_the_s
     source, target = stores
     report = shared.convert(source, target)
     assert report == {
-        "ledgers": [{"slug": SLUG, "source": COUNTS, "shared": COUNTS, "match": True}],
-        "totals": {"ledgers": 1, "source": COUNTS, "shared": COUNTS},
+        "ledgers": [{"slug": SLUG, "source": ROW, "shared": ROW, "match": True}],
+        "totals": {"ledgers": 1, "source": ROW, "shared": ROW},
         "match": True,
         "read_only": True,
         "dry_run": False,
@@ -122,7 +124,7 @@ def test_registry_rows_differing_in_the_shared_database_are_never_replaced(store
 def test_a_dry_run_reports_counts_and_rolls_every_write_back(stores):
     source, target = stores
     report = shared.convert(source, target, dry_run=True)
-    assert report["ledgers"] == [{"slug": SLUG, "source": COUNTS, "shared": COUNTS, "match": True}]
+    assert report["ledgers"] == [{"slug": SLUG, "source": ROW, "shared": ROW, "match": True}]
     assert report["dry_run"] is True
     assert report["read_only"] is False
     assert not target.exists(SLUG)
@@ -146,8 +148,36 @@ def test_a_differing_count_is_reported_as_no_match(stores, monkeypatch):
     assert report["ledgers"][0]["match"] is False
 
 
-def test_the_command_refuses_without_a_shared_database(monkeypatch, tmp_path):
+def test_the_command_refuses_without_a_shared_database(stores, monkeypatch):
+    source, _ = stores
     monkeypatch.delenv("AGENTIHOOKS_SWARM_DATABASE_URL", raising=False)
-    monkeypatch.setattr("sys.argv", ["shared", "--source", str(tmp_path)])
-    with pytest.raises(SystemExit, match="AGENTIHOOKS_SWARM_DATABASE_URL"):
+    monkeypatch.setattr("sys.argv", ["shared", "--source", str(source.directory)])
+    with pytest.raises(
+        SystemExit, match="^shared conversion: AGENTIHOOKS_SWARM_DATABASE_URL names no shared database$"
+    ):
         shared.main()
+
+
+def test_the_command_refuses_a_folder_without_a_ledger_database(monkeypatch, tmp_path):
+    monkeypatch.setattr("sys.argv", ["shared", "--source", str(tmp_path), "--unfence"])
+    with pytest.raises(SystemExit, match=f"^shared conversion: {tmp_path} holds no ledger database$"):
+        shared.main()
+
+
+def test_unfencing_rolls_a_converted_folder_back_to_writable(stores, monkeypatch, capsys):
+    source, target = stores
+    shared.convert(source, target)
+    monkeypatch.delenv("AGENTIHOOKS_SWARM_DATABASE_URL", raising=False)
+    monkeypatch.setattr("sys.argv", ["shared", "--source", str(source.directory), "--unfence"])
+    shared.main()
+    assert json.loads(capsys.readouterr().out) == {"read_only": False}
+    source.import_document("after", document())
+    assert source.exists("after")
+
+
+def test_a_dry_run_and_an_unfence_cannot_be_combined(stores, monkeypatch):
+    source, _ = stores
+    monkeypatch.setattr("sys.argv", ["shared", "--source", str(source.directory), "--dry-run", "--unfence"])
+    with pytest.raises(SystemExit):
+        shared.main()
+    assert not sqlite.fenced(source.directory, "*")
