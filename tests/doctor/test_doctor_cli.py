@@ -241,6 +241,106 @@ def test_a_pinned_agent_still_cannot_write_the_doctor_ledger_as_doctor(env, monk
     assert state(WATCHED)["sources"] == []
 
 
+ORDER = "restart the doctor crew with two engineers"
+
+
+@pytest.fixture
+def seated_master(env, monkeypatch):
+    from scripts.swarm.store import AgentRecord
+
+    store, _, _ = env
+    monkeypatch.setattr("hooks.context.broadcast.session_name", lambda pid: "")
+    store.put_agent(WATCHED, AgentRecord(MASTER, "master", "master", seat=f"master@{WATCHED}"))
+    pin(monkeypatch)
+    return store
+
+
+def typed(words, ago):
+    import time
+
+    from hooks.context import operator_words
+
+    operator_words.record(MASTER, words, now=time.time() - ago)
+
+
+def relays(slug):
+    return [n["text"] for n in state(slug)["notifications"] if ORDER in n["text"]]
+
+
+def test_the_master_relaying_a_fresh_operator_order_starts_the_doctor_with_its_caps(seated_master, capsys):
+    store = seated_master
+    typed(ORDER, 60)
+    argv = [WATCHED, "start", "--max-eng-agents", "2", "--max-ci-agents", "1", "--quote", ORDER]
+    assert doctor.main(argv) == 0, capsys.readouterr().err
+    config = store.config(DOCTOR)
+    assert (config.max_eng, config.max_ci, config.caps_pinned) == (2, 1, True)
+    assert config.state in ("running", "drained")
+    assert (
+        relays(WATCHED)
+        == relays(DOCTOR)
+        == [doctor.RELAYED.format(name="master 323133 0106", action="start", words=ORDER)]
+    )
+
+
+def test_the_master_relaying_a_fresh_order_rescales_a_running_doctor(seated_master, capsys):
+    store = seated_master
+    assert doctor.main([WATCHED, "start"]) == 0, capsys.readouterr().err
+    assert store.config(DOCTOR).max_eng == 1
+    typed(ORDER, 60)
+    assert doctor.main([WATCHED, "start", "--max-eng-agents", "2", "--quote", ORDER]) == 0, capsys.readouterr().err
+    assert (store.config(DOCTOR).max_eng, store.config(DOCTOR).max_ci) == (2, 0)
+
+
+@pytest.mark.parametrize(
+    "ago, quote", [(None, None), (2400, ORDER), (None, ORDER), (60, "two engineers please")], ids=str
+)
+def test_the_master_without_a_fresh_operator_order_cannot_start_or_scale_the_doctor(seated_master, capsys, ago, quote):
+    store = seated_master
+    if ago is not None:
+        typed(ORDER, ago)
+    argv = [WATCHED, "start", "--max-eng-agents", "2"] + (["--quote", quote] if quote else [])
+    assert doctor.main(argv) == 1
+    assert capsys.readouterr().err.strip() == f"doctor: {doctor.UNORDERED}"
+    assert DOCTOR not in store.slugs()
+    assert state(WATCHED)["sources"] == [] and not relays(WATCHED)
+
+
+def test_an_engineer_cannot_scale_the_doctor_even_with_the_operator_words(env, monkeypatch, capsys):
+    store, _, _ = env
+    monkeypatch.setattr("hooks.context.broadcast.session_name", lambda pid: "")
+    pin(monkeypatch, "engineer@323133-1244", "eng")
+    typed(ORDER, 60)
+    assert doctor.main([WATCHED, "start", "--max-eng-agents", "2", "--quote", ORDER]) == 1
+    assert "uses its swarm controls" in capsys.readouterr().err
+    assert DOCTOR not in store.slugs()
+
+
+def test_the_operator_shell_scales_the_doctor_without_a_quote(env, monkeypatch, capsys):
+    store, _, _ = env
+    monkeypatch.delenv("AGENTIHOOKS_AGENT_NAME", raising=False)
+    monkeypatch.setattr("hooks.context.broadcast.session_name", lambda pid: "")
+    assert doctor.main([WATCHED, "start", "--max-eng-agents", "3"]) == 0, capsys.readouterr().err
+    assert store.config(DOCTOR).max_eng == 3
+    assert not relays(WATCHED) and not relays(DOCTOR)
+
+
+def test_the_master_relaying_a_fresh_operator_order_stops_the_doctor_and_records_it(seated_master, capsys):
+    store = seated_master
+    assert doctor.main([WATCHED, "start"]) == 0, capsys.readouterr().err
+    typed(ORDER, 2400)
+    assert doctor.main([WATCHED, "stop", "--quote", ORDER]) == 1
+    assert capsys.readouterr().err.strip() == f"doctor: {doctor.UNORDERED}"
+    assert not state(DOCTOR)["closed_at"] and store.config(DOCTOR).state != "stopped"
+    typed(ORDER, 60)
+    assert doctor.main([WATCHED, "stop", "--quote", ORDER]) == 0, capsys.readouterr().err
+    assert state(DOCTOR)["closed_at"] and store.config(DOCTOR).state == "stopped"
+    assert (
+        relays(WATCHED)
+        == relays(DOCTOR)
+        == [doctor.RELAYED.format(name="master 323133 0106", action="stop", words=ORDER)]
+    )
+
+
 LONG = "a" * 40 + "-2026-10"
 
 
