@@ -1242,6 +1242,16 @@ def test_a_codex_resume_passes_its_prompt_to_codex_instead_of_typing_it(tmp_path
     assert (init_agent.PROMPT_AFTER_START in opened) is held
 
 
+@pytest.mark.parametrize(
+    ("transport", "resume", "served"),
+    [(init_agent.APP_SERVER, "", True), ("", "c0ffee", True), ("", "", False), ("legacy", "", False)],
+)
+def test_a_resumed_or_served_session_is_named_without_typing(transport, resume, served):
+    from types import SimpleNamespace
+
+    assert init_agent._served(SimpleNamespace(codex_transport=transport, resume=resume)) is served
+
+
 @pytest.mark.parametrize(("held", "argv"), [("1", "<a b>\n"), ("", "<a b><Start the task.>\n")])
 def test_the_codex_launcher_line_runs_its_command_without_the_prompt_only_when_held(tmp_path, held, argv):
     spec = init_agent.AgentSpec(agent="codex")

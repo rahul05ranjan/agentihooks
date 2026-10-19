@@ -843,6 +843,11 @@ def _names_pane(route: dict, launcher: Path, agent: str) -> bool:
     return route.get("status") in STARTED_ROUTES or (not route.get("status") and bool(_held_prompt(launcher, agent)))
 
 
+def _served(args) -> bool:
+    """A resumed thread is already named, like a served viewer's, so nothing is typed into its pane."""
+    return args.codex_transport == APP_SERVER or bool(args.resume)
+
+
 def _name_codex_session(pane: str, name: str, environ: dict[str, str], since: float, ready: bool) -> list[str]:
     outcome = herdr_host.name_session(pane, name, environ, _codex_named(environ, name, since)) if ready else "not-ready"
     herdr_panes.mark(pane, environ, session_name=name if outcome == "named" else f"unset:{outcome}")
@@ -1032,7 +1037,7 @@ def main(argv: list[str] | None = None, environ: dict[str, str] | None = None) -
             active_env,
             _held_prompt(launcher, agent),
             launcher_at / 1000,
-            served=args.codex_transport == APP_SERVER or bool(args.resume),
+            served=_served(args),
         )
         if channel:
             report.append(f"channel_warning={_answer_channel_warning(pane, active_env)}")
