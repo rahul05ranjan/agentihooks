@@ -116,7 +116,7 @@ import watch_ledger  # noqa: E402
 
 from scripts.gates.base import Who
 from scripts.inbox import outbox
-from scripts.swarm_ledger import ledger_phases, ledger_plans, ledger_task_duplicates, storage
+from scripts.swarm_ledger import ledger_phases, ledger_plans, ledger_task_duplicates, ports, storage
 
 repository = storage.default()
 
@@ -672,7 +672,7 @@ def cmd_relay(args):
 
 
 def swarm_autonomy(slug):
-    from scripts.swarm.store import SwarmError, connect
+    SwarmError, connect = ports.swarm().store.SwarmError, ports.swarm().store.connect
 
     try:
         return connect().config(slug).autonomy
@@ -1051,7 +1051,8 @@ def build_parser():
 def main():
     from scripts.gates import Who
     from scripts.gates.identity import refusal
-    from scripts.swarm.naming import resolve_name
+
+    resolve_name = ports.swarm().naming.resolve_name
 
     args = build_parser().parse_args()
     if text := refusal(args.name, Who.from_env()):
@@ -1064,4 +1065,7 @@ def main():
 
 
 if __name__ == "__main__":
+    from scripts.swarm_ledger import composition
+
+    composition.wire()
     main()
