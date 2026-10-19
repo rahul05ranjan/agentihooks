@@ -2,6 +2,7 @@ import gzip
 import hashlib
 import io
 import json
+import os
 import secrets
 import sys
 from types import SimpleNamespace
@@ -123,6 +124,19 @@ def test_interrupted_refresh_keeps_the_hosted_copy_and_its_media(diverged, monke
     assert archived(target, before) == before
 
 
+def test_prune_keeps_a_displaced_file_written_again_after_the_refresh(diverged):
+    _, target = diverged
+    folder = target.directory / f"{SLUG}.media"
+    rewritten = folder / media(target, b"Uploaded again with identical bytes.")
+    removed = folder / media(target, b"Referenced only by the displaced copy.")
+    stale = {path.name: path.stat().st_mtime_ns for path in (rewritten, removed)}
+    later = stale[rewritten.name] + 1
+    os.utime(rewritten, ns=(later, later))
+    hosted.prune(target, folder, {**stale, "missing.md": 0})
+    assert rewritten.exists()
+    assert not removed.exists()
+
+
 def request(snapshot, credential, headers):
     encoded = gzip.compress(json.dumps(snapshot).encode())
     return SimpleNamespace(
@@ -215,6 +229,7 @@ def test_refresh_command_checks_the_frozen_source_before_transfer(diverged, monk
     assert failure.value.code == 2
     assert capsys.readouterr().err.endswith("migration: error: frozen source differs from --expect-source\n")
     assert sent == []
+    assert not hosted.storage.fenced(source.directory, SLUG)
     monkeypatch.setattr(sys, "argv", refresh_command(source, *flags, "--expect-source", digest(snapshot)))
     hosted.main()
     assert sent == [(snapshot, "c" * 64)]

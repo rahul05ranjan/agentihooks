@@ -12,6 +12,7 @@ import time
 import urllib.request
 from collections.abc import Iterator
 from contextlib import contextmanager
+from email.message import Message
 from pathlib import Path
 
 from scripts.swarm_ledger import storage
@@ -156,11 +157,22 @@ def restore(repo: LedgerRepository, snapshot: dict, expected: tuple[str, str] | 
         transaction.add_registries(snapshot["registries"])
         if transaction.export(slug) != state:
             raise ValueError("imported history differs from source")
-    if displaced:
-        with media_lock(repo.directory):
-            for name in displaced["files"].keys() - files.keys():
-                (repo.directory / f"{slug}.media" / name).unlink(missing_ok=True)
+        folder = repo.directory / f"{slug}.media"
+        displaced_only = displaced["files"].keys() - files.keys() if displaced else set()
+        stale = {name: (folder / name).stat().st_mtime_ns for name in displaced_only}
+    if stale:
+        prune(repo, folder, stale)
     return manifest(capture(repo, slug))
+
+
+def prune(repo: LedgerRepository, folder: Path, stale: dict) -> None:
+    from scripts.swarm_ledger import request_metrics
+
+    with request_metrics.locked(repo.domain.LOCK), media_lock(repo.directory):
+        for name, written in stale.items():
+            path = folder / name
+            if path.exists() and path.stat().st_mtime_ns == written:
+                path.unlink()
 
 
 def displace(repo: LedgerRepository, snapshot: dict, expected: tuple[str, str] | None) -> dict:
@@ -175,12 +187,19 @@ def displace(repo: LedgerRepository, snapshot: dict, expected: tuple[str, str] |
     folder = repo.directory / f"{snapshot['slug']}.displaced"
     folder.mkdir(exist_ok=True)
     temporary = folder / f"{digest}.json.gz.part"
-    temporary.write_bytes(gzip.compress(encode(current)))
+    with temporary.open("wb") as handle:
+        handle.write(gzip.compress(encode(current)))
+        os.fsync(handle.fileno())
     temporary.replace(folder / f"{digest}.json.gz")
+    descriptor = os.open(folder, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
     return current
 
 
-def expectation(headers) -> tuple[str, str] | None:
+def expectation(headers: Message | dict) -> tuple[str, str] | None:
     expected = (headers.get("X-Ledger-Source"), headers.get("X-Ledger-Replaces"))
     if expected == (None, None):
         return None
@@ -288,6 +307,8 @@ def main() -> None:
     from scripts.swarm_ledger import ledger_server
 
     repo = storage.build(args.source / storage.DATABASE, ledger_server.core)
+    if refresh and manifest(capture(repo, args.slug[0]))["digest"] != args.expect_source:
+        parser.error("frozen source differs from --expect-source")
     with repo.snapshot() as snapshot:
         slugs = args.slug or snapshot.slugs()
     if args.freeze and not args.slug:
