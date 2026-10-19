@@ -49,7 +49,7 @@ def _acknowledge(store: RedisStore, slug: str, who: Who) -> None:
     if os.environ.get("AGENTIHOOKS_LEDGER_AGENT_TOKEN"):
         from scripts.swarm import ledger_cutover
 
-        ledger_cutover.acknowledge(store, slug, who)
+        ledger_cutover.acknowledge(store, slug, who, os.environ)
 
 
 @contextmanager
