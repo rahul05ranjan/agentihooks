@@ -74,15 +74,13 @@ def logo_links(page):
     return re.findall(r'<a [^>]*href="/"[^>]*>\s*<span class="logo" aria-hidden="true"></span>\s*</a>', page)
 
 
-def test_the_logo_links_home_on_a_rendered_ledger_page_and_the_bin():
+def test_the_logo_links_home_on_a_rendered_ledger_page_and_the_home_script_builds_it():
     content = {"title": "Logo", "overview": "o", "sources": [], "phases": [{"title": "p", "description": "d"}]}
     server.repository.create("logo", content)
     ledger = server.page_for("logo")
-    bin_view = server.index_page()
-    home = server.index_page()
-    for page in (ledger, bin_view, home):
-        assert logo_links(page) == [LOGO_LINK]
-        assert page.count('class="logo"') == 1
+    assert logo_links(ledger) == [LOGO_LINK]
+    assert ledger.count('class="logo"') == 1
+    assert 'class="logo"' not in server.index_page()
 
 
 def test_the_logo_link_keeps_the_logo_box_and_marks_focus_from_the_palette():

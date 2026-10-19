@@ -48,8 +48,11 @@ ORDER += (
 def serve_modules(target, ledger=None, swarm=None):
     """Answer every /static/<version>/ asset the shells load, and with a ledger the event stream that carries it."""
     if ledger is not None:
+        snapshot_body(ledger, swarm)
         target.route(lambda url: is_events(url), lambda route: fulfill_events(route, ledger, swarm))
     from scripts.swarm_ledger import ledger_core
+
+    ledger_core.static_assets()
 
     def answer(route):
         name = urlsplit(route.request.url).path.split("/", 3)[3]
