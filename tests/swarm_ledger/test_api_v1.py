@@ -960,9 +960,10 @@ def test_publish_plan_writes_land_through_the_plans_and_slices_resources(live, t
 
 
 def test_a_planner_publishes_a_plan_and_plan_read_prints_its_sliced_task(live, tmp_path, monkeypatch, capsys):
-    from scripts.swarm_ledger import ledger_artifacts, plan_read
-    from tests.swarm_ledger.test_ledger_authority import ledger
+    from scripts.swarm_ledger import ledger_artifacts, ledger_core, plan_read
+    from tests.swarm_ledger.test_ledger_authority import core, ledger
 
+    monkeypatch.setattr(ledger_core, "LEDGER_DIR", core.LEDGER_DIR)
     filler = "".join(f"One detail {n}\n" for n in range(12))
     plan = tmp_path / "plan.md"
     plan.write_text(
