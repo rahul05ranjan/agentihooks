@@ -1,5 +1,5 @@
 """Wall time per claimed task: past one limit the master hears of it, past a second the agent is asked to push and
-hand off, and an agent still live a grace period after that ask is ended and its task reopened for the next engineer.
+hand off, and an agent still live a grace period after that ask is ended and its task reopened for the next agent.
 Declared waits count toward the age; only a wait on the merge queue holds the ask and the end."""
 
 import json
@@ -25,18 +25,18 @@ REPORT = (
 )
 ASK = (
     "Overrun on swarm {slug}: you have run {minutes} minutes on task {task}, past the {park} minute limit. Finish the "
-    "step you are on, push your work with agentihooks swarm {slug} publish, write a Handoff v2 naming what blocks you, "
+    "step you are on, push any commits with agentihooks swarm {slug} publish, write a Handoff v2 naming what blocks you, "
     "run agentihooks swarm {slug} handoff <doc> and stop; a successor continues the task. Still running in {grace} "
-    "minutes, you are ended and the task reopens for the next engineer."
+    "minutes, you are ended and the task reopens for the next agent."
 )
 ENDED = (
     "Overrun on swarm {slug}: {agent} was still running {grace} minutes after the ask to hand off task {task}, "
-    "{minutes} minutes in all. The swarm ended it and reopened the task for the next engineer, who continues from "
-    "the branch. Close this item once you have looked."
+    "{minutes} minutes in all. The swarm ended it and reopened the task for the next agent, who continues from "
+    "its work folder and any pushed branch. Close this item once you have looked."
 )
 COMMENT = (
     "The overrun watch ended {agent} after {minutes} minutes on this task: it was still running {grace} minutes "
-    "after the ask to push and hand off. The task is open again for the next engineer."
+    "after the ask to push and hand off. The task is open again for the next agent."
 )
 
 
