@@ -371,6 +371,11 @@ def reader(record: dict, limits: Limits) -> list[Finding]:
                 (
                     coverage[1],
                     *(() if historical.get("listed", True) else ("trace listing stopped at its page cap",)),
+                    *(
+                        (f"{historical['unlisted']} traces past the listing cap not counted",)
+                        if historical.get("unlisted")
+                        else ()
+                    ),
                     *historical.get("unreadable", [])[:3],
                     "tool error, task cost and turn gap findings cover only the read traces",
                     "each Doctor scan reads more within its read budget",

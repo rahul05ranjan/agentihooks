@@ -92,9 +92,21 @@ def _cache_path(cache: Path, trace_id: str) -> Path:
 
 
 def _cached(cache: Path, trace: dict) -> dict:
-    entry = registry.load(_cache_path(cache, trace["id"]))
-    usable = entry.get("deduplicated") and ("observations" in entry or "failed" in entry)
-    return entry if usable and entry.get("updated_at") == trace.get("updatedAt") else {}
+    path = _cache_path(cache, trace["id"])
+    entry = registry.load(path)
+    if entry.get("updated_at") != trace.get("updatedAt") or not (entry.get("whole") or "failed" in entry):
+        return {}
+    if not entry.get("deduplicated"):
+        entry = _deduplicated(entry)
+        registry.save(path, entry)
+    return entry
+
+
+def _deduplicated(entry: dict) -> dict:
+    upgraded = {**entry, "deduplicated": True}
+    if "observations" in entry:
+        upgraded["observations"] = list({json.dumps(o, sort_keys=True): o for o in entry["observations"]}.values())
+    return upgraded
 
 
 def _listing(slug, get, budget, deadline, clock):
@@ -104,12 +116,12 @@ def _listing(slug, get, budget, deadline, clock):
             body = get("traces", {"tags": f"swarm:{slug}", "fields": "core", "page": page, "limit": PAGE})
             rows += body["data"]
             if page >= body["meta"]["totalPages"]:
-                return rows, True, []
+                return rows, True, 0, []
             if page >= budget.trace_pages or clock() >= deadline:
-                return rows, False, []
+                return rows, False, max(body["meta"]["totalItems"] - len(rows), 0), []
             page += 1
     except Exception as exc:  # noqa: BLE001
-        return rows, False, [f"trace listing failed: {registry.failure(exc)}"]
+        return rows, False, 0, [f"trace listing failed: {registry.failure(exc)}"]
 
 
 def _backfill(get, cache, trace, budget, deadline, clock):
@@ -137,7 +149,7 @@ def history(
     reader failure.
     """
     deadline = clock() + budget.history_seconds
-    listed, complete_listing, failures = _listing(slug, get, budget, deadline, clock)
+    listed, complete_listing, unlisted, failures = _listing(slug, get, budget, deadline, clock)
     listed = list({trace["id"]: trace for trace in listed}.values())
     entries = {t["id"]: _cached(cache, t) for t in listed}
     unread = [t for t in listed if not entries[t["id"]]]
@@ -160,9 +172,10 @@ def history(
     covered = sum(1 for entry in entries.values() if entry.get("whole"))
     coverage = {
         "listed": complete_listing,
+        "unlisted": unlisted,
         "traces": len(listed),
         "covered": covered,
-        "complete": complete_listing and covered == len(listed),
+        "complete": not failures and covered == len(listed),
         "unreadable": [f"trace {key} unreadable: {e['failed']}" for key, e in entries.items() if e.get("failed")],
     }
     return found, coverage, failures
