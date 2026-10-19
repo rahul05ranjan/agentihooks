@@ -1,5 +1,8 @@
 import json
+import subprocess
+import sys
 from dataclasses import asdict, replace
+from pathlib import Path
 
 import pytest
 
@@ -232,3 +235,10 @@ def test_undecided_or_unknown_local_rows_and_pod_agents_are_not_shown(store):
     assert rv.view(store, SLUG, NOW)["cards"] == []
     store.put_restored(SLUG, [asdict(resume.Outcome("nobody", "eng", "t", resume.AWAITING, "x"))])
     assert rv.view(store, SLUG, NOW) == {"cards": [], rv.METRIC: {}}
+
+
+@pytest.mark.parametrize("module", ["scripts.swarm.recovery_view", "scripts.swarm.resume"])
+def test_the_recovery_modules_import_first_in_a_fresh_interpreter(module):
+    root = Path(__file__).parents[2]
+    result = subprocess.run([sys.executable, "-c", f"import {module}"], cwd=root, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
