@@ -109,7 +109,7 @@ def test_proof_controls_refuse_their_credentials_over_plain_http_off_loopback(mo
 
 
 def test_the_event_stream_refuses_its_credential_over_plain_http_off_loopback(monkeypatch):
-    monkeypatch.setattr(watch_ledger.ledger_link, "base", lambda slug="": "http://ledger:8765")
+    monkeypatch.setattr(watch_ledger.ledger_link, "base", lambda: "http://ledger:8765")
     monkeypatch.setattr(watch_ledger.urllib.request, "urlopen", pytest.fail)
 
     with pytest.raises(watch_ledger.ledger_link.Cleartext):
@@ -118,7 +118,7 @@ def test_the_event_stream_refuses_its_credential_over_plain_http_off_loopback(mo
 
 def test_an_upload_refuses_its_credential_over_plain_http_off_loopback(monkeypatch, tmp_path):
     (tmp_path / "shot.png").write_bytes(b"png")
-    monkeypatch.setattr(ledger, "base", lambda slug="": "http://ledger:8765")
+    monkeypatch.setattr(ledger, "base", lambda: "http://ledger:8765")
     monkeypatch.setattr(ledger, "credentials", lambda slug: {"X-Ledger-Token": "token"})
     monkeypatch.setattr(ledger.urllib.request, "urlopen", pytest.fail)
 
@@ -225,9 +225,9 @@ def test_every_credential_sender_trusts_the_ledger_ca_with_its_own_timeout(monke
     seen = trusted(monkeypatch, cert)
     environ = {**os.environ, "AGENTIHOOKS_DEPLOYMENT": "distributed", "LEDGER_URL": "https://ledger:8765"}
     (tmp_path / "shot.png").write_bytes(b"png")
-    monkeypatch.setattr(ledger, "base", lambda slug="": "https://ledger:8765")
+    monkeypatch.setattr(ledger, "base", lambda: "https://ledger:8765")
     monkeypatch.setattr(ledger, "credentials", lambda slug: {"X-Ledger-Token": "token"})
-    monkeypatch.setattr(watch_ledger.ledger_link, "base", lambda environ=None, slug="": "https://ledger:8765")
+    monkeypatch.setattr(watch_ledger.ledger_link, "base", lambda environ=None: "https://ledger:8765")
 
     monkeypatch.delenv("LEDGER_CA_PEM")
     proof_ledger.call("ledgers", {}, {**environ, "AGENTIHOOKS_CONTROLLER_CREDENTIAL": "controller"})

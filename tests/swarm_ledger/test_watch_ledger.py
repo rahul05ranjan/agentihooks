@@ -106,7 +106,7 @@ def live(monkeypatch):
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
     threading.Thread(target=httpd.serve_forever, args=(0.01,), daemon=True).start()
     base = f"http://127.0.0.1:{httpd.server_address[1]}"
-    monkeypatch.setattr(watch_ledger.ledger_link, "base", lambda slug="": base)
+    monkeypatch.setattr(watch_ledger.ledger_link, "base", lambda: base)
     monkeypatch.setattr(server, "ALLOWED_HOSTS", {f"127.0.0.1:{httpd.server_address[1]}"})
     yield base
     httpd.shutdown()
@@ -261,7 +261,7 @@ def test_the_watcher_connects_with_header_credentials_and_no_token_in_the_url(mo
         return Answer()
 
     monkeypatch.setattr(watch_ledger.urllib.request, "urlopen", urlopen)
-    monkeypatch.setattr(watch_ledger.ledger_link, "base", lambda slug="": "http://127.0.0.1:9")
+    monkeypatch.setattr(watch_ledger.ledger_link, "base", lambda: "http://127.0.0.1:9")
     frames = list(watch_ledger.stream("a b", "cur", {"X-Ledger-Token": "secret"}))
     assert frames == [("heartbeat", {}, None)]
     url, headers, timeout = seen[0]

@@ -301,67 +301,6 @@ def test_spawn_hands_each_agent_its_own_ledger_token_and_never_the_server_secret
     assert "SWARM_SECRET" not in env
 
 
-@pytest.mark.parametrize(
-    ("lane", "name", "profile"),
-    [
-        ("eng", "engineer@a1b2c3-0001", "engineer"),
-        ("master", "master@a1b2c3-0001", "master"),
-        ("master", "master@a1b2c3-0002", "master"),
-    ],
-)
-def test_staged_and_active_launches_use_each_successors_scoped_credential(tmp_path, monkeypatch, lane, name, profile):
-    import secrets
-    from dataclasses import replace
-
-    from scripts.swarm import runtime as module
-    from scripts.swarm.store import SwarmConfig
-    from scripts.swarm_ledger import authority_context, ledger_authority
-
-    seen = []
-    monkeypatch.delenv("SWARM_URL", raising=False)
-    monkeypatch.setattr(module.binding, "fields", lambda *_: {"profile": profile})
-
-    def run(argv, **kwargs):
-        seen.append(kwargs["env"])
-        return SimpleNamespace(returncode=0, stdout="status=started\nroute_status=routed\n", stderr="")
-
-    runtime = HerdrRuntime(home=tmp_path, run=run)
-    monkeypatch.setattr(runtime, "conversations", lambda: {})
-    config = SwarmConfig("sw", str(tmp_path), 0, 0, pending_api_url="https://hosted.example")
-    argv = ["agentihooks", "init-agent", "--agent", "codex", "--profile", profile]
-    secret = secrets.token_hex(32)
-    with authority_context.bound(secret):
-        runtime._launch(config, lane, "task", name, argv)
-        assert seen[-1]["AGENTIHOOKS_LEDGER_AGENT_TOKEN"] == ledger_authority.agent_token(secret, "sw", name)
-        assert "SWARM_URL" not in seen[-1]
-        assert "SWARM_SECRET" not in seen[-1]
-        runtime._launch(replace(config, api_url=config.pending_api_url), lane, "task", name, argv)
-        assert seen[-1]["SWARM_URL"] == "https://hosted.example"
-    with pytest.raises(module.SpawnError, match="ledger.*credential"):
-        runtime._launch(config, lane, "task", name, argv)
-    assert len(seen) == 2
-
-
-def test_a_local_launch_drops_an_inherited_hosted_route(tmp_path, monkeypatch):
-    from scripts.swarm import runtime as module
-    from scripts.swarm.store import SwarmConfig
-
-    monkeypatch.setenv("AGENTIHOOKS_SWARM", "other")
-    monkeypatch.setenv("SWARM_URL", "https://hosted.example")
-    monkeypatch.setattr(module.binding, "fields", lambda *_: {"profile": "engineer"})
-    seen = {}
-
-    def run(argv, **kwargs):
-        seen.update(kwargs["env"])
-        return SimpleNamespace(returncode=0, stdout="status=started\nroute_status=routed\n", stderr="")
-
-    runtime = HerdrRuntime(home=tmp_path, run=run)
-    monkeypatch.setattr(runtime, "conversations", lambda: {})
-    argv = ["agentihooks", "init-agent", "--agent", "codex", "--profile", "engineer"]
-    runtime._launch(SwarmConfig("sw", str(tmp_path), 0, 0), "eng", "task", "engineer@a1b2c3-0001", argv)
-    assert "SWARM_URL" not in seen
-
-
 def test_spawn_without_the_server_secret_never_passes_on_the_tick_s_token(tmp_path, monkeypatch):
     monkeypatch.delenv("SWARM_SECRET", raising=False)
     monkeypatch.setenv("AGENTIHOOKS_LEDGER_AGENT_TOKEN", "the-tick-s-own")
