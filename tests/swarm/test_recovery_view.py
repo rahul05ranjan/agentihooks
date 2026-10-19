@@ -11,7 +11,7 @@ from scripts.swarm import resume
 from scripts.swarm.store import AgentRecord, RedisStore, SwarmConfig
 from scripts.swarm_v2.checkpoints import model
 
-pytestmark = [pytest.mark.unit, pytest.mark.xdist_group("fakeredis")]
+pytestmark = pytest.mark.unit
 
 SLUG = "rv"
 NOW = 1_000_000

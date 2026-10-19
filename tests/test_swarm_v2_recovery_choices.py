@@ -6,7 +6,7 @@ from scripts.swarm.store import SwarmError
 from scripts.swarm_v2.kubernetes import failures
 from tests import sv2_kub05_cases as cases
 
-pytestmark = [pytest.mark.unit, pytest.mark.xdist_group("fakeredis")]
+pytestmark = pytest.mark.unit
 
 
 @pytest.fixture

@@ -5,8 +5,6 @@ import pytest
 
 from tests import sv2_ux03_cases
 
-pytestmark = pytest.mark.xdist_group("fakeredis")
-
 EVIDENCE = Path(__file__).parents[3] / "evidence" / "SV2-UX-03"
 
 
