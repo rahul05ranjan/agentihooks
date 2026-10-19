@@ -709,7 +709,14 @@ def test_a_watch_pass_holds_the_pass_lock_but_its_wait_does_not(monkeypatch):
     assert held == [True, False]
 
 
-def test_reload_signals_the_running_server_and_waits_for_its_successor(tmp_path, monkeypatch):
+@pytest.fixture
+def quick_clock(monkeypatch):
+    ticks = iter(range(1_000_000))
+    monkeypatch.setattr(server.time, "monotonic", lambda: float(next(ticks)))
+    monkeypatch.setattr(server.time, "sleep", lambda seconds: None)
+
+
+def test_reload_signals_the_running_server_and_waits_for_its_successor(tmp_path, monkeypatch, quick_clock):
     pidfile = tmp_path / ".server.pid"
     pidfile.write_text("41")
     sent, naps = [], []
@@ -729,7 +736,9 @@ def test_reload_signals_the_running_server_and_waits_for_its_successor(tmp_path,
 
 
 @pytest.mark.parametrize(("pid", "kill"), [("", None), ("41", ProcessLookupError)])
-def test_reload_starts_a_server_when_the_recorded_one_is_unreadable_or_gone(tmp_path, monkeypatch, pid, kill):
+def test_reload_starts_a_server_when_the_recorded_one_is_unreadable_or_gone(
+    tmp_path, monkeypatch, pid, kill, quick_clock
+):
     pidfile = tmp_path / ".server.pid"
     pidfile.write_text(pid)
     sent = []
@@ -746,7 +755,7 @@ def test_reload_starts_a_server_when_the_recorded_one_is_unreadable_or_gone(tmp_
     assert sent == ([] if kill is None else [(41, server.signal.SIGHUP)])
 
 
-def test_reload_starts_a_server_when_none_runs(monkeypatch):
+def test_reload_starts_a_server_when_none_runs(monkeypatch, quick_clock):
     sent = []
     monkeypatch.setattr(server, "server_process_alive", lambda: False)
     monkeypatch.setattr(server, "ensure", lambda: sent.append("ensure"))
@@ -768,7 +777,7 @@ def test_reload_fails_when_the_server_never_hands_off(tmp_path, monkeypatch):
         server.reload(wait=2.0)
 
 
-def test_reload_starts_a_server_when_the_signalled_one_dies_without_handing_off(tmp_path, monkeypatch):
+def test_reload_starts_a_server_when_the_signalled_one_dies_without_handing_off(tmp_path, monkeypatch, quick_clock):
     pidfile = tmp_path / ".server.pid"
     pidfile.write_text("41")
     alive, sent = iter([True, False]), []
@@ -781,7 +790,7 @@ def test_reload_starts_a_server_when_the_signalled_one_dies_without_handing_off(
     assert sent == [(41, server.signal.SIGHUP), "ensure"]
 
 
-def test_reload_applies_the_compose_service_then_hands_off(tmp_path, monkeypatch):
+def test_reload_applies_the_compose_service_then_hands_off(tmp_path, monkeypatch, quick_clock):
     pidfile = tmp_path / ".server.pid"
     pidfile.write_text("41")
     sent, used = [], []
@@ -796,7 +805,7 @@ def test_reload_applies_the_compose_service_then_hands_off(tmp_path, monkeypatch
     assert used == [server.core.LEDGER_DIR]
 
 
-def test_reload_stops_when_the_compose_service_cannot_start(monkeypatch):
+def test_reload_stops_when_the_compose_service_cannot_start(monkeypatch, quick_clock):
     monkeypatch.setattr(server.server_compose, "used", lambda folder: True)
     monkeypatch.setattr(server.server_compose, "start", lambda folder: "no such image")
     monkeypatch.setattr(server.os, "kill", lambda pid, sig: pytest.fail("signalled"))
