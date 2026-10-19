@@ -65,6 +65,17 @@ def test_a_frozen_phase_marks_itself_and_its_slices_but_not_its_plan():
     assert "plans/p1" not in frozen
 
 
+def test_a_freeze_on_a_plan_gone_from_the_ledger_still_marks_the_phase_and_tasks_under_it():
+    doc = {
+        **DOC,
+        "phases": [*DOC["phases"], {"id": "ph3", "title": "Orphan", "plan": "plans/gone"}],
+        "tasks": [*DOC["tasks"], task("t9", "ph3")],
+        "freezes": [record("plans/gone")],
+    }
+    frozen = set(freeze.marks(doc, hierarchy.project(doc)[0], "", False)["frozen"])
+    assert frozen == {"phases/ph3", "tasks/t9"}
+
+
 def test_a_focus_holds_what_lies_outside_it_but_never_urgent_or_fix_phase_tasks():
     assert marks([record("plans/p1", "focus")])["held"] == {"plans/p2", "phases/ph2", "tasks/t2"}
     assert marks([record("plans/p1", "focus")], fix_phase="ph2")["held"] == {"plans/p2", "phases/ph2"}
