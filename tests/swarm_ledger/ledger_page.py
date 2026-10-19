@@ -77,9 +77,8 @@ def served_ledger(ledger):
         return ledger
     from scripts.swarm_ledger import ledger_server
 
-    view = ledger_server.page_view(ledger)
-    meta = ledger.get("_meta", {})
-    return {**view, "marks": ledger.get("marks", view["marks"]), "_meta": {**view["_meta"], **meta}}
+    meta = {"limits": ledger_server.PAGE_LIMITS, **ledger.get("_meta", {})}
+    return {"marks": {"frozen": [], "held": []}, **ledger, "_meta": meta}
 
 
 def is_events(url):

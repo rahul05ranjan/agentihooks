@@ -93,3 +93,42 @@ def test_an_unsafe_task_work_folder_answers_not_found():
 )
 def test_only_the_exact_task_work_folder_path_reads_the_folder(path, routed):
     assert bool(routes.WORKSPACE_RE.fullmatch(path)) is routed
+
+
+def get_request(path, command="GET", sent=None):
+    return SimpleNamespace(
+        headers={"Host": "h"},
+        path=f"/api/v1/ledgers/{SLUG}/{path}",
+        command=command,
+        exists=lambda slug: True,
+        send_media=lambda *args: sent.append(args),
+    )
+
+
+def test_file_reads_need_no_credential_and_come_from_their_own_store():
+    sent = []
+    anonymous = SimpleNamespace(caller=lambda headers, admin, slug: None, controller=lambda credential: False)
+    server = SimpleNamespace(
+        **{**vars(fake_server([])), "authority": anonymous, "ledger_media": "media", "ledger_artifacts": "artifacts"}
+    )
+    for kind in ("media", "artifacts"):
+        assert routes.dispatch(get_request(f"files/{kind}/a.png", sent=sent), server) is None
+    assert sent == [(SLUG, "a.png", "media"), (SLUG, "a.png", "artifacts")]
+    with pytest.raises(APIError) as caught:
+        routes.dispatch(get_request("files/media/a.png", "DELETE", sent), server)
+    assert (caught.value.status, len(sent)) == (403, 2)
+
+
+def test_the_model_list_and_swarm_reads_answer_with_their_data(monkeypatch):
+    catalog = {"claude": [{"model": "opus"}], "codex": []}
+    seen = []
+    monkeypatch.setattr(
+        resources, "swarm_read", lambda status, path, query: seen.append((status, path, query)) or {"data": status}
+    )
+    server = SimpleNamespace(
+        **{**vars(fake_server([])), "swarm_models": lambda: catalog, "swarm_status": lambda slug: {"slug": slug}}
+    )
+    models = routes.dispatch(get_request("swarm/models"), server)
+    assert models == {"data": catalog, "revision": resources.revision(catalog)}
+    assert routes.dispatch(get_request("swarm/agents?limit=5"), server) == {"data": {"slug": SLUG}}
+    assert seen == [({"slug": SLUG}, "swarm/agents", {"limit": 5})]

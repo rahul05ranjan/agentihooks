@@ -2,15 +2,7 @@ import copy
 
 import pytest
 
-from tests.swarm_ledger.ledger_page import (
-    fulfill_events,
-    is_events,
-    ledger_state,
-    loaded,
-    serve_modules,
-    shell_html,
-    snapshot_body,
-)
+from tests.swarm_ledger.ledger_page import fulfill_events, is_events, ledger_state, loaded, serve_modules, shell_html
 from tests.swarm_ledger.test_caps_columns import browser as chromium_browser
 
 browser = chromium_browser
@@ -84,11 +76,12 @@ def page(browser, request):
 
     context.route("**/*", answer)
     serve_modules(context)
-    context.route(
-        is_events,
-        lambda route: fulfill_events(route, ledger_state({**doc, "freezes": freezes}), SWARM),
-    )
-    snapshot_body(ledger_state({**doc, "freezes": freezes}), SWARM)
+
+    def view():
+        return ledger_server.page_view(ledger_state({**doc, "freezes": freezes}), "", False)
+
+    context.route(is_events, lambda route: fulfill_events(route, view(), SWARM))
+    view()
     tab = context.new_page()
     tab.set_default_timeout(3000)
     tab.set_default_navigation_timeout(15000)

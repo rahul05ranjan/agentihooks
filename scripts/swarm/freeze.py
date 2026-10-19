@@ -74,12 +74,10 @@ def covers(target: str, task: dict, chain: list) -> bool:
     return target in chain
 
 
-def marks(doc: dict, graph: dict, fix: str = "", watched: bool = False) -> dict:
+def marks(doc: dict, graph: dict, fix: str, watched: bool) -> dict:
     records = doc.get("freezes") or []
     focus = [r["target"] for r in records if r["verb"] == "focus"]
-    tasks = {
-        f"tasks/{t['id']}": t for t in doc.get("tasks") or [] if isinstance(t, dict) and f"tasks/{t.get('id')}" in graph
-    }
+    tasks = {f"tasks/{t.get('id')}": t for t in doc.get("tasks") or [] if isinstance(t, dict)}
     chains = {node: _chain(node, graph, tasks) for node in graph}
     found = {"frozen": [], "held": []}
     for node, chain in chains.items():
@@ -101,7 +99,7 @@ def _chain(node: str, graph: dict, tasks: dict) -> list:
     if node in tasks:
         return ancestry(tasks[node], graph)
     chain, up = [node], (graph.get(node) or (None, None))[1]
-    while up and up not in chain and len(chain) < hierarchy.CHAIN:
+    while up and up not in chain:
         chain.append(up)
         up = (graph.get(up) or (None, None))[1]
     return chain

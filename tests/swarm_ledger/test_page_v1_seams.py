@@ -83,7 +83,7 @@ def test_a_watched_swarm_focus_holds_every_task_but_urgent_and_fix_phase_ones():
 
 def test_a_task_that_is_not_open_is_never_held():
     doc = {**DOC, "tasks": [{**DOC["tasks"][1], "state": "done"}], "freezes": [record("plans/p1", "focus")]}
-    assert freeze.marks(doc, hierarchy.project(doc)[0])["held"] == ["plans/p2", "phases/ph2"]
+    assert freeze.marks(doc, hierarchy.project(doc)[0], "", False)["held"] == ["plans/p2", "phases/ph2"]
 
 
 def test_a_focus_on_an_item_gone_from_the_ledger_holds_everything_but_urgent_work():
@@ -136,7 +136,7 @@ def doctor_server(monkeypatch, peer_freezes):
     )
     documents = {"doctor": ledger_state(doc)}
     if peer_freezes is not None:
-        documents["doctor-watched"] = {"freezes": peer_freezes}
+        documents["doctor-watched"] = documents["plain-watched"] = {"freezes": peer_freezes}
     repository = SimpleNamespace(exists=lambda slug: slug in documents, get_document=lambda slug: documents[slug])
     monkeypatch.setattr(ledger_server, "swarm_store", lambda: store)
     monkeypatch.setattr(ledger_server, "repository", repository)
@@ -158,6 +158,7 @@ def test_a_focus_in_the_watched_swarm_holds_the_doctor_tasks_in_every_view_it_st
     for view in (streamed, published[0]):
         assert set(view["marks"]["held"]) == {"tasks/t1", "tasks/t2", "tasks/t3", "tasks/t5"}
     assert ledger_server.ledger_view(ledger_state(doc))["marks"]["held"] == []
+    assert ledger_server.ledger_view(ledger_state(doc), "plain")["marks"]["held"] == []
 
 
 def test_an_unreadable_swarm_leaves_the_doctor_view_unheld(monkeypatch):

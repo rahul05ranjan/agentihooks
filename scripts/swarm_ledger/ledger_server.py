@@ -102,8 +102,8 @@ def served_version():
 NO_DOCTOR = ("", False)
 
 
-def page_view(state, fix_phase="", watched=False):
-    meta = {key: item for key, item in state.get("_meta", {}).items() if key not in ("seeds", "api_operations")}
+def page_view(state, fix_phase, watched):
+    meta = {key: item for key, item in state["_meta"].items() if key not in ("seeds", "api_operations")}
     marks = freeze.marks(state, hierarchy.project(state)[0], fix_phase, watched)
     return {**state, "marks": marks, "_meta": {**meta, "limits": PAGE_LIMITS}}
 
@@ -116,7 +116,7 @@ def doctor_holds(slug):
     try:
         store = swarm_store()
         fix = freeze.fix_phase(store.config(slug))
-        peer = store.peer(slug) if fix else ""
+        peer = fix and store.peer(slug)
         records = repository.get_document(peer).get("freezes") or [] if peer and repository.exists(peer) else []
     except (SwarmError, RedisError, ValueError, OSError):
         return NO_DOCTOR
@@ -124,7 +124,7 @@ def doctor_holds(slug):
 
 
 def ledger_view(state, slug=None):
-    view = page_view(state, *(doctor_holds(slug) if slug else ()))
+    view = page_view(state, *(doctor_holds(slug) if slug else NO_DOCTOR))
     view["_meta"].update(page_version=served_version(), crew=ledger_gate.crew(state["_meta"]))
     return view
 
