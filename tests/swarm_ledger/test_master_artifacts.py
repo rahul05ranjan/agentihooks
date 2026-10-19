@@ -18,8 +18,6 @@ MASTER = "master@abcdef-0001"
 WORKER = "engineer@abcdef-0002"
 CONTENT = b"# Requested audit\n\nDesign and architecture findings.\n"
 
-pytestmark = pytest.mark.xdist_group("fakeredis")
-
 
 @pytest.fixture
 def publication(ledger_dir, tmp_path, monkeypatch):
