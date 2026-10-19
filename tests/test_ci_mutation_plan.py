@@ -111,6 +111,98 @@ def test_measured_costs_merge_mappings_keep_slowest_durations_and_cover_missing_
     assert measured_costs([names[1]], []) == {names[1]: 80.6}
 
 
+def test_a_mutant_with_a_recorded_killer_costs_that_test_and_one_without_keeps_its_traced_sum(tmp_path):
+    from types import SimpleNamespace
+
+    from scripts.ci_mutation.killers import KillMemory
+    from scripts.ci_mutation.measured import measured_costs
+
+    memory = KillMemory(tmp_path / "killers")
+    killers = {"x_f": "fast", "x_gone": "dropped", "x_new": "unmeasured"}
+    for function, killer in killers.items():
+        memory.mutant = f"scripts.sample.{function}__mutmut_1"
+        memory.pytest_runtest_logreport(SimpleNamespace(failed=True, nodeid=killer))
+    names = [
+        "scripts.sample.x_f__mutmut_2",
+        "scripts.sample.x_g__mutmut_1",
+        "scripts.sample.x_gone__mutmut_3",
+        "scripts.sample.x_new__mutmut_2",
+    ]
+    results = [
+        {
+            "tests": {
+                "scripts.sample.x_f": ["fast", "slow"],
+                "scripts.sample.x_g": ["fast", "slow"],
+                "scripts.sample.x_gone": ["fast", "slow"],
+                "scripts.sample.x_new": ["fast", "unmeasured"],
+            },
+            "durations": {"fast": 2.0, "slow": 200.0},
+        }
+    ]
+    traced = 5.6 + 1.25 * 202.0
+    # A killer the stats never timed costs as much as the slowest timed test.
+    unmeasured = 5.6 + 1.25 * 200.0
+    assert measured_costs(names, results, memory) == pytest.approx(
+        {names[0]: 8.1, names[1]: traced, names[2]: traced, names[3]: unmeasured}
+    )
+    assert measured_costs(names, results) == pytest.approx(
+        {**dict.fromkeys(names[:3], traced), names[3]: 5.6 + 1.25 * 202.0}
+    )
+
+
+def test_refinement_prices_mutants_from_killers_kept_beside_the_shared_stats(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts.ci_mutation import measured
+    from scripts.ci_mutation.killers import KillMemory
+    from scripts.ci_mutation.stats import SharedStats, stats_key, write_part
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("mutmut.configuration._config", None)
+    _project(tmp_path, {})
+    (tmp_path / "sample.py").write_text("def outer(value):\n    return value + 1\n")
+    selected = {"sample.py": ({2}, ["tests/test_sample.py"])}
+    stats = SharedStats(tmp_path / "stats", "head")
+    key = stats_key(stats.head, selected)
+    results = [{"tests": {"sample.x_outer": ["fast", "slow"]}, "durations": {"fast": 2.0, "slow": 100.0}}]
+    write_part(stats.group(0).folder / "part-0.json", key, (0, 1), results)
+    traced = measured.refine_plan(tmp_path, selected, stats)["costs"]
+    memory = KillMemory(stats.folder / "killers")
+    memory.mutant = next(iter(traced))
+    memory.pytest_runtest_logreport(SimpleNamespace(failed=True, nodeid="fast"))
+    killed = measured.refine_plan(tmp_path, selected, stats)["costs"]
+    assert traced
+    assert set(killed) == set(traced)
+    assert list(traced.values()) == pytest.approx([5.6 + 1.25 * 102.0] * len(traced))
+    assert list(killed.values()) == pytest.approx([8.1] * len(killed))
+
+
+def test_measured_costs_price_tests_by_the_cpu_their_contended_walls_took():
+    from scripts.ci_mutation.measured import measured_costs, measured_splits
+
+    name = "scripts.sample.x_f__mutmut_1"
+    tests = {"scripts.sample.x_f": ["a", "b"]}
+    contended = 5.6 + 1.25 * (30.0 + 40.0) / 3
+    results = [
+        {"tests": tests, "durations": {"a": 30.0}, "cpu": 10.0},
+        {"tests": {}, "durations": {"b": 40.0}, "cpu": 10.0},
+        {"tests": {}, "durations": {"c": 20.0}, "cpu": 10.0},
+    ]
+    assert measured_costs([name], results) == pytest.approx({name: contended})
+    cached = [{**result, "cpu": cpu} for result, cpu in zip(results, (15.0, 5.0, 5.0), strict=True)]
+    cached += [{"tests": {}, "durations": {"c": 2.0}, "cpu": 5.0}, {"tests": {}, "durations": {}, "cpu": 4.0}]
+    assert measured_costs([name], cached) == pytest.approx({name: contended})
+    uncontended = [{"tests": tests, "durations": {"a": 3.0, "b": 4.0}, "cpu": 10.0}]
+    assert measured_costs([name], uncontended) == pytest.approx({name: 5.6 + 1.25 * 7.0})
+    quick = [{"tests": tests, "durations": {"a": 0.3, "b": 0.3}, "cpu": 0.2}]
+    assert measured_costs([name], quick) == pytest.approx({name: 5.6 + 1.25 * 0.2})
+    untimed = [{"tests": tests, "durations": {"a": 30.0, "b": 40.0}}]
+    assert measured_costs([name], untimed) == pytest.approx({name: 5.6 + 1.25 * 70.0})
+    long = [{"tests": tests, "durations": {"a": 300.0, "b": 300.0}, "cpu": 200.0}]
+    assert measured_splits([name], long) == {}
+    assert measured_splits([name], [{**long[0], "cpu": 600.0}])["scripts.sample.x_f"]["head"] == ["a"]
+
+
 def test_expensive_mutants_are_balanced_before_cheap_names_and_totals_are_preserved():
     from scripts.ci_mutation.measured import plan_shards
 

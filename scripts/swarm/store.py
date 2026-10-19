@@ -27,6 +27,7 @@ SCALING = ("auto", "manual")
 AUTO_SCALING, MANUAL_SCALING = SCALING
 DEFAULT_LOAD_HIGH, DEFAULT_LOAD_LOW = 1.5, 1.0
 DEFAULT_MEMORY_PER_AGENT_MB = 700
+DEFAULT_SWAP_FULL_SHARE = 0.9
 DEFAULT_MASTERS_STEP = 12
 DEFAULT_MASTER_MOVE_GRACE = 300
 MAX_LOAD = 10.0
@@ -76,6 +77,7 @@ class SwarmConfig:
     master_move_grace: int = DEFAULT_MASTER_MOVE_GRACE
     pending_api_url: str = ""
     ledger_staged_at: int = 0
+    swap_full_share: float = DEFAULT_SWAP_FULL_SHARE
 
 
 def scaling_refusal(config):
@@ -89,6 +91,8 @@ def scaling_refusal(config):
         return f"load low must be above 0 and at most load high, and load high at most {MAX_LOAD:g}"
     if type(config.memory_per_agent_mb) is not int or config.memory_per_agent_mb <= 0:
         return "memory per agent must be a whole number of MB above 0"
+    if type(config.swap_full_share) not in (int, float) or not 0 < config.swap_full_share <= 1:
+        return "swap full share must be above 0 and at most 1"
     return ""
 
 
@@ -210,6 +214,7 @@ class RedisStore:
             int(raw.get("master_move_grace") or DEFAULT_MASTER_MOVE_GRACE),
             raw.get("pending_api_url", ""),
             int(raw.get("ledger_staged_at") or 0),
+            float(raw.get("swap_full_share") or DEFAULT_SWAP_FULL_SHARE),
         )
 
     def update(self, slug, **changes):
