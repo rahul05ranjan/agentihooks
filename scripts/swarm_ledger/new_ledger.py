@@ -31,15 +31,14 @@ import ledger_core as core  # noqa: E402
 import ledger_link  # noqa: E402
 import ledger_size  # noqa: E402
 
-from scripts.swarm import naming
-from scripts.swarm_ledger import storage
+from scripts.swarm_ledger import ports, storage
 
 TEMPLATE = core.TEMPLATE
 LIMITS = {"overview": 200, "phase description": 100}
 
 
 def built_slug(args):
-    from scripts.swarm import naming
+    naming = ports.swarm().naming
 
     try:
         if args.plan:
@@ -194,6 +193,7 @@ def main():
     args = parser.parse_args()
 
     slug = built_slug(args)
+    naming = ports.swarm().naming
     if args.size == "swarm" and not naming.is_code_named_swarm(slug):
         sys.exit(f"a swarm ledger is created with its swarm by one command: {naming.SWARM_INIT}")
     if storage.default().exists(slug):

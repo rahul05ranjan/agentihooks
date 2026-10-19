@@ -7,6 +7,8 @@ import re
 
 import ledger_comments
 
+from scripts.swarm_ledger import ports
+
 AUTHOR_RE = re.compile(r"^[A-Za-z][\w.@-]{0,63}$")
 ROLES = ("orchestrator", "member")
 ITEM_PATH_RE = re.compile(r"^(phases|questions|followups)/[^/]+$")
@@ -72,8 +74,8 @@ def check_hive(op):
 
 
 def _screened(text):
-    from hooks.context.conditions import LEDGER_WRITE
-    from hooks.filters import check as filters
+    LEDGER_WRITE = ports.hooks().conditions.LEDGER_WRITE
+    filters = ports.hooks().filters
 
     return filters.screen(LEDGER_WRITE, text)
 

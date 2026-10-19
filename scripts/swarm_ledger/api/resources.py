@@ -1,6 +1,8 @@
 import hashlib
 import json
 
+from scripts.swarm_ledger import ports
+
 from .errors import APIError
 
 
@@ -231,10 +233,8 @@ def hierarchy_read(repository, slug: str, path: str, query: dict) -> dict:
 
 
 def node_state(kind: str, item: dict, doc: dict) -> str:
-    from scripts.swarm.phase_state import lifecycle
-
     if kind == "phase":
-        return lifecycle(item, doc)
+        return ports.swarm().phase_state.lifecycle(item, doc)
     if item.get("out_of_scope"):
         return "out_of_scope"
     return item.get("state") or ("done" if item.get("done") else "open")
