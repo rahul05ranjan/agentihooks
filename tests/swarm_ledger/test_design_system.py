@@ -34,7 +34,7 @@ def home_style():
 
 
 def home_page_source(view):
-    page = server.index_page(view)
+    page = server.index_page()
     version = server.served_version()
     for name, path in core.static_assets().items():
         href = f'<link rel="stylesheet" href="/static/{version}/{name}">'
@@ -309,10 +309,12 @@ class LandingBays(unittest.TestCase):
     def test_only_home_falls_outside_the_bay_scope(self):
         mains = {
             "ledger": re.search(r"<main([^>]*)>", page_source()).group(1),
-            "home": re.search(r"<main([^>]*)>", server.index_page("home")).group(1),
-            "bin": re.search(r"<main([^>]*)>", server.index_page("bin")).group(1),
+            "home": re.search(r"<main([^>]*)>", server.index_page()).group(1),
         }
-        self.assertEqual(mains, {"ledger": "", "home": ' class="home"', "bin": ' class="bin"'})
+        self.assertEqual(mains, {"ledger": "", "home": ""})
+        script = (core.TEMPLATE.parent / "static" / "home" / "home.js").read_text(encoding="utf-8")
+        self.assertIn('=== "bin" ? "bin" : "home";', script)
+        self.assertIn("main.className = view;", script)
 
     def test_priority_item_and_stat_rows_are_hairline_rows(self):
         css = css_of(page_source())

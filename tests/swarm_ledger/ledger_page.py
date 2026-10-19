@@ -56,6 +56,13 @@ def serve_modules(target, ledger=None, swarm=None):
         return route.fulfill(body=path.read_text(encoding="utf-8"), content_type=f"{ctype}; charset=utf-8")
 
     target.route("**/static/*/**", answer)
+    target.route("**/api/v1/tips", answer_tips)
+
+
+def answer_tips(route):
+    from scripts.swarm_ledger import page_tips
+
+    route.fulfill(json={"data": page_tips.values()})
 
 
 def shell_html(title="Ledger"):
