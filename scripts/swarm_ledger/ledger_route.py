@@ -10,8 +10,12 @@ from scripts.swarm_ledger import ports
 CURRENT: ContextVar[tuple[str, str] | None] = ContextVar("ledger_route", default=None)
 
 
+def local() -> bool:
+    return os.environ.get("AGENTIHOOKS_DEPLOYMENT", "local") == "local"
+
+
 def configured(store: object, slug: str) -> str:
-    return store.redis.hget(store.key(slug, "config"), "api_url") or ""
+    return (store.redis.hget(store.key(slug, "config"), "api_url") or "") if local() else ""
 
 
 def url(slug: str = "") -> str:
@@ -30,11 +34,7 @@ def scoped(slug: str, address: str) -> Iterator[None]:
 
 @contextmanager
 def session(slug: str) -> Iterator[None]:
-    if (
-        os.environ.get("AGENTIHOOKS_SWARM") == slug
-        and os.environ.get("AGENTIHOOKS_DEPLOYMENT", "local") == "local"
-        and not os.environ.get("SWARM_URL")
-    ):
+    if os.environ.get("AGENTIHOOKS_SWARM") == slug and local() and not os.environ.get("SWARM_URL"):
         store = ports.swarm().store.connect()
         with scoped(slug, store.config(slug).api_url):
             yield
@@ -64,8 +64,7 @@ def service(function: Callable) -> Callable:
         from scripts.swarm_ledger.authority_context import tick_headers
 
         pending = store.redis.hget(store.key(slug, "config"), "pending_api_url")
-        local = os.environ.get("AGENTIHOOKS_DEPLOYMENT", "local") == "local"
-        if (url(slug) or pending) and not tick_headers(slug) and (local or Who.from_env().pinned):
+        if local() and (url(slug) or pending) and not tick_headers(slug):
             return ["the host tick will apply the settings"]
         return function(store, slug, *args, **kwargs)
 
