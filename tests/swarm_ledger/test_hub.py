@@ -424,6 +424,10 @@ def test_the_default_retention_is_bounded():
     assert hub.channels[SLUG].log.maxlen == events_hub.RETAINED
 
 
+def test_a_new_hub_is_not_closing():
+    assert Hub().closing is False
+
+
 def test_draining_wakes_every_waiting_reader_with_closed():
     hub = Hub()
     seq, _ = opened(hub)

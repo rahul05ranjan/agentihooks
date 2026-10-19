@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 
@@ -69,6 +70,13 @@ def test_the_digest_follows_content_and_names_but_not_file_times(tmp_path):
     assert changed != first
     page.rename(tmp_path / "renamed.py")
     assert server_code.code_digest((tmp_path,)) not in (first, changed)
+
+
+def test_the_digest_hashes_each_path_beside_its_content_hash(tmp_path):
+    page = tmp_path / "page.py"
+    page.write_text("old = 1\n")
+    expected = hashlib.sha256(str(page).encode() + b"\0" + hashlib.sha256(b"old = 1\n").digest()).hexdigest()
+    assert server_code.code_digest((tmp_path,)) == expected
 
 
 def test_a_code_file_that_vanished_is_left_out_of_the_digest(tmp_path):
