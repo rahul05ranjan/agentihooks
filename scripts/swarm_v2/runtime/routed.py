@@ -97,7 +97,7 @@ def hive_controller(runtime: RoutedRuntime, store: RedisStore, slug: str, held: 
         [*runtime.router.runtimes.values(), hive],
         default=HIVE,
         disabled=runtime.router.disabled,
-        placement=Placement(HIVE, local_profiles=frozenset()),
+        placement=Placement(HIVE, lanes=frozenset(("eng", "ci", "plan")), local_profiles=frozenset()),
     )
     placed = RoutedRuntime(runtime.herdr_runtime, router)
     placed.hive_launch = hive

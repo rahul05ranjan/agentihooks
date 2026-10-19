@@ -86,6 +86,11 @@ login. Each step that empties the list names its reason, and the launch waits wi
 Among the hives left, placement picks the lowest `prefer` rank for the role, then the most room, then a lasting
 hive over an ephemeral one, then the hive id.
 
+`eng`, `ci` and `plan` run on headless hives. When a UI hive also takes one of them, placement tries the headless
+hives first and takes the UI hive only when none of them can launch the agent, for instance when every one is full.
+The agent record carries that reason as `placement_fallback` in its profile decision. The engineer, cicd and planner
+profiles place as `eng`, `ci` and `plan`; a frontend or qa profile on any lane places as its UI role.
+
 When no live hive takes the role:
 
 - `qa` and `frontend` wait with "no UI hive live".

@@ -12,7 +12,7 @@ from scripts.swarm.tick import Placed
 from scripts.swarm_v2.runtime.base import Capability, Outcome, SpawnRequest, Status
 
 HIVE = "hive"
-ROLE_PROFILES = {"engineer": "eng", "cicd": "ci"}
+ROLE_PROFILES = {"engineer": "eng", "cicd": "ci", "planner": "plan"}
 TTL_MS = 300000
 ORDERS = "controller-launch-orders"
 ENDINGS = "launch-endings"
@@ -25,6 +25,7 @@ class Selection:
     account: capacity.Account
     route_kind: str
     master_placement: placement.MasterPlacement | None = None
+    fallback: str = ""
 
 
 def loaded_hives(store: RedisStore) -> list[dict]:
@@ -94,13 +95,17 @@ class HiveLaunch:
             if row.harness == "claude" and capacity.free_seats(row) and (not account or row.name == account)
         ]
         route_kind = task.get("route_kind", "subscription")
-        reason = placement.Wait("no advertised Claude account has room")
+        reason, fallback = placement.Wait("no advertised Claude account has room"), None
         for row in sorted(candidates, key=lambda row: (row.sessions, row.name)):
-            hive = placement.place(role, "claude", row.name, route_kind, config.repo, hives, now)
-            if isinstance(hive, str):
-                return self._record_wait(lane, task, Selection(decision, hive, row, route_kind))
-            reason = hive
-        return self._record_wait(lane, task, reason)
+            chosen = placement.choose(role, "claude", row.name, route_kind, config.repo, hives, now)
+            if isinstance(chosen, placement.Wait):
+                reason = chosen
+                continue
+            selected = Selection(decision, chosen.hive, row, route_kind, fallback=chosen.fallback)
+            if not chosen.fallback:
+                return self._record_wait(lane, task, selected)
+            fallback = fallback or selected
+        return self._record_wait(lane, task, fallback or reason)
 
     def _master_selection(self, config, decision, hives, now, rows):
         accounts = {row.name: row for row in rows if row.harness == "claude" and capacity.free_seats(row)}
@@ -178,6 +183,7 @@ class HiveLaunch:
                     if selected.master_placement is not None
                     else {}
                 ),
+                **({"placement_fallback": selected.fallback} if selected.fallback else {}),
             },
             harness="claude",
             account=selected.account.name,
