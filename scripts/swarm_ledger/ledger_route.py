@@ -65,7 +65,7 @@ def service(function: Callable) -> Callable:
 
         pending = store.redis.hget(store.key(slug, "config"), "pending_api_url")
         local = os.environ.get("AGENTIHOOKS_DEPLOYMENT", "local") == "local"
-        if local and (url(slug) or pending) and not tick_headers(slug):
+        if (url(slug) or pending) and not tick_headers(slug) and (local or Who.from_env().pinned):
             return ["the host tick will apply the settings"]
         return function(store, slug, *args, **kwargs)
 
