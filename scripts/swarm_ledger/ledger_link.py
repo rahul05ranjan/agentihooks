@@ -97,7 +97,10 @@ def urlopen(request: urllib.request.Request, timeout: float, environ=os.environ)
 
 def remote(environ=os.environ, slug="") -> bool:
     return (
-        bool(ledger_route.url(slug) or environ.get("SWARM_URL"))
+        bool(
+            ledger_route.url(slug)
+            or (environ.get("SWARM_URL") if not slug or environ.get("AGENTIHOOKS_SWARM", slug) == slug else "")
+        )
         or environ.get("AGENTIHOOKS_DEPLOYMENT", "local") != "local"
     )
 

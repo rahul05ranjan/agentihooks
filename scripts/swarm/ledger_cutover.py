@@ -115,6 +115,8 @@ def _activate(store: RedisStore, slug: str, address: str) -> None:
     from scripts.swarm import commands
     from scripts.swarm_ledger import authority_context
 
+    if Who.from_env().pinned:
+        raise SwarmError("ledger activation requires controller authority")
     keys = _activation_keys(store, slug)
     with store.redis.pipeline() as batch:
         for key, reader in keys.items():

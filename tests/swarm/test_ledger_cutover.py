@@ -111,6 +111,7 @@ def test_endpoint_activation_requires_ready_executions_and_moves_the_controller_
         monkeypatch.setenv("AGENTIHOOKS_LEDGER_AGENT_TOKEN", ledger_authority.agent_token(secret, SLUG, actor.name))
         assert cli.main([SLUG, "ledger-ready"]) == 0
         capsys.readouterr()
+    monkeypatch.delenv("AGENTIHOOKS_AGENT_NAME")
     cli.cmd_set(source, args)
     assert source.config(SLUG).api_url == url
     assert lease.current(source, SLUG) is None
