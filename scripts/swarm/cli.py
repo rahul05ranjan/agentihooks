@@ -914,8 +914,6 @@ def _manual_count_step(counts):
 
 
 def cmd_set(store, args):
-    from scripts.swarm import ledger_cutover
-
     changes, lanes = {}, {key: dict(value) for key, value in store.config(args.slug).lanes.items()}
     counts, pairs = _split_master_pairs(args.pairs, "masters", masters.count_of)
     changes.update(_manual_count_step(counts))
@@ -957,7 +955,7 @@ def cmd_set(store, args):
                 f"or {', '.join(LANE_KEYS)}=<value>"
             )
         changes[SETTABLE[key]] = int(value)
-    config = ledger_cutover.settings(store, args.slug, {**changes, **_pinned(changes)})
+    config = store.update(args.slug, **changes, **_pinned(changes))
     _store_master_counts(store, args.slug, counts, hives)
     _store_master_rules(store, args.slug, rules)
     asked = any(pair.startswith("master-agent=") for pair in args.pairs)
@@ -1057,12 +1055,6 @@ def _affinity_line(report):
 
 def _remote_control_text(agents):
     return "".join(f"{line}\n" for a in agents if (line := remote_control.line(a.__dict__)))
-
-
-def cmd_ledger_ready(store: RedisStore, args: argparse.Namespace) -> None:
-    from scripts.swarm import ledger_cutover
-
-    print(json.dumps(ledger_cutover.readiness(store, args.slug)))
 
 
 def cmd_status(store, args):
@@ -2011,7 +2003,6 @@ def build_parser():
     sub.add_parser("set").add_argument("pairs", nargs="+")
     sub.add_parser("save-template").add_argument("template_name", metavar="name")
     sub.add_parser("status").add_argument("--json", action="store_true")
-    sub.add_parser("ledger-ready")
     for verb in ("freeze", "focus", "unfreeze"):
         frozen = sub.add_parser(verb)
         frozen.add_argument("target")

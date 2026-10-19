@@ -57,10 +57,6 @@ def dispatch(handler: object, server: ModuleType) -> dict | str | None:
 
 
 def ledger_read(server: ModuleType, slug: str, path: str, query: dict) -> dict:
-    if path == "controller-lease":
-        from . import controller_lease
-
-        return controller_lease.read(slug)
     if path.split("/")[0] == "hierarchy":
         return resources.hierarchy_read(server.repository, slug, path, query)
     if path == "architecture":
@@ -145,10 +141,6 @@ def ledger_operation(handler: object, server: ModuleType, slug: str, path: str, 
     if path in ("uploads/media", "uploads/artifacts"):
         return admin.upload(handler, server, slug, path)
     payload = body(handler, server)
-    if path == "controller-lease/actions":
-        from . import controller_lease
-
-        return controller_lease.act(slug, principal, payload)
     if path == "lifecycle/actions":
         return admin.lifecycle(server, principal, slug, payload)
     if path == "swarm/actions":
