@@ -145,7 +145,6 @@ def test_no_script_a_step_runs_calls_the_api():
         ".github/coverage/flatten.py",
         ".github/coverage/proxy.py",
         ".github/coverage/sonar-retry.sh",
-        "deploy/helm/agentihooks-swarm/ci/kind-smoke.sh",
         "docker/swarm-node/base-copy.sh",
         "docker/swarm-node/pull-base.sh",
         "docker/swarm-node/smoke.sh",
@@ -180,11 +179,6 @@ def test_no_script_a_step_runs_calls_the_api():
         "scripts/size_limits.py",
         "scripts/swarm_ledger/artifact_sanity.py",
         "scripts/swarm_ledger/ledger_server.py",
-        "tests/chart_hive_join.py",
-        "tests/chart_network.py",
-        "tests/chart_redis.py",
-        "tests/chart_secrets.py",
-        "tests/chart_workers.py",
         "tests/count_floor.py",
         "tests/coverage_baseline.py",
         "tests/coverage_ratchet.py",
@@ -193,7 +187,6 @@ def test_no_script_a_step_runs_calls_the_api():
         "tests/flake_budget.py",
         "tests/integration/swarm_node/run_health_proof.sh",
         "tests/js_lcov.py",
-        "tests/kind_request.py",
         "tests/ledger_load/gate.py",
         "tests/ledger_load/paired.py",
         "tests/ledger_load/streams.py",
@@ -217,6 +210,18 @@ def test_no_script_a_step_runs_calls_the_api():
         expected.append("scripts/ci_wall_clock.py")
     if (ROOT / ".github/actions/browser-cache/use-image.sh").exists():
         expected.append(".github/actions/browser-cache/use-image.sh")
+    if (ROOT / "deploy/helm/agentihooks-swarm/ci/kind-smoke.sh").exists():
+        expected.extend(
+            (
+                "deploy/helm/agentihooks-swarm/ci/kind-smoke.sh",
+                "tests/chart_hive_join.py",
+                "tests/chart_network.py",
+                "tests/chart_redis.py",
+                "tests/chart_secrets.py",
+                "tests/chart_workers.py",
+                "tests/kind_request.py",
+            )
+        )
     routing_contracts = [
         "tests/test_ci_anton_runners.py",
         "tests/test_ci_runner_classes.py",
