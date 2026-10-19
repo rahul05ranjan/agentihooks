@@ -23,8 +23,8 @@ agentihooks doctor <slug> intervene ACTION [--to ADDRESS] [--text TEXT] [--file 
                                                apply a merged fix to the watched swarm: pull-dev, restart-ledger-server,
                                                refresh-rules, culture, handoff-at-stop or message; logged on both ledgers
 <slug> names the watched ledger or its Doctor ledger. Start refuses without a linked bundle.
-The watched master sets lane caps, or relays a start or stop, only with --quote: the operator's own words typed
-in its pane within the last thirty minutes; each relay is noted on both ledgers.
+The watched master starts, scales or stops its Doctor only with --quote: the operator's own words typed in its
+pane within the last thirty minutes; each relay is noted on both ledgers. Other agents are refused.
 Every swarm tick runs the detectors once per AGENTIHOOKS_DOCTOR_INTERVAL_MINUTES (10) and closes the Doctor after
 AGENTIHOOKS_DOCTOR_QUIET_MINUTES (120) with no new finding.
 """
@@ -161,7 +161,7 @@ def cmd_start(store, args):
         for key, value in (("max_eng", args.max_eng_agents), ("max_ci", args.max_ci_agents))
         if value is not None
     }
-    relay = _order(store, slug, args.quote, "start") if caps or args.quote else ""
+    relay = _order(store, slug, args.quote, "start")
     ledger = swarm.LedgerClient()
     _create_ledger(doctor, slug, ledger.state(slug).get("title") or slug)
     _link(ledger, slug, doctor)
@@ -192,7 +192,7 @@ def _order(store, slug, quote, action):
     words = ledger_relay.verified(name, quote, within=RELAY_WINDOW_SEC)
     if not words:
         raise SwarmError(UNORDERED)
-    return RELAYED.format(name=name, action=action, words=words).replace("-", " ").replace("@", " ")
+    return RELAYED.format(name=name.replace("-", " ").replace("@", " "), action=action, words=words)
 
 
 def _relay(slug, doctor, note):
@@ -245,7 +245,7 @@ def _close(store, slug, doctor, lead="", announce=True):
 
 def cmd_stop(store, args):
     slug, doctor = _pair_of(store, args.slug)
-    relay = _order(store, slug, args.quote, "stop") if args.quote else ""
+    relay = _order(store, slug, args.quote, "stop")
     _relay(slug, doctor, relay)
     _close(store, slug, doctor, announce=False)
 

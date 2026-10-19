@@ -74,6 +74,7 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(doctor, "linked_bundle", lambda: tmp_path / "bundle")
     monkeypatch.setattr(doctor.detect, "readers", lambda *args, **kwargs: {})
     monkeypatch.setattr(doctor.loop, "speed", lambda *args: [])
+    monkeypatch.setattr("hooks.context.broadcast.session_name", lambda pid: "")
     assert swarm_cli.main([WATCHED, "create", "--repo", "/repo"]) == 0
     return store, rt, tmp_path
 
@@ -180,13 +181,25 @@ def pin(monkeypatch, name=MASTER, lane="master"):
 
 
 @pytest.fixture
-def pinned_master(monkeypatch):
+def pinned_master(env, monkeypatch):
+    seat(monkeypatch, env[0])
+    typed(ORDER, 60)
+
+
+ORDER = "restart the doctor crew with two engineers"
+QUOTED = ["--quote", ORDER]
+
+
+def seat(monkeypatch, store):
+    from scripts.swarm.store import AgentRecord
+
+    store.put_agent(WATCHED, AgentRecord(MASTER, "master", "master", seat=f"master@{WATCHED}"))
     pin(monkeypatch)
 
 
 def test_the_watched_master_starts_its_doctor_and_authors_the_links_as_itself(env, pinned_master, capsys):
     store, _, _ = env
-    assert doctor.main([WATCHED, "start"]) == 0, capsys.readouterr().err
+    assert doctor.main([WATCHED, "start", *QUOTED]) == 0, capsys.readouterr().err
     assert state(DOCTOR)["sources"] == [ledger_link.page_url(WATCHED)]
     assert state(WATCHED)["sources"] == [ledger_link.page_url(DOCTOR)]
     assert state(DOCTOR)["_meta"]["stamps"]["sources"]["by"] == MASTER
@@ -200,20 +213,37 @@ def test_the_watched_master_reopens_its_closed_doctor_as_itself(env, monkeypatch
     assert doctor.main([WATCHED, "start"]) == 0
     assert doctor.main([WATCHED, "stop"]) == 0
     assert state(DOCTOR)["closed_at"]
-    pin(monkeypatch)
-    assert doctor.main([WATCHED, "start"]) == 0, capsys.readouterr().err
+    seat(monkeypatch, store)
+    typed(ORDER, 60)
+    assert doctor.main([WATCHED, "start", *QUOTED]) == 0, capsys.readouterr().err
     assert not state(DOCTOR)["closed_at"]
     assert state(DOCTOR)["_meta"]["stamps"]["closed_at"]["by"] == MASTER
 
 
 def test_the_watched_master_stops_its_doctor_as_itself(env, pinned_master, capsys):
     store, _, _ = env
-    assert doctor.main([WATCHED, "start"]) == 0, capsys.readouterr().err
-    assert doctor.main([WATCHED, "stop"]) == 0, capsys.readouterr().err
+    assert doctor.main([WATCHED, "start", *QUOTED]) == 0, capsys.readouterr().err
+    assert doctor.main([WATCHED, "stop", *QUOTED]) == 0, capsys.readouterr().err
     assert state(DOCTOR)["closed_at"]
     assert state(DOCTOR)["_meta"]["stamps"]["closed_at"]["by"] == MASTER
     assert state(DOCTOR)["_meta"]["stamps"]["overview"]["by"] == MASTER
     assert store.config(DOCTOR).state == "stopped"
+
+
+@pytest.mark.parametrize("argv", [["start"], ["stop"]], ids=str)
+def test_the_watched_master_cannot_start_or_stop_its_doctor_without_a_quote(env, monkeypatch, capsys, argv):
+    store, _, _ = env
+    assert doctor.main([WATCHED, "start"]) == 0
+    assert doctor.main([WATCHED, "stop"]) == 0
+    reopened = argv == ["stop"]
+    if reopened:
+        assert doctor.main([WATCHED, "start"]) == 0
+    seat(monkeypatch, store)
+    typed(ORDER, 60)
+    capsys.readouterr()
+    assert doctor.main([WATCHED, *argv]) == 1
+    assert capsys.readouterr().err.strip() == f"doctor: {doctor.UNORDERED}"
+    assert bool(state(DOCTOR)["closed_at"]) is not reopened
 
 
 def test_the_operator_shell_still_starts_the_doctor_as_doctor(env, monkeypatch, capsys):
@@ -241,18 +271,10 @@ def test_a_pinned_agent_still_cannot_write_the_doctor_ledger_as_doctor(env, monk
     assert state(WATCHED)["sources"] == []
 
 
-ORDER = "restart the doctor crew with two engineers"
-
-
 @pytest.fixture
 def seated_master(env, monkeypatch):
-    from scripts.swarm.store import AgentRecord
-
-    store, _, _ = env
-    monkeypatch.setattr("hooks.context.broadcast.session_name", lambda pid: "")
-    store.put_agent(WATCHED, AgentRecord(MASTER, "master", "master", seat=f"master@{WATCHED}"))
-    pin(monkeypatch)
-    return store
+    seat(monkeypatch, env[0])
+    return env[0]
 
 
 def typed(words, ago):
@@ -269,7 +291,7 @@ def relays(slug):
 
 def test_the_master_relaying_a_fresh_operator_order_starts_the_doctor_with_its_caps(seated_master, capsys):
     store = seated_master
-    typed(ORDER, 60)
+    typed(ORDER, 1790)
     argv = [WATCHED, "start", "--max-eng-agents", "2", "--max-ci-agents", "1", "--quote", ORDER]
     assert doctor.main(argv) == 0, capsys.readouterr().err
     config = store.config(DOCTOR)
@@ -284,15 +306,15 @@ def test_the_master_relaying_a_fresh_operator_order_starts_the_doctor_with_its_c
 
 def test_the_master_relaying_a_fresh_order_rescales_a_running_doctor(seated_master, capsys):
     store = seated_master
-    assert doctor.main([WATCHED, "start"]) == 0, capsys.readouterr().err
-    assert store.config(DOCTOR).max_eng == 1
     typed(ORDER, 60)
+    assert doctor.main([WATCHED, "start", *QUOTED]) == 0, capsys.readouterr().err
+    assert store.config(DOCTOR).max_eng == 1
     assert doctor.main([WATCHED, "start", "--max-eng-agents", "2", "--quote", ORDER]) == 0, capsys.readouterr().err
     assert (store.config(DOCTOR).max_eng, store.config(DOCTOR).max_ci) == (2, 0)
 
 
 @pytest.mark.parametrize(
-    "ago, quote", [(None, None), (2400, ORDER), (None, ORDER), (60, "two engineers please")], ids=str
+    "ago, quote", [(None, None), (1810, ORDER), (None, ORDER), (60, "two engineers please")], ids=str
 )
 def test_the_master_without_a_fresh_operator_order_cannot_start_or_scale_the_doctor(seated_master, capsys, ago, quote):
     store = seated_master
@@ -326,8 +348,9 @@ def test_the_operator_shell_scales_the_doctor_without_a_quote(env, monkeypatch, 
 
 def test_the_master_relaying_a_fresh_operator_order_stops_the_doctor_and_records_it(seated_master, capsys):
     store = seated_master
-    assert doctor.main([WATCHED, "start"]) == 0, capsys.readouterr().err
-    typed(ORDER, 2400)
+    typed("start the doctor crew now", 60)
+    assert doctor.main([WATCHED, "start", "--quote", "start the doctor crew now"]) == 0, capsys.readouterr().err
+    typed(ORDER, 1810)
     assert doctor.main([WATCHED, "stop", "--quote", ORDER]) == 1
     assert capsys.readouterr().err.strip() == f"doctor: {doctor.UNORDERED}"
     assert not state(DOCTOR)["closed_at"] and store.config(DOCTOR).state != "stopped"
