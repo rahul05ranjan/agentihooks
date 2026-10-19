@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from scripts import agent_choice
 from scripts.handoff import transfers
-from scripts.swarm import idle, outage, snapshot
+from scripts.swarm import idle, outage
 from scripts.swarm.store import MASTER, AgentRecord, RedisStore, SwarmError
 from scripts.swarm_ledger import ledger_workspace
 
@@ -381,6 +381,7 @@ def recover_outages(
 
 
 def _recover_process(store, slug, agent, task, context, text):
+    from scripts.swarm import snapshot
     from scripts.swarm.tick import SpawnError
 
     worktree = snapshot.worktrees(store.config(slug).repo, [agent.name]).get(agent.name, "")
