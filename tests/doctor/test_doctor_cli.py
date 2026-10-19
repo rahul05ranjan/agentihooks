@@ -351,6 +351,7 @@ def test_the_master_relaying_a_fresh_operator_order_stops_the_doctor_and_records
     typed("start the doctor crew now", 60)
     assert doctor.main([WATCHED, "start", "--quote", "start the doctor crew now"]) == 0, capsys.readouterr().err
     typed(ORDER, 1810)
+    capsys.readouterr()
     assert doctor.main([WATCHED, "stop", "--quote", ORDER]) == 1
     assert capsys.readouterr().err.strip() == f"doctor: {doctor.UNORDERED}"
     assert not state(DOCTOR)["closed_at"] and store.config(DOCTOR).state != "stopped"
