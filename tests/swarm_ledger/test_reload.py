@@ -32,8 +32,8 @@ class Reload(unittest.TestCase):
         self.ready = True
         self.addCleanup(server.HANDOFF.clear)
 
-    def hand_off(self, *args):
-        self.calls.append(args)
+    def hand_off(self, *args, **kwargs):
+        self.calls.append((*args, kwargs))
         return b'{"demo": 6}' if self.ready else None
 
     def test_unchanged_code_keeps_the_server(self):
@@ -47,14 +47,23 @@ class Reload(unittest.TestCase):
         os.utime(self.page, ns=(2, 2_000_000_000))
         self.assertIsNone(server.reload_if_changed(started, self.server, (self.dir,), self.hand_off))
         self.assertEqual(
-            self.calls, [(self.server.socket, [sys.executable, str(server.CODE_DIR / "ledger_server.py"), "--serve"])]
+            self.calls,
+            [
+                (
+                    self.server.socket,
+                    [sys.executable, str(server.CODE_DIR / "ledger_server.py"), "--serve"],
+                    {"extra": {server.WATCHED: ""}},
+                )
+            ],
         )
         self.assertEqual(self.server.shutdowns, 1)
         self.assertEqual(server.HANDOFF, {"since": {"demo": 6}})
 
     def test_a_successor_that_sent_no_generations_gets_every_written_ledger(self):
         started = server.code_stamp((self.dir,))
-        self.assertIsNone(server.reload_if_changed(started, self.server, (self.dir,), lambda *args: b"", force=True))
+        self.assertIsNone(
+            server.reload_if_changed(started, self.server, (self.dir,), lambda *args, **kwargs: b"", force=True)
+        )
         self.assertEqual(server.HANDOFF, {"since": {}})
 
     def test_a_successor_that_never_got_ready_leaves_the_server_serving_until_the_next_change(self):
@@ -128,7 +137,7 @@ class ImportedCode(unittest.TestCase):
             os.utime(path, ns=(1, 1_000_000_000))
         self.calls = []
 
-    def hand_off(self, *args):
+    def hand_off(self, *args, **kwargs):
         self.calls.append(args)
         return b"{}"
 

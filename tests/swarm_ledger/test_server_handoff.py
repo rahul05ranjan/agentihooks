@@ -85,6 +85,22 @@ def test_the_successor_gets_the_socket_and_the_ready_pipe_by_number(listener, mo
     assert seen["start_new_session"] is True
 
 
+def test_the_successor_gets_the_extra_settings_over_the_inherited_ones(listener, monkeypatch):
+    monkeypatch.setattr(server_handoff.os, "environ", {"KEEP": "1", "LEDGER_WATCHED": "old"})
+    seen = {}
+
+    def popen(argv, **kwargs):
+        seen.update(kwargs["env"])
+        os.write(int(kwargs["env"][server_handoff.READY_FD]), server_handoff.READY)
+        return subprocess.Popen([sys.executable, "-c", ""])
+
+    extra = {"LEDGER_WATCHED": "demo", server_handoff.LISTEN_FD: "99"}
+    assert server_handoff.hand_off(listener, ["serve"], popen, timeout=5, extra=extra) == b""
+    assert seen["KEEP"] == "1"
+    assert seen["LEDGER_WATCHED"] == "demo"
+    assert seen[server_handoff.LISTEN_FD] == str(listener.fileno())
+
+
 def test_a_failed_spawn_closes_both_pipe_ends(listener, monkeypatch):
     monkeypatch.setattr(server_handoff.os, "environ", {})
     opened = []
@@ -165,9 +181,9 @@ def test_a_reload_hands_over_without_a_failed_or_slow_request(tmp_path, ledger_p
     with (tmp_path / "server.out").open("w") as log:
         first = subprocess.Popen([sys.executable, str(SERVER), "--serve"], env=env, stdout=log, stderr=log)
     successor = None
+    results, stop = [], threading.Event()
     try:
         until(lambda: pid_of(tmp_path) == first.pid)
-        results, stop = [], threading.Event()
 
         def hammer():
             while not stop.is_set():
@@ -182,7 +198,10 @@ def test_a_reload_hands_over_without_a_failed_or_slow_request(tmp_path, ledger_p
         worker.start()
         time.sleep(0.2)
         os.kill(first.pid, signal.SIGHUP)
-        first.wait(timeout=30)
+        try:
+            first.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            pytest.fail((tmp_path / "server.out").read_text())
         successor = pid_of(tmp_path)
         time.sleep(0.2)
         stop.set()
@@ -192,6 +211,7 @@ def test_a_reload_hands_over_without_a_failed_or_slow_request(tmp_path, ledger_p
         assert results and {status for status, _ in results} == {200}, (tmp_path / "server.out").read_text()
         assert max(seconds for _, seconds in results) < 1.0
     finally:
+        stop.set()
         for pid in {first.pid, successor} - {None}:
             try:
                 os.kill(pid, signal.SIGTERM)

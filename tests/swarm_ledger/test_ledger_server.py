@@ -453,28 +453,88 @@ def test_warming_stops_after_one_pass_without_ledgers(monkeypatch):
     assert server.WARM_PASSES == 5
 
 
-def test_a_hangup_asks_the_watch_loop_to_hand_off(monkeypatch):
+def test_a_hangup_asks_for_a_hand_off(monkeypatch):
     requested = server.threading.Event()
     monkeypatch.setattr(server, "RELOAD", requested)
     server.request_reload(1, None)
     assert requested.is_set()
 
 
-def test_the_watch_loop_hands_off_on_request_and_then_stops(monkeypatch):
+def test_a_hangup_hands_off_on_its_own_thread_and_then_stops(monkeypatch):
     requested = server.threading.Event()
     requested.set()
     seen = []
-    monkeypatch.setattr(server, "RELOAD", requested)
-    monkeypatch.setattr(server, "reloading", lambda: False)
+    monkeypatch.setattr(server, "HANDED", server.threading.Event())
     monkeypatch.setattr(server, "code_stamp", lambda: 7)
 
     def reload_if_changed(started, httpd, force, loaded):
         seen.append((started, httpd, force, loaded))
 
     monkeypatch.setattr(server, "reload_if_changed", reload_if_changed)
-    assert server.watch_ledgers("httpd") is None
+    assert server.answer_reloads("httpd", requested) is None
     assert seen == [(7, "httpd", True, server.LOADED_DIGEST)]
     assert not requested.is_set()
+    assert server.HANDED.is_set()
+
+
+def test_a_hangup_the_successor_refused_waits_for_the_next_one(monkeypatch):
+    class Requests:
+        def __init__(self):
+            self.left = 2
+            self.cleared = 0
+
+        def wait(self):
+            self.left -= 1
+            if self.left < 0:
+                raise StopIteration
+            return True
+
+        def clear(self):
+            self.cleared += 1
+
+    requested = Requests()
+    monkeypatch.setattr(server, "HANDED", server.threading.Event())
+    monkeypatch.setattr(server, "code_stamp", lambda: 7)
+    monkeypatch.setattr(server, "reload_if_changed", lambda started, httpd, force, loaded: started)
+    with pytest.raises(StopIteration):
+        server.answer_reloads("httpd", requested)
+    assert requested.cleared == 2
+    assert not server.HANDED.is_set()
+
+
+def test_the_server_hands_over_only_once(monkeypatch):
+    seen = []
+    monkeypatch.setattr(server, "HANDED", server.threading.Event())
+    monkeypatch.setattr(server, "reload_if_changed", lambda *args, **kwargs: seen.append((args, kwargs)))
+    assert server.hand_over(5, "httpd", force=True) is None
+    assert server.hand_over(5, "httpd") is None
+    assert seen == [((5, "httpd"), {"force": True, "loaded": server.LOADED_DIGEST})]
+
+
+def test_an_unchanged_check_keeps_the_server_and_its_next_stamp(monkeypatch):
+    monkeypatch.setattr(server, "HANDED", server.threading.Event())
+    monkeypatch.setattr(server, "reload_if_changed", lambda started, httpd, force, loaded: started + 1)
+    assert server.hand_over(5, "httpd") == 6
+    assert not server.HANDED.is_set()
+
+
+def test_handing_over_holds_the_lock(monkeypatch):
+    held = []
+    monkeypatch.setattr(server, "HANDED", server.threading.Event())
+    monkeypatch.setattr(server, "reload_if_changed", lambda *args, **kwargs: held.append(server.HANDING.locked()))
+    server.hand_over(5, "httpd")
+    assert held == [True]
+    assert not server.HANDING.locked()
+
+
+def test_the_watch_loop_stops_once_the_code_reload_handed_over(monkeypatch):
+    seen = []
+    monkeypatch.setattr(server, "HANDED", server.threading.Event())
+    monkeypatch.setattr(server, "reloading", lambda: True)
+    monkeypatch.setattr(server, "code_stamp", lambda: 7)
+    monkeypatch.setattr(server, "reload_if_changed", lambda *args, **kwargs: seen.append((args, kwargs)))
+    assert server.watch_ledgers("httpd") is None
+    assert seen == [((7, "httpd"), {"force": False, "loaded": server.LOADED_DIGEST})]
 
 
 def test_reload_signals_the_running_server_and_waits_for_its_successor(tmp_path, monkeypatch):
@@ -536,22 +596,116 @@ def test_serving_listens_for_a_hangup_before_it_serves(monkeypatch):
 
 
 def test_a_carry_goes_from_the_old_server_to_its_successor_once(tmp_path, monkeypatch):
-    monkeypatch.setattr(server.core, "LEDGER_DIR", tmp_path)
+    folder = tmp_path / "ledgers"
+    folder.mkdir()
+    monkeypatch.setattr(server.core, "LEDGER_DIR", folder)
     monkeypatch.setattr(server.stored, "carry", lambda since: {"demo": [7, "{}"]} if since == {"demo": 6} else {})
     adopted = []
     monkeypatch.setattr(server.stored, "adopt_carried", adopted.append)
     server.write_carry({"demo": 6})
-    assert sorted(p.name for p in tmp_path.iterdir()) == [server.CARRY]
-    server.take_carry()
-    server.take_carry()
+    assert sorted(p.name for p in folder.iterdir()) == [server.CARRY]
+    assert server.take_carry() == ["demo"]
+    assert server.take_carry() == []
     assert adopted == [{"demo": [7, "{}"]}]
-    assert list(tmp_path.iterdir()) == []
+    assert list(folder.iterdir()) == []
 
 
 def test_a_broken_carry_is_dropped_and_the_successor_goes_on(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(server.core, "LEDGER_DIR", tmp_path)
-    (tmp_path / server.CARRY).write_text("{not json")
+    folder = tmp_path / "ledgers"
+    folder.mkdir()
+    monkeypatch.setattr(server.core, "LEDGER_DIR", folder)
+    (folder / server.CARRY).write_text("{not json")
     monkeypatch.setattr(server.stored, "adopt_carried", lambda carried: pytest.fail("adopted a broken carry"))
-    server.take_carry()
-    assert list(tmp_path.iterdir()) == []
+    assert server.take_carry() == []
+    assert list(folder.iterdir()) == []
     assert capsys.readouterr().err.startswith("carry: ")
+
+
+def test_a_carry_the_repository_refuses_names_no_ledger_to_refresh(tmp_path, monkeypatch, capsys):
+    folder = tmp_path / "ledgers"
+    folder.mkdir()
+    monkeypatch.setattr(server.core, "LEDGER_DIR", folder)
+    (folder / server.CARRY).write_text('{"demo": [7, "{}"]}')
+
+    def refuse(carried):
+        raise ValueError("bad rows")
+
+    monkeypatch.setattr(server.stored, "adopt_carried", refuse)
+    assert server.take_carry() == []
+    assert capsys.readouterr().err == "carry: bad rows\n"
+
+
+def stream_view(slug):
+    return {"ledger": {"_meta": {"rev": 1}, "slug": slug}}
+
+
+def test_warming_streams_builds_each_watched_view_and_leaves_it_unwatched(monkeypatch):
+    hub = server.Hub()
+    monkeypatch.setattr(server, "HUB", hub)
+    monkeypatch.setattr(server, "stream_resources", stream_view)
+    environ = {server.WATCHED: "demo,other", "KEEP": "1"}
+    server.warm_streams(environ)
+    assert environ == {"KEEP": "1"}
+    assert hub.resource("demo", "ledger") == {"_meta": {"rev": 1}, "slug": "demo"}
+    assert hub.resource("other", "ledger") == {"_meta": {"rev": 1}, "slug": "other"}
+    assert hub.watched() == []
+    assert server.WATCHED == "LEDGER_WATCHED"
+
+
+def test_warming_streams_without_watched_ledgers_builds_nothing(monkeypatch):
+    hub = server.Hub()
+    monkeypatch.setattr(server, "HUB", hub)
+    monkeypatch.setattr(server, "stream_resources", lambda slug: pytest.fail(f"built {slug}"))
+    server.warm_streams({server.WATCHED: ""})
+    server.warm_streams({})
+    assert hub.channels == {}
+
+
+def test_a_stream_view_that_fails_to_build_is_left_for_the_page(monkeypatch, capsys):
+    hub = server.Hub()
+    monkeypatch.setattr(server, "HUB", hub)
+
+    def resources(slug):
+        if slug == "broken":
+            raise ValueError("bad rows")
+        return stream_view(slug)
+
+    monkeypatch.setattr(server, "stream_resources", resources)
+    server.warm_streams({server.WATCHED: "broken,demo"})
+    assert hub.resource("broken", "ledger") is None
+    assert hub.resource("demo", "ledger") == {"_meta": {"rev": 1}, "slug": "demo"}
+    assert hub.watched() == []
+    assert capsys.readouterr().err == "warm stream broken: bad rows\n"
+
+
+class Watching:
+    def __init__(self, *slugs):
+        self.slugs = slugs
+
+    def has(self, slug):
+        return slug in self.slugs
+
+
+def test_refreshing_streams_publishes_only_the_carried_ledgers_a_page_watches(monkeypatch):
+    published = []
+    monkeypatch.setattr(server, "HUB", Watching("demo"))
+    monkeypatch.setattr(server.repository, "get_document", lambda slug: {"slug": slug})
+    monkeypatch.setattr(server, "publish_ledger", lambda slug, state: published.append((slug, state)))
+    server.refresh_streams(["demo", "quiet"])
+    assert published == [("demo", {"slug": "demo"})]
+
+
+def test_a_refresh_that_fails_leaves_the_others_refreshing(monkeypatch, capsys):
+    published = []
+
+    def document(slug):
+        if slug == "broken":
+            raise ValueError("bad rows")
+        return {"slug": slug}
+
+    monkeypatch.setattr(server, "HUB", Watching("broken", "demo"))
+    monkeypatch.setattr(server.repository, "get_document", document)
+    monkeypatch.setattr(server, "publish_ledger", lambda slug, state: published.append((slug, state)))
+    server.refresh_streams(["broken", "demo"])
+    assert published == [("demo", {"slug": "demo"})]
+    assert capsys.readouterr().err == "refresh stream broken: bad rows\n"

@@ -26,7 +26,9 @@ process. The interface is `scripts.swarm_v2.ledger_writer`.
   `conflicts_total(dir)` reads it as `ledger_writer_conflicts_total`.
 - The kernel drops the lease when the holder exits, crashes or is killed, so a restart needs no cleanup.
   A code reload (`SWARM_RELOAD=1` on changed code content, or `ledger_server.py --reload`) starts a successor
-  that inherits the listening socket, loads the open ledgers and reports ready; the old server then stops
+  that inherits the listening socket, loads the open ledgers and the event stream views of the ledgers a page
+  watches, and reports ready; a hangup is answered on its own thread, so it hands over even when the watch loop
+  has stopped. The old server then stops
   accepting, ends its event streams, finishes its requests, hands over the ledgers written since and releases
   the lease, and the successor takes it within `LEASE_WAIT_S`. Connections that arrive meanwhile wait in the
   socket's backlog.

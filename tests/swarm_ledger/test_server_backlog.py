@@ -4,7 +4,6 @@ import queue
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from http.client import HTTPConnection
-from http.server import ThreadingHTTPServer
 
 import pytest
 
@@ -21,7 +20,7 @@ def listening(monkeypatch, ledger_port, tmp_path):
     admitted.set()
     created = queue.Queue()
 
-    class ObservedServer(ThreadingHTTPServer):
+    class ObservedServer(server.ThreadingHTTPServer):
         def server_activate(self):
             super().server_activate()
             created.put(self)

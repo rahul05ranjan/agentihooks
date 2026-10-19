@@ -128,7 +128,9 @@ def test_serve_runs_the_ledger_watch_on_a_daemon_thread(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "PIDFILE", tmp_path / ".server.pid")
     server.serve()
     assert [{**t, "args": tuple(type(a) for a in t["args"])} for t in threads] == [
-        {"target": server.watch_ledgers, "args": (Server,), "daemon": True}
+        {"target": server.watch_ledgers, "args": (Server,), "daemon": True},
+        {"target": server.answer_reloads, "args": (Server,), "daemon": True},
+        {"target": server.refresh_streams, "args": (list,), "daemon": True},
     ]
     assert adopted == [server.stored]
     assert steps == [
@@ -168,21 +170,27 @@ def test_a_successor_warms_reports_ready_then_waits_for_the_lease_and_takes_the_
     monkeypatch.setattr(server.server_handoff, "announce", lambda held: steps.append(("announce", held)))
     monkeypatch.setattr(server.stored, "generations", lambda: {"demo": 5})
     monkeypatch.setattr(server, "warm", lambda: steps.append("warm"))
-    monkeypatch.setattr(server, "take_carry", lambda: steps.append("take carry"))
+    monkeypatch.setattr(server, "warm_streams", lambda: steps.append("warm streams"))
+    monkeypatch.setattr(server, "take_carry", lambda: steps.append("take carry") or ["demo"])
     monkeypatch.setattr(server, "write_carry", lambda since: steps.append(("write carry", since)))
     monkeypatch.setattr(server, "listening", listening)
     monkeypatch.setattr(server.ledger_writer, "WriterLease", Lease)
     monkeypatch.setattr(server.legacy, "adopt", lambda stored: steps.append("adopt"))
     monkeypatch.setattr(server, "adopt_unrelayed", lambda: None)
-    monkeypatch.setattr(server.threading, "Thread", lambda **kwargs: SimpleNamespace(start=lambda: None))
+    threads = []
+    monkeypatch.setattr(
+        server.threading, "Thread", lambda **kwargs: threads.append(kwargs) or SimpleNamespace(start=lambda: None)
+    )
     monkeypatch.setattr(server.server_lifetime, "watch", lambda *args: threading.Event())
     monkeypatch.setattr(server.server_code, "record", lambda *args: None)
     monkeypatch.setattr(server, "HUB", SimpleNamespace(drain=lambda: None))
     monkeypatch.setattr(server, "HANDOFF", {"since": {"demo": 6}})
     monkeypatch.setattr(server, "PIDFILE", tmp_path / ".server.pid")
     server.serve()
+    assert [t["args"] for t in threads if t["target"] is server.refresh_streams] == [(["demo"],)]
     assert steps == [
         "warm",
+        "warm streams",
         ("announce", b'{"demo": 5}'),
         ("acquire", server.LEASE_WAIT_S),
         "take carry",

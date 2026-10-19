@@ -79,7 +79,10 @@ LEASE_WAIT_S = 20.0
 RELOAD_WAIT_S = 100.0
 WARM_PASSES = 5
 CARRY = ".server.carry.json"
+WATCHED = "LEDGER_WATCHED"
 RELOAD = threading.Event()
+HANDING = threading.Lock()
+HANDED = threading.Event()
 HANDOFF = {}
 THREADS_EXHAUSTED = 75
 TLS_HANDSHAKE_S = 10
@@ -1176,7 +1179,11 @@ def reload_if_changed(started, server, code_dirs=CODE_DIRS, hand_off=server_hand
         return started
     if loaded is not None and not force and code_digest(code_dirs) == loaded:
         return stamp
-    held = hand_off(server.socket, [sys.executable, str(CODE_DIR / "ledger_server.py"), "--serve"])
+    held = hand_off(
+        server.socket,
+        [sys.executable, str(CODE_DIR / "ledger_server.py"), "--serve"],
+        extra={WATCHED: ",".join(HUB.watched())},
+    )
     if held is None:
         sys.stderr.write("reload: the successor never reported ready; this server keeps serving\n")
         return stamp
@@ -1193,20 +1200,52 @@ def write_carry(since):
 
 
 def take_carry():
+    """The slugs whose committed copies the old server carried over."""
     path = core.LEDGER_DIR / CARRY
     try:
         text = path.read_text()
     except FileNotFoundError:
-        return
+        return []
     path.unlink()
     try:
-        stored.adopt_carried(json.loads(text))
+        carried = json.loads(text)
+        stored.adopt_carried(carried)
     except Exception as exc:  # a broken carry leaves its ledgers to load from their rows
         sys.stderr.write(f"carry: {exc}\n")
+        return []
+    return list(carried)
+
+
+def refresh_streams(slugs):
+    """Bring a warmed stream view up to a ledger the old server wrote after the successor built it."""
+    for slug in slugs:
+        if HUB.has(slug):
+            try:
+                publish_ledger(slug, repository.get_document(slug))
+            except Exception as exc:  # the next write to the ledger publishes its view anyway
+                sys.stderr.write(f"refresh stream {slug}: {exc}\n")
 
 
 def request_reload(signum, frame):
     RELOAD.set()
+
+
+def hand_over(started, server, force=False):
+    with HANDING:
+        if HANDED.is_set():
+            return None
+        started = reload_if_changed(started, server, force=force, loaded=LOADED_DIGEST)
+        if started is None:
+            HANDED.set()
+        return started
+
+
+def answer_reloads(server, requested=RELOAD):
+    """Hangups are answered on their own thread, so a reload still hands over while the watch loop is stalled or dead."""
+    while requested.wait():
+        requested.clear()
+        if hand_over(code_stamp(), server, force=True) is None:
+            return
 
 
 def reloading(environ=os.environ) -> bool:
@@ -1223,9 +1262,8 @@ def watch_ledgers(server=None, interval=2.0):
     started = code_stamp()
     reload = reloading()
     for passes in itertools.count():
-        if reload or RELOAD.is_set():
-            started = reload_if_changed(started, server, force=RELOAD.is_set(), loaded=LOADED_DIGEST)
-            RELOAD.clear()
+        if reload:
+            started = hand_over(started, server)
             if started is None:
                 return
         try:
@@ -1278,11 +1316,24 @@ def warm(passes=WARM_PASSES):
             return
 
 
+def warm_streams(environ=os.environ):
+    """Load the stream view of each ledger a page watched on the old server, so the page's reconnect finds it built."""
+    for slug in filter(None, environ.pop(WATCHED, "").split(",")):
+        try:
+            HUB.open(slug, lambda slug=slug: stream_resources(slug))
+        except Exception as exc:  # a view that fails to build loads on the page's own reconnect
+            sys.stderr.write(f"warm stream {slug}: {exc}\n")
+            continue
+        HUB.close(slug)
+
+
 def serve():
     core.LEDGER_DIR.mkdir(parents=True, exist_ok=True)
     listener = server_handoff.inherited()
+    carried = []
     if listener is not None:
         warm()
+        warm_streams()
         server_handoff.announce(json.dumps(stored.generations()).encode())
     try:
         writer = ledger_writer.WriterLease(core.LEDGER_DIR).acquire(
@@ -1291,12 +1342,14 @@ def serve():
     except ledger_writer.WriterConflict as conflict:
         sys.exit(str(conflict))
     if listener is not None:
-        take_carry()
+        carried = take_carry()
     legacy.adopt(stored)
     adopt_unrelayed()
     metrics_journal(request_metrics.restore, core.LEDGER_DIR / request_metrics.JOURNAL_NAME)
     server = listening(listener)
     threading.Thread(target=watch_ledgers, args=(server,), daemon=True).start()
+    threading.Thread(target=answer_reloads, args=(server,), daemon=True).start()
+    threading.Thread(target=refresh_streams, args=(carried,), daemon=True).start()
     stopped = server_lifetime.watch(server, core.LEDGER_DIR, PORT)
     server_code.record(PIDFILE.parent, os.getpid(), LOADED_STAMP)
     PIDFILE.write_text(str(os.getpid()))

@@ -23,10 +23,12 @@ def announce(payload: bytes = b"", environ=os.environ) -> None:
             pipe.write(READY + payload)
 
 
-def spawn(listener: socket.socket, argv: list[str], popen=subprocess.Popen) -> tuple[subprocess.Popen, int]:
+def spawn(
+    listener: socket.socket, argv: list[str], popen=subprocess.Popen, extra: dict | None = None
+) -> tuple[subprocess.Popen, int]:
     read, write = os.pipe()
     fd = listener.fileno()
-    env = {**os.environ, LISTEN_FD: str(fd), READY_FD: str(write)}
+    env = {**os.environ, **(extra or {}), LISTEN_FD: str(fd), READY_FD: str(write)}
     try:
         child = popen(argv, pass_fds=(fd, write), env=env, stdin=subprocess.DEVNULL, start_new_session=True)
     except OSError:
@@ -49,7 +51,11 @@ def ready(child: subprocess.Popen, read: int, timeout: float) -> bytes | None:
 
 
 def hand_off(
-    listener: socket.socket, argv: list[str], popen=subprocess.Popen, timeout: float = READY_WAIT_S
+    listener: socket.socket,
+    argv: list[str],
+    popen=subprocess.Popen,
+    timeout: float = READY_WAIT_S,
+    extra: dict | None = None,
 ) -> bytes | None:
-    child, read = spawn(listener, argv, popen)
+    child, read = spawn(listener, argv, popen, extra)
     return ready(child, read, timeout)
