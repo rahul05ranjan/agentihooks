@@ -40,23 +40,13 @@ def session(slug: str) -> Iterator[None]:
         store = connect()
         with scoped(slug, store.config(slug).api_url):
             yield
-            _acknowledge(store, slug, Who.from_env())
     else:
         yield
-
-
-def _acknowledge(store: RedisStore, slug: str, who: Who) -> None:
-    if os.environ.get("AGENTIHOOKS_LEDGER_AGENT_TOKEN"):
-        from scripts.swarm import ledger_cutover
-
-        ledger_cutover.acknowledge(store, slug, who, os.environ)
 
 
 @contextmanager
 def command(store: RedisStore, slug: str, who: Who) -> Iterator[None]:
     with scoped(slug, configured(store, slug) if slug else ""):
-        if slug:
-            _acknowledge(store, slug, who)
         yield
 
 
