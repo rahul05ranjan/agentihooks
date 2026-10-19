@@ -173,3 +173,95 @@ def test_healthy_cleanup_does_not_request_startup_logs(ready):
     world.api.pod_logs = unexpected
     assert world.cleanup(controller).run(old.execution_id).state == "done"
     assert "startup" not in retention.retained(world.store, cases.SLUG, old.execution_id)["removed"]["pods"][0]
+
+
+class Logs:
+    def __init__(self) -> None:
+        self.requested = []
+
+    def pod_logs(self, name, container):
+        self.requested.append((name, container))
+        return "startup refused\n"
+
+
+def status_pod(status=None, **fields):
+    pod = {"metadata": {"name": "refused"}, **fields}
+    if status is not None:
+        pod["status"] = status
+    return pod
+
+
+@pytest.mark.parametrize(
+    "pod",
+    [
+        status_pod(),
+        status_pod({"phase": "Running", "containerStatuses": [{"name": "agent"}]}),
+        status_pod({"phase": "Succeeded", "containerStatuses": [{"name": "agent", "state": {"terminated": {}}}]}),
+        status_pod(
+            {"phase": "Running", "containerStatuses": [{"name": "agent", "state": {"terminated": {"exitCode": 0}}}]}
+        ),
+    ],
+)
+def test_pods_without_a_failed_phase_or_nonzero_exit_are_not_captured(pod):
+    from scripts.swarm_v2.kubernetes.diagnostics import startup
+
+    logs = Logs()
+    assert startup(pod, logs) is None
+    assert logs.requested == []
+
+
+def test_a_failed_phase_alone_captures_terminated_containers_with_a_clean_exit():
+    from scripts.swarm_v2.kubernetes.diagnostics import startup
+
+    logs = Logs()
+    pod = status_pod(
+        {
+            "phase": "Failed",
+            "containerStatuses": [{"name": "agent", "state": {"terminated": {"exitCode": 0}}}, {"name": "idle"}],
+        }
+    )
+    assert startup(pod, logs) == {
+        "phase": "Failed",
+        "reason": "",
+        "containers": [{"name": "agent", "terminated": {"exitCode": 0}, "log": "startup refused\n"}],
+    }
+    assert logs.requested == [("refused", "agent")]
+
+
+def test_a_nonzero_exit_without_a_phase_is_captured_with_an_empty_phase():
+    from scripts.swarm_v2.kubernetes.diagnostics import startup
+
+    pod = status_pod({"containerStatuses": [{"name": "agent", "state": {"terminated": {"exitCode": 1}}}]})
+    assert startup(pod, Logs())["phase"] == ""
+
+
+def test_retained_startup_records_carry_the_pod_identity_and_labels(ready):
+    import json
+
+    from scripts.swarm_v2.kubernetes.diagnostics import retain
+    from scripts.swarm_v2.kubernetes.watch import EXECUTION_LABEL
+
+    world, _, _, _ = ready
+    labels = {EXECUTION_LABEL: "exe-1", "owner": "fixture"}
+    retain(
+        world.store,
+        cases.SLUG,
+        {"metadata": {"name": "refused", "uid": "uid-1", "labels": labels}},
+        {"phase": "Failed"},
+    )
+    saved = world.store.redis.hget(world.store.key(cases.SLUG, "attempt-startup-diagnostics"), "exe-1")
+    assert json.loads(saved) == {"pod": "refused", "uid": "uid-1", "labels": labels, "startup": {"phase": "Failed"}}
+
+
+@pytest.mark.parametrize("current,removed", [(None, True), ("replaced", False)])
+def test_launch_removal_checks_the_current_pod_before_deleting(current, removed):
+    from tests import test_swarm_v2_kubernetes_grants as grants
+
+    found = grants.pod(project="github.com/other/project")
+    later = None if current is None else grants.pod(project="github.com/other/project", uid="uid-2")
+    api = grants.Api(found)
+    reads = iter([found, later])
+    api.read_pod = lambda name: next(reads)
+    hand = grants.grants(api).hand(grants.agent(), grants.GRANT)
+    assert (hand.reason, hand.removed) == ("project_unpermitted", removed)
+    assert api.deleted == []
