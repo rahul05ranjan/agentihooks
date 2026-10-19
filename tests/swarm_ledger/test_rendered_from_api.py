@@ -101,8 +101,7 @@ def test_a_served_view_starts_with_nothing_pending():
 
 
 def test_home_and_bin_are_one_static_shell():
-    home, binned = server.index_page("home"), server.index_page("bin")
-    assert home == binned
+    home = server.index_page()
     assert "__HOME_" not in home
     assert set(re.findall(r"__HOME_(\w+)__", core.HOME.read_text(encoding="utf-8"))) == {"PAGE"}
     assert "<button" not in home and 'class="fab"' not in home

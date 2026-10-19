@@ -6,7 +6,6 @@ import pytest
 from tests.swarm_ledger.ledger_page import (
     ledger_state,
     loaded,
-    reload_after_folds,
     serve_modules,
     shell_html,
 )
@@ -69,10 +68,8 @@ def context(browser):
 def rows(page):
     page.wait_for_selector("#phases > li .phase-state", state="attached")
     return page.evaluate(
-        """() => [...document.querySelectorAll("#phases > li")].map((li) => {
-          const fold = li.querySelector("details.phase-fold");
-          return [li.querySelector(".phase-state").textContent, fold.open, fold.querySelector(".desc").textContent];
-        })"""
+        """() => [...document.querySelectorAll("#phases > li")].map((li) => [
+          li.querySelector(".phase-state").textContent, li.querySelector(".phase-body .desc").textContent])"""
     )
 
 
@@ -80,20 +77,15 @@ def test_each_phase_row_shows_its_lifecycle_and_a_waiting_phase_names_its_blocke
     page = context.new_page()
     page.goto(URL)
     loaded(page)
-    assert rows(page) == [
-        ["Building", True, "first"],
-        ["Planning", True, "second"],
-        ["Waits for phase Inbox, Seats", True, "third"],
-    ]
+    assert rows(page) == [["Building", "first"], ["Planning", "second"], ["Waits for phase Inbox, Seats", "third"]]
 
 
-def test_a_folded_phase_row_stays_folded_after_a_reload(context):
+def test_a_phase_row_never_folds_and_always_shows_its_description(context):
     page = context.new_page()
     page.goto(URL)
     loaded(page)
-    page.click("#item-phases-p3 details.phase-fold > summary")
-    reload_after_folds(page, "#item-phases-p3 details.phase-fold")
-    assert [open_ for _, open_, _ in rows(page)] == [True, True, False]
+    assert page.locator("#phases details:not([data-key])").count() == 0
+    assert page.locator("#item-phases-p3 .phase-body .desc").is_visible()
 
 
 REVIEW_DOC = {

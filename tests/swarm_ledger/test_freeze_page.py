@@ -136,13 +136,13 @@ def test_every_plan_phase_slice_and_task_row_carries_a_freeze_button(page):
     tab, _ = page
     for selector in ("#item-plans-hier", "#item-phases-p1", "#item-slices-hier\\.hy-page", "#item-tasks-t1"):
         assert freeze_text(tab, selector) == "freeze"
-    assert tab.locator("#item-plans-hier > details.plan-fold > summary .freeze").count() == 1
-    assert tab.locator("#item-plans-hier > details.plan-fold > summary .scope").count() == 1
+    assert tab.locator("#item-plans-hier > .plan-head .freeze").count() == 1
+    assert tab.locator("#item-plans-hier > .plan-head .scope").count() == 1
 
 
 def test_freezing_a_plan_from_its_row_sends_the_freeze_and_disables_its_rows(page):
     tab, sent = page
-    tab.click("#item-plans-v2 > details.plan-fold > summary .freeze")
+    tab.click("#item-plans-v2 > .plan-head .freeze")
     assert sent_ops(tab, sent, "freeze_set") == [{"op": "freeze_set", "verb": "freeze", "target": "plans/v2"}]
     tab.wait_for_function("() => document.querySelector('#item-phases-p2').classList.contains('frozen')")
     assert freeze_text(tab, "#item-plans-v2") == "unfreeze"
@@ -153,7 +153,7 @@ def test_freezing_a_plan_from_its_row_sends_the_freeze_and_disables_its_rows(pag
 def test_a_frozen_plan_dims_and_disables_everything_under_it_while_comments_stay_open(page):
     tab, _ = page
     assert tab.evaluate("() => document.querySelector('#item-plans-v2').classList.contains('frozen')") is True
-    assert tab.locator("#item-plans-v2 > details.plan-fold > summary > .snowflake").count() == 1
+    assert tab.locator("#item-plans-v2 > .plan-head > .snowflake").count() == 1
     for selector in ("#item-phases-p2", "#item-phases-p3"):
         state = row_state(tab, selector)
         assert (state["frozen"], state["flake"], state["checkbox"], state["verdicts"], state["scope"]) == (
@@ -181,7 +181,7 @@ def test_a_frozen_plan_dims_and_disables_everything_under_it_while_comments_stay
 @pytest.mark.parametrize("page", [[freeze("plans/v2")]], indirect=True)
 def test_unfreeze_sends_the_clear_and_restores_the_rows(page):
     tab, sent = page
-    tab.click("#item-plans-v2 > details.plan-fold > summary .freeze")
+    tab.click("#item-plans-v2 > .plan-head .freeze")
     assert sent_ops(tab, sent, "freeze_clear") == [{"op": "freeze_clear", "target": "plans/v2"}]
     tab.wait_for_function("() => !document.querySelector('#item-phases-p2').classList.contains('frozen')")
     assert row_state(tab, "#item-tasks-t2")["rank"] == [False]
@@ -207,11 +207,11 @@ def test_a_focus_puts_the_snowflake_on_items_outside_it_only(page):
     outside = row_state(tab, "#item-phases-p2")
     assert (outside["held"], outside["flake"], outside["frozen"], outside["checkbox"]) == (True, True, False, [False])
     assert row_state(tab, "#item-tasks-t2")["held"] is True
-    assert tab.locator("#item-plans-v2 > details.plan-fold > summary > .snowflake").count() == 1
+    assert tab.locator("#item-plans-v2 > .plan-head > .snowflake").count() == 1
     for selector in ("#item-phases-p1", "#item-tasks-t1", "#item-tasks-t3"):
         state = row_state(tab, selector)
         assert (state["held"], state["flake"]) == (False, False)
-    assert tab.locator("#item-plans-hier > details.plan-fold > summary > .snowflake").count() == 0
+    assert tab.locator("#item-plans-hier > .plan-head > .snowflake").count() == 0
 
 
 @pytest.mark.parametrize("page", [[freeze("lane:ci")]], indirect=True)
@@ -280,7 +280,7 @@ def test_the_swarm_panel_says_when_nothing_is_frozen(page):
 
 def test_marking_a_plan_out_of_scope_sends_its_change(page):
     tab, sent = page
-    tab.click("#item-plans-v2 > details.plan-fold > summary .scope")
+    tab.click("#item-plans-v2 > .plan-head .scope")
     for _ in range(40):
         if sent["changes"]:
             break
@@ -329,7 +329,7 @@ def test_a_lane_focus_holds_tasks_outside_the_lane_and_no_phase(page):
     assert row_state(tab, "#item-tasks-t3")["held"] is False
     for selector in ("#item-phases-p1", "#item-phases-p2"):
         assert row_state(tab, selector)["held"] is False
-    assert tab.locator("#item-plans-v2 > details.plan-fold > summary > .snowflake").count() == 0
+    assert tab.locator("#item-plans-v2 > .plan-head > .snowflake").count() == 0
 
 
 @pytest.mark.parametrize("page", [{"freezes": [freeze("phases/p1")]}], indirect=True)

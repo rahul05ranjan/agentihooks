@@ -3,14 +3,14 @@ import { $, closedText, grow, h, headCount, newId, span, when } from "./dom.js";
 import { inScope, itemState, pendingOf, taskRank, taskRanks } from "./state.js";
 import { doc, meta, queue, renderSync, toggle } from "./sync.js";
 import { renderArtifacts } from "./artifacts.js";
-import { closedComments, commentsView, openComments, rememberComment, taskLink, threadView } from "./threads.js";
+import { commentsView, taskLink, threadView } from "./threads.js";
 import { bottleneckStat, renderAlerts, renderNotifications, renderPriorities, statGrip, statKey } from "./notices.js";
 import { renderOutline } from "./outline.js";
-import { collapsible, markToggles } from "./folds.js";
+import { markToggles } from "./folds.js";
 import { renderChat, renderChatBadge } from "./chat.js";
 import { inboxPending, renderSwarm, swarm } from "./swarm.js";
 import { readWorkspace } from "./api.js";
-import { firstPage, lazy, moreButton, wanted } from "./pages.js";
+import { firstPage, moreButton } from "./pages.js";
 import { frozen, held, ownFreeze, snowflake } from "./freezes.js";
 
 function scopeDot(key, item, off) {
@@ -92,12 +92,10 @@ function phaseRow(item, n) {
   const box = h("input", { type: "checkbox", "data-focus": `check:${key}`, "aria-label": item.title, disabled: item.out_of_scope || frozen(doc, key) ? "" : false });
   box.checked = !!item.done;
   box.addEventListener("change", () => toggle(key, box.checked, "done"));
-  const fold = h("details", { class: "phase-fold" },
-    h("summary", {}, h("span", { class: "item-title", text: item.title }), h("span", { class: "phase-state", text: phaseStatus(item).label })),
+  const body = h("div", { class: "phase-body" },
+    h("div", { class: "phase-head" }, h("span", { class: "item-title", text: item.title }), h("span", { class: "phase-state", text: phaseStatus(item).label })),
     item.description ? h("p", { class: "desc", text: item.description }) : null, phaseSlices(item), phaseReview(item));
-  fold.open = !closedComments.has(`${key}/row`);
-  fold.addEventListener("toggle", () => rememberComment(`${key}/row`, fold.open));
-  const row = h("div", { class: "row" }, box, h("span", { class: "num", text: `${n}.` }), h("div", {}, fold), itemActions(key, item));
+  const row = h("div", { class: "row" }, box, h("span", { class: "num", text: `${n}.` }), h("div", {}, body), itemActions(key, item));
   return h("li", { class: itemClass(item, key), id: `item-phases-${item.id}` }, holdMark(key), row, commentsView(key, item.comments));
 }
 
@@ -125,13 +123,11 @@ function planActions(key, plan) {
 
 function planRow({ key, id, title, phases, plan }) {
   const idOf = (p) => `item-phases-${p.id}`;
-  const fold = h("details", { class: "plan-fold" }, h("summary", {}, plan ? holdMark(key) : null, h("span", { class: "plan-title", text: title }),
-    h("span", { class: "plan-count", text: `${phases.length} ${phases.length === 1 ? "phase" : "phases"}` }), planActions(key, plan)));
-  fold.open = !closedComments.has(`${key}/row`) || phases.some((p) => idOf(p) === wanted.id);
-  fold.addEventListener("toggle", () => rememberComment(`${key}/row`, fold.open));
-  lazy(fold, () => h("ol", { class: "plan-phases" }, ...firstPage(key, phases, idOf).map((p, i) => phaseRow(p, i + 1)),
-    moreButton(key, phases.length, "more phases", render), phases.length ? null : h("li", { class: "empty", text: "None." })));
-  return h("li", { class: "plan" + (plan && plan.out_of_scope ? " out" : "") + (plan ? holdClass(key) : ""), id }, fold);
+  const head = h("div", { class: "plan-head" }, plan ? holdMark(key) : null, h("span", { class: "plan-title", text: title }),
+    h("span", { class: "plan-count", text: `${phases.length} ${phases.length === 1 ? "phase" : "phases"}` }), planActions(key, plan));
+  const list = h("ol", { class: "plan-phases" }, ...firstPage(key, phases, idOf).map((p, i) => phaseRow(p, i + 1)),
+    moreButton(key, phases.length, "more phases", render), phases.length ? null : h("li", { class: "empty", text: "None." }));
+  return h("li", { class: "plan" + (plan && plan.out_of_scope ? " out" : "") + (plan ? holdClass(key) : ""), id }, head, list);
 }
 
 function phaseList() {
@@ -171,20 +167,18 @@ function proofList(rows) {
   return h("dl", {}, ...rows.flatMap(([k, v]) => [h("dt", { text: label(k) }), value(v)]));
 }
 
-function proofBody(item) {
-  const list = proofList(proofRows(item.contract, item.proof));
-  if (item.workspace) readWorkspace(item.id).then((resp) => (resp.ok ? resp.json() : null)).then((tails) => {
-    if (tails) list.replaceWith(proofList(proofRows(item.contract, item.proof, tails.data)));
-  }).catch(() => null);
-  return list;
+const workTails = new Map();
+
+function workButton(item) {
+  if (!item.workspace || workTails.has(item.id)) return null;
+  return h("button", { class: "link", type: "button", text: "Show work folder", on: { click: () => readWorkspace(item.id)
+    .then((resp) => (resp.ok ? resp.json() : null)).then((tails) => { if (tails) { workTails.set(item.id, tails.data); render(); } }).catch(() => null) } });
 }
 
-function taskProof(key, item) {
+function taskProof(item) {
   if (!item.workspace && !proofRows(item.contract, item.proof).length) return null;
-  const box = h("details", { class: "task-proof" }, h("summary", {}, "Contract and proof"));
-  box.open = openComments.has(key);
-  box.addEventListener("toggle", () => rememberComment(key, box.open));
-  return lazy(box, () => proofBody(item));
+  return h("div", { class: "task-proof" }, h("div", { class: "task-proof-head", text: "Contract and proof" }),
+    proofList(proofRows(item.contract, item.proof, workTails.get(item.id))), workButton(item));
 }
 
 function rankPick(key, item) {
@@ -220,7 +214,7 @@ function taskRow(item, tasks) {
     item.description ? h("p", { class: "desc", text: item.description }) : null, meta,
     waits ? h("p", { class: "desc", text: waits }) : null);
   const row = h("div", { class: "row" }, body, itemActions(key, item));
-  return h("li", { class: itemClass(item, key), id: `item-tasks-${item.id}` }, holdMark(key), row, taskProof(`${key}/proof`, item), commentsView(key, item.comments));
+  return h("li", { class: itemClass(item, key), id: `item-tasks-${item.id}` }, holdMark(key), row, taskProof(item), commentsView(key, item.comments));
 }
 
 function taskCounts(tasks) {
@@ -321,12 +315,9 @@ function groupedWork(name, items, row) {
   live.sort((a, b) => (rank[a.state || "open"] ?? 4) - (rank[b.state || "open"] ?? 4) || taskRanks().indexOf(taskRank(a)) - taskRanks().indexOf(taskRank(b)));
   $(name).replaceChildren(...firstPage(name, live, idOf).map(row), moreButton(name, live.length, `more ${NOUNS[name]}`, render) || "");
   if (!done.length) return;
-  const box = h("details", { class: "fold", id: name + "-done" }, h("summary", { text: `${done.length} done` }));
-  collapsible(box);
-  if (done.some((i) => idOf(i) === wanted.id)) box.open = true;
   const key = `${name}-done`;
-  lazy(box, () => h("ol", {}, ...firstPage(key, done, idOf).map(row), moreButton(key, done.length, `more done ${NOUNS[name]}`, render) || ""));
-  $(name).append(h("li", {}, box));
+  $(name).append(h("li", { class: "done-group", id: key }, h("div", { class: "done-head", text: `${done.length} done` }),
+    h("ol", {}, ...firstPage(key, done, idOf).map(row), moreButton(key, done.length, `more done ${NOUNS[name]}`, render) || "")));
 }
 
 function lastSeen() {

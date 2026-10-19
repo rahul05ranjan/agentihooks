@@ -129,8 +129,9 @@ def test_home_shell_lists_no_ledger_rows(base):
     _, _, body = get(base + "/")
     assert SLUG not in body
     assert '<ul id="rows"></ul>' in body
-    assert '<div class="watermark" aria-hidden="true"></div>' in body
-    assert re.findall(r'data-sort="(\w+)"', body) == ["kind", "open", "done", "swarm", "at"]
+    assert "watermark" not in body and "data-sort" not in body
+    script = (core.HOME.parent / "static" / "home" / "home.js").read_text(encoding="utf-8")
+    assert '"Kind:kind", "Overview", ">Open:open", ">Done:done", "Swarm:swarm", ">Activity:at"' in script
 
 
 def test_page_shells_are_plain_ascii_so_any_ascii_locale_reads_them_alike():
@@ -306,7 +307,7 @@ def test_a_deep_link_past_the_first_page_of_a_closed_fold_reveals_its_target(chr
         loaded(page)
         target = page.locator("#item-tasks-t299")
         target.wait_for()
-        assert target.evaluate("el => el.closest('details#tasks-done').open")
+        assert target.evaluate("el => !!el.closest('li#tasks-done')")
         assert target.is_visible()
         assert target.evaluate(
             "el => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.top < innerHeight; }"
