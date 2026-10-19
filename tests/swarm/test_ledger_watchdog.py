@@ -363,6 +363,7 @@ def test_a_stale_server_is_restarted_and_three_fast_writes_alert_nobody(store, t
     host = Host(tmp_path)
     plant(host.proc, host.argv)
     code = current(host, tmp_path)
+    (code / "a.py").write_text("changed")
     os.utime(code / "a.py", ns=(1, 1))
     clock = Clock()
     host.clock = clock
@@ -447,6 +448,7 @@ def test_a_server_the_tick_started_without_its_own_record_is_not_restarted_again
     store.redis.set(ledger_watchdog.STARTED_KEY, str(PID))
     assert ledger_watchdog.watch(store, "sw", ProbedLedger(Clock()), FakeRuntime(), host) == []
     code = current(host, tmp_path)
+    (code / "a.py").write_text("changed")
     os.utime(code / "a.py", ns=(1, 1))
     assert ledger_watchdog.watch(store, "sw", ProbedLedger(Clock()), FakeRuntime(), host) != []
 

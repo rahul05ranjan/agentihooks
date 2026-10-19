@@ -100,6 +100,7 @@ LOGO = ROOT / "media" / "agentihooks-logo.png"
 
 HUB = Hub()
 BIN_SWEEP_EVERY = 15
+FOLLOW_S = 0.25
 SCHEDULER_UNAVAILABLE = threading.Event()
 LOADED_STAMP = code_stamp()
 LOADED_DIGEST = code_digest()
@@ -1386,6 +1387,17 @@ def warm_streams(environ=os.environ):
         HUB.close(slug)
 
 
+def follow_shared(interval=FOLLOW_S):
+    """Publish each watched ledger's newer stored generation, whichever host wrote it to the shared database."""
+    while True:
+        for slug in HUB.watched():
+            try:
+                repository.current(slug)
+            except Exception as exc:  # one unreadable ledger must not stop the others following
+                sys.stderr.write(f"shared follow {slug}: {exc}\n")
+        scheduled_wait(interval)
+
+
 def serve():
     core.LEDGER_DIR.mkdir(parents=True, exist_ok=True)
     listener = server_handoff.inherited()
@@ -1410,6 +1422,8 @@ def serve():
     threading.Thread(target=watch_ledgers, args=(server,), kwargs={"stopping": watching}, daemon=True).start()
     threading.Thread(target=answer_reloads, args=(server,), daemon=True).start()
     threading.Thread(target=refresh_streams, args=(carried,), daemon=True).start()
+    if storage.shared():
+        threading.Thread(target=follow_shared, daemon=True).start()
     stopped = server_lifetime.watch(server, core.LEDGER_DIR, PORT)
     server_code.record(PIDFILE.parent, os.getpid(), LOADED_STAMP, digest=LOADED_DIGEST)
     PIDFILE.write_text(str(os.getpid()))
