@@ -11,7 +11,7 @@ import { agentActions, reconcile, settle, titlePause } from "./lifecycle.js";
 import { quotaCount, renderHives } from "./hives.js";
 import { agentCellTips } from "./agent_cells.js";
 import { capacityShown, liveAgents, renderRoles } from "./roles.js";
-import { recoveryCards, renderRecovery } from "./recovery.js";
+import { renderHandoffs, renderRecovery } from "./recovery.js";
 
 const LIVE_LANES = [["eng", "max_eng"], ["ci", "max_ci"], ["plan", "max_plan"]];
 const ROLES = ["master", "engineer", "planner", "qa", "cicd", "documentation"];
@@ -83,7 +83,7 @@ export function cells(...values) {
   return h("tr", {}, ...values.map((v) => (v && v.nodeType ? h("td", {}, v) : h("td", { text: v == null || v === "" ? "—" : String(v) }))));
 }
 
-function moreRow(key, total, noun, columns, again) {
+export function moreRow(key, total, noun, columns, again) {
   const cell = moreButton(key, total, noun, again, "td");
   if (cell) cell.colSpan = columns;
   return cell && h("tr", { class: "page-more" }, cell);
@@ -337,7 +337,7 @@ export function renderSwarm(sw) {
   renderHives();
   renderDoctor(sw, now);
   if (wanted.id || !$("health").contains(document.activeElement)) renderHealth(sw.findings, now);
-  renderHandoffs(sw.handoffs || []);
+  renderHandoffs(sw.handoffs || [], sw);
   renderRecovery(sw);
   renderStats();
 }
@@ -373,17 +373,6 @@ function healthRow(f, now) {
   note.value = earlier.note || "";
   return cells(f.kind, idCell(f.subject), h("div", {}, h("div", { text: (f.evidence || []).join(" · ") || f.summary }), ...(f.links || []).filter((link) => /^https?:\/\//.test(link.url || "")).map((link) =>
       h("div", {}, h("a", { href: link.url, target: "_blank", rel: "noopener", text: link.label })))), f.threshold, f.seen_at ? `${span(now - f.seen_at)} ago` : "—", pick, note);
-}
-
-function renderHandoffs(rows) {
-  const recovering = new Set(recoveryCards(swarm).map((card) => card.seat));
-  $("handoff-count").textContent = `${rows.length} ${rows.length === 1 ? "seat" : "seats"}`;
-  $("swarm-handoffs").replaceChildren(...(rows.length ? firstPage("seats", rows, (r) => `seat-${r.seat}`).map((r) => withId(cells(idCell(seatText(r.seat)), clock(r.at), r.reason,
-    r.continuity ? label(r.continuity) : "—", r.binding ? h("span", {}, label(r.binding), r.bound_at && ` ${clock(r.bound_at)}`) : "—",
-    r.awaiting && recovering.has(r.seat) ? h("a", { href: `#recovery-${r.seat}`, text: "recovery" })
-    : r.awaiting ? h("span", { class: "sw-ctl" }, ...(r.resume_available === false ? ["fresh"] : ["resume", "fresh"]).map((choice) => h("button", { class: "sw-btn", type: "button",
-      "data-agent": r.awaiting, "data-restore-choice": choice, disabled: !!pending, text: choice === "resume" ? r.resume_label || choice : choice }))) : r.successor ? idCell(r.successor) : "—"), `seat-${r.seat}`))
-    : [emptyRow(6, "No seats yet. Seats appear when agents start.")]), moreRow("seats", rows.length, "more seats", 6, () => renderHandoffs(rows)) || "");
 }
 
 function freezeRow(r) {
