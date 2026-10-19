@@ -1,3 +1,4 @@
+import hashlib
 import json
 from dataclasses import replace
 from types import SimpleNamespace
@@ -37,6 +38,7 @@ def setup():
     herdr._quota_accounts = [Account("claude", "account", "room", 0, 80, 80, 6)]
     herdr.planned_account.return_value = None
     launcher = launch.HiveLaunch(store, config.slug, held, herdr)
+    launcher.opening = lambda request: f"opening for {request.name}"
     return SimpleNamespace(store=store, config=config, held=held, hive=hive, herdr=herdr, launcher=launcher)
 
 
@@ -123,6 +125,9 @@ def test_publishes_fenced_order_after_host_admission(setup):
     assert json.loads(store.redis.get(order.prompt_ref)) == {
         **task,
         "profile_decision": setup.herdr._profile_decision.return_value.record(),
+        "hive_opening": f"opening for {name}",
+        "hive_opening_digest": hashlib.sha256(f"opening for {name}".encode()).hexdigest(),
+        "hive_seeds": {},
     }
     assert order.prompt_ref == store.key(slug, f"launch-prompt:{order.execution_id}")
     assert 0 < store.redis.pttl(order.prompt_ref) <= 300000

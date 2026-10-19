@@ -1,5 +1,6 @@
 """A swarm task's work folder: steering notes seeded from the task, and the progress and proof its agents append."""
 
+import json
 import re
 from pathlib import Path
 
@@ -10,6 +11,8 @@ CONTRACT_LABELS = (("must", "Must be true"), ("check", "Checked by"), ("judge", 
 TAILS = (("latest_progress", "progress.md"), ("latest_proof", "proof.md"))
 TAIL_LINES = 3
 TAIL_BYTES = 4096
+SEEDS = ("steering.md", "progress.md", "proof.md")
+ENDED = ("ended", "finished")
 
 
 def folder(slug, task_id):
@@ -72,3 +75,74 @@ def _tail(path):
     if size > TAIL_BYTES:
         text = text.split("\n", 1)[-1]
     return [line for line in text.splitlines() if line.strip()][-TAIL_LINES:]
+
+
+def portable(slug, task_id):
+    folder(slug, task_id)
+    return f"~/.agentihooks/swarm/{slug}/tasks/{task_id}"
+
+
+def named(slug, agent, recorded=""):
+    from scripts.hive import reports
+
+    if reports.host(agent):
+        return portable(slug, agent.task)
+    return recorded or str(folder(slug, agent.task))
+
+
+def seeds(slug, task_id):
+    path = folder(slug, task_id)
+    return {name: (path / name).read_text(encoding="utf-8") for name in SEEDS if (path / name).is_file()}
+
+
+def materialize(slug, task_id, sent):
+    """Steering follows the controller; progress and proof the hive already holds stay its own."""
+    path = folder(slug, task_id)
+    path.mkdir(parents=True, exist_ok=True)
+    for name in SEEDS:
+        if name not in sent:
+            continue
+        if name == "steering.md":
+            (path / name).write_text(sent[name], encoding="utf-8")
+            continue
+        try:
+            with (path / name).open("x", encoding="utf-8") as fh:
+                fh.write(sent[name])
+        except FileExistsError:
+            pass
+    return path
+
+
+def synced_key(hive):
+    from scripts.hive import registry
+
+    return f"{registry.key(hive)}:workspaces"
+
+
+def sync(redis, hive, hosted, ttl):
+    copy = {}
+    for slug, task_id in hosted:
+        copy.setdefault(slug, {})[task_id] = tails(slug, task_id)
+    redis.set(synced_key(hive), json.dumps(copy), ex=ttl)
+
+
+def published(store, slug, ledger):
+    """Each task's latest work folder lines: the hive's synced copy when its execution runs on another hive."""
+    from scripts.hive import reports
+
+    remote = {
+        agent.task: host for agent in store.agents(slug) if agent.state not in ENDED and (host := reports.host(agent))
+    }
+    copies = {}
+    found = {}
+    for task in ledger.get("tasks", []):
+        if not task.get("workspace"):
+            continue
+        host = remote.get(task["id"])
+        if not host:
+            found[task["id"]] = tails(slug, task["id"])
+            continue
+        if host not in copies:
+            copies[host] = json.loads(store.redis.get(synced_key(host)) or "{}")
+        found[task["id"]] = copies[host].get(slug, {}).get(task["id"], {})
+    return found
