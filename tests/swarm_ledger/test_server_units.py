@@ -297,23 +297,41 @@ def test_serve_follows_a_shared_database_on_its_own_daemon_thread(monkeypatch, t
         def server_activate(self):
             pass
 
-        def serve_forever(self):
+        def serve_forever(self, poll_interval):
+            pass
+
+        def drained(self, timeout):
             pass
 
         def server_close(self):
             pass
 
+    class Lease:
+        def __init__(self, directory):
+            pass
+
+        def acquire(self, claimant, wait):
+            return self
+
+        def release(self):
+            pass
+
     monkeypatch.setattr(server.threading, "Thread", Thread)
     monkeypatch.setattr(server, "ThreadingHTTPServer", Server)
+    monkeypatch.setattr(server, "HUB", SimpleNamespace(drain=lambda: None))
     monkeypatch.setattr(server.server_lifetime, "watch", lambda *args: threading.Event())
+    monkeypatch.setattr(server.ledger_writer, "WriterLease", Lease)
     monkeypatch.setattr(server.legacy, "adopt", lambda repository: None)
     monkeypatch.setattr(server, "PIDFILE", tmp_path / ".server.pid")
     monkeypatch.setattr(server.storage, "shared", lambda: "postgresql://ledger@db.test/ledger")
     server.serve()
-    assert threads == [
-        {"target": server.watch_ledgers, "daemon": True},
-        {"target": server.follow_shared, "daemon": True},
+    assert [t["target"] for t in threads] == [
+        server.watch_ledgers,
+        server.answer_reloads,
+        server.refresh_streams,
+        server.follow_shared,
     ]
+    assert threads[-1] == {"target": server.follow_shared, "daemon": True}
 
 
 def test_the_shared_follow_reads_every_watched_ledger_each_quarter_second(monkeypatch, capsys):

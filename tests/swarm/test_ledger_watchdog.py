@@ -371,7 +371,7 @@ def test_a_stale_server_is_restarted_and_three_fast_writes_alert_nobody(store, t
     assert ledger_watchdog.watch(store, "sw", ledger, FakeRuntime(), host) == [
         "restarted the ledger server on new code; three writes took 0.3 seconds, 0.3 seconds and 0.3 seconds"
     ]
-    assert host.calls == [("run", [*host.argv[:2], "--reload"], str(host.folder), 210, False, True)]
+    assert host.calls == [("run", [sys.executable, host.argv[1], "--reload"], str(host.folder), 210, False, True)]
     assert len(ledger.writes) == 3 and master_mail(store) == [] and ledger.notes == []
     assert store.redis.get(ledger_watchdog.STARTED_KEY) == "5151"
 
