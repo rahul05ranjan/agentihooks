@@ -1,7 +1,6 @@
 from dataclasses import asdict
 
-from scripts.swarm import lease
-from scripts.swarm.store import SwarmError, connect
+from scripts.swarm_ledger import ports
 
 from . import schemas
 from .errors import APIError
@@ -27,12 +26,16 @@ SCHEMA = {
 }
 
 
+def connect():
+    return ports.swarm().store.connect()
+
+
 def _result(value):
-    return {"data": asdict(value) if isinstance(value, lease.Lease) else value}
+    return {"data": asdict(value) if isinstance(value, ports.swarm().lease.Lease) else value}
 
 
 def read(slug: str) -> dict:
-    return _result(lease.current(connect(), slug))
+    return _result(ports.swarm().lease.current(connect(), slug))
 
 
 def act(slug: str, principal: str, payload: dict) -> dict:
@@ -41,6 +44,7 @@ def act(slug: str, principal: str, payload: dict) -> dict:
     schemas.validate(SCHEMA, payload)
     action = payload["action"]
     schemas.validate({**SCHEMA, "required": ["action", *REQUIRED[action]]}, payload)
+    lease, SwarmError = ports.swarm().lease, ports.swarm().store.SwarmError
     store = connect()
     try:
         if action == "transfer":
