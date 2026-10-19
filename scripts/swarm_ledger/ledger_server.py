@@ -1156,7 +1156,8 @@ def scheduled_wait(interval: float) -> None:
 
     if not SCHEDULER_UNAVAILABLE.is_set():
         try:
-            return wait(interval)
+            wait(interval)
+            return
         except OSError as exc:
             SCHEDULER_UNAVAILABLE.set()
             sys.stderr.write(f"scheduler wait unavailable, sleeping instead: {exc}\n")
