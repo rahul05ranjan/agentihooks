@@ -824,7 +824,11 @@ class HerdrRuntime:
                 text=True,
                 timeout=SPAWN_TIMEOUT_S,
                 env={
-                    **{key: value for key, value in os.environ.items() if key not in (PREDECESSOR, *TICK_ONLY)},
+                    **{
+                        key: value
+                        for key, value in os.environ.items()
+                        if key not in (PREDECESSOR, "SWARM_URL", *TICK_ONLY)
+                    },
                     **({PREDECESSOR: predecessor} if predecessor else {}),
                     **_ledger_environment(config, name),
                     "AGENTIHOOKS_SWARM": config.slug,
