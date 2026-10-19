@@ -914,6 +914,8 @@ def _manual_count_step(counts):
 
 
 def cmd_set(store, args):
+    from scripts.swarm import ledger_cutover
+
     changes, lanes = {}, {key: dict(value) for key, value in store.config(args.slug).lanes.items()}
     counts, pairs = _split_master_pairs(args.pairs, "masters", masters.count_of)
     changes.update(_manual_count_step(counts))
@@ -955,7 +957,7 @@ def cmd_set(store, args):
                 f"or {', '.join(LANE_KEYS)}=<value>"
             )
         changes[SETTABLE[key]] = int(value)
-    config = store.update(args.slug, **changes, **_pinned(changes))
+    config = ledger_cutover.settings(store, args.slug, {**changes, **_pinned(changes)})
     _store_master_counts(store, args.slug, counts, hives)
     _store_master_rules(store, args.slug, rules)
     asked = any(pair.startswith("master-agent=") for pair in args.pairs)
