@@ -216,7 +216,6 @@ def test_workspace_scopes_mutmut_and_preserves_the_pytest_config(tmp_path):
         (root / name).mkdir(parents=True)
         (root / name / "asset.txt").write_text(name)
     (root / "Swarm-v2.md").write_text("# plan\n")
-    (root / "deploy").mkdir()
     (root / "deploy" / "fixture.yaml").write_text("fixture")
     (root / "tests" / "test_sample.py").write_text('FIXTURE = "deploy/fixture.yaml"\n')
     (root / "hooks" / "__pycache__").mkdir()
