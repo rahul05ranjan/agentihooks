@@ -122,7 +122,7 @@ def test_projection_equal_to_memory_names_memory():
     decision = host_budget.room(_sample(load1=18.0, available_mb=8400, agents=18), LIMITS)
 
     assert decision.room == 12
-    assert "MB available memory less 0 MB swap in use fits 12" in decision.reason
+    assert "MB available memory less 0 of 0 MB swap in use fits 12" in decision.reason
 
 
 def test_each_room_names_the_limit_that_set_it():
@@ -181,8 +181,9 @@ def test_host_room_line_names_swap_and_the_per_agent_figure():
     full = host_budget.room(_swapped(16000, 3700, 4096), LIMITS)
 
     assert measured.reason == (
-        "one minute load 0.00 per CPU is below the low watermark; 7000 MB available memory less 1400 MB swap "
-        "in use fits 4 at 1400 MB each, the larger of 1400 MB measured over 3 agent trees and the configured 700 MB"
+        "one minute load 0.00 per CPU is below the low watermark; 7000 MB available memory less 1400 of 8000 MB "
+        "swap in use fits 4 at 1400 MB each, the larger of 1400 MB measured over 3 Claude agent trees and the "
+        "configured 700 MB"
     )
     assert configured.reason.endswith("fits 8 at 700 MB each, the configured figure")
     assert (full.room, full.limit) == (0, "memory")

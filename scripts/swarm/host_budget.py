@@ -86,11 +86,12 @@ def memory_text(sample: HostSample, thresholds: Thresholds, memory: int) -> str:
     figure = "the configured figure"
     if sample.measured_agents:
         figure = (
-            f"the larger of {sample.agent_mb} MB measured over {sample.measured_agents} agent trees "
+            f"the larger of {sample.agent_mb} MB measured over {sample.measured_agents} Claude agent trees "
             f"and the configured {thresholds.memory_per_agent_mb} MB"
         )
     return (
-        f"{sample.available_mb} MB available memory less {sample.swap_used_mb} MB swap in use fits {memory} "
+        f"{sample.available_mb} MB available memory less {sample.swap_used_mb} of {sample.swap_total_mb} MB swap "
+        f"in use fits {memory} "
         f"at {per_agent_mb(sample, thresholds)} MB each, {figure}"
     )
 
