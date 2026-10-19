@@ -222,10 +222,18 @@ def test_a_new_life_on_the_same_task_starts_its_own_clock():
     assert swarm.store.redis.hgetall(swarm.store.key(SLUG, overrun.KEY)) == {}
 
 
-def test_a_planner_is_never_watched():
+def test_a_planner_is_watched_like_an_engineer():
     swarm = Swarm(agent=AgentRecord(OWNER, "plan", "t1", seat=SEAT, started_at=START))
+    assert len(swarm.tick(PARK)) == 2
+    swarm.tick(ENDED)
+    assert swarm.retired == [OWNER]
+
+
+def test_an_agent_released_through_ready_is_never_asked():
+    swarm = Swarm(task={"state": "pr", "awaiting": "merge"})
+    [agent] = swarm.store.agents(SLUG)
+    swarm.store.put_agent(SLUG, replace(agent, state="finished"))
     assert swarm.tick(PARK) == [] and swarm.tick(ENDED) == []
-    assert swarm.master() == [] and swarm.retired == []
 
 
 def test_a_refused_reopen_leaves_the_claim_and_the_agent_record():

@@ -8,14 +8,14 @@ from dataclasses import dataclass
 
 from scripts.inbox import exits
 from scripts.inbox.store import InboxStore
-from scripts.swarm import idle, outage
+from scripts.swarm import capacity, idle, outage
 from scripts.swarm.health.findings import MINUTE_MS
 from scripts.swarm.ledger_events import Mail
 from scripts.swarm_ledger import ledger_workspace
 
 REPORT_MINUTES, PARK_MINUTES, GRACE_MINUTES = 90, 150, 15
 SENDER, KEY, CAUSE = "swarm", "overrun", "overrun"
-HELD, LANES = ("claimed", "pr"), ("eng", "ci")
+HELD = ("claimed", "pr")
 FINISHED, STOPPED, MERGE = "finished", "stopped", "merge"
 NO_STEPS = "no steps recorded in progress.md"
 REPORT = (
@@ -81,7 +81,7 @@ def _minutes(watch, since):
 def _holding(watch, agent, rows):
     row = rows.get(agent.task) or {}
     return (
-        agent.lane in LANES
+        agent.lane in capacity.LANES
         and agent.started_at > 0
         and agent.name in watch.live
         and row.get("state") in HELD
