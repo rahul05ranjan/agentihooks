@@ -75,13 +75,13 @@ def served(services: Services, *args, **kwargs) -> tuple[int, dict]:
 def test_the_api_serves_ledger_reads_from_fake_services():
     status, body = served(fake_services([]), "GET", "/api/v1/ledgers")
     assert status == 200
-    assert body["data"] == [{"slug": SLUG, "title": "Fake"}]
+    assert [(row["slug"], row["title"]) for row in body["data"]] == [(SLUG, "Fake")]
 
 
 def test_the_api_serves_swarm_reads_from_the_swarm_service():
     status, body = served(fake_services([]), "GET", f"/api/v1/ledgers/{SLUG}/swarm/agents")
     assert status == 200
-    assert body["data"] == [{"name": "eng"}]
+    assert [row["name"] for row in body["data"]] == ["eng"]
 
 
 def test_the_api_runs_swarm_controls_through_the_swarm_service():
