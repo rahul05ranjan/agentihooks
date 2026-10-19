@@ -14,8 +14,6 @@ from scripts.swarm_ledger.api import controller_lease
 from scripts.swarm_ledger.api.errors import APIError
 from scripts.swarm_v2 import masters
 
-pytestmark = pytest.mark.xdist_group("fakeredis")
-
 SLUG = "sw"
 DEST = "https://hosted.example"
 TOKEN = {"AGENTIHOOKS_LEDGER_AGENT_TOKEN": "token-1"}
@@ -280,7 +278,7 @@ def test_the_route_acknowledges_with_the_environment_it_checked(store, worker, m
 
     seen = []
     monkeypatch.delenv("AGENTIHOOKS_LEDGER_AGENT_TOKEN", raising=False)
-    environment = {"AGENTIHOOKS_LEDGER_AGENT_TOKEN": "token-1"}
+    environment = {**os.environ, "AGENTIHOOKS_LEDGER_AGENT_TOKEN": "token-1"}
     monkeypatch.setattr(os, "environ", environment)
     monkeypatch.setattr(ledger_cutover, "acknowledge", lambda store, slug, who, environ=None: seen.append(environ))
     ledger_route._acknowledge(store, SLUG, who(worker))
@@ -401,6 +399,19 @@ def test_a_transfer_moves_a_live_lease_held_by_its_owner_to_a_higher_epoch(store
     assert lease.transfer(store, SLUG, "hive", 2, 4).epoch == 5
 
 
+def test_a_transfer_rises_above_a_live_epoch_ahead_of_the_epoch_counter(store):
+    owner(store, json.dumps({"owner": "hive", "epoch": 7, "expires_at": NOW + 1}))
+    store.redis.set(store.key(SLUG, "control-epoch"), 4)
+    assert lease.transfer(store, SLUG, "hive", 2, 7).epoch == 8
+
+
+def test_controller_lease_actions_refuse_a_payload_missing_its_fields(store, monkeypatch):
+    monkeypatch.setattr(controller_lease, "connect", lambda: store)
+    with pytest.raises(APIError) as refused:
+        controller_lease.act(SLUG, "", {"action": "renew"})
+    assert (refused.value.status, refused.value.code) == (400, "schema_invalid")
+
+
 def test_a_lease_expiring_now_counts_as_free(store):
     owner(store, json.dumps({"owner": "other", "epoch": 4, "expires_at": NOW}))
     assert lease.transfer(store, SLUG, "hive", 2, 0).epoch == 3
@@ -422,8 +433,9 @@ def test_a_transfer_refuses_a_lease_it_does_not_hold(store, raw, expected, messa
 
 
 def test_a_transfer_that_keeps_losing_its_watch_is_not_committed(store, monkeypatch):
-    spy(store, monkeypatch, fail=True)
+    watched = spy(store, monkeypatch, fail=True)
     with pytest.raises(SwarmError) as refused:
         lease.transfer(store, SLUG, "hive", 0, 0)
     assert str(refused.value) == "the controller lease kept changing; transfer was not committed"
+    assert len(watched) == 5
     assert store.redis.get(store.key(SLUG, "control-owner")) is None

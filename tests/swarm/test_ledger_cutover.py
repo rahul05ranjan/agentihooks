@@ -11,7 +11,6 @@ from scripts.swarm_v2 import masters
 from tests.swarm_ledger.test_ledger_authority import SLUG
 from tests.swarm_ledger.test_ledger_authority import live as _authority_live
 
-pytestmark = pytest.mark.xdist_group("fakeredis")
 live = _authority_live
 
 
