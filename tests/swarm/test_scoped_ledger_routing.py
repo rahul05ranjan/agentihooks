@@ -8,7 +8,6 @@ import pytest
 from scripts.swarm import cli, lease
 from scripts.swarm.store import RedisStore, SwarmConfig
 from scripts.swarm_ledger import authority_context, ledger, ledger_link, ledger_route
-
 from tests.swarm.test_cli import env as env
 from tests.swarm.test_cli import run
 
