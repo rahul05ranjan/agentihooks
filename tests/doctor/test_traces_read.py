@@ -333,6 +333,17 @@ def test_a_listing_stopped_by_the_budget_counts_what_it_did_not_reach(tmp_path):
     assert (coverage["listed"], coverage["unlisted"], coverage["traces"]) == (False, 8, 1)
 
 
+@pytest.mark.parametrize("items,unlisted", [(3, 2), (1, 0)])
+def test_traces_past_the_cap_count_a_trace_repeated_across_pages_once(tmp_path, items, unlisted):
+    def get(path, params):
+        if path == "traces":
+            return _page([_trace_row("a", "u")], params["page"], 3, items=items)
+        return _page([], 1, 1)
+
+    _, coverage, _ = traces_read.history("s", get, tmp_path, traces_read.Budget(trace_pages=2))
+    assert (coverage["traces"], coverage["unlisted"]) == (1, unlisted)
+
+
 def test_a_failed_listing_counts_no_traces_past_a_cap(tmp_path):
     def down(path, params):
         raise TimeoutError("read timed out")
