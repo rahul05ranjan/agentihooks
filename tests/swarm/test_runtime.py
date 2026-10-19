@@ -342,6 +342,13 @@ def test_staged_and_active_launches_use_each_successors_scoped_credential(tmp_pa
     assert len(seen) == 2
 
 
+def test_a_local_launch_drops_an_inherited_hosted_route(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTIHOOKS_SWARM", "other")
+    monkeypatch.setenv("SWARM_URL", "https://hosted.example")
+    env = _spawn_env(tmp_path, monkeypatch)
+    assert "SWARM_URL" not in env
+
+
 def test_spawn_without_the_server_secret_never_passes_on_the_tick_s_token(tmp_path, monkeypatch):
     monkeypatch.delenv("SWARM_SECRET", raising=False)
     monkeypatch.setenv("AGENTIHOOKS_LEDGER_AGENT_TOKEN", "the-tick-s-own")

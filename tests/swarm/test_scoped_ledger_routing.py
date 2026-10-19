@@ -128,6 +128,21 @@ def test_an_active_successor_keeps_an_unrelated_swarm_local(store, monkeypatch):
         assert ledger.base("selected") == "https://hosted.example"
 
 
+def test_a_hosted_successor_watches_an_unrelated_swarm_locally(store, monkeypatch):
+    from scripts.swarm_ledger import watch_ledger
+
+    monkeypatch.setenv("AGENTIHOOKS_SWARM", "selected")
+    monkeypatch.setenv("SWARM_URL", "https://hosted.example")
+    with ledger_route.scoped("other", ""):
+        address, headers = watch_ledger.request("other", "event", {})
+    assert address.startswith("http://127.0.0.1:")
+    assert address.endswith("/api/v1/ledgers/other/events")
+    assert headers["Last-Event-ID"] == "event"
+    with ledger_route.scoped("selected", "https://hosted.example"):
+        address, _ = watch_ledger.request("selected", "", {})
+    assert address == "https://hosted.example/api/v1/ledgers/selected/events"
+
+
 def test_pending_destination_stages_private_authority_without_routing_the_tick(store, monkeypatch):
     from argparse import Namespace
 
