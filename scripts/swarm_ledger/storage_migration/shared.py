@@ -39,18 +39,20 @@ def slugs(repo: LedgerRepository) -> list:
         return snapshot.slugs() if snapshot else []
 
 
-def copy(source: LedgerRepository, target: LedgerRepository, slug: str, dry_run: bool) -> dict:
+def copy(source: LedgerRepository, target: LedgerRepository, slug: str, dry_run: bool, replace: bool = False) -> dict:
     with source.snapshot() as snapshot:
         state, registries, token = snapshot.export(slug), snapshot.registries(slug), snapshot.token(slug)
     try:
         with target.transaction() as transaction:
-            if not transaction.exists(slug) or transaction.export(slug) != state:
-                stored = json.loads(hosted.encode(state))
-                seeds = stored["_meta"].get("seeds")
-                if seeds is not None:
-                    stored["_meta"]["seeds"] = {}
+            exists = transaction.exists(slug)
+            stale = not exists or transaction.export(slug) != state
+            moved = transaction.registries(slug) != registries
+            if exists and (stale or moved) and not replace:
+                raise ValueError(f"ledger {slug} differs in the shared database; conversion refuses to replace it")
+            if stale:
+                stored, seeds = hosted.unseeded(state)
                 transaction.insert(slug, stored, seeds, token or secrets.token_urlsafe(24))
-            if transaction.registries(slug) != registries:
+            if moved:
                 transaction.replace_registries(slug, registries)
             converted, kept = transaction.export(slug), transaction.registries(slug)
             if dry_run:
@@ -67,11 +69,13 @@ def freeze(source: LedgerRepository) -> None:
 
 
 def convert(source: LedgerRepository, target: LedgerRepository, dry_run: bool = False) -> dict:
+    copied = set()
     if not dry_run:
         for slug in slugs(source):
             copy(source, target, slug, False)
+            copied.add(slug)
         freeze(source)
-    ledgers = [copy(source, target, slug, dry_run) for slug in slugs(source)]
+    ledgers = [copy(source, target, slug, dry_run, slug in copied) for slug in slugs(source)]
     totals = {side: {key: sum(row[side][key] for row in ledgers) for key in COUNTED} for side in ("source", "shared")}
     return {
         "ledgers": ledgers,
@@ -98,7 +102,7 @@ def main() -> None:
 
     source = sqlite.SQLiteLedgerRepository(args.source / sqlite.DATABASE, ledger_server.core)
     target = postgres.PostgresLedgerRepository(address, ledger_server.core)
-    print(json.dumps(convert(source, target, args.dry_run)))
+    print(json.dumps(convert(source, target, args.dry_run)), flush=True)
 
 
 if __name__ == "__main__":

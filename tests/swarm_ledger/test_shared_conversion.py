@@ -96,6 +96,27 @@ def test_a_registry_change_alone_before_the_fence_reaches_the_shared_database(st
         assert target.registry("bin", connection)[SLUG] == 7
 
 
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_a_differing_ledger_already_in_the_shared_database_is_never_replaced(stores, dry_run):
+    source, target = stores
+    target.import_document(SLUG, {**document(), "title": "Shared work"})
+    with pytest.raises(ValueError, match=f"^ledger {SLUG} differs in the shared database; conversion refuses"):
+        shared.convert(source, target, dry_run=dry_run)
+    assert target.export_document(SLUG)["title"] == "Shared work"
+    assert not sqlite.fenced(source.directory, "*")
+
+
+def test_registry_rows_differing_in_the_shared_database_are_never_replaced(stores):
+    source, target = stores
+    target.import_document(SLUG, document())
+    with target.connect() as connection, connection:
+        target.save_registry(connection, "bin", {SLUG: 9})
+    with pytest.raises(ValueError, match="conversion refuses to replace it$"):
+        shared.convert(source, target)
+    with target.connect() as connection:
+        assert target.registry("bin", connection)[SLUG] == 9
+
+
 def test_a_dry_run_reports_counts_and_rolls_every_write_back(stores):
     source, target = stores
     report = shared.convert(source, target, dry_run=True)
