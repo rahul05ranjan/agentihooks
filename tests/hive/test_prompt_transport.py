@@ -256,6 +256,7 @@ def test_the_controller_carries_the_opening_by_redis_key(setup, homes):
     from scripts.swarm.capacity import Account
     from scripts.swarm.profile_choice import ProfileDecision
     from scripts.swarm.runtime import HerdrRuntime
+    from scripts.swarm.store import AgentRecord
     from scripts.swarm_v2.runtime.base import SpawnRequest
 
     hive = registry._default("host")
@@ -275,12 +276,15 @@ def test_the_controller_carries_the_opening_by_redis_key(setup, homes):
     launcher = launch.HiveLaunch(setup.store, "fixture", setup.held, herdr)
     launcher.opening = lambda request: f"opening for {request.name}"
     launcher.sleep = Mock(side_effect=StopIteration)
+    name = setup.store.next_name("fixture", "eng")
+    setup.store.put_agent("fixture", AgentRecord(name, "eng", "task", seat="eng-2@fixture", state="starting"))
+    setup.store.seats.occupy("eng-2@fixture", name, 0)
     task = {**TASK, "seat": "eng-2@fixture", "controller_epoch": setup.held.epoch}
     with at(homes.controller), pytest.raises(StopIteration):
-        launcher.spawn(SpawnRequest(setup.config, "eng", "eng-name", task))
+        launcher.spawn(SpawnRequest(setup.config, "eng", name, task))
     payload = json.loads(setup.redis.get(launcher.orders_for("task").prompt_ref))
-    assert payload[orders.OPENING] == "opening for eng-name"
-    assert payload[orders.DIGEST] == hashlib.sha256(b"opening for eng-name").hexdigest()
+    assert payload[orders.OPENING] == f"opening for {name}"
+    assert payload[orders.DIGEST] == hashlib.sha256(f"opening for {name}".encode()).hexdigest()
 
 
 def test_resume_texts_name_the_remote_folder_below_its_home(setup, homes):

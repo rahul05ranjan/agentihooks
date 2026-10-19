@@ -213,7 +213,13 @@ def request_for(setup, name=None, lane="eng", route="subscription"):
         setup.config,
         lane,
         name,
-        {"id": "task", "seat": record.seat, "controller_epoch": setup.held.epoch, "route_kind": route},
+        {
+            "id": "task",
+            "title": "Launch on a hive",
+            "seat": record.seat,
+            "controller_epoch": setup.held.epoch,
+            "route_kind": route,
+        },
     )
 
 
