@@ -28,7 +28,7 @@ PHASES = [
 
 
 def test_the_served_view_carries_each_phase_status_and_label():
-    view = server.page_view({"phases": PHASES, "tasks": [], "_meta": {}})
+    view = server.page_view({"phases": PHASES, "tasks": [], "_meta": {}}, *server.NO_DOCTOR)
     assert view["phase_status"] == {
         "a": {"state": "done", "label": "Done"},
         "b": {"state": "to_plan", "label": "Needs a plan"},
@@ -104,7 +104,7 @@ def test_home_and_bin_are_one_static_shell():
     home = server.index_page()
     assert "__HOME_" not in home
     assert set(re.findall(r"__HOME_(\w+)__", core.HOME.read_text(encoding="utf-8"))) == {"PAGE"}
-    assert "<button" not in home and 'class="fab"' not in home
+    assert "<button" not in home and 'class="fab"' not in home and "<header" not in home
     with served(server) as base:
         pages = [urllib.request.urlopen(base + path, timeout=5).read().decode() for path in ("/", "/?view=bin")]
     assert pages[0] == pages[1]
@@ -156,3 +156,7 @@ def test_only_the_folds_the_design_record_allows_render(tab):
     tab.click("#tasks-box > summary")
     tab.locator("#item-tasks-t1").wait_for()
     assert tab.evaluate(ALLOWED_FOLDS) == []
+    tab.evaluate(
+        """() => document.querySelector("#item-phases-p1").append(Object.assign(document.createElement("details"), {className: "planted"}))"""
+    )
+    assert tab.evaluate(ALLOWED_FOLDS) == ["planted"]

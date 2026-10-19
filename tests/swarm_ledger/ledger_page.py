@@ -59,14 +59,11 @@ def serve_modules(target, ledger=None, swarm=None):
         ctype = "text/css" if path.suffix == ".css" else "text/javascript"
         return route.fulfill(body=path.read_text(encoding="utf-8"), content_type=f"{ctype}; charset=utf-8")
 
-    target.route("**/static/*/**", answer)
-    target.route("**/api/v1/tips", answer_tips)
-
-
-def answer_tips(route):
     from scripts.swarm_ledger import page_tips
 
-    route.fulfill(json={"data": page_tips.values()})
+    tips = page_tips.values()
+    target.route("**/static/*/**", answer)
+    target.route("**/api/v1/tips", lambda route: route.fulfill(json={"data": tips}))
 
 
 def shell_html(title="Ledger"):
@@ -86,10 +83,12 @@ def snapshot_body(ledger=None, swarm=None):
 def served_ledger(ledger):
     if not isinstance(ledger, dict):
         return ledger
+    from scripts.swarm import phase_state
     from scripts.swarm_ledger import ledger_server
 
     meta = {"limits": ledger_server.PAGE_LIMITS, **ledger.get("_meta", {})}
-    return {"marks": {"frozen": [], "held": []}, **ledger, "_meta": meta}
+    status = phase_state.status({"tasks": [], **ledger})
+    return {"marks": {"frozen": [], "held": []}, "phase_status": status, **ledger, "_meta": meta}
 
 
 def is_events(url):
@@ -129,8 +128,7 @@ def reload_after_folds(tab, selector):
     state = tab.locator(selector).evaluate_all(
         """boxes => boxes.map(box => ({
           id: box.id,
-          key: box.dataset.key || (box.matches(".plan-fold,.phase-fold")
-            ? box.closest("[id^=item-]").id.slice(5).replace("-", "/") + "/row" : null),
+          key: box.dataset.key || null,
           open: box.open
         }))"""
     )

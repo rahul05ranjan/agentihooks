@@ -178,7 +178,7 @@ export function overlayChanges(sw) {
 
 export function toggleOverlay(sw, role, name) {
   const worn = wornOverlays(sw, role);
-  overlayDraft[role] = worn.includes(name) ? worn.filter((n) => n !== name) : worn.length < tips.overlays ? [...worn, name] : worn;
+  overlayDraft[role] = worn.includes(name) ? worn.filter((n) => n !== name) : worn.length >= tips.overlays ? worn : [...worn, name];
 }
 
 function overlayRow(sw, role) {
@@ -186,7 +186,7 @@ function overlayRow(sw, role) {
   const names = [...new Set([...(sw.overlays_available || []).filter((o) => (o.wears || []).includes(role)).map((o) => o.name), ...worn])];
   return h("div", { class: "sw-ovl-row", role: "group", "aria-label": `Overlays the ${role} role wears` }, h("span", { class: "sw-cap-name", text: role }),
     names.length ? h("div", { class: "sw-ctl" }, ...names.map((name) => h("button", { class: "sw-btn sw-mode", type: "button", "data-overlay-role": role, "data-overlay": name,
-      "aria-pressed": String(worn.includes(name)), disabled: !!pending || (!worn.includes(name) && !(worn.length < tips.overlays)), text: name })))
+      "aria-pressed": String(worn.includes(name)), disabled: !!pending || (!worn.includes(name) && worn.length >= tips.overlays), text: name })))
       : h("span", { class: "sw-ovl-none", text: "no overlay in the bundle wears this role" }));
 }
 

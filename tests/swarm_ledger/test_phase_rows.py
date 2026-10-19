@@ -30,7 +30,10 @@ def served_answers():
 
     answers = []
     for c in CASES:
-        status = ledger_server.page_view({"phases": c["phases"], "tasks": c["tasks"], "_meta": {}})["phase_status"]
+        view = ledger_server.page_view(
+            {"phases": c["phases"], "tasks": c["tasks"], "_meta": {}}, *ledger_server.NO_DOCTOR
+        )
+        status = view["phase_status"]
         answers.append([status[c["phase"]]["state"], status[c["phase"]]["label"]])
     return answers
 

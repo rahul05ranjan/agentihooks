@@ -61,6 +61,13 @@ export function pendingOf(d, key) {
   return d.pending[key] || null;
 }
 
+export function settlePending(d, sent) {
+  for (const op of sent) {
+    const key = pendingKey(op);
+    if (key && d.pending[key] && d.pending[key].id === op.id) delete d.pending[key];
+  }
+}
+
 export function applyOp(d, op) {
   if (op.op === "sync" || op.op === "stats_sync") return;
   const key = pendingKey(op);

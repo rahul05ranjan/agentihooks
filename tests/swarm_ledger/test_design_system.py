@@ -13,7 +13,7 @@ import ledger_core as core  # noqa: E402
 import ledger_server as server  # noqa: E402
 
 from scripts.swarm_ledger import page_assets  # noqa: E402
-from tests.swarm_ledger.ledger_page import page_source  # noqa: E402
+from tests.swarm_ledger.ledger_page import page_source, rendered_home  # noqa: E402
 from tests.swarm_ledger.test_swarm_layout import NOW_MS, browser, open_page, status  # noqa: E402, F401
 
 LITERAL = re.compile(r"#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(|(?<![-\w])(white|black)(?![-\w])")
@@ -314,9 +314,6 @@ class LandingBays(unittest.TestCase):
             "home": re.search(r"<main([^>]*)>", server.index_page()).group(1),
         }
         self.assertEqual(mains, {"ledger": "", "home": ""})
-        script = (core.TEMPLATE.parent / "static" / "home" / "home.js").read_text(encoding="utf-8")
-        self.assertIn('=== "bin" ? "bin" : "home";', script)
-        self.assertIn("main.className = view;", script)
 
     def test_priority_item_and_stat_rows_are_hairline_rows(self):
         css = css_of(page_source())
@@ -427,6 +424,13 @@ def test_every_overflowing_agent_cell_ellipsizes_and_exposes_its_full_text(open_
     execution.hover()
     page.tab.clock.run_for(1100)
     assert page.tab.locator(".ledger-tip:popover-open").inner_text() == execution.get_attribute("data-tip")
+
+
+def test_the_home_script_scopes_home_and_bin_on_main(browser):  # noqa: F811
+    for view in ("home", "bin"):
+        with mock.patch.object(server, f"{view}_summaries", return_value=[{"slug": "a", "closed_at": 0}]):
+            page = rendered_home(server, browser, view)
+        assert re.search(r"<main([^>]*)>", page).group(1) == f' class="{view}"'
 
 
 if __name__ == "__main__":
