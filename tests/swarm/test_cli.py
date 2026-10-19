@@ -836,11 +836,14 @@ def test_review_budget_keeps_each_pull_requests_rounds(env, monkeypatch, capsys,
     capsys.readouterr()
     first = "https://github.com/o/r/pull/1"
     second = "https://github.com/o/r/pull/2"
-    if not legacy:
+    if legacy:
+        for _ in range(3):
+            cli.review_rounds.Budget("sw", "reviews").spend("t1", "rounds", 3)
+    else:
         ledger.rows["t1"]["pr_url"] = first
-    for n in (1, 2, 3):
-        assert run("sw", "--as", "engineer@a1b2c3-0001", "review") == 0
-        assert json.loads(capsys.readouterr().out)["round"] == n
+        for n in (1, 2, 3):
+            assert run("sw", "--as", "engineer@a1b2c3-0001", "review") == 0
+            assert json.loads(capsys.readouterr().out)["round"] == n
     if legacy and register_first:
         ledger.rows["t1"]["pr_url"] = first
         assert run("sw", "--as", "engineer@a1b2c3-0001", "review") == 1
@@ -1112,6 +1115,7 @@ def test_timer_reconcile_installs_a_newly_added_service_and_leaves_current_units
     names = [
         "agentihooks-inbox-waker.service",
         "agentihooks-quota-prober.service",
+        "agentihooks-tick-watch.service",
         "agentihooks-swarm-waits.timer",
     ]
     assert calls == [(["systemctl", "--user", "is-enabled", "--quiet", name], kw) for name in names]
@@ -1119,13 +1123,13 @@ def test_timer_reconcile_installs_a_newly_added_service_and_leaves_current_units
     calls.clear()
     failing.add("is-enabled")
     assert timer.reconcile("/bin/agentihooks", tmp_path, run=run)
-    assert [call[0][2] for call in calls] == ["is-enabled", "enable", "enable", "enable"]
+    assert [call[0][2] for call in calls] == ["is-enabled", "enable", "enable", "enable", "enable"]
 
     calls.clear()
     failing.clear()
     failing.add(names[1])
     assert timer.reconcile("/bin/agentihooks", tmp_path, run=run) is False
-    assert [call[0][2] for call in calls] == ["is-enabled", "is-enabled", *["enable"] * 3]
+    assert [call[0][2] for call in calls] == ["is-enabled", "is-enabled", *["enable"] * 4]
     failing.clear()
 
     calls.clear()
@@ -1155,6 +1159,7 @@ def test_timer_reconcile_installs_a_newly_added_service_and_leaves_current_units
         (["systemctl", "--user", "daemon-reload"], {**kw, "check": False}),
         enable("agentihooks-inbox-waker.service"),
         enable("agentihooks-quota-prober.service"),
+        enable("agentihooks-tick-watch.service"),
         enable("agentihooks-new-intake.service"),
         enable("agentihooks-swarm-waits.timer"),
     ]
