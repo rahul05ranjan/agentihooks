@@ -113,7 +113,7 @@ def test_chat_lines_carry_the_ledger_reply_rules_or_the_default(capsys):
 
 
 def test_the_request_carries_the_credential_the_stream_accept_and_the_cursor(monkeypatch):
-    monkeypatch.setattr(watch_ledger.ledger_link, "base", lambda: "http://h:1")
+    monkeypatch.setattr(watch_ledger.ledger_link, "base", lambda slug="": "http://h:1")
     given = {"X-Ledger-Token": "t"}
     assert watch_ledger.request(SLUG, None, given) == (
         f"http://h:1/api/v1/ledgers/{SLUG}/events",
@@ -136,7 +136,7 @@ def test_stream_opens_the_request_with_the_read_timeout_and_parses_frames(monkey
         opened.append((request.full_url, dict(request.header_items()), timeout))
         return io.BytesIO(body)
 
-    monkeypatch.setattr(watch_ledger.ledger_link, "base", lambda: "https://h:1")
+    monkeypatch.setattr(watch_ledger.ledger_link, "base", lambda slug="": "https://h:1")
     monkeypatch.setattr(watch_ledger.urllib.request, "urlopen", urlopen)
     monkeypatch.setattr(watch_ledger, "credentials", lambda slug: {"X-Ledger-Token": f"for {slug}"})
     assert list(watch_ledger.stream(SLUG, "c1")) == [("snapshot", {"é": 1}, "c0"), ("heartbeat", {}, None)]
