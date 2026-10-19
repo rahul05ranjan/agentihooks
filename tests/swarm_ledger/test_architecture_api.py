@@ -12,6 +12,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 import scripts.swarm_v2.architecture as records
 from scripts.swarm_ledger.api import architecture, routes
 from scripts.swarm_ledger.api.errors import APIError
+from tests.swarm_ledger.api_fakes import as_services
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "tests" / "fixtures" / "swarm_v2" / "architecture"
@@ -28,6 +29,10 @@ class Headers(dict):
 
 
 def fake_server():
+    return as_services(server_parts())
+
+
+def server_parts():
     return SimpleNamespace(
         ALLOWED_HOSTS={"h"},
         ALLOWED_ORIGINS=set(),
