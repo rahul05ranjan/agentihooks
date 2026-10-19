@@ -5,12 +5,12 @@ from contextvars import ContextVar
 from functools import wraps
 
 from scripts.gates import Who
-from scripts.swarm.store import RedisStore
+from scripts.swarm_ledger import ports
 
 CURRENT: ContextVar[tuple[str, str] | None] = ContextVar("ledger_route", default=None)
 
 
-def configured(store: RedisStore, slug: str) -> str:
+def configured(store: object, slug: str) -> str:
     return store.redis.hget(store.key(slug, "config"), "api_url") or ""
 
 
@@ -30,14 +30,12 @@ def scoped(slug: str, address: str) -> Iterator[None]:
 
 @contextmanager
 def session(slug: str) -> Iterator[None]:
-    from scripts.swarm.store import connect
-
     if (
         os.environ.get("AGENTIHOOKS_SWARM") == slug
         and os.environ.get("AGENTIHOOKS_DEPLOYMENT", "local") == "local"
         and not os.environ.get("SWARM_URL")
     ):
-        store = connect()
+        store = ports.swarm().store.connect()
         with scoped(slug, store.config(slug).api_url):
             yield
             _acknowledge(store, slug, Who.from_env())
@@ -53,7 +51,7 @@ def _acknowledge(store: RedisStore, slug: str, who: Who) -> None:
 
 
 @contextmanager
-def command(store: RedisStore, slug: str, who: Who) -> Iterator[None]:
+def command(store: object, slug: str, who: Who) -> Iterator[None]:
     with scoped(slug, configured(store, slug) if slug else ""):
         if slug:
             _acknowledge(store, slug, who)
