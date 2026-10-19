@@ -110,22 +110,26 @@ def host(hive_id: str, ui: str, **fields) -> dict:
 
 
 FALLBACKS = {
-    "headless with room": ([host("ws", "yes"), host("anton", "no", agents=3)], Choice("anton")),
+    "headless with room": ([host("ws", "yes"), host("anton", "no", agents=3)], Choice("anton"), "subscription"),
     "headless full": (
         [host("ws", "yes"), host("anton", "no", agents=4)],
         Choice("ws", "no headless hive for eng has room"),
+        "subscription",
     ),
     "no headless live": (
         [host("ws", "yes"), host("anton", "no", heartbeat_at=0)],
         Choice("ws", "no live headless hive takes eng"),
+        "subscription",
     ),
     "headless without the repo waits": (
         [host("ws", "yes"), host("anton", "no", repos=["other"])],
         Wait("no headless hive for eng lists the repo agentihooks"),
+        "subscription",
     ),
     "headless with one free place but without the slot waits": (
         [host("ws", "yes"), host("anton", "no", agents=3, slots=[])],
         Wait("no headless hive for eng advertises the claude slot acct"),
+        "subscription",
     ),
     "the fallback honours prefer among UI hives": (
         [
@@ -134,6 +138,7 @@ FALLBACKS = {
             host("anton", "no", agents=4),
         ],
         Choice("vm", "no headless hive for eng has room"),
+        "subscription",
     ),
     "the fallback checks the login on the UI hive": (
         [host("ws", "yes", interactive={"claude": ""}), host("anton", "no", agents=4)],
@@ -148,19 +153,21 @@ FALLBACKS = {
     "one full and one without the slot waits": (
         [host("ws", "yes"), host("anton", "no", agents=4), host("pod", "no", slots=[])],
         Wait("no headless hive for eng advertises the claude slot acct"),
+        "subscription",
     ),
     "full headless and a full workstation wait": (
         [host("ws", "yes", agents=4), host("anton", "no", agents=4)],
         Wait("no headless hive for eng has room"),
+        "subscription",
     ),
-    "only headless": ([host("anton", "no", agents=1), host("pod", "no", agents=2)], Choice("anton")),
+    "only headless": ([host("anton", "no", agents=1), host("pod", "no", agents=2)], Choice("anton"), "subscription"),
 }
 
 
 @pytest.mark.parametrize("case", FALLBACKS.values(), ids=FALLBACKS.keys())
 def test_a_non_ui_role_takes_a_ui_hive_only_when_no_headless_hive_has_room(case):
-    hives, expected, *route = case
-    assert choose("eng", "claude", "acct", route[0] if route else "subscription", REPO, hives, NOW) == expected
+    hives, expected, route = case
+    assert choose("eng", "claude", "acct", route, REPO, hives, NOW) == expected
 
 
 def test_a_fleet_without_a_ui_hive_keeps_the_plain_reason():
