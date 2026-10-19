@@ -5,7 +5,7 @@ or the local restore, checks again against current state before anything starts.
 import json
 
 from scripts.swarm import resume
-from scripts.swarm.store import RedisStore
+from scripts.swarm.store import AgentRecord, RedisStore
 from scripts.swarm_v2.checkpoints import model
 
 MATERIAL = "attempt-recovery-material"
@@ -106,9 +106,8 @@ def pod_cards(store: RedisStore, slug: str, now_ms: int) -> list[dict]:
     return [pod_card(latest[seat], now_ms) for seat in sorted(latest)]
 
 
-def local_card(row: dict, agent, now_ms: int) -> dict:
+def local_card(row: dict, agent: AgentRecord, now_ms: int) -> dict:
     """A local restore has only the snapshot's paths, so its badge stays path only whatever the reopen did."""
-    snapshot = model.Validator(None, loaded={}).classify({"worktrees": {}, "conversation_id": agent.conversation_id})
     decided = row["outcome"] != resume.AWAITING
     blocker = row["reason"] if row["reason"] in LOCAL_BLOCKERS else ""
     unavailable = {"native": blocker, "context": resume.LOCAL_CONTEXT, "fresh": ""}
@@ -122,7 +121,7 @@ def local_card(row: dict, agent, now_ms: int) -> dict:
         "reason": row["reason"],
         "badge": PATH_ONLY,
         "material": [NO_CHECKPOINT, NO_WATERMARK],
-        "diagnosis": [f"native resume: {blocker or LOCAL_NATIVE}", *snapshot.limitations],
+        "diagnosis": [f"native resume: {blocker or LOCAL_NATIVE}", *model.PATH_ONLY_LIMITS],
         "choices": _choices(
             unavailable, ACCEPTED if decided else "", {"native": "resume", "context": "", "fresh": "fresh"}
         ),

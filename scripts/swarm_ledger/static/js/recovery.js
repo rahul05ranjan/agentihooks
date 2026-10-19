@@ -7,7 +7,7 @@ export function recoveryCards(sw) {
 }
 
 function lines(texts) {
-  return h("div", { class: "sw-lines" }, ...texts.map((text) => h("span", { text })));
+  return h("div", { class: "sw-lines" }, ...texts.map((text) => h("span", { text, title: text })));
 }
 
 function choiceButton(card, c) {

@@ -36,6 +36,9 @@ ROWS = [
     "agents-box",
     "health-box",
     "handoff-box",
+    "recovery-box",
+    "freeze-box",
+    "architecture-box",
 ]
 
 
