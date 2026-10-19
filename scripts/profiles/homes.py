@@ -1,3 +1,4 @@
+import glob
 import hashlib
 import json
 import os
@@ -79,24 +80,34 @@ def rollouts(root: Path, name: str) -> Path:
 def adopt_rollouts(root: Path, name: str) -> Path:
     stable = rollouts(root, name)
     homes = _homes(root, name)
-    for home in sorted(homes.iterdir()) if homes.is_dir() else ():
+    earlier = [p for p in sorted(homes.iterdir()) if not p.is_symlink()] if homes.is_dir() else []
+    for home in [*earlier, root / name]:
         for item in CODEX_ROLLOUTS:
             kept = home / "codex" / item
-            if kept.is_symlink() or not kept.is_dir():
+            if home.is_symlink() or kept.is_symlink() or not kept.is_dir():
                 continue
-            for path in sorted(kept.rglob("*")):
-                moved = stable / item / path.relative_to(kept)
-                if path.is_file() and not moved.exists():
-                    moved.parent.mkdir(parents=True, exist_ok=True)
-                    path.replace(moved)
+            for path in sorted(kept.rglob("rollout-*.jsonl")):
+                _adopt(path, stable / item / path.relative_to(kept))
     return stable
+
+
+def _adopt(path: Path, target: Path) -> None:
+    # A live home keeps writing its rollouts, so they are copied and the newer copy wins.
+    if path.is_symlink() or (target.exists() and target.stat().st_mtime >= path.stat().st_mtime):
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staged = target.with_name(f".{target.name}.{os.getpid()}")
+    shutil.copy2(path, staged)
+    staged.replace(target)
 
 
 def has_codex_rollout(root: Path, name: str, conversation_id: str) -> bool:
     if not conversation_id:
         return False
     stable = adopt_rollouts(root, name)
-    return any(next((stable / item).rglob(f"rollout-*{conversation_id}.jsonl"), None) for item in CODEX_ROLLOUTS)
+    return any(
+        next((stable / item).rglob(f"rollout-*-{glob.escape(conversation_id)}.jsonl"), None) for item in CODEX_ROLLOUTS
+    )
 
 
 def collect(root: Path, name: str) -> None:

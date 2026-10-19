@@ -1163,6 +1163,7 @@ def test_every_swarm_launch_subscribes_the_brain_overlay_its_profile_renders(
         agent = AgentRecord(
             "agent@a1b2c3-0001", lane, "t1", harness=harness, profile=DEFAULT_PROFILES[lane], conversation_id="c0ffee"
         )
+        _saved_rollout(DEFAULT_PROFILES[lane], "c0ffee")
         runtime.resume(config, agent, "you were restored")
     else:
         handoff = (

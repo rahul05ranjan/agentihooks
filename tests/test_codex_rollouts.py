@@ -36,4 +36,24 @@ def test_an_isolated_home_rendered_before_the_rollout_folder_is_adopted(world): 
     assert again is not None
     assert list((again / "sessions").rglob("*01a14f5c.jsonl"))
     assert list((again / "archived_sessions").rglob("*0aa.jsonl"))
-    assert not list((out / "sessions").rglob("*.jsonl"))
+    assert render.has_codex_rollout("rb-role", [], "01a14f5c")
+
+
+def test_the_newer_rollout_wins_when_an_earlier_home_keeps_writing_it(world):  # noqa: F811
+    import os
+
+    from scripts.profiles import homes, render
+
+    live = render.render_codex("rb-role", isolate=True)
+    for item in homes.CODEX_ROLLOUTS:
+        (live / item).unlink()
+    older = _rollout(live / "sessions", "01a14f5c")
+    render.render_codex("rb-role", isolate=True)
+    stable = next(homes.rollouts(render.rendered_root(), "rb-role").rglob("*01a14f5c.jsonl"))
+    older.write_text("{}\n{}\n")
+    os.utime(older, (stable.stat().st_mtime + 5,) * 2)
+
+    assert render.has_codex_rollout("rb-role", [], "01a14f5c")
+    assert stable.read_text() == "{}\n{}\n"
+    assert older.read_text() == "{}\n{}\n"
+    assert not render.has_codex_rollout("rb-role", [], "a14f5c")

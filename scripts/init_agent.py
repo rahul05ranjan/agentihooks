@@ -766,7 +766,8 @@ def _select_host(requested: str, environ: dict[str, str]) -> tuple[str, bool]:
 
 def _start_herdr(launcher: Path, directory: Path, name: str, args, agent: str, environ: dict[str, str]) -> list[str]:
     started = herdr_host.ensure_server(environ)
-    env = {"HERDR_AGENT": agent, **({PROMPT_AFTER_START: "1"} if _held_prompt(launcher, agent) else {})}
+    held = _held_prompt(launcher, agent) and not args.resume
+    env = {"HERDR_AGENT": agent, **({PROMPT_AFTER_START: "1"} if held else {})}
     placed = herdr_host.open_pane(directory, args.title or name, env, args.placement, args.workspace, environ)
     herdr_panes.record(placed, "init-agent", name, environ, int(time.time() * 1000))
     herdr_host.run(placed.pane_id, launcher, environ)
@@ -1031,7 +1032,7 @@ def main(argv: list[str] | None = None, environ: dict[str, str] | None = None) -
             active_env,
             _held_prompt(launcher, agent),
             launcher_at / 1000,
-            served=args.codex_transport == APP_SERVER,
+            served=args.codex_transport == APP_SERVER or bool(args.resume),
         )
         if channel:
             report.append(f"channel_warning={_answer_channel_warning(pane, active_env)}")
