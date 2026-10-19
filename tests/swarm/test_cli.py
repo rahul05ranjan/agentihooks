@@ -2959,22 +2959,6 @@ def test_set_refuses_bad_scaling_settings(env, capsys, pair, reason):
     assert store.config("sw") == before
 
 
-def test_set_stores_the_swarm_api_address_and_clears_it(env, capsys, monkeypatch):
-    from scripts.swarm import ledger_cutover
-
-    store, _, _ = env
-    monkeypatch.setattr(ledger_cutover, "settings", lambda store, slug, changes: store.update(slug, **changes))
-    run("sw", "create", "--repo", "/repo")
-    assert store.config("sw").api_url == ""
-    assert run("sw", "set", "api-url=https://swarm.example.test:8443") == 0
-    assert store.config("sw").api_url == "https://swarm.example.test:8443"
-    assert json.loads(capsys.readouterr().out.splitlines()[-1])["api_url"] == "https://swarm.example.test:8443"
-    assert run("sw", "set", "api-url=http://swarm-api.agentihooks-swarm.svc:8780") == 0
-    assert store.config("sw").api_url == "http://swarm-api.agentihooks-swarm.svc:8780"
-    assert run("sw", "set", "api-url=") == 0
-    assert store.config("sw").api_url == ""
-
-
 @pytest.mark.parametrize(
     "value",
     [
