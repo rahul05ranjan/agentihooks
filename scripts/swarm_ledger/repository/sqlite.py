@@ -651,10 +651,15 @@ class SQLiteLedgerRepository:
     def transaction(self):
         """One immediate write transaction under the core lock; entries it wrote are cached once it commits."""
         with request_metrics.locked(self.domain.LOCK), self.connect() as connection:
-            with connection:
-                request_metrics.begin(connection, BEGIN_IMMEDIATE)
-                transaction = Transaction(self, connection)
-                yield transaction
+            try:
+                with connection:
+                    request_metrics.begin(connection, BEGIN_IMMEDIATE)
+                    transaction = Transaction(self, connection)
+                    yield transaction
+            except BaseException:
+                with self._guard:
+                    self._cache.clear()
+                raise
         for slug, entry in transaction.written.items():
             self._remember(slug, entry)
 
