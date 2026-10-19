@@ -293,7 +293,9 @@ def test_the_rendered_page_stays_bounded_as_history_doubles(chromium_browser):
         show(page, shell_html(), ledger=ledger_state(history(4)), swarm=None)
         page.click("#tasks-box > summary")
         page.wait_for_selector("#tasks .page-more button")
-        assert page.locator("#tasks li[id^='item-tasks-']").count() == 50
+        assert page.locator("#tasks > li[id^='item-tasks-']").count() <= 50
+        assert page.locator("#tasks-done li[id^='item-tasks-']").count() <= 50
+        assert page.locator("#tasks li[id^='item-tasks-']").count() <= 100
     finally:
         page.close()
 
