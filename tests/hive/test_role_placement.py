@@ -1,7 +1,9 @@
 import pytest
 
+from scripts.hive.placement import NO_UI_HIVE, Choice, Wait, choose, place
 from tests.hive.test_controller_launch import setup as setup
 from tests.hive.test_controller_launch import write_hive
+from tests.hive.test_placement import NOW, REPO, hive
 
 ALL_ROLES = ["master", "qa", "frontend", "eng", "ci", "plan"]
 
@@ -90,74 +92,73 @@ def test_an_account_a_headless_hive_advertises_wins_over_an_earlier_account_that
 
 def test_the_hive_controller_routes_the_plan_lane_through_hive_placement(setup):
     from scripts.swarm import controller
+    from scripts.swarm.profile_choice import ProfileDecision
     from scripts.swarm_v2.runtime.base import RuntimeRouter
     from scripts.swarm_v2.runtime.routed import RoutedRuntime
 
     two_hosts(setup)
+    setup.herdr._profile_decision.return_value = ProfileDecision("planner", "lane", "planner")
     routed = RoutedRuntime(setup.herdr, RuntimeRouter([]))
     fenced = controller.FencedRuntime(setup.store, setup.config.slug, setup.held, routed, "compose")
     assert fenced.runtime.router.placed_backend("plan", {"id": "task"}) == "hive"
     assert fenced.placement_refusal("plan", {"id": "task"}) == ""
+    assert fenced.runtime.hive_launch.select(setup.config, "plan", {"id": "task"}).hive == "anton"
 
 
 def host(hive_id: str, ui: str, **fields) -> dict:
-    from tests.hive.test_placement import hive
-
     return hive(hive_id, **{"ui": ui, "roles": ["eng"] if ui == "no" else ALL_ROLES, "max_agents": 4, **fields})
 
 
 FALLBACKS = {
-    "headless with room": ([host("ws", "yes"), host("anton", "no", agents=3)], ("anton", "")),
+    "headless with room": ([host("ws", "yes"), host("anton", "no", agents=3)], Choice("anton")),
     "headless full": (
         [host("ws", "yes"), host("anton", "no", agents=4)],
-        ("ws", "no headless hive for eng has room"),
-    ),
-    "headless without the repo": (
-        [host("ws", "yes"), host("anton", "no", repos=["other"])],
-        ("ws", "no headless hive for eng lists the repo agentihooks"),
-    ),
-    "headless without the slot": (
-        [host("ws", "yes"), host("anton", "no", slots=[])],
-        ("ws", "no headless hive for eng advertises the claude slot acct"),
-    ),
-    "headless without the login": (
-        [host("ws", "yes"), host("anton", "no", interactive={"claude": ""})],
-        ("ws", "no headless hive for eng holds the claude login for acct"),
-        "interactive",
+        Choice("ws", "no headless hive for eng has room"),
     ),
     "no headless live": (
         [host("ws", "yes"), host("anton", "no", heartbeat_at=0)],
-        ("ws", "no live headless hive takes eng"),
+        Choice("ws", "no live headless hive takes eng"),
     ),
-    "only headless": ([host("anton", "no", agents=1), host("pod", "no", agents=2)], ("anton", "")),
+    "headless without the repo waits": (
+        [host("ws", "yes"), host("anton", "no", repos=["other"])],
+        Wait("no headless hive for eng lists the repo agentihooks"),
+    ),
+    "headless without the slot waits": (
+        [host("ws", "yes"), host("anton", "no", slots=[])],
+        Wait("no headless hive for eng advertises the claude slot acct"),
+    ),
+    "headless without the login waits": (
+        [host("ws", "yes"), host("anton", "no", interactive={"claude": ""})],
+        Wait("no headless hive for eng holds the claude login for acct"),
+        "interactive",
+    ),
+    "one full and one without the slot waits": (
+        [host("ws", "yes"), host("anton", "no", agents=4), host("pod", "no", slots=[])],
+        Wait("no headless hive for eng advertises the claude slot acct"),
+    ),
+    "full headless and a full workstation wait": (
+        [host("ws", "yes", agents=4), host("anton", "no", agents=4)],
+        Wait("no headless hive for eng has room"),
+    ),
+    "only headless": ([host("anton", "no", agents=1), host("pod", "no", agents=2)], Choice("anton")),
 }
 
 
 @pytest.mark.parametrize("case", FALLBACKS.values(), ids=FALLBACKS.keys())
-def test_a_non_ui_role_takes_a_ui_hive_only_with_the_reason_no_headless_hive_could(case):
-    from scripts.hive.placement import Choice, choose
-    from tests.hive.test_placement import NOW, REPO
-
+def test_a_non_ui_role_takes_a_ui_hive_only_when_no_headless_hive_has_room(case):
     hives, expected, *route = case
-    assert choose("eng", "claude", "acct", route[0] if route else "subscription", REPO, hives, NOW) == Choice(*expected)
+    assert choose("eng", "claude", "acct", route[0] if route else "subscription", REPO, hives, NOW) == expected
 
 
-def test_a_full_fleet_waits_with_the_headless_reason():
-    from scripts.hive.placement import Wait, choose, place
-    from tests.hive.test_placement import NOW, REPO
-
-    hives = [host("ws", "yes", agents=4), host("anton", "no", agents=4)]
-    assert choose("eng", "claude", "acct", "subscription", REPO, hives, NOW) == Wait(
-        "no headless hive for eng has room"
+def test_a_fleet_without_a_ui_hive_keeps_the_plain_reason():
+    assert place("eng", "claude", "acct", "subscription", REPO, [host("anton", "no", agents=4)], NOW) == Wait(
+        "no hive for eng has room"
     )
-    assert place("eng", "claude", "acct", "subscription", REPO, hives[1:], NOW) == Wait("no hive for eng has room")
 
 
-def test_ui_roles_never_take_a_headless_hive():
-    from scripts.hive.placement import Choice, choose
-    from tests.hive.test_placement import NOW, REPO
-
-    hives = [host("ws", "yes", agents=3), host("anton", "no", roles=["eng", "ci", "plan"])]
+def test_ui_roles_take_only_ui_hives_even_when_a_headless_hive_lists_them():
+    hives = [host("ws", "yes", agents=3), host("anton", "no", roles=ALL_ROLES)]
     for role in ("qa", "frontend", "master"):
         assert choose(role, "claude", "acct", "subscription", REPO, hives, NOW) == Choice("ws")
-    assert Choice("ws").fallback == ""
+    beside_a_master_pc = [host("pc", "yes", roles=["master"]), hives[1]]
+    assert choose("qa", "claude", "acct", "subscription", REPO, beside_a_master_pc, NOW) == Wait(NO_UI_HIVE)

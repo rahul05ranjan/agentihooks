@@ -95,14 +95,15 @@ class HiveLaunch:
             if row.harness == "claude" and capacity.free_seats(row) and (not account or row.name == account)
         ]
         route_kind = task.get("route_kind", "subscription")
-        reason, fallback = placement.Wait("no advertised Claude account has room"), None
+        reason = placement.Wait("no advertised Claude account has room")
+        fallback = None
         for row in sorted(candidates, key=lambda row: (row.sessions, row.name)):
-            chosen = placement.choose(role, "claude", row.name, route_kind, config.repo, hives, now)
-            if isinstance(chosen, placement.Wait):
-                reason = chosen
+            choice = placement.choose(role, "claude", row.name, route_kind, config.repo, hives, now)
+            if isinstance(choice, placement.Wait):
+                reason = choice
                 continue
-            selected = Selection(decision, chosen.hive, row, route_kind, fallback=chosen.fallback)
-            if not chosen.fallback:
+            selected = Selection(decision, choice.hive, row, route_kind, fallback=choice.fallback)
+            if not choice.fallback:
                 return self._record_wait(lane, task, selected)
             fallback = fallback or selected
         return self._record_wait(lane, task, fallback or reason)
