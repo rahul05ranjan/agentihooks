@@ -116,17 +116,17 @@ def test_inline_code_and_links_nested_in_bold_and_italic_are_formatted(page):
     assert "`" not in body.inner_text()
 
 
-def test_json_is_pretty_printed_and_foldable(page):
+def test_json_is_pretty_printed_as_plain_nested_blocks_that_never_fold(page):
     viewer = open_artifact(page, "Proposal shape")
     body = viewer.locator(".art-body")
-    folds = body.locator("details")
-    folds.nth(2).wait_for()
-    assert folds.count() == 3
+    nodes = body.locator(".json-node")
+    nodes.nth(2).wait_for()
+    assert nodes.count() == 3
+    assert body.locator("details, summary").count() == 0
     assert "Stopped at" in body.inner_text()
-    assert body.locator("summary").nth(1).inner_text() == '"proposal": {'
-    folds.nth(1).locator("summary").first.click()
-    assert not folds.nth(1).evaluate("el => el.open")
-    assert not body.get_by_text('"Stopped at"').is_visible()
+    assert body.locator(".json-open").nth(1).inner_text() == '"proposal": {'
+    body.locator(".json-open").nth(1).click()
+    assert body.get_by_text('"Stopped at"').is_visible()
     viewer.get_by_role("button", name="Close artifact").click()
     assert not viewer.is_visible()
 

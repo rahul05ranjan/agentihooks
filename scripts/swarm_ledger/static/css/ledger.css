@@ -190,11 +190,9 @@ h1, p, .item-title, .text, .desc, textarea { overflow-wrap: anywhere; }
 .art-doc blockquote { margin: 12px 0; padding-left: 12px; border-left: 2px solid var(--edge); color: var(--text-2); }
 .art-doc a { color: var(--link); }
 .json-tree { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--fs-meta); line-height: 1.6; }
-.json-tree details { margin: 0; padding-left: 18px; }
-.json-tree > details { padding-left: 0; }
+.json-tree .json-node { margin: 0; padding-left: 18px; }
+.json-tree > .json-node { padding-left: 0; }
 .json-tree .json-leaf, .json-tree .json-close { padding-left: 18px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.json-tree summary { cursor: pointer; text-transform: none; letter-spacing: normal; }
-.json-tree details:not([open]) > summary::after { content: " … " attr(data-close); color: var(--muted); }
 .json-string { color: var(--positive); }
 .json-number, .json-boolean { color: var(--accent-2); }
 .json-null { color: var(--muted); }
