@@ -1,3 +1,4 @@
+import subprocess
 from argparse import Namespace
 
 import pytest
@@ -55,6 +56,50 @@ def test_the_roots_are_the_running_checkout_and_the_install_root(monkeypatch, tm
     monkeypatch.setattr(install, "AGENTIHOOKS_ROOT", tmp_path / "worktree")
     monkeypatch.setattr(install, "install_root", lambda: tmp_path / "primary")
     assert real_roots() == (tmp_path / "worktree", tmp_path / "primary")
+
+
+def test_a_run_from_a_linked_git_worktree_leaves_the_shared_units_alone(monkeypatch, tmp_path, capsys):
+    from scripts.targets._common import _install_module
+
+    install = _install_module()
+    monkeypatch.setattr(timer, "reconcile", real_reconcile)
+    worktree = tmp_path / "worktrees" / "agentihooks" / "engineer-1"
+    worktree.mkdir(parents=True)
+    (worktree / ".git").write_text("gitdir: /home/dev/agentihooks/.git/worktrees/engineer-1\n")
+    monkeypatch.setattr(install, "AGENTIHOOKS_ROOT", worktree)
+    monkeypatch.setattr(install, "install_root", lambda: worktree)
+    shared = tmp_path / "systemd" / "user"
+    monkeypatch.setattr(timer, "UNIT_DIR", shared)
+    shared.mkdir(parents=True)
+    (shared / "agentihooks-inbox-waker.service").write_text('ExecStart="/installed/bin/agentihooks" swarm waker\n')
+    (shared / "agentihooks-swarm.timer").write_text("[Timer]\n")
+    before = {path.name: path.read_text() for path in shared.iterdir()}
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0)
+
+    assert timer.ensure("/worktree/bin/agentihooks", run=run) is False
+    assert timer.reconcile("/worktree/bin/agentihooks", run=run) is False
+    assert {path.name: path.read_text() for path in shared.iterdir()} == before
+
+    (shared / "agentihooks-swarm.timer").unlink()
+    for name, text in timer.units("/worktree/bin/agentihooks").items():
+        (shared / name).write_text(text)
+    current = {path.name: path.read_text() for path in shared.iterdir()}
+    assert timer.reconcile("/worktree/bin/agentihooks", run=run) is False
+    assert {path.name: path.read_text() for path in shared.iterdir()} == current
+
+    assert calls == []
+    refusal = (
+        f"this run comes from the git worktree {worktree}, "
+        f"so it leaves the shared swarm timer units in {shared} alone\n"
+    )
+    assert capsys.readouterr().err == refusal * 3
+
+    proof_dir = tmp_path / "proof-units"
+    assert timer.ensure("/worktree/bin/agentihooks", proof_dir, run=run)
 
 
 class _Store:
@@ -217,14 +262,14 @@ def test_removing_one_leftover_tick_unit_still_reloads_systemd(tmp_path):
     ]
     calls.clear()
     assert timer.ensure("/installed/bin/agentihooks", tmp_path, run=_systemctl(calls))
-    assert [argv[2] for argv, _ in calls] == ["enable"] * 4
+    assert [argv[2] for argv, _ in calls] == ["enable"] * 3
 
 
 def test_ensure_fails_when_the_scheduled_tick_cannot_be_registered(tmp_path, monkeypatch):
     monkeypatch.setattr(timer, "schedule", lambda: False)
     calls = []
     assert timer.ensure("/installed/bin/agentihooks", tmp_path, run=_systemctl(calls)) is False
-    assert [argv[2] for argv, _ in calls][-4:] == ["enable"] * 4
+    assert [argv[2] for argv, _ in calls][-3:] == ["enable"] * 3
 
 
 def test_reconcile_reruns_ensure_while_a_retired_tick_unit_is_left(tmp_path, monkeypatch):
