@@ -100,7 +100,7 @@ def _cached(cache: Path, trace: dict) -> dict:
 
 
 def _upgraded(path: Path, entry: dict) -> dict:
-    observations = [json.dumps(o, sort_keys=True) for o in entry.get("observations", [])]
+    observations = [json.dumps(o) for o in entry.get("observations", ())]
     if len(set(observations)) < len(observations):
         return {}
     entry = {**entry, "deduplicated": True}
