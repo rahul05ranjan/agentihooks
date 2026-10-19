@@ -182,7 +182,7 @@ gh run view <run id> --log | grep -E '"requeue"|Log only'
 
 A job whose runner pod or node vanished can stay `in_progress` with no failure, so its Tests run never completes and Queue retry never sees it. The Lost runner workflow, `.github/workflows/lost-runner.yml`, runs every ten minutes on a hosted runner with the TCC Main CI app token and runs `python -m scripts.ci_lost_runner --repo <owner>/<repo>`. A queued or running Tests run is stalled when:
 
-- a job has been in progress for at least ten minutes on a self-hosted runner that is absent from the organization runner list,
+- a job has been in progress for at least ten minutes on a self-hosted runner that is absent from or offline in the organization runner list,
 - no other job is running on a live runner, and
 - every queued job waits on a lost job.
 

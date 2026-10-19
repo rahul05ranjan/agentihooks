@@ -13,6 +13,7 @@ WORKFLOWS = Path(".github/workflows")
 OPEN = ("in_progress", "queued")
 RED = ("failure", "timed_out")
 HOSTED_GROUP = "GitHub Actions"
+ONLINE = '.runners[] | select(.status == "online") | .name'
 GRACE_MINUTES = 10
 CANCEL_POLLS = 18
 POLL_SECONDS = 10
@@ -23,7 +24,7 @@ def _api(*args: str) -> str:
 
 
 def live_runners(org: str) -> set[str]:
-    names = _api("--paginate", f"orgs/{org}/actions/runners?per_page=100", "--jq", ".runners[].name")
+    names = _api("--paginate", f"orgs/{org}/actions/runners?per_page=100", "--jq", ONLINE)
     return set(names.split())
 
 

@@ -18,7 +18,12 @@ RUNNERS = {"anton-oss-light-live"}
 RUN = {"id": 7, "run_attempt": 1, "status": "queued", "conclusion": None}
 RUNS = "repos/o/r/actions/runs/7"
 JOBS = "repos/o/r/actions/runs/7/jobs?filter=latest&per_page=100"
-RUNNER_LIST = ("--paginate", "orgs/o/actions/runners?per_page=100", "--jq", ".runners[].name")
+RUNNER_LIST = (
+    "--paginate",
+    "orgs/o/actions/runners?per_page=100",
+    "--jq",
+    '.runners[] | select(.status == "online") | .name',
+)
 
 
 def stamp(when):
