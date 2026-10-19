@@ -1,4 +1,5 @@
 import re
+from email.message import Message
 from types import SimpleNamespace
 
 import pytest
@@ -140,9 +141,12 @@ def test_only_a_put_to_a_page_write_reaches_the_page_handler():
     written = []
     server = SimpleNamespace(**{**vars(fake_server([])), "MAX_BODY": 100})
 
+    headers = Message()
+    headers["Host"] = "h"
+
     def request(command, path):
         return SimpleNamespace(
-            **vars(get_request(path, command)),
+            **{**vars(get_request(path, command)), "headers": headers},
             put_ledger=lambda slug: written.append(("saves", slug)),
             put_swarm=lambda slug: written.append(("swarm/controls", slug)),
         )
@@ -151,4 +155,4 @@ def test_only_a_put_to_a_page_write_reaches_the_page_handler():
     routes.dispatch(request("PUT", "swarm/controls"), server)
     with pytest.raises(APIError) as caught:
         routes.dispatch(request("POST", "saves"), server)
-    assert (caught.value.status, written) == (400, [("saves", SLUG), ("swarm/controls", SLUG)])
+    assert (caught.value.status, written) == (415, [("saves", SLUG), ("swarm/controls", SLUG)])
