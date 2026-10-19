@@ -340,6 +340,14 @@ def active(record: dict, limits: Limits) -> list[Finding]:
     return [f for binding in record.get("active", []) for f in _active_binding(binding, record, limits)]
 
 
+def _caps(historical: dict) -> tuple:
+    return (
+        *(() if historical.get("listed", True) else ("trace listing stopped at its page cap",)),
+        *((f"{historical['unlisted']} traces past the listing cap not counted",) if historical.get("unlisted") else ()),
+        *((f"{historical['capped']} traces read up to the observation page cap",) if historical.get("capped") else ()),
+    )
+
+
 def reader(record: dict, limits: Limits) -> list[Finding]:
     state = record.get("reader")
     if not state:
@@ -362,7 +370,7 @@ def reader(record: dict, limits: Limits) -> list[Finding]:
             )
         )
     if not historical["complete"] and not state["failures"]:
-        missing = historical["traces"] - historical["covered"]
+        missing = historical["traces"] - historical["covered"] - historical.get("capped", 0)
         found.append(
             Finding(
                 "trace coverage partial",
@@ -370,12 +378,7 @@ def reader(record: dict, limits: Limits) -> list[Finding]:
                 f"observations of {missing} traces not read yet",
                 (
                     coverage[1],
-                    *(() if historical.get("listed", True) else ("trace listing stopped at its page cap",)),
-                    *(
-                        (f"{historical['unlisted']} traces past the listing cap not counted",)
-                        if historical.get("unlisted")
-                        else ()
-                    ),
+                    *_caps(historical),
                     *historical.get("unreadable", [])[:3],
                     "tool error, task cost and turn gap findings cover only the read traces",
                     "each Doctor scan reads more within its read budget",
