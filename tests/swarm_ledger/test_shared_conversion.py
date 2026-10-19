@@ -106,15 +106,17 @@ def test_a_differing_ledger_already_in_the_shared_database_is_never_replaced(sto
     assert not sqlite.fenced(source.directory, "*")
 
 
-def test_registry_rows_differing_in_the_shared_database_are_never_replaced(stores):
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_registry_rows_differing_in_the_shared_database_are_never_replaced(stores, dry_run):
     source, target = stores
     target.import_document(SLUG, document())
     with target.connect() as connection, connection:
         target.save_registry(connection, "bin", {SLUG: 9})
     with pytest.raises(ValueError, match="conversion refuses to replace it$"):
-        shared.convert(source, target)
+        shared.convert(source, target, dry_run=dry_run)
     with target.connect() as connection:
         assert target.registry("bin", connection)[SLUG] == 9
+    assert not sqlite.fenced(source.directory, "*")
 
 
 def test_a_dry_run_reports_counts_and_rolls_every_write_back(stores):
