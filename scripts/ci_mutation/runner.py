@@ -173,6 +173,7 @@ def prepare_workspace(root: Path, work: Path, paths: list[str], tests: list[str]
         "observability",
         "docker/swarm-node",
         ".agentihooks/conditions",
+        "deploy/helm/agentihooks-swarm/ci",
     ):
         source = root / name
         if source.is_dir():
@@ -207,6 +208,7 @@ def prepare_workspace(root: Path, work: Path, paths: list[str], tests: list[str]
             "observability/",
             "docker/swarm-node/",
             ".agentihooks/conditions/",
+            "deploy/helm/agentihooks-swarm/ci/",
             *root_files,
             *(f"{name}/" for name in sorted({Path(path).parts[0] for path in extra_files})),
         ],

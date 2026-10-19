@@ -211,6 +211,7 @@ def test_workspace_scopes_mutmut_and_preserves_the_pytest_config(tmp_path):
         "observability",
         "docker/swarm-node",
         ".agentihooks/conditions",
+        "deploy/helm/agentihooks-swarm/ci",
     ):
         (root / name).mkdir(parents=True)
         (root / name / "asset.txt").write_text(name)
@@ -238,6 +239,7 @@ def test_workspace_scopes_mutmut_and_preserves_the_pytest_config(tmp_path):
         "observability/",
         "docker/swarm-node/",
         ".agentihooks/conditions/",
+        "deploy/helm/agentihooks-swarm/ci/",
         ".test_durations",
         "Swarm-v2.md",
     ]
@@ -268,6 +270,7 @@ def test_workspace_scopes_mutmut_and_preserves_the_pytest_config(tmp_path):
         "observability",
         "docker/swarm-node",
         ".agentihooks/conditions",
+        "deploy/helm/agentihooks-swarm/ci",
     ):
         assert (work / name / "asset.txt").read_text() == name
     assert (work / "Swarm-v2.md").read_text() == "# plan\n"
