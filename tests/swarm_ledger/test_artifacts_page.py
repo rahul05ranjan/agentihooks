@@ -166,13 +166,13 @@ def trash_page(browser):
     tab.close()
 
 
-def test_delete_moves_an_artifact_to_the_trash_and_drops_the_badge(trash_page):
+def test_delete_marks_the_artifact_pending_until_the_server_moves_it(trash_page):
     tab, sent = trash_page
     assert tab.locator("#art-badge").inner_text() == "2"
     tab.get_by_role("button", name="Delete Proposal shape").click()
-    assert tab.locator("#art-list .art-row").count() == 1
-    assert tab.locator("#art-badge").inner_text() == "1"
-    assert "Proposal shape" in tab.locator("#art-trash").inner_text()
+    assert tab.get_by_role("button", name="Delete Proposal shape").inner_text().lower() == "sending"
+    assert tab.locator("#art-list .art-row").count() == 2
+    assert "Proposal shape" not in tab.locator("#art-trash").inner_text()
     tab.wait_for_function("() => document.getElementById('status').textContent !== ''")
     tab.wait_for_timeout(200)
     assert {"op": "artifact_delete", "target": "art-json"}.items() <= sent[0].items()
@@ -183,6 +183,6 @@ def test_the_trash_lists_days_left_and_restore_brings_an_artifact_back(trash_pag
     row = tab.locator("#art-trash .art-row", has_text="Old logo draft")
     assert "28 days left" in row.inner_text()
     row.get_by_role("button", name="Restore Old logo draft").click()
-    assert tab.locator("#art-badge").inner_text() == "3"
-    assert tab.locator("#art-list").get_by_role("button", name="Old logo draft", exact=True).is_visible()
-    assert tab.locator("#art-trash .art-row").count() == 0
+    assert row.get_by_role("button", name="Restore Old logo draft").inner_text().lower() == "sending"
+    assert tab.locator("#art-badge").inner_text() == "2"
+    assert tab.locator("#art-trash .art-row").count() == 1

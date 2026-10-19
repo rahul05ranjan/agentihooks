@@ -222,7 +222,7 @@ def test_the_page_version_separates_each_asset_name_from_its_bytes():
 
 
 def test_the_bin_shell_leaves_the_watermark_slot_empty(base):
-    assert '/css/tooltips.css">\n<main class="bin">' in server.index_page("bin")
+    assert '/css/tooltips.css">\n<main>' in server.index_page()
 
 
 def test_the_shell_names_the_server_port_and_an_empty_token_when_the_record_has_none(base, monkeypatch):

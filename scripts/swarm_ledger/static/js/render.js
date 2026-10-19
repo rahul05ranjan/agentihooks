@@ -1,7 +1,7 @@
-import { ACTIVE_MS, PHASE_LABELS } from "./config.js";
+import { ACTIVE_MS } from "./config.js";
 import { $, closedText, excerpt, h, headCount, newId, span, when } from "./dom.js";
 import { renderCycle } from "./render_cycle.js";
-import { inScope, itemState, phaseLifecycle, taskRank, taskRanks } from "./state.js";
+import { inScope, itemState, pendingOf, taskRank, taskRanks } from "./state.js";
 import { doc, meta, queue, renderSync, toggle } from "./sync.js";
 import { renderArtifacts } from "./artifacts.js";
 import { closedComments, commentsView, openComments, rememberComment, taskLink, threadView } from "./threads.js";
@@ -34,7 +34,7 @@ function freezeButton(key) {
 }
 
 export function verdictButton(item, verdict, cls, text, off) {
-  return h("button", { class: `link ${cls}`, type: "button", text, disabled: off ? "" : false, on: { click: () => queue({ op: "verdict", id: newId("comment"), item, verdict }) } });
+  return h("button", { class: `link ${cls}`, type: "button", text, disabled: off || pendingOf(doc, item) ? "" : false, on: { click: () => queue({ op: "verdict", id: newId("comment"), item, verdict }) } });
 }
 
 function itemActions(key, item) {
@@ -66,17 +66,14 @@ function checkRow(list, item, n, titleText, descText) {
   return h("li", { class: itemClass(item, key), id: `item-${list}-${item.id}` }, holdMark(key), row, commentsView(key, item.comments));
 }
 
-function phaseLabel(phase, doc) {
-  const state = phaseLifecycle(phase, doc);
-  if (state !== "waiting") return PHASE_LABELS[state];
-  const byId = Object.fromEntries(doc.phases.map((p) => [p.id, p]));
-  const waits = phase.depends_on.filter((id) => !(byId[id] || {}).done).map((id) => (byId[id] || {}).title || id);
-  return `Waits for phase ${waits.join(", ")}`;
+function phaseStatus(phase) {
+  return doc.phase_status[phase.id] || { state: "", label: "" };
 }
 
 function phaseReview(phase) {
   const review = phase.review || {};
-  if (phaseLifecycle(phase, doc) !== "in_review" || (review.state === "sent_back" && !review.escalated)) return null;
+  if (phaseStatus(phase).state !== "in_review" || (review.state === "sent_back" && !review.escalated)) return null;
+  if (pendingOf(doc, `phases/${phase.id}`)) return h("div", { class: "hl-verdict phase-review", text: "review sent" });
   const note = h("input", { class: "hl-note phase-note", type: "text", maxlength: "500", placeholder: "note for the planner", "aria-label": "Review note" });
   const decide = (state) => {
     const text = note.value.trim();
@@ -97,7 +94,7 @@ function phaseRow(item, n) {
   box.checked = !!item.done;
   box.addEventListener("change", () => toggle(key, box.checked, "done"));
   const fold = h("details", { class: "phase-fold" },
-    h("summary", {}, h("span", { class: "item-title", text: item.title }), h("span", { class: "phase-state", text: phaseLabel(item, doc) })),
+    h("summary", {}, h("span", { class: "item-title", text: item.title }), h("span", { class: "phase-state", text: phaseStatus(item).label })),
     item.description ? h("p", { class: "desc", text: item.description }) : null, phaseSlices(item), phaseReview(item));
   fold.open = !closedComments.has(`${key}/row`);
   fold.addEventListener("toggle", () => rememberComment(`${key}/row`, fold.open));
@@ -209,10 +206,11 @@ function taskProof(key, item) {
 }
 
 function rankPick(key, item) {
-  const pick = h("select", { class: `rank-pick rank-${taskRank(item)}`, "aria-label": `Queue rank of ${item.title}`, "data-focus": `rank:${key}`,
+  const sending = pendingOf(doc, key), rank = sending && sending.op === "task_rank" ? sending.rank : taskRank(item);
+  const pick = h("select", { class: `rank-pick rank-${rank}${sending ? " pending" : ""}`, "aria-label": `Queue rank of ${item.title}`, "data-focus": `rank:${key}`,
     disabled: item.state === "done" || frozen(doc, key) ? "" : false, on: { change: () => queue({ op: "task_rank", id: newId("rank"), item: key, rank: pick.value }) } },
     ...taskRanks().map((r) => h("option", { value: r, text: r })));
-  pick.value = taskRank(item);
+  pick.value = rank;
   return pick;
 }
 

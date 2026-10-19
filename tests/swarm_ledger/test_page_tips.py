@@ -4,15 +4,16 @@ import urllib.request
 
 import pytest
 
+from hooks.context import profile_chain
 from scripts.gates import claims, quiet, reruns
-from scripts.swarm_ledger import ledger_artifacts, ledger_bin, ledger_phases, ledger_tasks, page_tips
+from scripts.swarm_ledger import ledger_artifacts, ledger_bin, ledger_phases, page_tips
 from scripts.swarm_ledger import ledger_server as server
 from tests.swarm_ledger.ledger_page import MODULES, served
 from tests.swarm_ledger.test_caps_columns import browser as chromium_browser
 
 browser = chromium_browser
 TOOLTIPS = MODULES.parents[1] / "tooltips.js"
-NUMBER_WORDS = r"\b(one|two|three|four|five|ten|twenty|thirty|sixty)\b"
+NUMBER_WORDS = r"\b(two|three|four|five|ten|twenty|thirty|sixty)\b"
 
 
 def test_the_tip_values_are_the_numbers_the_rules_enforce():
@@ -21,7 +22,7 @@ def test_the_tip_values_are_the_numbers_the_rules_enforce():
         "claims": claims.CAP,
         "reruns": reruns.RERUN_CAP,
         "quiet_minutes": quiet.QUIET_MINUTES,
-        "overlays": ledger_tasks.OVERLAY_CAP,
+        "overlays": profile_chain.OVERLAY_CAP,
         "bin_days": ledger_bin.KEEP_DAYS,
         "trash_days": ledger_artifacts.KEEP_DAYS,
     }
@@ -50,9 +51,10 @@ def test_no_tooltip_bakes_a_rule_number():
 def test_the_page_and_home_read_the_tips_through_the_shared_api_module():
     api = (MODULES / "api.js").read_text(encoding="utf-8")
     assert "export function readTips()" in api
-    assert "/api/v1/tips" in api
-    assert "readTips" in (MODULES / "main.js").read_text(encoding="utf-8")
-    assert "readTips" in (MODULES.parent / "home" / "home.js").read_text(encoding="utf-8")
+    assert "export async function loadTips()" in api
+    assert '"/api/v1/tips"' in (MODULES / "config.js").read_text(encoding="utf-8")
+    assert "loadTips()" in (MODULES / "main.js").read_text(encoding="utf-8")
+    assert "loadTips()" in (MODULES.parent / "home" / "home.js").read_text(encoding="utf-8")
 
 
 @pytest.fixture

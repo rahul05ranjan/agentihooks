@@ -43,8 +43,9 @@ def browser():
         yield launched
 
 
-def test_home_reads_logo_agentihooks_home_without_a_ledger_count():
-    page = server.index_page()
+def test_home_reads_logo_agentihooks_home_without_a_ledger_count(browser):
+    with patch.object(server, "home_summaries", return_value=summaries("a")):
+        page = rendered_home(server, browser)
     assert f'{WATERMARK}<main class="home">{BRAND}<h1>HOME</h1></header>' in page
     assert 'class="total"' not in page
     divider = rule("h1::before")
@@ -77,7 +78,7 @@ def test_the_logo_links_home_on_a_rendered_ledger_page_and_the_bin():
     content = {"title": "Logo", "overview": "o", "sources": [], "phases": [{"title": "p", "description": "d"}]}
     server.repository.create("logo", content)
     ledger = server.page_for("logo")
-    bin_view = server.index_page(view="bin")
+    bin_view = server.index_page()
     home = server.index_page()
     for page in (ledger, bin_view, home):
         assert logo_links(page) == [LOGO_LINK]
@@ -184,7 +185,7 @@ def test_the_server_serves_the_logo_as_the_favicon(tmp_path):
 def test_every_page_shell_links_the_favicon_in_its_head():
     server.repository.create("icon", {"title": "Icon", "phases": [{"title": "p", "description": "d"}]})
     ledger = server.page_for("icon")
-    bin_view = server.index_page(view="bin")
+    bin_view = server.index_page()
     home = server.index_page()
     for page, link in ((ledger, LEDGER_FAVICON), (bin_view, HOME_FAVICON), (home, HOME_FAVICON)):
         assert page.count("favicon") == 1

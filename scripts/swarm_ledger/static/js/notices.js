@@ -1,5 +1,6 @@
 import { $, h, headCount, newId, noticeTime } from "./dom.js";
 import { doc, queue } from "./sync.js";
+import { pendingOf } from "./state.js";
 import { verdictButton } from "./render.js";
 import { jumpTo } from "./outline.js";
 import { foldSaved } from "./folds.js";
@@ -93,12 +94,13 @@ function alertRow(a) {
     } } },
     outcome, h("button", { class: "link", type: "submit", text: "Save" }));
   const openForm = () => { Object.assign(alertDraft, { id: a.id, text: "" }); form.hidden = false; outcome.value = ""; outcome.focus(); };
-  return h("li", { class: "notif-row", id: `alert-${a.id}` },
+  const sending = pendingOf(doc, `alerts/${a.id}`);
+  return h("li", { class: "notif-row" + (sending ? " pending" : ""), id: `alert-${a.id}` },
     h("div", { class: "notif-meta" },
       h("span", { text: noticeTime(a.at) }),
       h("span", { text: ALERT_SOURCES[a.source] || a.source }),
       h("span", { text: `For the ${a.target}` }),
-      h("span", { class: "alert-state", text: a.state === "claimed" ? `Claimed by ${a.claimed_by}` : "Open" }),
+      h("span", { class: "alert-state", text: sending ? "sending" : a.state === "claimed" ? `Claimed by ${a.claimed_by}` : "Open" }),
       h("span", { class: "alert-acts" },
         a.state === "open" && h("button", { class: "link alert-claim", type: "button", text: "Claim", on: { click: () => queue({ op: "alert_claim", id: newId("alert"), target: a.id }) } }),
         h("button", { class: "link alert-done", type: "button", text: "Mark done", on: { click: openForm } }))),
