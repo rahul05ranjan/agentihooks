@@ -959,6 +959,47 @@ def test_publish_plan_writes_land_through_the_plans_and_slices_resources(live, t
     assert reply["revision"] == resources.revision(reply["data"])
 
 
+def test_a_planner_publishes_a_plan_and_plan_read_prints_its_sliced_task(live, tmp_path, monkeypatch, capsys):
+    from scripts.swarm_ledger import ledger_artifacts, plan_read
+    from tests.swarm_ledger.test_ledger_authority import ledger
+
+    filler = "".join(f"One detail {n}\n" for n in range(12))
+    plan = tmp_path / "plan.md"
+    plan.write_text(
+        f"# Plan\n<!-- slice: one -->\n## One\n{filler}<!-- slice: two -->\n## Two\nSecond step\n", encoding="utf-8"
+    )
+    file = ledger_artifacts.store(SLUG, "plan.md", plan.read_bytes())
+    monkeypatch.setattr(ledger, "upload_artifact", lambda *a: file)
+    monkeypatch.setattr(
+        ledger.ledger_publish,
+        "publish",
+        lambda path, title, repo, artifact, issue_title: (artifact(path, title), "artifact"),
+    )
+    for name in ("AGENTIHOOKS_AGENT_NAME", "AGENTIHOOKS_SWARM", "AGENTIHOOKS_SWARM_TASK"):
+        monkeypatch.delenv(name, raising=False)
+    publish = ["--slug", SLUG, "--as", "api-reader", "publish-plan", str(plan), "--phase", "p1"]
+    ledger.cmd_publish_plan(ledger.build_parser().parse_args(publish))
+    url = f"{ledger.base()}/artifacts/{SLUG}/{file['id']}"
+    add = ["--slug", SLUG, "--as", "api-reader", "task", "add", "t2", "Two", "--lane", "eng", "--phase", "p1"]
+    ledger.cmd_task(ledger.build_parser().parse_args([*add, "--plan-slice", "two"]))
+    capsys.readouterr()
+    plan_id = f"plan-{file['id'][:12]}"
+    stored = request(live, "GET", f"slices/{plan_id}.two")[1]["data"]
+    task = request(live, "GET", "tasks/t2")[1]["data"]
+    assert (stored["lines"], task["plan_slice"], task["plan_lines"], task["slice"], task["plan_url"]) == (
+        "16-18",
+        "two",
+        "16-18",
+        f"slices/{plan_id}.two",
+        url,
+    )
+    assert plan_read.main(["read", "--slug", SLUG, "--task", "t2"], environ={}) == 0
+    out = capsys.readouterr().out
+    assert out.endswith("<!-- slice: two -->\n## Two\nSecond step\n")
+    assert "## One" not in out
+    assert out.startswith("One detail 2\n")
+
+
 def test_resource_reads_preserve_pinned_identity(live):
     from unittest.mock import patch
 
