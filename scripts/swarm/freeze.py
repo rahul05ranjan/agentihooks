@@ -98,10 +98,9 @@ def marks(doc: dict, graph: dict, fix: str, watched: bool) -> dict:
 def _chain(node: str, graph: dict, tasks: dict) -> list:
     if node in tasks:
         return ancestry(tasks[node], graph)
-    chain, up = [node], (graph.get(node) or (None, None))[1]
-    while up and up not in chain:
+    chain = [node]
+    while (up := (graph.get(chain[-1]) or (None, None))[1]) not in (None, *chain):
         chain.append(up)
-        up = (graph.get(up) or (None, None))[1]
     return chain
 
 

@@ -161,6 +161,13 @@ def test_a_focus_in_the_watched_swarm_holds_the_doctor_tasks_in_every_view_it_st
     assert ledger_server.ledger_view(ledger_state(doc), "plain")["marks"]["held"] == []
 
 
+def test_a_freeze_alone_in_the_watched_swarm_holds_no_doctor_task(monkeypatch):
+    from scripts.swarm_ledger import ledger_server
+
+    doc = doctor_server(monkeypatch, peer_freezes=[record("plans/p1")])
+    assert ledger_server.ledger_view(ledger_state(doc), "doctor")["marks"]["held"] == []
+
+
 def test_an_unreadable_swarm_leaves_the_doctor_view_unheld(monkeypatch):
     from types import SimpleNamespace
 

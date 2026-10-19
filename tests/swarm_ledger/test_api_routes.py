@@ -125,10 +125,30 @@ def test_the_model_list_and_swarm_reads_answer_with_their_data(monkeypatch):
     monkeypatch.setattr(
         resources, "swarm_read", lambda status, path, query: seen.append((status, path, query)) or {"data": status}
     )
+    monkeypatch.setattr(resources, "read", lambda state, path, query, cache: seen.append((path, query)) or {"data": []})
     server = SimpleNamespace(
         **{**vars(fake_server([])), "swarm_models": lambda: catalog, "swarm_status": lambda slug: {"slug": slug}}
     )
     models = routes.dispatch(get_request("swarm/models"), server)
     assert models == {"data": catalog, "revision": resources.revision(catalog)}
     assert routes.dispatch(get_request("swarm/agents?limit=5"), server) == {"data": {"slug": SLUG}}
-    assert seen == [({"slug": SLUG}, "swarm/agents", {"limit": 5})]
+    assert routes.dispatch(get_request("chat?limit=7"), server) == {"data": []}
+    assert seen == [({"slug": SLUG}, "swarm/agents", {"limit": 5}), ("chat", {"limit": 7})]
+
+
+def test_only_a_put_to_a_page_write_reaches_the_page_handler():
+    written = []
+    server = SimpleNamespace(**{**vars(fake_server([])), "MAX_BODY": 100})
+
+    def request(command, path):
+        return SimpleNamespace(
+            **vars(get_request(path, command)),
+            put_ledger=lambda slug: written.append(("saves", slug)),
+            put_swarm=lambda slug: written.append(("swarm/controls", slug)),
+        )
+
+    routes.dispatch(request("PUT", "saves"), server)
+    routes.dispatch(request("PUT", "swarm/controls"), server)
+    with pytest.raises(APIError) as caught:
+        routes.dispatch(request("POST", "saves"), server)
+    assert (caught.value.status, written) == (400, [("saves", SLUG), ("swarm/controls", SLUG)])
