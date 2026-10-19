@@ -1793,7 +1793,6 @@ def test_swarm_codex_preparation_renders_isolated_storage(world):
     assert tomllib.loads((out / "config.toml").read_text())["sqlite_home"] == str(out)
 
 
-
 def _hooks_entries(hooks: Path) -> list[str]:
     doc = json.loads(hooks.read_text())["hooks"]
     labels = {
