@@ -138,6 +138,38 @@ if [[ -n "$(ledger_reload)" ]]; then
   printf 'the plain http ledger StatefulSet asked Reloader to watch a TLS secret\n' >&2
   exit 1
 fi
+database_holders() {
+  helm template "$release" "$chart" "$@" | python3 -c '
+import sys, yaml
+found = set()
+def walk(doc, node):
+    if isinstance(node, dict):
+        listed = node.get("containers")
+        for container in (listed + node.get("initContainers", [])) if isinstance(listed, list) else []:
+            for item in container.get("env", []):
+                if item.get("valueFrom", {}).get("secretKeyRef", {}).get("name") == "swarm-ledger-database":
+                    found.add(doc["metadata"]["name"] + "/" + container["name"])
+        for value in node.values():
+            walk(doc, value)
+    elif isinstance(node, list):
+        for value in node:
+            walk(doc, value)
+for doc in yaml.safe_load_all(sys.stdin):
+    if doc:
+        walk(doc, doc)
+print(" ".join(sorted(found)))'
+}
+holders="$(database_holders --set 'ledger.secretEnv[0].name=AGENTIHOOKS_SWARM_DATABASE_URL' \
+  --set 'ledger.secretEnv[0].secretName=swarm-ledger-database' --set 'ledger.secretEnv[0].key=url')"
+if [[ $holders != "$release-ledger/ledger" ]]; then
+  printf 'the ledger only database Secret reached %s, expected only the ledger container\n' "$holders" >&2
+  exit 1
+fi
+if [[ -n "$(database_holders)" ]]; then
+  printf 'a chart without ledger.secretEnv referenced the ledger database Secret\n' >&2
+  exit 1
+fi
+printf 'only the ledger container reads the ledger secret env\n'
 printf 'the TLS ledger rolls when its TLS secret renews and a plain ledger watches no secret\n'
 digest="sha256:$(printf 'a%.0s' $(seq 64))"
 rendered="$(helm template "$release" "$chart" --set image.tag="dev@$digest")"
