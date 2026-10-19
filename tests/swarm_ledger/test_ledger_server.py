@@ -1,3 +1,4 @@
+import inspect
 import re
 import sys
 from pathlib import Path
@@ -360,15 +361,17 @@ def test_draining_waits_for_the_requests_in_flight():
         assert httpd.drained(0.05) is True
         with httpd.idle:
             httpd.active = 1
-        assert httpd.drained(0.05) is False
 
         def finish():
             with httpd.idle:
                 httpd.active = 0
                 httpd.idle.notify_all()
 
-        threading.Timer(0.1, finish).start()
+        timer = threading.Timer(1.0, finish)
+        timer.start()
+        assert httpd.drained(0.05) is False
         assert httpd.drained(10) is True
+        timer.join()
     finally:
         httpd.server_close()
 
@@ -377,22 +380,30 @@ def test_a_request_counts_as_in_flight_from_accept_until_its_thread_ends():
     httpd = unbound_server()
     started = []
     httpd.process_request_thread = lambda request, address: started.append((request, address, httpd.active))
+    httpd.active = 2
     httpd.process_request("request", ("127.0.0.1", 1))
     httpd.server_close()
-    assert started == [("request", ("127.0.0.1", 1), 1)]
-    assert httpd.active == 1
+    assert started == [("request", ("127.0.0.1", 1), 3)]
+    assert httpd.active == 3
+
+
+def test_the_recorded_pid_is_empty_without_a_pidfile(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "PIDFILE", tmp_path / ".server.pid")
+    assert server.recorded_pid() == ""
+    server.PIDFILE.write_text("41")
+    assert server.recorded_pid() == "41"
 
 
 def test_a_finished_request_thread_leaves_flight_and_wakes_the_drain():
     httpd = unbound_server()
     handled, woken = [], []
-    httpd.finish_request = lambda request, address: handled.append(httpd.active)
+    httpd.finish_request = lambda request, address: handled.append((request, address, httpd.active))
     httpd.shutdown_request = lambda request: None
     httpd.active = 2
     httpd.idle.notify_all = lambda: woken.append(httpd.active)
     try:
         httpd.process_request_thread("request", ("127.0.0.1", 1))
-        assert handled == [2]
+        assert handled == [("request", ("127.0.0.1", 1), 2)]
         assert httpd.active == 1
         assert woken == [1]
     finally:
@@ -489,9 +500,23 @@ def test_a_hangup_asks_for_a_hand_off(monkeypatch):
     assert requested.is_set()
 
 
+class Requests:
+    def __init__(self, left):
+        self.left = left
+        self.cleared = 0
+
+    def wait(self):
+        self.left -= 1
+        if self.left < 0:
+            raise StopIteration
+        return True
+
+    def clear(self):
+        self.cleared += 1
+
+
 def test_a_hangup_hands_off_on_its_own_thread_and_then_stops(monkeypatch):
-    requested = server.threading.Event()
-    requested.set()
+    requested = Requests(1)
     seen = []
     monkeypatch.setattr(server, "HANDED", server.threading.Event())
     monkeypatch.setattr(server, "code_stamp", lambda: 7)
@@ -502,26 +527,16 @@ def test_a_hangup_hands_off_on_its_own_thread_and_then_stops(monkeypatch):
     monkeypatch.setattr(server, "reload_if_changed", reload_if_changed)
     assert server.answer_reloads("httpd", requested) is None
     assert seen == [(7, "httpd", True, server.LOADED_DIGEST)]
-    assert not requested.is_set()
+    assert requested.cleared == 1
     assert server.HANDED.is_set()
 
 
+def test_the_hangup_thread_waits_on_the_reload_request_by_default():
+    assert inspect.signature(server.answer_reloads).parameters["requested"].default is server.RELOAD
+
+
 def test_a_hangup_the_successor_refused_waits_for_the_next_one(monkeypatch):
-    class Requests:
-        def __init__(self):
-            self.left = 2
-            self.cleared = 0
-
-        def wait(self):
-            self.left -= 1
-            if self.left < 0:
-                raise StopIteration
-            return True
-
-        def clear(self):
-            self.cleared += 1
-
-    requested = Requests()
+    requested = Requests(2)
     monkeypatch.setattr(server, "HANDED", server.threading.Event())
     monkeypatch.setattr(server, "code_stamp", lambda: 7)
     monkeypatch.setattr(server, "reload_if_changed", lambda started, httpd, force, loaded: started)

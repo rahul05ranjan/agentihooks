@@ -51,6 +51,19 @@ def test_an_adopted_carry_serves_the_writes_without_reading_rows(pair, monkeypat
     assert reader.current("ledger").generation == carried["ledger"][0]
 
 
+def test_a_carry_of_a_ledger_the_reader_never_loaded_is_adopted(pair, monkeypatch):
+    writer, reader = pair
+    writer.get_document("ledger")
+    carried = writer.carry({})
+
+    def refused(connection, slug):
+        raise AssertionError(f"{slug} was read from rows")
+
+    reader.adopt_carried(carried)
+    monkeypatch.setattr(sqlite, "read_rows", refused)
+    assert reader.current("ledger").generation == carried["ledger"][0]
+
+
 def test_an_older_carry_never_replaces_a_newer_copy(pair):
     writer, reader = pair
     writer.get_document("ledger")

@@ -74,7 +74,7 @@ def test_a_waiting_writer_takes_the_lease_once_the_holder_releases_it(tmp_path, 
 
 
 def test_a_waiting_writer_is_refused_and_counted_once_when_the_wait_ends(tmp_path, lease, monkeypatch):
-    clock = iter([0.0, 0.4, 0.8, 1.2])
+    clock = iter([0.0, 0.4, 0.8, 1.0])
     naps = []
     monkeypatch.setattr(ledger_writer.time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(ledger_writer.time, "sleep", naps.append)
@@ -82,6 +82,14 @@ def test_a_waiting_writer_is_refused_and_counted_once_when_the_wait_ends(tmp_pat
         ledger_writer.WriterLease(tmp_path).acquire(OTHER, wait=1.0)
     assert naps == [ledger_writer.LEASE_POLL_S, ledger_writer.LEASE_POLL_S]
     assert ledger_writer.conflicts_total(tmp_path) == 1
+
+
+def test_a_writer_that_does_not_wait_is_refused_without_polling(tmp_path, lease, monkeypatch):
+    naps = []
+    monkeypatch.setattr(ledger_writer.time, "sleep", naps.append)
+    with pytest.raises(ledger_writer.WriterConflict):
+        ledger_writer.WriterLease(tmp_path).acquire(OTHER)
+    assert naps == []
 
 
 def test_each_refusal_adds_one_conflict(tmp_path, lease):

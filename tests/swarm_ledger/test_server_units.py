@@ -119,14 +119,29 @@ def test_serve_runs_the_ledger_watch_on_a_daemon_thread(monkeypatch, tmp_path):
         def server_close(self):
             steps.append("close")
 
+    waits = []
+
+    class Lease:
+        def __init__(self, directory):
+            pass
+
+        def acquire(self, claimant, wait):
+            waits.append(wait)
+            return self
+
+        def release(self):
+            pass
+
     monkeypatch.setattr(server.threading, "Thread", Thread)
     monkeypatch.setattr(server, "ThreadingHTTPServer", Server)
     monkeypatch.setattr(server, "HUB", SimpleNamespace(drain=lambda: steps.append("drain")))
     monkeypatch.setattr(server.server_lifetime, "watch", lambda *args: threading.Event())
+    monkeypatch.setattr(server.ledger_writer, "WriterLease", Lease)
     adopted = []
     monkeypatch.setattr(server.legacy, "adopt", adopted.append)
     monkeypatch.setattr(server, "PIDFILE", tmp_path / ".server.pid")
     server.serve()
+    assert waits == [0.0]
     assert [{**t, "args": tuple(type(a) for a in t["args"])} for t in threads] == [
         {"target": server.watch_ledgers, "args": (Server,), "daemon": True},
         {"target": server.answer_reloads, "args": (Server,), "daemon": True},

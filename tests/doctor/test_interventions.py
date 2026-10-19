@@ -1,6 +1,7 @@
 import os
 import re
 import subprocess
+import sys
 from argparse import Namespace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -238,7 +239,7 @@ def test_the_ledger_server_restarts_only_when_its_code_changed(store, tmp_path):
     os.utime(code / "ledger_server.py", (300, 300))
     os.utime(code / "ledger_gate.py", (300, 300))
     line = interventions.apply(ctx, "restart-ledger-server", args())
-    assert [call[-1] for call in ctx.run.calls] == ["--reload"]
+    assert ctx.run.calls == [[sys.executable, str(code / "ledger_server.py"), "--reload"]]
     assert line == restarted(
         "scripts/swarm_ledger/ledger_gate.py, scripts/swarm_ledger/ledger_server.py changed since it started"
     )

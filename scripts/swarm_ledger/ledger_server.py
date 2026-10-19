@@ -1302,7 +1302,7 @@ def warm(passes=WARM_PASSES):
     takes over with current copies."""
     held = {}
     for _ in range(passes):
-        changed = False
+        fresh = []
         for summary in ledger_summaries():
             slug = summary["slug"]
             try:
@@ -1310,9 +1310,10 @@ def warm(passes=WARM_PASSES):
             except Exception as exc:  # a ledger that fails to load stays cold and the handoff goes on
                 sys.stderr.write(f"warm {slug}: {exc}\n")
                 continue
-            changed = changed or held.get(slug) is not entry
+            if held.get(slug) is not entry:
+                fresh.append(slug)
             held[slug] = entry
-        if not changed:
+        if not fresh:
             return
 
 

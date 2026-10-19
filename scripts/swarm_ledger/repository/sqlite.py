@@ -447,7 +447,7 @@ class SQLiteLedgerRepository:
         """Cache the committed copies another process carried over, unless one as new is already cached."""
         held = self.generations()
         for slug, (generation, text) in carried.items():
-            if held.get(slug, -1) < generation:
+            if slug not in held or held[slug] < generation:
                 fragments = document(json.loads(text))
                 self._remember(slug, Entry(generation, None, fragments.value, fragments))
 

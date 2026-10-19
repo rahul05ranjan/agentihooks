@@ -42,9 +42,10 @@ def spawn(
 def ready(child: subprocess.Popen, read: int, timeout: float) -> bytes | None:
     """The payload the successor sent with its ready mark, or None once it died or the wait ran out."""
     with os.fdopen(read, "rb") as pipe:
-        heard = pipe.read() if select.select([pipe], [], [], timeout)[0] else b""
-    if heard.startswith(READY):
-        return heard[len(READY) :]
+        if select.select([pipe], [], [], timeout)[0]:
+            heard = pipe.read()
+            if heard.startswith(READY):
+                return heard[len(READY) :]
     child.kill()
     child.wait()
     return None

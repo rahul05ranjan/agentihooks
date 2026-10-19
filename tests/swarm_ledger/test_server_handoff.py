@@ -38,7 +38,7 @@ def child_env():
 
 
 def test_a_successor_that_reports_ready_serves_on_the_inherited_socket(listener, monkeypatch):
-    monkeypatch.setattr(server_handoff.os, "environ", child_env())
+    monkeypatch.setenv("PYTHONPATH", str(ROOT))
     port = listener.getsockname()[1]
     assert server_handoff.hand_off(listener, [sys.executable, "-c", SUCCESSOR], timeout=30) == b'{"demo": 6}'
     listener.close()
@@ -47,13 +47,13 @@ def test_a_successor_that_reports_ready_serves_on_the_inherited_socket(listener,
 
 
 def test_a_successor_that_dies_before_ready_leaves_the_old_server_in_charge(listener, monkeypatch):
-    monkeypatch.setattr(server_handoff.os, "environ", child_env())
+    monkeypatch.setenv("PYTHONPATH", str(ROOT))
     assert server_handoff.hand_off(listener, [sys.executable, "-c", "raise SystemExit(3)"], timeout=30) is None
     assert listener.fileno() >= 0
 
 
 def test_a_successor_that_never_reports_is_killed_after_the_wait(listener, monkeypatch):
-    monkeypatch.setattr(server_handoff.os, "environ", child_env())
+    monkeypatch.setenv("PYTHONPATH", str(ROOT))
     spawned = []
     popen = subprocess.Popen
 
@@ -61,13 +61,13 @@ def test_a_successor_that_never_reports_is_killed_after_the_wait(listener, monke
         spawned.append(popen(*args, **kwargs))
         return spawned[-1]
 
-    script = "import time\ntime.sleep(60)\n"
+    script = "import time\ntime.sleep(5)\n"
     assert server_handoff.hand_off(listener, [sys.executable, "-c", script], recorded, timeout=0.2) is None
     assert spawned[0].returncode == -signal.SIGKILL
 
 
 def test_the_successor_gets_the_socket_and_the_ready_pipe_by_number(listener, monkeypatch):
-    monkeypatch.setattr(server_handoff.os, "environ", {"KEEP": "1"})
+    monkeypatch.setenv("KEEP", "1")
     seen = {}
 
     def popen(argv, **kwargs):
@@ -86,7 +86,8 @@ def test_the_successor_gets_the_socket_and_the_ready_pipe_by_number(listener, mo
 
 
 def test_the_successor_gets_the_extra_settings_over_the_inherited_ones(listener, monkeypatch):
-    monkeypatch.setattr(server_handoff.os, "environ", {"KEEP": "1", "LEDGER_WATCHED": "old"})
+    monkeypatch.setenv("KEEP", "1")
+    monkeypatch.setenv("LEDGER_WATCHED", "old")
     seen = {}
 
     def popen(argv, **kwargs):
@@ -102,7 +103,6 @@ def test_the_successor_gets_the_extra_settings_over_the_inherited_ones(listener,
 
 
 def test_a_failed_spawn_closes_both_pipe_ends(listener, monkeypatch):
-    monkeypatch.setattr(server_handoff.os, "environ", {})
     opened = []
     pipe = os.pipe
 
@@ -141,6 +141,7 @@ def test_no_inherited_socket_without_the_setting():
 def test_announce_writes_ready_with_its_payload_once_and_forgets_the_pipe():
     read, write = os.pipe()
     environ = {server_handoff.READY_FD: str(write)}
+    os.set_blocking(read, False)
     server_handoff.announce(b"held", environ)
     assert os.read(read, 64) == server_handoff.READY + b"held"
     assert os.read(read, 8) == b""
