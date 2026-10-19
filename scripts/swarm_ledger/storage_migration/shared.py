@@ -15,6 +15,14 @@ class DryRun(Exception):
     pass
 
 
+def keep() -> None:
+    pass
+
+
+def rollback() -> None:
+    raise DryRun
+
+
 def comments(value) -> int:
     if isinstance(value, list):
         return sum(comments(item) for item in value)
@@ -39,7 +47,7 @@ def slugs(repo: LedgerRepository) -> list:
         return snapshot.slugs() if snapshot else []
 
 
-def copy(source: LedgerRepository, target: LedgerRepository, slug: str, dry_run: bool, replace: bool = False) -> dict:
+def copy(source: LedgerRepository, target: LedgerRepository, slug: str, finish, replace: bool = False) -> dict:
     with source.snapshot() as snapshot:
         state, registries, token = snapshot.export(slug), snapshot.registries(slug), snapshot.token(slug)
     try:
@@ -55,8 +63,7 @@ def copy(source: LedgerRepository, target: LedgerRepository, slug: str, dry_run:
             if moved:
                 transaction.replace_registries(slug, registries)
             converted, kept = transaction.export(slug), transaction.registries(slug)
-            if dry_run:
-                raise DryRun
+            finish()
     except DryRun:
         pass
     source_counts, shared_counts = counts(state, registries), counts(converted, kept)
@@ -91,10 +98,11 @@ def convert(source: LedgerRepository, target: LedgerRepository, dry_run: bool = 
     copied = set()
     if not dry_run:
         for slug in slugs(source):
-            copy(source, target, slug, False)
+            copy(source, target, slug, keep)
             copied.add(slug)
         freeze(source)
-    ledgers = [copy(source, target, slug, dry_run, slug in copied) for slug in slugs(source)]
+    finish = rollback if dry_run else keep
+    ledgers = [copy(source, target, slug, finish, slug in copied) for slug in slugs(source)]
     totals = {side: {key: sum(row[side][key] for row in ledgers) for key in COUNTED} for side in ("source", "shared")}
     return {
         "ledgers": ledgers,
