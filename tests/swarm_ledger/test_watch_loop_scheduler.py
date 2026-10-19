@@ -1,8 +1,9 @@
 import threading
+from pathlib import Path
 
 import pytest
 
-from scripts.scheduler import process_timer
+from scripts.scheduler import process_timer, service
 from scripts.swarm_ledger import ledger_server
 
 pytestmark = [pytest.mark.unit, pytest.mark.xdist_group("fakeredis")]
@@ -13,11 +14,13 @@ class Stop(Exception):
 
 
 @pytest.fixture
-def unwritable_cache(monkeypatch, tmp_path):
+def unwritable_cache(monkeypatch):
     import fakeredis
 
-    (tmp_path / ".cache").write_text("")
-    monkeypatch.setenv("HOME", str(tmp_path))
+    (Path.home() / ".cache").write_text("")
+    monkeypatch.setattr(
+        service.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("scheduler supervisor started")
+    )
     monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:6379/0")
     for name in ("AGENTIHOOKS_DEPLOYMENT", "AGENTIHOOKS_HIVE_ID"):
         monkeypatch.delenv(name, raising=False)
