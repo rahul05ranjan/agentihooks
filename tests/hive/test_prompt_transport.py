@@ -148,7 +148,7 @@ def test_the_hive_materializes_the_seeds_below_its_own_home(setup, homes):
 
 def test_the_hive_keeps_its_own_progress_on_relaunch(homes):
     with at(homes.hive):
-        folder = ledger_workspace.materialize("fixture", "task", {"progress.md": "seed\n"})
+        folder = ledger_workspace.materialize("fixture", "task", {"progress.md": "seed\n", "steering.md": "old\n"})
         (folder / "progress.md").write_text("hive step\n", encoding="utf-8")
         ledger_workspace.materialize("fixture", "task", {"progress.md": "seed\n", "steering.md": "new\n"})
     assert (folder / "progress.md").read_text(encoding="utf-8") == "hive step\n"
@@ -167,7 +167,7 @@ def test_a_changed_opening_is_refused_before_launch(setup, homes, change):
     setup.redis.set("prompt", json.dumps(payload))
     with at(homes.hive):
         ack = setup.consumer.apply(setup.order)
-    assert (ack.status, ack.failure) == ("failed", "prompt")
+    assert (ack.status, ack.target, ack.failure) == ("failed", {}, "prompt")
     setup.runtime.spawn.assert_not_called()
 
 
@@ -249,6 +249,53 @@ def test_the_daemon_syncs_the_workspaces_it_hosts(setup, homes, monkeypatch):
         daemon.beat(setup.redis, "host")
     synced = json.loads(setup.redis.get(ledger_workspace.synced_key("host")))
     assert synced == {"fixture": {"task": {"latest_progress": "hive step"}}}
+    assert 0 < setup.redis.ttl(ledger_workspace.synced_key("host")) <= daemon.TTL_SECONDS
+
+
+def test_the_synced_copy_sits_below_its_own_hive_key():
+    from scripts.hive import registry
+
+    assert ledger_workspace.synced_key("host") == f"{registry.key('host')}:workspaces"
+
+
+def test_a_hive_syncs_only_the_worker_tasks_it_hosts(setup, homes, monkeypatch):
+    from dataclasses import replace
+
+    agents = [
+        replace(setup.agent, task="mine"),
+        replace(setup.agent, task="master", lane="master"),
+        replace(setup.agent, task="elsewhere", runtime_target={"host_id": "other"}),
+        replace(setup.agent, task="unlaunched", execution_id=""),
+    ]
+    monkeypatch.setattr(setup.consumer.store, "agents", lambda slug: agents)
+    monkeypatch.setattr(setup.consumer.store, "slugs", lambda: ["fixture"])
+    with at(homes.hive):
+        for task in ("mine", "master", "elsewhere", "unlaunched"):
+            ledger_workspace.materialize("fixture", task, {"progress.md": f"{task} step\n"})
+        setup.consumer.sync_workspaces(45)
+    synced = json.loads(setup.redis.get(ledger_workspace.synced_key("host")))
+    assert synced == {"fixture": {"mine": {"latest_progress": "mine step"}}}
+
+
+def test_the_opening_is_built_for_the_lane_on_the_controller(setup, homes, monkeypatch):
+    from dataclasses import replace
+
+    from scripts.swarm.store import MANUAL
+    from scripts.swarm_v2.runtime.base import SpawnRequest
+
+    calls = []
+    monkeypatch.setattr(orders.prompt, "build", lambda *args, **kwargs: calls.append((args, kwargs)) or "text")
+    config = replace(setup.config, lanes={"eng": {"role": "a hive engineer"}}, autonomy=MANUAL)
+    assert orders.build_opening(SpawnRequest(config, "eng", "worker", TASK)) == "text"
+    task = {**TASK, "harness": "claude", "workspace": "~/.agentihooks/swarm/fixture/tasks/task"}
+    assert calls == [
+        (("fixture", "agentihooks", "eng", "worker", task), {"role": "a hive engineer", "autonomy": MANUAL})
+    ]
+    orders.build_opening(SpawnRequest(config, "ci", "worker", {"id": "task"}))
+    assert calls[1] == (
+        ("fixture", "agentihooks", "ci", "worker", {"id": "task", "harness": "claude"}),
+        {"role": None, "autonomy": MANUAL},
+    )
 
 
 def test_the_controller_carries_the_opening_by_redis_key(setup, homes):
@@ -302,3 +349,9 @@ def test_resume_texts_keep_the_local_folder(setup, homes):
         recovered = resume._recovery_text("fixture", setup.agent, TASK)
     assert str(homes.controller / ".agentihooks" / "swarm" / "fixture" / "tasks" / "task") in restored
     assert TASK["workspace"] in recovered
+
+
+def test_a_local_recovery_without_a_recorded_folder_names_its_own(setup, homes):
+    with at(homes.controller), patch.object(commands, "hive_id", return_value="host"):
+        recovered = resume._recovery_text("fixture", setup.agent, {"id": "task"})
+    assert f"task folder {homes.controller / '.agentihooks' / 'swarm' / 'fixture' / 'tasks' / 'task'} (" in recovered

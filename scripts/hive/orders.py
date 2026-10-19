@@ -66,7 +66,7 @@ def build_opening(request: SpawnRequest) -> str:
     config, task = request.config, {**request.task, "harness": "claude"}
     if task.get("workspace"):
         task["workspace"] = ledger_workspace.portable(config.slug, task["id"])
-    role = config.lanes.get(request.lane, {}).get("role", "")
+    role = config.lanes.get(request.lane, {}).get("role")
     return prompt.build(config.slug, config.repo, request.lane, request.name, task, role=role, autonomy=config.autonomy)
 
 

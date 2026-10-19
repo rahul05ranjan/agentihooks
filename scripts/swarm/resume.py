@@ -316,7 +316,7 @@ def _recovery_current(store, slug, agent, context):
 
 
 def _recovery_text(slug, agent, task):
-    folder = ledger_workspace.named(slug, agent, task.get("workspace", ""))
+    folder = ledger_workspace.named(slug, agent, task.get("workspace"))
     return (
         f"Service is back after the outage. As {agent.name}, re-read your task folder {folder} "
         f"(steering.md, progress.md, proof.md), then run agentihooks msg inbox and continue your own task {agent.task}. "
