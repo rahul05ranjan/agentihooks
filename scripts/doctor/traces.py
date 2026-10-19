@@ -343,7 +343,11 @@ def active(record: dict, limits: Limits) -> list[Finding]:
 def _caps(historical: dict) -> tuple:
     return (
         *(() if historical.get("listed", True) else ("trace listing stopped at its page cap",)),
-        *((f"{historical['unlisted']} traces past the listing cap not counted",) if historical.get("unlisted") else ()),
+        *(
+            (f"{historical['unlisted']} traces past where the listing stopped not counted",)
+            if historical.get("unlisted")
+            else ()
+        ),
         *((f"{historical['capped']} traces read up to the observation page cap",) if historical.get("capped") else ()),
     )
 

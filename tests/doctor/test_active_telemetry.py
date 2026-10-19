@@ -252,7 +252,7 @@ def test_partial_coverage_names_the_traces_past_the_listing_cap_apart_from_the_u
     [found] = traces.findings(_record(historical=historical), LIMITS)
     assert found.summary == "observations of 10 traces not read yet"
     assert found.measure == 10
-    assert "1430 traces past the listing cap not counted" in found.evidence
+    assert "1430 traces past where the listing stopped not counted" in found.evidence
 
 
 def test_traces_read_up_to_the_observation_page_cap_are_named_and_not_counted_unread():
