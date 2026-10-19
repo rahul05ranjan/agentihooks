@@ -7,20 +7,18 @@ from pathlib import Path
 
 import yaml
 
-from scripts.ci_queue_retry import base_name, dependents
+from scripts.ci_queue_retry import _api, base_name, dependents
 
 WORKFLOWS = Path(".github/workflows")
 OPEN = ("in_progress", "queued")
 RED = ("failure", "timed_out")
 HOSTED_GROUP = "GitHub Actions"
 ONLINE = '.runners[] | select(.status == "online") | .name'
+RUNS = ".workflow_runs[]"
 GRACE_MINUTES = 10
+CONFIRM_SECONDS = 120
 CANCEL_POLLS = 18
 POLL_SECONDS = 10
-
-
-def _api(*args: str) -> str:
-    return subprocess.run(["gh", "api", *args], stdout=subprocess.PIPE, text=True, check=True).stdout
 
 
 def live_runners(org: str) -> set[str]:
@@ -41,7 +39,7 @@ def lost_jobs(jobs: list[dict], runners: set[str], now: datetime, grace: timedel
 
 
 def job_ids(workflow: dict) -> dict[str, str]:
-    return {spec.get("name", job_id): job_id for job_id, spec in workflow["jobs"].items()}
+    return {base_name(spec.get("name", job_id)): job_id for job_id, spec in workflow["jobs"].items()}
 
 
 def stalled(jobs: list[dict], lost: list[dict], workflow: dict) -> tuple[bool, str]:
@@ -49,9 +47,10 @@ def stalled(jobs: list[dict], lost: list[dict], workflow: dict) -> tuple[bool, s
         return False, "no job lost its runner"
     ids = job_ids(workflow)
     names = {base_name(job["name"]) for job in lost}
-    blocked = set().union(*(dependents(workflow, ids[name]) for name in names if name in ids))
+    waiting = set().union(*(dependents(workflow, ids[name]) for name in names if name in ids))
+    blocked = {base_name(name) for name in waiting}
     for job in jobs:
-        if job in lost or job["status"] not in OPEN:
+        if job in lost or job["status"] == "completed":
             continue
         if job["status"] == "in_progress":
             return False, f"{job['name']} still runs on a live runner"
@@ -60,13 +59,13 @@ def stalled(jobs: list[dict], lost: list[dict], workflow: dict) -> tuple[bool, s
     return True, f"runner lost on {', '.join(job['name'] for job in lost)}"
 
 
-def decide(run: dict, jobs: list[dict]) -> tuple[bool, str]:
+def decide(run: dict, jobs: list[dict]) -> tuple[str, str]:
     failed = [job["name"] for job in jobs if job.get("conclusion") in RED]
     if failed:
-        return False, f"failed on its own: {', '.join(failed)}"
+        return "none", f"failed on its own: {', '.join(failed)}"
     if run["run_attempt"] != 1:
-        return False, f"attempt {run['run_attempt']} lost its runner again"
-    return True, "first attempt lost its runner"
+        return "cancel", f"attempt {run['run_attempt']} lost its runner again"
+    return "rerun", "first attempt lost its runner"
 
 
 def run_state(repo: str, run_id: int) -> dict:
@@ -84,33 +83,46 @@ def stop(repo: str, run_id: int) -> dict:
     return run
 
 
-def jobs_of(repo: str, run_id: int) -> list[dict]:
-    return json.loads(_api(f"repos/{repo}/actions/runs/{run_id}/jobs?filter=latest&per_page=100"))["jobs"]
+def jobs_of(repo: str, run_id: int) -> dict:
+    return json.loads(_api(f"repos/{repo}/actions/runs/{run_id}/jobs?filter=latest&per_page=100"))
 
 
 def open_runs(repo: str, workflow: str) -> list[dict]:
     runs = []
     for status in OPEN:
-        page = json.loads(_api(f"repos/{repo}/actions/workflows/{workflow}/runs?per_page=100&status={status}"))
-        runs += page["workflow_runs"]
+        url = f"repos/{repo}/actions/workflows/{workflow}/runs?per_page=100&status={status}"
+        runs += [json.loads(line) for line in _api("--paginate", url, "--jq", RUNS).splitlines()]
     return runs
 
 
-def watch(repo: str, run: dict, runners: set[str], workflow: dict, grace: timedelta) -> dict:
+def assess(repo: str, run: dict, workflow: dict, grace: timedelta) -> tuple[bool, str, list[dict]]:
+    page = jobs_of(repo, run["id"])
+    jobs = page["jobs"]
+    if page["total_count"] != len(jobs):
+        return False, f"listed {len(jobs)} of {page['total_count']} jobs", jobs
+    lost = lost_jobs(jobs, live_runners(repo.split("/")[0]), datetime.now(UTC), grace)
+    stuck, reason = stalled(jobs, lost, workflow)
+    return stuck, reason, jobs
+
+
+def watch(repo: str, run: dict, workflow: dict, grace: timedelta) -> dict:
     report = {"run": run["id"], "attempt": run["run_attempt"], "action": "none"}
     if run["status"] not in OPEN:
         return {**report, "reason": f"run completed with conclusion {run['conclusion']}"}
-    jobs = jobs_of(repo, run["id"])
-    lost = lost_jobs(jobs, runners, datetime.now(UTC), grace)
-    stuck, reason = stalled(jobs, lost, workflow)
+    stuck, reason, jobs = assess(repo, run, workflow, grace)
+    if stuck:
+        time.sleep(CONFIRM_SECONDS)
+        stuck, reason, jobs = assess(repo, run, workflow, grace)
     if not stuck:
         return {**report, "reason": reason}
+    action, why = decide(run, jobs)
+    if action == "none":
+        return {**report, "reason": f"{reason}; {why}"}
     if run_state(repo, run["id"])["run_attempt"] != run["run_attempt"]:
         return {**report, "reason": "the run was rerun meanwhile"}
-    retry, why = decide(run, jobs)
     if stop(repo, run["id"])["status"] != "completed":
         return {**report, "action": "cancel", "reason": f"{reason}; the run did not end after force cancel"}
-    if not retry:
+    if action == "cancel":
         return {**report, "action": "cancel", "reason": f"{reason}; {why}"}
     _api("-X", "POST", f"repos/{repo}/actions/runs/{run['id']}/rerun-failed-jobs")
     return {**report, "action": "rerun", "reason": f"{reason}; {why}"}
@@ -125,10 +137,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     workflow = yaml.safe_load((WORKFLOWS / args.workflow).read_text())
     runs = [run_state(args.repo, run_id) for run_id in args.run_id] or open_runs(args.repo, args.workflow)
-    runners = live_runners(args.repo.split("/")[0])
+    errors = 0
     for run in runs:
-        print(json.dumps(watch(args.repo, run, runners, workflow, timedelta(minutes=args.grace_minutes))))
-    return 0
+        try:
+            report = watch(args.repo, run, workflow, timedelta(minutes=args.grace_minutes))
+        except subprocess.CalledProcessError as error:
+            errors += 1
+            report = {"run": run["id"], "attempt": run["run_attempt"], "action": "error", "reason": str(error)}
+        print(json.dumps(report))
+    return 1 if errors else 0
 
 
 if __name__ == "__main__":
