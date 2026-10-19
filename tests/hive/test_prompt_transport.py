@@ -228,6 +228,31 @@ def test_seeds_carry_only_the_latest_text(homes):
     assert sent["steering.md"] == "# task\n" + "y" * ledger_workspace.SEED_CHARS
 
 
+def test_work_folder_seeds_are_read_and_written_as_utf8(homes, monkeypatch):
+    import codecs
+
+    used = []
+
+    def spy(method):
+        real = getattr(Path, method)
+
+        def call(self, *args, **kwargs):
+            if self.name in ledger_workspace.SEEDS:
+                used.append((method, kwargs.get("encoding")))
+            return real(self, *args, **kwargs)
+
+        return call
+
+    for method in ("open", "read_text", "write_text"):
+        monkeypatch.setattr(Path, method, spy(method))
+    with at(homes.hive):
+        ledger_workspace.materialize("fixture", "task", {"steering.md": "steer —\n", "progress.md": "step —\n"})
+        sent = ledger_workspace.seeds("fixture", "task")
+    assert sent == {"steering.md": "steer —\n", "progress.md": "step —\n"}
+    assert {method for method, _ in used} == {"open", "read_text", "write_text"}
+    assert all(encoding and codecs.lookup(encoding).name == "utf-8" for _, encoding in used)
+
+
 def test_a_local_task_reads_its_own_folder(setup, homes):
     carry(setup, homes)
     ledger = {"tasks": [{"id": "task", "workspace": TASK["workspace"]}]}
