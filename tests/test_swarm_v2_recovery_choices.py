@@ -176,6 +176,15 @@ def test_a_refused_request_is_recorded_for_the_page_and_the_seat_keeps_waiting(w
     assert world.occupant().state == failures.AWAITING
 
 
+def test_an_accepted_decision_clears_the_earlier_refused_request(world):
+    recovery = _pending(world, [_entry(world, "ckpt-context", 1, continuation="context")])
+    world.store.redis.hset(world.store.key(cases.SLUG, failures.REQUESTS), world.old.execution_id, "native")
+    world.reconcile(recovery)
+    recovery.decide(world.old.execution_id, "context")
+    assert _published(world)["refused_request"] is None
+    assert world.store.redis.hgetall(world.store.key(cases.SLUG, failures.REFUSED_REQUESTS)) == {}
+
+
 def test_each_pass_republishes_pending_material_only(world):
     recovery = _pending(world, [])
     world.store.redis.delete(world.store.key(cases.SLUG, failures.MATERIAL))

@@ -139,6 +139,15 @@ def test_master_context_with_a_checkpoint_replaces_the_attempt(pending):
     assert result["replacement"] == pending.world.occupant().execution_id
 
 
+def test_a_replayed_context_decision_admits_no_second_replacement(pending):
+    pending.world.checkpoints.by_execution[pending.old.execution_id] = pending.world.fx["first"]["checkpoints"]
+    first = post(pending, pending.token, {"agent": "coordinator", "choice": "context"})
+    occupant = pending.world.occupant()
+    again = post(pending, pending.token, {"agent": "coordinator", "choice": "context"})
+    assert again == first
+    assert pending.world.occupant() == occupant
+
+
 def test_a_master_lists_verified_checkpoints_for_a_recovery(pending):
     entries = pending.world.fx["first"]["checkpoints"]
     pending.world.checkpoints.by_execution[pending.old.execution_id] = entries

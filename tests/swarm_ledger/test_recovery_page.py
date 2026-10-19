@@ -85,3 +85,12 @@ def test_a_path_only_card_is_never_green_and_without_cards_the_table_says_so(ope
     page = open_page(status())
     assert page.table("swarm-recovery") == [["No seat is waiting on a recovery decision."]]
     assert page.text("#recovery-count").lower() == "none waiting"
+
+
+def test_rollback_without_recovery_material_leaves_the_seat_waiting_with_its_handoff_choices(open_page):
+    page = open_page(payload())
+    assert page.table("swarm-handoffs")[0][4].lower() == "awaiting decision"
+    assert page.tab.locator("#swarm-handoffs button").all_inner_texts() == ["resume", "fresh"]
+    page.tab.locator("#swarm-handoffs button", has_text="fresh").click()
+    page.tab.wait_for_function("() => !document.querySelector('#swarm-modes button').disabled")
+    assert page.puts == [{"action": "restore-decision", "agent": "eng-7", "choice": "fresh"}]

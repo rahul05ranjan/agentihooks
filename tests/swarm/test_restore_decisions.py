@@ -173,6 +173,18 @@ def test_a_failed_retry_is_not_a_decision_and_keeps_its_first_wait(store, tmp_pa
     assert (row["decided"], row["awaited_at"], row["at"]) == (False, awaited, 3000)
 
 
+def test_native_is_refused_for_a_lost_conversation_before_anything_is_attached(store, tmp_path):
+    saved(store, tmp_path, conversation="")
+    restore(store, ResumingRuntime())
+    before = (store.restored("sw"), transfers.list_transfers(store, "sw"), store.seats.occupant("eng-1@sw"))
+    runtime = ResumingRuntime()
+    with pytest.raises(resume.SwarmError, match="^no conversation id$"):
+        resume.decide(store, "sw", "sw-eng-1", "native", runtime, 2000, FakeLedger([]))
+    assert (store.restored("sw"), transfers.list_transfers(store, "sw"), store.seats.occupant("eng-1@sw")) == before
+    assert not runtime.resumed
+    assert {a.state for a in store.agents("sw") if a.name == "sw-eng-1"} == {"awaiting-decision"}
+
+
 @pytest.mark.parametrize("changes", [{"runtime_backend": "local"}, {"execution_id": ""}])
 def test_only_a_pod_attempt_takes_the_controller_path(changes):
     pods = _PodStore(_pod_agent(**changes))
