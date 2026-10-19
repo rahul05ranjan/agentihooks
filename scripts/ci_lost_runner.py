@@ -12,6 +12,7 @@ from scripts.ci_queue_retry import base_name, dependents
 WORKFLOWS = Path(".github/workflows")
 OPEN = ("in_progress", "queued")
 RED = ("failure", "timed_out")
+HOSTED_GROUP = "GitHub Actions"
 GRACE_MINUTES = 10
 CANCEL_POLLS = 18
 POLL_SECONDS = 10
@@ -33,6 +34,7 @@ def lost_jobs(jobs: list[dict], runners: set[str], now: datetime, grace: timedel
         if job["status"] == "in_progress"
         and job.get("runner_name")
         and job["runner_name"] not in runners
+        and job.get("runner_group_name") != HOSTED_GROUP
         and now - datetime.fromisoformat(job["started_at"]) >= grace
     ]
 

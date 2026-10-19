@@ -29,12 +29,13 @@ def ago(minutes):
     return stamp(datetime.now(UTC) - timedelta(minutes=minutes))
 
 
-def job(name, status="completed", conclusion="success", runner="anton-oss-light-live", started=None):
+def job(name, status="completed", conclusion="success", runner="anton-oss-light-live", started=None, group="anton-oss"):
     return {
         "name": name,
         "status": status,
         "conclusion": conclusion,
         "runner_name": runner,
+        "runner_group_name": group,
         "started_at": started or stamp(NOW - timedelta(hours=1)),
     }
 
@@ -104,6 +105,7 @@ def test_a_job_in_progress_on_an_absent_runner_past_the_grace_is_lost():
         lost(started=stamp(NOW - GRACE + timedelta(seconds=1))),
         job("queue-fail-fast", "in_progress", None),
         job("queue-fail-fast", "in_progress", None, None),
+        job("durations", "in_progress", None, "GitHub Actions 1000223300", group="GitHub Actions"),
         job("queue-fail-fast", "in_progress", None, ""),
         job("queue-fail-fast", "queued", None, "anton-oss-light-gone"),
         job("queue-fail-fast", "completed", "success", "anton-oss-light-gone"),
