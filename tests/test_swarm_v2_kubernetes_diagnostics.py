@@ -97,7 +97,12 @@ def test_pod_log_requests_are_bounded_and_refusals_raise(status):
             assert method == "GET" and body is None
             parsed = urlsplit(path)
             assert parsed.path == "/api/v1/namespaces/workers/pods/refused/log"
-            assert parse_qs(parsed.query) == {"container": ["agent"], "limitBytes": ["65536"], "timestamps": ["true"]}
+            assert parse_qs(parsed.query) == {
+                "container": ["agent"],
+                "tailLines": ["200"],
+                "limitBytes": ["65536"],
+                "timestamps": ["true"],
+            }
             return (status, read(b"startup refused\xff\n")) if status == 200 else (status, {})
 
     client = PodClient(Http(), "workers")

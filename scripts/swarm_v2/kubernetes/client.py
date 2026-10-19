@@ -172,7 +172,9 @@ class PodClient:
         return self.read("pods", name)
 
     def pod_logs(self, name: str, container: str) -> str:
-        query = urllib.parse.urlencode({"container": container, "limitBytes": 65536, "timestamps": "true"})
+        query = urllib.parse.urlencode(
+            {"container": container, "tailLines": 200, "limitBytes": 65536, "timestamps": "true"}
+        )
         status, answer = self.http.send(
             "GET", f"{self._path(name)}/log?{query}", read=lambda raw: raw.decode(errors="replace")
         )
