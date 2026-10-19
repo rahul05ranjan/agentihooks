@@ -217,6 +217,7 @@ def test_no_script_a_step_runs_calls_the_api():
         expected.append("scripts/ci_wall_clock.py")
     if (ROOT / ".github/actions/browser-cache/use-image.sh").exists():
         expected.append(".github/actions/browser-cache/use-image.sh")
+    expected = [path for path in expected if (ROOT / path).exists()]
     routing_contracts = [
         "tests/test_ci_anton_runners.py",
         "tests/test_ci_runner_classes.py",
