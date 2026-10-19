@@ -123,9 +123,22 @@ FALLBACKS = {
         [host("ws", "yes"), host("anton", "no", repos=["other"])],
         Wait("no headless hive for eng lists the repo agentihooks"),
     ),
-    "headless without the slot waits": (
-        [host("ws", "yes"), host("anton", "no", slots=[])],
+    "headless with one free place but without the slot waits": (
+        [host("ws", "yes"), host("anton", "no", agents=3, slots=[])],
         Wait("no headless hive for eng advertises the claude slot acct"),
+    ),
+    "the fallback honours prefer among UI hives": (
+        [
+            host("ws", "yes"),
+            host("vm", "yes", agents=3, prefer={"eng": 1}),
+            host("anton", "no", agents=4),
+        ],
+        Choice("vm", "no headless hive for eng has room"),
+    ),
+    "the fallback checks the login on the UI hive": (
+        [host("ws", "yes", interactive={"claude": ""}), host("anton", "no", agents=4)],
+        Wait("no headless hive for eng has room"),
+        "interactive",
     ),
     "headless without the login waits": (
         [host("ws", "yes"), host("anton", "no", interactive={"claude": ""})],
