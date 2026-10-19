@@ -42,4 +42,5 @@ jobs:
       - name: Cancel stalled Tests runs and rerun their failed jobs once
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PYTHONUNBUFFERED: "1"
         run: python -m scripts.ci_lost_runner --repo "$GITHUB_REPOSITORY"

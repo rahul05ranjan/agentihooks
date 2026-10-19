@@ -444,5 +444,5 @@ def test_the_watchdog_workflow_runs_the_script_every_ten_minutes_with_the_app_to
     mint = next(step for step in steps if step.get("id") == "app-token")
     assert mint["with"]["permission-actions"] == "write"
     assert mint["with"]["permission-organization-self-hosted-runners"] == "read"
-    assert steps[-1]["env"]["GH_TOKEN"] == "${{ steps.app-token.outputs.token }}"
+    assert steps[-1]["env"] == {"GH_TOKEN": "${{ steps.app-token.outputs.token }}", "PYTHONUNBUFFERED": "1"}
     assert steps[-1]["run"] == 'python -m scripts.ci_lost_runner --repo "$GITHUB_REPOSITORY"'

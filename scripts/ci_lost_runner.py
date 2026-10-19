@@ -149,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", required=True)
     parser.add_argument("--workflow", default="test.yml")
-    parser.add_argument("--run-id", type=int, action="append", default=[])
+    parser.add_argument("--run-id", action="append", default=[])
     parser.add_argument("--grace-minutes", type=float, default=GRACE_MINUTES)
     args = parser.parse_args(argv)
     workflow = yaml.safe_load((WORKFLOWS / args.workflow).read_text())
@@ -160,14 +160,15 @@ def main(argv: list[str] | None = None) -> int:
         found = guarded(first_look, args.repo, run, workflow, grace)
         if found:
             reports.append(found)
-            print(json.dumps(found), flush=True)
+            print(json.dumps(found))
         else:
             suspects.append(run)
     if suspects:
         time.sleep(CONFIRM_SECONDS)
     for run in suspects:
-        reports.append(guarded(watch, args.repo, run, workflow, grace))
-        print(json.dumps(reports[-1]), flush=True)
+        found = guarded(watch, args.repo, run, workflow, grace)
+        reports.append(found)
+        print(json.dumps(found))
     return 1 if any(found["action"] == "error" for found in reports) else 0
 
 
