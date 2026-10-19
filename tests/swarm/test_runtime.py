@@ -343,10 +343,23 @@ def test_staged_and_active_launches_use_each_successors_scoped_credential(tmp_pa
 
 
 def test_a_local_launch_drops_an_inherited_hosted_route(tmp_path, monkeypatch):
+    from scripts.swarm import runtime as module
+    from scripts.swarm.store import SwarmConfig
+
     monkeypatch.setenv("AGENTIHOOKS_SWARM", "other")
     monkeypatch.setenv("SWARM_URL", "https://hosted.example")
-    env = _spawn_env(tmp_path, monkeypatch)
-    assert "SWARM_URL" not in env
+    monkeypatch.setattr(module.binding, "fields", lambda *_: {"profile": "engineer"})
+    seen = {}
+
+    def run(argv, **kwargs):
+        seen.update(kwargs["env"])
+        return SimpleNamespace(returncode=0, stdout="status=started\nroute_status=routed\n", stderr="")
+
+    runtime = HerdrRuntime(home=tmp_path, run=run)
+    monkeypatch.setattr(runtime, "conversations", lambda: {})
+    argv = ["agentihooks", "init-agent", "--agent", "codex", "--profile", "engineer"]
+    runtime._launch(SwarmConfig("sw", str(tmp_path), 0, 0), "eng", "task", "engineer@a1b2c3-0001", argv)
+    assert "SWARM_URL" not in seen
 
 
 def test_spawn_without_the_server_secret_never_passes_on_the_tick_s_token(tmp_path, monkeypatch):
