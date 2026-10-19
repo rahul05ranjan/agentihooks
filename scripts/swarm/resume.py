@@ -167,6 +167,9 @@ def decide(store, slug: str, name: str, choice: str, runtime, now_ms: int, ledge
 
         worktrees = json.loads(store.redis.get(store.key(slug, "restore-worktrees")) or "{}")
         worktree = store.config(slug).repo if agent.lane == MASTER else worktrees.get(name, "")
+        lost = blocker(agent, worktree, has_quota=lambda harness, account: True)
+        if choice == NATIVE and lost:
+            raise SwarmError(lost)
         outcome = _attempt(
             store,
             slug,

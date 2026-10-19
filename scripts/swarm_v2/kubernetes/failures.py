@@ -292,6 +292,7 @@ class Recovery:
         """Kept beside the decision so the decision record keeps the shape earlier attempts were stored in."""
         self.controller.require()
         self.store.redis.hset(self._key(DECIDED), execution_id, lease.now_ms(self.store))
+        self.store.redis.hdel(self._key(REFUSED_REQUESTS), execution_id)
 
     def request(self, execution_id: str, choice: str) -> Decision:
         """A repeated request for the choice already accepted returns that decision and admits nothing."""
