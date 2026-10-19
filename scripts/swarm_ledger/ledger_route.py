@@ -64,7 +64,8 @@ def service(function: Callable) -> Callable:
         from scripts.swarm_ledger.authority_context import tick_headers
 
         pending = store.redis.hget(store.key(slug, "config"), "pending_api_url")
-        if (url(slug) or pending) and not tick_headers(slug):
+        local = os.environ.get("AGENTIHOOKS_DEPLOYMENT", "local") == "local"
+        if local and (url(slug) or pending) and not tick_headers(slug):
             return ["the host tick will apply the settings"]
         return function(store, slug, *args, **kwargs)
 
