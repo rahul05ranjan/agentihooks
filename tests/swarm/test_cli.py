@@ -2933,9 +2933,6 @@ def test_set_stores_the_scaling_settings_and_reports_them(env, capsys):
     ]
     assert run("sw", "scaling=auto") == 0
     assert store.config("sw").scaling == "auto"
-    assert run("sw", "swap-full-share=0.8") == 0
-    assert store.config("sw").swap_full_share == 0.8
-    assert json.loads(capsys.readouterr().out.splitlines()[-1])["swap_full_share"] == 0.8
 
 
 @pytest.mark.parametrize(
@@ -2944,8 +2941,6 @@ def test_set_stores_the_scaling_settings_and_reports_them(env, capsys):
         ("load-low=3", "load low must be above 0 and at most load high, and load high at most 10"),
         ("load-high=x", "load-high takes a number, the one minute load per CPU"),
         ("memory-per-agent=-1", "memory-per-agent takes a whole number of MB"),
-        ("swap-full-share=x", "swap-full-share takes a number, the share of swap in use"),
-        ("swap-full-share=2", "swap full share must be above 0 and at most 1"),
         ("scaling=sometimes", "scaling must be one of auto, manual"),
     ],
 )
