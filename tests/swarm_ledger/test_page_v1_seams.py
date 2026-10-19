@@ -86,6 +86,18 @@ def test_a_task_that_is_not_open_is_never_held():
     assert freeze.marks(doc, hierarchy.project(doc)[0])["held"] == ["plans/p2", "phases/ph2"]
 
 
+def test_a_focus_on_an_item_gone_from_the_ledger_holds_everything_but_urgent_work():
+    held = marks([record("tasks/gone", "focus")])["held"]
+    assert {"plans/p1", "plans/p2", "phases/ph1", "phases/ph2", "tasks/t1", "tasks/t2"} <= held
+    assert "tasks/t4" not in held
+
+
+def test_a_lane_focus_never_holds_plans_or_phases_whatever_its_value():
+    held = marks([record("lane:ci:night", "focus")])["held"]
+    assert not held & {"plans/p1", "plans/p2", "phases/ph1", "phases/ph2"}
+    assert {"tasks/t1", "tasks/t3"} <= held
+
+
 def test_the_streamed_ledger_view_carries_the_marks_and_the_server_limits():
     from scripts.swarm_ledger import ledger_artifacts, ledger_core, ledger_server
 
@@ -102,18 +114,65 @@ def test_the_streamed_ledger_view_carries_the_marks_and_the_server_limits():
 
 
 def test_the_streamed_view_never_marks_a_doctor_fix_phase_task_held(monkeypatch):
+    from scripts.swarm_ledger import ledger_server
+
+    doc = doctor_server(monkeypatch, peer_freezes=None)
+    doc = {**doc, "freezes": [record("plans/p1", "focus")]}
+    assert "tasks/t6" not in ledger_server.ledger_view(ledger_state(doc), "doctor")["marks"]["held"]
+    assert "tasks/t6" in ledger_server.ledger_view(ledger_state(doc))["marks"]["held"]
+
+
+def doctor_server(monkeypatch, peer_freezes):
     from types import SimpleNamespace
 
     from scripts.doctor import loop, priming
     from scripts.swarm_ledger import ledger_server
 
     doc = {**DOC, "phases": [*DOC["phases"], {"id": loop.FIX_PHASE, "title": "Fix", "plan": "plans/p2"}]}
-    doc = {**doc, "tasks": [*DOC["tasks"], task("t6", loop.FIX_PHASE)], "freezes": [record("plans/p1", "focus")]}
-    config = SimpleNamespace(template=priming.TEMPLATE)
-    store = SimpleNamespace(config=lambda slug: config, peer=lambda slug: "no-such-ledger")
+    doc = {**doc, "tasks": [*DOC["tasks"], task("t6", loop.FIX_PHASE)]}
+    configs = {"doctor": SimpleNamespace(template=priming.TEMPLATE)}
+    store = SimpleNamespace(
+        config=lambda slug: configs.get(slug, SimpleNamespace(template="")), peer=lambda slug: f"{slug}-watched"
+    )
+    documents = {"doctor": ledger_state(doc)}
+    if peer_freezes is not None:
+        documents["doctor-watched"] = {"freezes": peer_freezes}
+    repository = SimpleNamespace(exists=lambda slug: slug in documents, get_document=lambda slug: documents[slug])
     monkeypatch.setattr(ledger_server, "swarm_store", lambda: store)
-    assert "tasks/t6" not in ledger_server.ledger_view(ledger_state(doc), "doctor")["marks"]["held"]
-    assert "tasks/t6" in ledger_server.ledger_view(ledger_state(doc))["marks"]["held"]
+    monkeypatch.setattr(ledger_server, "repository", repository)
+    monkeypatch.setattr(ledger_server, "swarm_status", lambda slug, ledger: None)
+    return doc
+
+
+def test_a_focus_in_the_watched_swarm_holds_the_doctor_tasks_in_every_view_it_streams(monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts.swarm_ledger import ledger_server
+
+    doc = doctor_server(monkeypatch, peer_freezes=[record("plans/p1"), record("plans/p2", "focus")])
+    published = []
+    hub = SimpleNamespace(has=lambda slug: True, publish=lambda slug, kind, view: published.append(view))
+    monkeypatch.setattr(ledger_server, "HUB", hub)
+    ledger_server.publish_ledger("doctor", ledger_state(doc))
+    streamed = ledger_server.stream_resources("doctor")["ledger"]
+    for view in (streamed, published[0]):
+        assert set(view["marks"]["held"]) == {"tasks/t1", "tasks/t2", "tasks/t3", "tasks/t5"}
+    assert ledger_server.ledger_view(ledger_state(doc))["marks"]["held"] == []
+
+
+def test_an_unreadable_swarm_leaves_the_doctor_view_unheld(monkeypatch):
+    from types import SimpleNamespace
+
+    from scripts.swarm.store import SwarmError
+    from scripts.swarm_ledger import ledger_server
+
+    doc = doctor_server(monkeypatch, peer_freezes=[record("plans/p2", "focus")])
+
+    def unreadable(slug):
+        raise SwarmError("no swarm")
+
+    monkeypatch.setattr(ledger_server, "swarm_store", lambda: SimpleNamespace(config=unreadable))
+    assert ledger_server.ledger_view(ledger_state(doc), "doctor")["marks"] == {"frozen": [], "held": []}
 
 
 def test_page_saves_apply_through_version_one(live):
@@ -142,6 +201,28 @@ def test_a_crossed_effort_range_is_refused_before_it_is_queued(live, monkeypatch
         status, error = request(live, "PUT", "swarm/controls", {"action": "set", "effort_min": "high"})
     assert (status, error["error"]["message"]) == (400, "effort-min high is above effort-max medium")
     control.assert_not_called()
+
+
+def test_a_ceiling_alone_below_the_stored_floor_is_refused(live, monkeypatch):
+    from types import SimpleNamespace
+
+    config = SimpleNamespace(effort_min="medium", effort_max="high", lanes={})
+    monkeypatch.setattr(server, "swarm_store", lambda: SimpleNamespace(config=lambda slug: config))
+    with patch.object(server, "swarm_control") as control:
+        status, error = request(live, "PUT", "swarm/controls", {"action": "set", "effort_max": "low"})
+    assert (status, error["error"]["message"]) == (400, "effort-min medium is above effort-max low")
+    control.assert_not_called()
+
+
+def test_a_set_without_efforts_is_queued_even_when_the_stored_range_is_crossed(live, monkeypatch):
+    from types import SimpleNamespace
+
+    config = SimpleNamespace(effort_min="high", effort_max="low", lanes={})
+    monkeypatch.setattr(server, "swarm_store", lambda: SimpleNamespace(config=lambda slug: config))
+    status_body = {"config": {"slug": SLUG, "state": "running"}}
+    with patch.object(server, "swarm_control", return_value=(status_body, None)) as control:
+        assert request(live, "PUT", "swarm/controls", {"action": "set", "max_eng": 2}) == (200, status_body)
+    control.assert_called_once()
 
 
 def test_uploaded_media_is_served_from_version_one(live):

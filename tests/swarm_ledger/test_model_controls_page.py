@@ -1,3 +1,5 @@
+import json
+
 from playwright.sync_api import expect
 
 from tests.swarm_ledger import test_swarm_layout as layout
@@ -153,11 +155,17 @@ def test_the_panel_keeps_the_sent_values_until_the_acknowledging_tick_published(
 
 def test_a_typed_cap_settles_on_the_number_it_sent(open_page):
     page = model_page(open_page)
+
+    def applied(route):
+        page.puts.append(json.loads(route.request.post_data))
+        page.payload["config"]["max_ci"] = 2
+        page.payload["commands"] = [
+            {"id": "new", "command": "swarm", "argv": ["set", "max-ci-agents=2"], "state": "pending"}
+        ]
+        route.fulfill(json=page.payload)
+
+    page.context.route("**/swarm/controls", applied)
     page.tab.locator("#cap-ci").fill("02")
-    page.payload["config"]["max_ci"] = 2
-    page.payload["commands"] = [
-        {"id": "new", "command": "swarm", "argv": ["set", "max-ci-agents=2"], "state": "pending"}
-    ]
     page.tab.get_by_role("button", name="Apply capacity").click()
     for _ in range(100):
         if page.puts:

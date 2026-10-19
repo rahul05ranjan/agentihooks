@@ -99,6 +99,9 @@ def served_version():
     return served_page()[0]
 
 
+NO_DOCTOR = ("", False)
+
+
 def page_view(state, fix_phase="", watched=False):
     meta = {key: item for key, item in state.get("_meta", {}).items() if key not in ("seeds", "api_operations")}
     marks = freeze.marks(state, hierarchy.project(state)[0], fix_phase, watched)
@@ -116,7 +119,7 @@ def doctor_holds(slug):
         peer = store.peer(slug) if fix else ""
         records = repository.get_document(peer).get("freezes") or [] if peer and repository.exists(peer) else []
     except (SwarmError, RedisError, ValueError, OSError):
-        return "", False
+        return NO_DOCTOR
     return fix, any(r.get("verb") == "focus" for r in records)
 
 
