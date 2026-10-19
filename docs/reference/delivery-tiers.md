@@ -180,7 +180,7 @@ gh run view <run id> --log | grep -E '"requeue"|Log only'
 
 ### Stalled runs
 
-A job whose runner pod or node vanished can stay `in_progress` with no failure, so its Tests run never completes and Queue retry never sees it. The Lost runner workflow, `.github/workflows/lost-runner.yml`, is scheduled every ten minutes (GitHub can start scheduled runs late) on a hosted runner, queues on a shared hosted lane, and runs `python -m scripts.ci_lost_runner --repo <owner>/<repo>` with the TCC Main CI app token. It examines every queued or running Tests run, whatever its event. A run is stalled when:
+A job whose runner pod or node vanished can stay `in_progress` with no failure, so its Tests run never completes and Queue retry never sees it. The Lost runner workflow, `.github/workflows/lost-runner.yml`, is scheduled every ten minutes (GitHub can start scheduled runs late) on a hosted runner, queues on a shared hosted lane, and runs `python -m scripts.ci_lost_runner --repo <owner>/<repo>` with the TCC Main CI app token. It examines every unfinished Tests run (in progress, queued, pending, waiting or requested), whatever its event. A run is stalled when:
 
 - a job started at least ten minutes ago and runs on a self-hosted runner that is absent from or offline in the organization runner list,
 - no other job is running on a live runner,

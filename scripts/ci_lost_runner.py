@@ -10,7 +10,7 @@ import yaml
 from scripts.ci_queue_retry import _api, base_name, dependents
 
 WORKFLOWS = Path(".github/workflows")
-OPEN = ("in_progress", "queued")
+OPEN = ("in_progress", "queued", "pending", "waiting", "requested")
 RED = ("failure", "timed_out")
 HOSTED_GROUP = "GitHub Actions"
 ONLINE = '.runners[] | select(.status == "online") | .name'
@@ -109,7 +109,7 @@ def report(run: dict, action: str, reason: str) -> dict:
 
 
 def first_look(repo: str, run: dict, workflow: dict, grace: timedelta) -> dict | None:
-    if run["status"] not in OPEN:
+    if run["status"] == "completed":
         return report(run, "none", f"run completed with conclusion {run['conclusion']}")
     stuck, reason, _ = assess(repo, run, workflow, grace)
     return None if stuck else report(run, "none", reason)

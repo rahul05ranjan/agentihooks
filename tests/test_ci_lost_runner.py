@@ -212,15 +212,23 @@ def test_stop_returns_the_last_state_when_nothing_ends_the_run(monkeypatch, no_s
     assert api.posts() == [post(f"{RUNS}/cancel"), post(f"{RUNS}/force-cancel")]
 
 
-def test_open_runs_lists_every_page_of_running_and_queued_runs(monkeypatch):
-    api = Api(
-        {
-            ("--paginate", f"{OPEN_RUNS}in_progress", "--jq", ".workflow_runs[]"): lines({"id": 1}),
-            ("--paginate", f"{OPEN_RUNS}queued", "--jq", ".workflow_runs[]"): lines({"id": 2}, {"id": 3}),
-        }
+def listing(**found):
+    statuses = ("in_progress", "queued", "pending", "waiting", "requested")
+    return {
+        ("--paginate", f"{OPEN_RUNS}{status}", "--jq", ".workflow_runs[]"): found.get(status, "") for status in statuses
+    }
+
+
+def test_open_runs_lists_every_page_of_every_unfinished_status(monkeypatch):
+    found = listing(
+        in_progress=lines({"id": 1}),
+        queued=lines({"id": 2}, {"id": 3}),
+        pending=lines({"id": 4}),
+        waiting=lines({"id": 5}),
+        requested=lines({"id": 6}),
     )
-    monkeypatch.setattr(ci_lost_runner, "_api", api)
-    assert ci_lost_runner.open_runs("o/r", "test.yml") == [{"id": 1}, {"id": 2}, {"id": 3}]
+    monkeypatch.setattr(ci_lost_runner, "_api", Api(found))
+    assert ci_lost_runner.open_runs("o/r", "test.yml") == [{"id": n} for n in range(1, 7)]
 
 
 def test_jobs_of_reads_every_page_of_the_latest_jobs(monkeypatch):
@@ -337,9 +345,10 @@ def test_a_completed_run_is_left_alone_at_first_look(monkeypatch, conclusion):
     assert api.calls == []
 
 
-def test_first_look_names_a_suspect_by_returning_nothing(monkeypatch):
+@pytest.mark.parametrize("status", ["in_progress", "queued", "pending", "waiting", "requested"])
+def test_first_look_names_an_unfinished_suspect_by_returning_nothing(monkeypatch, status):
     monkeypatch.setattr(ci_lost_runner, "_api", Api({JOBS: lines(*stalled_run()), RUNNER_LIST: ""}))
-    assert ci_lost_runner.first_look("o/r", RUN, WORKFLOW, GRACE) is None
+    assert ci_lost_runner.first_look("o/r", {**RUN, "status": status}, WORKFLOW, GRACE) is None
 
 
 def test_first_look_reports_a_healthy_open_run(monkeypatch):
@@ -383,8 +392,7 @@ def test_main_leaves_a_loss_that_clears_on_the_second_read(monkeypatch, capsys, 
 
 def test_main_scans_open_runs_with_its_grace_and_waits_only_for_suspects(monkeypatch, capsys, no_sleep):
     pages = {
-        ("--paginate", f"{OPEN_RUNS}in_progress", "--jq", ".workflow_runs[]"): "",
-        ("--paginate", f"{OPEN_RUNS}queued", "--jq", ".workflow_runs[]"): lines(RUN),
+        **listing(queued=lines(RUN)),
         JOBS: lines(job("lint"), lost(started=ago(11)), gate()),
         RUNNER_LIST: "",
     }
