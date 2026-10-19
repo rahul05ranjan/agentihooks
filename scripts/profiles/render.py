@@ -347,6 +347,10 @@ def owner(home: Path) -> str | None:
     return homes.owner(rendered_root(), home)
 
 
+def has_codex_rollout(name: str, overlays: Sequence[str], conversation_id: str) -> bool:
+    return homes.has_codex_rollout(rendered_root(), home_key(name, overlays), conversation_id)
+
+
 def _claude_fresh(root: Path, stamp: dict, required: set[str]) -> bool:
     out = root / "claude"
     mounts = connectors.path(root.name, "claude", root.parent)
@@ -484,6 +488,7 @@ def render_codex(name: str, force: bool = False, overlays: Sequence[str] = (), i
         and (out / binding.FILE).is_file()
         and connectors.path(root.name, "codex", root.parent).is_file()
         and _read_json(out / STAMP) == current
+        and (not isolate or all((out / item).is_symlink() for item in homes.CODEX_ROLLOUTS))
         and (not master or ((out / "AGENTS.md").is_file() and not (out / "AGENTS.md").is_symlink()))
     ):
         return None
@@ -510,6 +515,11 @@ def render_codex(name: str, force: bool = False, overlays: Sequence[str] = (), i
             continue
         if item != "auth.json" or current["login"]:
             _link(out / item, operator / item)
+    if isolate:
+        stable = homes.rollouts(rendered_root(), home_key(name, overlays))
+        for item in homes.CODEX_ROLLOUTS:
+            (stable / item).mkdir(parents=True, exist_ok=True)
+            _link(out / item, stable / item)
     _link(manifest, sources.path(root.name, "claude", root.parent))
     doc = _codex_config(installed, operator, out, _settings("codex", bundle, dirs))
     if isolate:

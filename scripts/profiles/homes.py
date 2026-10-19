@@ -9,6 +9,8 @@ from pathlib import Path
 from scripts.profiles import binding
 
 HOMES, CURRENT = ".homes", "current"
+ROLLOUTS = ".rollouts"
+CODEX_ROLLOUTS = ("sessions", "archived_sessions")
 GRACE_SECONDS = 600
 PROC = Path("/proc")
 
@@ -70,7 +72,35 @@ def promote(root: Path, name: str, home: Path) -> None:
         named.symlink_to(Path(HOMES) / name / CURRENT)
 
 
+def rollouts(root: Path, name: str) -> Path:
+    return root / ROLLOUTS / name / "codex"
+
+
+def adopt_rollouts(root: Path, name: str) -> Path:
+    stable = rollouts(root, name)
+    homes = _homes(root, name)
+    for home in sorted(homes.iterdir()) if homes.is_dir() else ():
+        for item in CODEX_ROLLOUTS:
+            kept = home / "codex" / item
+            if kept.is_symlink() or not kept.is_dir():
+                continue
+            for path in sorted(kept.rglob("*")):
+                moved = stable / item / path.relative_to(kept)
+                if path.is_file() and not moved.exists():
+                    moved.parent.mkdir(parents=True, exist_ok=True)
+                    path.replace(moved)
+    return stable
+
+
+def has_codex_rollout(root: Path, name: str, conversation_id: str) -> bool:
+    if not conversation_id:
+        return False
+    stable = adopt_rollouts(root, name)
+    return any(next((stable / item).rglob(f"rollout-*{conversation_id}.jsonl"), None) for item in CODEX_ROLLOUTS)
+
+
 def collect(root: Path, name: str) -> None:
+    adopt_rollouts(root, name)
     homes = _homes(root, name)
     kept = (homes / CURRENT).resolve()
     old = [p for p in homes.iterdir() if p.is_dir() and not p.is_symlink() and p.resolve() != kept]
