@@ -966,7 +966,7 @@ def test_a_planner_publishes_a_plan_and_plan_read_prints_its_sliced_task(live, t
     planner = "planner@323133-0258"
     seed = [
         operation("join", by=planner),
-        operation("task_add", task="tp", title="Slice the proof phase", lane="plan", kind="plan", phase="p1"),
+        {**operation("task_add", task="tp", title="Slice the proof phase", lane="plan", phase="p1"), "kind": "plan"},
         operation("task_update", by="swarm", item="tasks/tp", fields={"claimed_by": planner, "state": "claimed"}),
     ]
     status, reply = admin_put(live, *seed)
