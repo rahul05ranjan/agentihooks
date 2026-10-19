@@ -91,7 +91,7 @@ class Spy:
         return self.pipe.watch(*keys)
 
     def execute(self):
-        if self.fail:
+        if self.fail and self.pipe.watching:
             from redis.exceptions import WatchError
 
             raise WatchError("changed")
