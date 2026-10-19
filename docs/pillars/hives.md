@@ -92,8 +92,8 @@ hive over an ephemeral one, then the hive id.
 hives first and takes the UI hive only when no headless hive taking the role has room or none is live. A headless
 hive with room that lacks the account slot, the repo or the login makes the launch wait instead. The agent record
 carries the fallback reason as `placement_fallback` in its profile decision; a task pinned to a UI hive records the
-pin as its reason. UI roles take only UI hives; the master
-keeps its headless fallback below. The engineer, cicd and planner
+pin as its reason. UI roles, the master
+included, take only UI hives. The engineer, cicd and planner
 profiles place as `eng`, `ci` and `plan`; a frontend or qa profile on any lane places as its UI role.
 
 When no live hive takes the role:
@@ -106,23 +106,23 @@ A hive counts as live while its last heartbeat is under ninety seconds old. Code
 
 ### Master placement
 
-The master is placed in three tiers, each tried in `prefer` order:
+The master follows the same host rule as role placement: it runs only on a live UI hive with the `master` role
+that lists the repo. It is placed in two tiers, each tried in `prefer` order:
 
 1. A UI hive with the `master` role that holds the native interactive login for the master's harness.
 2. A UI hive with the `master` role and a subscription or api slot for that harness.
-3. A headless hive, `ui=no`, with a subscription or api slot, whatever its roles.
 
-Every tier also needs the hive to be live and to list the repo. With no candidate the master waits with "no live
-hive can run the master with interactive, subscription or api authentication".
+A headless hive never runs the master, whatever its roles.
 
-## Headless fallback
+## Workstation fallback
 
-When every UI hive is gone, the master still runs: tier three starts it on a headless hive through the same hive
-launch, on a subscription or api slot. Two health findings mark the state until it ends:
+When no UI hive fits, because none is live or the live ones lack the repo, the slot or the login, the hive
+controller leaves the master to the workstation herdr server. It refuses the launch with "the workstation hive
+spawns master work" followed by the placement reason, and the tick logs that line.
 
-- `master-headless`: the master runs on a headless hive.
-- `master-fallback-auth`: the master wanted its interactive login and runs on another route, so phone access
-  through Remote Control is lost.
+The `master-headless` health finding marks a master record placed on a headless hive before this rule. The
+`master-fallback-auth` finding marks a master that wanted its interactive login and runs on another route, so phone
+access through Remote Control is lost.
 
 Placement runs at every master launch, so the successor after the next handoff goes back to the best UI hive that
 is live then. `agentihooks swarm <id> master move --to HIVE` forces that move without waiting: the master hands
