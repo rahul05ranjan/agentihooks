@@ -47,7 +47,14 @@ CASES = {
     "all live plan": ("plan", fleet(), "subscription", REPO, "pods"),
     "pc off master": ("master", fleet("pc"), "subscription", REPO, "vm"),
     "pc off qa": ("qa", fleet("pc"), "subscription", REPO, "vm"),
-    "both off master": ("master", fleet("pc", "vm"), "subscription", REPO, "pods"),
+    "both off master": ("master", fleet("pc", "vm"), "subscription", REPO, NO_UI),
+    "headless master hive": (
+        "master",
+        fleet("pc", "vm", pods={"roles": ["master", "eng"]}),
+        "subscription",
+        REPO,
+        NO_UI,
+    ),
     "both off qa": ("qa", fleet("pc", "vm"), "subscription", REPO, NO_UI),
     "both off frontend": ("frontend", fleet("pc", "vm"), "subscription", REPO, NO_UI),
     "both off eng": ("eng", fleet("pc", "vm"), "subscription", REPO, "pods"),
@@ -126,10 +133,15 @@ def test_the_order(hives, expected):
     assert place("eng", "claude", "acct", "subscription", REPO, hives, NOW) == expected
 
 
-def test_the_master_fallback_ranks_by_room_without_counting_against_it():
+def test_the_master_never_falls_back_to_a_headless_hive():
     hives = [eng("a", agents=4), eng("b", agents=5), hive("vm", roles=["qa"], heartbeat_at=0)]
-    assert place("master", "claude", "acct", "subscription", REPO, hives, NOW) == "a"
+    assert place("master", "claude", "acct", "subscription", REPO, hives, NOW) == NO_UI
     assert place("qa", "claude", "acct", "subscription", REPO, hives, NOW) == NO_UI
+
+
+def test_a_full_master_ui_hive_keeps_the_master_without_counting_against_it():
+    hives = [hive("vm", roles=["master"], agents=2), eng("a")]
+    assert place("master", "claude", "acct", "subscription", REPO, hives, NOW) == "vm"
 
 
 def test_the_codex_harness_matches_its_own_slot_and_login():
