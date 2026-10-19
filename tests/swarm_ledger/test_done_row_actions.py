@@ -60,6 +60,7 @@ def ledger(browser):
     page.goto(URL)
     loaded(page)
     page.click("#tasks-box > summary")
+    page.locator("#item-tasks-t2").wait_for()
     yield page, served
     context.close()
 
