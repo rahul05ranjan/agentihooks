@@ -2,6 +2,7 @@ import inspect
 import re
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -491,6 +492,33 @@ def test_warming_stops_after_one_pass_without_ledgers(monkeypatch):
     server.warm()
     assert calls == ["listed"]
     assert server.WARM_PASSES == 5
+
+
+class Handed:
+    socket = "socket"
+
+    def shutdown(self):
+        pass
+
+
+def test_a_reload_names_the_watched_ledgers_to_its_successor(monkeypatch):
+    seen = []
+    monkeypatch.setattr(server, "HUB", SimpleNamespace(watched=lambda: ["demo", "other"]))
+    monkeypatch.setattr(server, "HANDOFF", {})
+
+    def hand_off(listener, argv, extra):
+        seen.append((listener, extra))
+        return b"{}"
+
+    assert server.reload_if_changed(1, Handed(), (), hand_off, force=True) is None
+    assert seen == [("socket", {server.WATCHED: "demo,other"})]
+
+
+def test_a_reload_whose_successor_never_got_ready_says_so_and_keeps_serving(monkeypatch, capsys):
+    monkeypatch.setattr(server, "HUB", SimpleNamespace(watched=lambda: []))
+    started = server.code_stamp(())
+    assert server.reload_if_changed(1, Handed(), (), lambda *args, **kwargs: None, force=True) == started
+    assert capsys.readouterr().err == "reload: the successor never reported ready; this server keeps serving\n"
 
 
 def test_a_hangup_asks_for_a_hand_off(monkeypatch):

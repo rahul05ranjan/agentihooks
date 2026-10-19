@@ -138,6 +138,14 @@ def test_no_inherited_socket_without_the_setting():
     assert server_handoff.inherited({}) is None
 
 
+def test_announce_without_a_payload_writes_only_the_ready_mark():
+    read, write = os.pipe()
+    os.set_blocking(read, False)
+    server_handoff.announce(environ={server_handoff.READY_FD: str(write)})
+    assert os.read(read, 64) == server_handoff.READY
+    os.close(read)
+
+
 def test_announce_writes_ready_with_its_payload_once_and_forgets_the_pipe():
     read, write = os.pipe()
     environ = {server_handoff.READY_FD: str(write)}

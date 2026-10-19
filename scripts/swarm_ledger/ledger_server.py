@@ -1302,19 +1302,16 @@ def warm(passes=WARM_PASSES):
     takes over with current copies."""
     held = {}
     for _ in range(passes):
-        fresh = []
+        loaded = {}
         for summary in ledger_summaries():
             slug = summary["slug"]
             try:
-                entry = stored.current(slug)
+                loaded[slug] = stored.current(slug)
             except Exception as exc:  # a ledger that fails to load stays cold and the handoff goes on
                 sys.stderr.write(f"warm {slug}: {exc}\n")
-                continue
-            if held.get(slug) is not entry:
-                fresh.append(slug)
-            held[slug] = entry
-        if not fresh:
+        if all(held.get(slug) is entry for slug, entry in loaded.items()):
             return
+        held.update(loaded)
 
 
 def warm_streams(environ=os.environ):
