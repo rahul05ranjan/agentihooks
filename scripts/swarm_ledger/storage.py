@@ -24,8 +24,8 @@ def fenced(directory, slug: str) -> bool:
     return sqlite.fenced(store(directory), slug)
 
 
-def folder_fenced(directory, slug: str) -> bool:
-    return sqlite.fenced(directory, slug)
+def folder_frozen(directory) -> bool:
+    return sqlite.frozen(directory)
 
 
 def read_document(directory, slug: str) -> dict | None:

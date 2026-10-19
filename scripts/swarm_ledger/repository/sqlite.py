@@ -59,6 +59,7 @@ TABLES_SQL = "SELECT name FROM sqlite_master WHERE type='table'"
 FENCES = "CREATE TABLE IF NOT EXISTS hosted_fences (slug TEXT PRIMARY KEY, destination TEXT NOT NULL)"
 FENCED = "SELECT destination FROM hosted_fences WHERE slug IN (?, '*')"
 UNFENCE = "DELETE FROM hosted_fences WHERE destination=?"
+FROZEN = "SELECT 1 FROM hosted_fences WHERE slug='*'"
 FENCE_DESTINATIONS = "SELECT destination FROM hosted_fences WHERE slug IN (?, '*') OR ?='*'"
 TABLE_ID = re.compile(r"[a-z_]+\Z")
 # a fenced ledger's last relay must still be able to hold its revision
@@ -243,12 +244,20 @@ def without_events(state: dict) -> dict:
 
 def fenced(directory: Path, slug: str) -> bool:
     """Whether the hosted migration fenced this ledger, or every ledger, in the folder's database."""
+    return fence_row(directory, FENCED, (slug,))
+
+
+def frozen(directory: Path) -> bool:
+    return fence_row(directory, FROZEN, ())
+
+
+def fence_row(directory: Path, query: str, parameters: tuple) -> bool:
     with read_only(directory) as connection:
         exists = (
             connection is not None
             and connection.execute("SELECT 1 FROM sqlite_master WHERE name='hosted_fences'").fetchone()
         )
-        return bool(exists and connection.execute(FENCED, (slug,)).fetchone())
+        return bool(exists and connection.execute(query, parameters).fetchone())
 
 
 class Transaction:

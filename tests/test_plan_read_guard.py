@@ -139,6 +139,7 @@ def test_shared_conversion_and_its_dry_run_pass_without_allowing_other_flags(led
         assert check(bash(command), env(ledger)) is None
     for ending in ("--freeze", "--url https://hosted.example", "--slug demo"):
         assert check(bash(f"python -m {module} --source {ledger} {ending}"), env(ledger))
+    assert check(bash(f"python -X {module} --source {ledger}"), env(ledger))
     hosted = "scripts.swarm_ledger.storage_migration.hosted"
     assert check(bash(f"python -m {hosted} --source {ledger} --dry-run"), env(ledger))
 

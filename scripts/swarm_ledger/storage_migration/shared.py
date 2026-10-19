@@ -1,6 +1,5 @@
 import argparse
 import json
-import secrets
 import sys
 from pathlib import Path
 
@@ -52,7 +51,7 @@ def copy(source: LedgerRepository, target: LedgerRepository, slug: str, dry_run:
                 raise ValueError(f"ledger {slug} differs in the shared database; conversion refuses to replace it")
             if stale:
                 stored, seeds = hosted.unseeded(state)
-                transaction.insert(slug, stored, seeds, token or secrets.token_urlsafe(24))
+                transaction.insert(slug, stored, seeds, token)
             if moved:
                 transaction.replace_registries(slug, registries)
             converted, kept = transaction.export(slug), transaction.registries(slug)
@@ -101,7 +100,7 @@ def convert(source: LedgerRepository, target: LedgerRepository, dry_run: bool = 
         "ledgers": ledgers,
         "totals": {"ledgers": len(ledgers), **totals},
         "match": all(row["match"] for row in ledgers),
-        "read_only": storage.folder_fenced(source.directory, "*"),
+        "read_only": storage.folder_frozen(source.directory),
         "dry_run": dry_run,
     }
 
@@ -117,17 +116,15 @@ def main() -> None:
     args = parser.parse_args()
     if not (args.source / storage.DATABASE).is_file():
         sys.exit(f"shared conversion: {args.source} holds no ledger database")
-    from scripts.swarm_ledger import ledger_server
-
     if not storage.shared():
         sys.exit(f"shared conversion: {postgres.URL} names no shared database")
-    source = storage.build(args.source / storage.DATABASE, ledger_server.core)
-    target = storage.build(None, ledger_server.core)
+    source = storage.build(args.source / storage.DATABASE)
+    target = storage.build()
     if args.unfence:
         removed = thaw(source, target)
-        print(json.dumps({"removed": removed, "read_only": storage.folder_fenced(source.directory, "*")}), flush=True)
+        print(json.dumps({"removed": removed, "read_only": storage.folder_frozen(source.directory)}))
         return
-    print(json.dumps(convert(source, target, args.dry_run)), flush=True)
+    print(json.dumps(convert(source, target, args.dry_run)))
 
 
 if __name__ == "__main__":

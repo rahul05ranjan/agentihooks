@@ -3,7 +3,7 @@ import sqlite3
 
 import pytest
 
-from scripts.swarm_ledger import ledger_core
+from scripts.swarm_ledger import ledger_core, storage
 from scripts.swarm_ledger.repository import sqlite
 from scripts.swarm_ledger.repository.sqlite import DATABASE, SQLiteLedgerRepository
 from scripts.swarm_ledger.storage_migration import shared
@@ -69,6 +69,7 @@ def test_a_write_landing_before_the_fence_reaches_the_shared_database(stores, mo
     freeze = shared.freeze
 
     def late_write(repo):
+        assert target.export_document(SLUG) == document()
         changed = {**document(), "title": "Late write", "tasks": [*document()["tasks"], {"id": "third"}]}
         repo.import_document(SLUG, changed, token="kept-token", replace=True)
         repo.import_document("late-ledger", document())
@@ -231,3 +232,34 @@ def test_a_dry_run_and_an_unfence_cannot_be_combined(stores, monkeypatch):
     with pytest.raises(SystemExit):
         shared.main()
     assert not sqlite.fenced(source.directory, "*")
+
+
+def test_the_folder_reads_frozen_only_under_the_every_ledger_fence_even_with_a_shared_database(stores, monkeypatch):
+    source, _ = stores
+    monkeypatch.setenv("AGENTIHOOKS_SWARM_DATABASE_URL", "postgresql://ledger@shared/ledger")
+    assert storage.folder_frozen(source.directory) is False
+    shared.freeze(source)
+    assert storage.folder_frozen(source.directory) is True
+    with source.transaction() as transaction:
+        transaction.unfence(shared.DESTINATION)
+    assert storage.folder_frozen(source.directory) is False
+
+
+def test_the_command_names_itself_and_requires_a_source(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["shared"])
+    with pytest.raises(SystemExit):
+        shared.main()
+    error = capsys.readouterr().err
+    assert error.startswith("usage: python -m scripts.swarm_ledger.storage_migration.shared ")
+    assert "the following arguments are required: --source" in error
+
+
+def test_the_command_dry_run_rolls_back_and_leaves_the_folder_writable(stores, monkeypatch, capsys):
+    source, target = stores
+    shared_store(monkeypatch, target)
+    monkeypatch.setattr("sys.argv", ["shared", "--source", str(source.directory), "--dry-run"])
+    shared.main()
+    report = json.loads(capsys.readouterr().out)
+    assert (report["dry_run"], report["read_only"], report["match"]) == (True, False, True)
+    assert not target.exists(SLUG)
+    assert not storage.folder_frozen(source.directory)
