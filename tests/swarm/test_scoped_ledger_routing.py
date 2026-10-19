@@ -380,7 +380,6 @@ def test_a_swarm_command_runs_inside_its_own_route_and_reports_its_master(store,
     seen = {}
     lead = object()
     monkeypatch.setattr(cli, "connect", lambda: store)
-    monkeypatch.setattr("scripts.swarm.store.connect", lambda: store)
     monkeypatch.setattr(cli, "cmd_status", lambda store, args: seen.update(route=ledger_route.url("selected")))
     monkeypatch.setattr(control_notifications, "CONTROLS", {"status": "showed the status"})
     monkeypatch.setattr(control_notifications, "master", lambda store, slug: lead)
