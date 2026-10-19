@@ -32,8 +32,10 @@ def test_subreaping_asks_the_kernel_to_adopt_orphaned_descendants():
 
 
 def test_a_refused_subreaper_stops_the_supervisor_before_it_starts_a_server():
-    with pytest.raises(OSError, match="prctl refused PR_SET_CHILD_SUBREAPER"):
+    with pytest.raises(OSError) as refused:
         server_supervisor.subreap(Libc(answer=-1))
+    assert refused.value.args == ("prctl refused PR_SET_CHILD_SUBREAPER",)
+    assert server_supervisor.REFUSED == "prctl refused PR_SET_CHILD_SUBREAPER"
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="child subreapers are a Linux feature")

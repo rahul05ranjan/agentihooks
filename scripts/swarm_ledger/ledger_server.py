@@ -1403,7 +1403,7 @@ def loaded_modules(modules=sys.modules) -> str:
         sorted(
             name
             for name, module in modules.items()
-            if module is not None and name != "__main__" and name.rsplit(".", 1)[-1] != "ledger_server"
+            if module is not None and name != "__main__" and name.rpartition(".")[2] != "ledger_server"
         )
     )
 
@@ -1600,7 +1600,7 @@ def reload(wait: float = RELOAD_WAIT_S) -> str | None:
     except (ValueError, ProcessLookupError):
         return ensure()
     deadline = time.monotonic() + wait
-    while recorded_pid() == pid and server_process_alive():
+    while all((recorded_pid() == pid, server_process_alive())):
         if time.monotonic() >= deadline:
             sys.exit(f"the ledger server pid {pid} did not hand off within {wait:.0f} s; see {LOGFILE}")
         time.sleep(0.1)

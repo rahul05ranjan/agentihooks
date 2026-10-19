@@ -7,12 +7,13 @@ from pathlib import Path
 
 PR_SET_CHILD_SUBREAPER = 36
 FORWARDED = (signal.SIGTERM, signal.SIGINT)
+REFUSED = "prctl refused PR_SET_CHILD_SUBREAPER"
 
 
 def subreap(libc=None) -> None:
-    lib = libc or ctypes.CDLL(None, use_errno=True)
+    lib = libc or ctypes.CDLL(None)
     if lib.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
-        raise OSError(ctypes.get_errno(), "prctl refused PR_SET_CHILD_SUBREAPER")
+        raise OSError(REFUSED)
 
 
 def forward(pidfile: Path, signum: int, held: tuple[int, ...] = (), kill=os.kill) -> None:
