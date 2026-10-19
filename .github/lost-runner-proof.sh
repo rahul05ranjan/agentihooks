@@ -40,22 +40,13 @@ if [[ "$MODE" == plant ]]; then
   [[ "$final" == "2 completed cancelled" ]] || { echo "::error::expected attempt 2 cancelled, got $final"; exit 1; }
   gh api "repos/$R/actions/runs/$PLANT/attempts/2/jobs" --jq '.jobs[] | "attempt 2 job \(.name): \(.conclusion)"'
 else
-  for _ in $(seq 60); do
-    line=$(watchdog --run-id "$PLANT")
-    echo "$(date -u +%T) $line"
-    [[ "$(jq -r .reason <<<"$line")" == *"failed on its own"* ]] && break
-    [[ "$(jq -r .reason <<<"$line")" != "run completed"* ]] || { echo "::error::run ended before the watchdog judged it"; exit 1; }
-    sleep 15
-  done
-  [[ "$(jq -r .reason <<<"$line")" == *"failed on its own"* ]] || { echo "::error::the stalled red run was never judged"; exit 1; }
-  [[ "$(jq -r .action <<<"$line")" == none ]] || { echo "::error::the stalled red run was touched"; exit 1; }
-  after=$(state)
-  echo "after the watchdog: $after"
-  [[ "$after" == "1 "* && "$after" != *completed* ]] || { echo "::error::expected attempt 1 still open, got $after"; exit 1; }
+  until_acted cancel
+  sleep 60
+  final=$(state)
+  echo "final: $final"
+  [[ "$final" == "1 completed cancelled" ]] || { echo "::error::expected attempt 1 cancelled and never rerun, got $final"; exit 1; }
   line=$(watchdog --run-id "$RED_RUN" --workflow test.yml)
   echo "real failure run: $line"
   [[ "$(jq -r .action <<<"$line")" == none ]] || { echo "::error::the real failure run was touched"; exit 1; }
-  echo "cleanup: the proof force cancels its own planted run"
-  gh api -X POST "repos/$R/actions/runs/$PLANT/force-cancel" >/dev/null
 fi
 echo "proof passed"
