@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from scripts.doctor import traces_read
@@ -45,7 +47,7 @@ def test_reader_walks_every_page_of_traces_and_observations_and_keeps_no_text(tm
     assert ("observations", {"traceId": "t1", "page": 2, "limit": traces_read.OBSERVATION_PAGE}) in calls
     assert traces_read.OBSERVATION_PAGE == 50
     assert (coverage, failures) == (
-        {"listed": True, "unlisted": 0, "traces": 1, "covered": 1, "complete": True, "unreadable": []},
+        {"listed": True, "unlisted": 0, "traces": 1, "covered": 1, "capped": 0, "complete": True, "unreadable": []},
         [],
     )
     assert read["tags"] == ["swarm:s", "task:a"]
@@ -152,7 +154,15 @@ def test_the_history_budget_leaves_the_rest_for_a_later_scan_and_says_so(tmp_pat
     langfuse = Langfuse([_trace_row(f"t{n}", "u") for n in range(4)])
     budget = traces_read.Budget(history_seconds=2)
     rows, coverage, failures = traces_read.history("s", langfuse, tmp_path, budget, clock=_ticks(1))
-    assert coverage == {"listed": True, "unlisted": 0, "traces": 4, "covered": 1, "complete": False, "unreadable": []}
+    assert coverage == {
+        "listed": True,
+        "unlisted": 0,
+        "traces": 4,
+        "covered": 1,
+        "capped": 0,
+        "complete": False,
+        "unreadable": [],
+    }
     assert failures == []
     assert [len(r["observations"]) for r in rows] == [1, 0, 0, 0]
     rows, coverage, _ = traces_read.history("s", langfuse, tmp_path, traces_read.Budget())
@@ -180,7 +190,15 @@ def test_a_single_trace_stops_at_the_budget_without_caching_partial_history(tmp_
     assert now[0] == 10
     assert row["complete"] is False
     assert len(row["observations"]) == 2
-    assert coverage == {"listed": True, "unlisted": 0, "traces": 1, "covered": 0, "complete": False, "unreadable": []}
+    assert coverage == {
+        "listed": True,
+        "unlisted": 0,
+        "traces": 1,
+        "covered": 0,
+        "capped": 0,
+        "complete": False,
+        "unreadable": [],
+    }
     assert failures == []
     assert list(tmp_path.rglob("*.json")) == []
 
@@ -256,7 +274,15 @@ def test_an_unreadable_trace_is_a_coverage_gap_retried_after_every_unread_trace(
     asked.clear()
     _, coverage, _ = traces_read.history("s", get, tmp_path, traces_read.Budget())
     assert asked == ["c", "a"]
-    assert coverage == {"listed": True, "unlisted": 0, "traces": 3, "covered": 3, "complete": True, "unreadable": []}
+    assert coverage == {
+        "listed": True,
+        "unlisted": 0,
+        "traces": 3,
+        "covered": 3,
+        "capped": 0,
+        "complete": True,
+        "unreadable": [],
+    }
 
 
 def test_a_capped_listing_is_judged_within_its_window_and_counts_the_traces_past_the_cap(tmp_path):
@@ -267,9 +293,33 @@ def test_a_capped_listing_is_judged_within_its_window_and_counts_the_traces_past
         "unlisted": 3429,
         "traces": 1,
         "covered": 1,
+        "capped": 0,
         "complete": True,
         "unreadable": [],
     }
+
+
+def _deep(path, params):
+    if path == "traces":
+        return _page([_trace_row("a", "u")], 1, 1)
+    return _page([{"id": f"o{params['page']}", "type": "TOOL", "startTime": "2026-10-05T15:00:00Z"}], params["page"], 9)
+
+
+def test_a_trace_past_the_observation_page_cap_is_kept_as_capped_and_not_read_again(tmp_path):
+    budget = traces_read.Budget(observation_pages=2)
+    [row], coverage, _ = traces_read.history("s", _deep, tmp_path, budget)
+    assert (row["complete"], len(row["observations"])) == (False, 2)
+    assert (coverage["covered"], coverage["capped"], coverage["complete"]) == (0, 1, True)
+    asked = []
+    traces_read.history("s", lambda path, params: asked.append(path) or _deep(path, params), tmp_path, budget)
+    assert asked == ["traces"]
+
+
+def test_a_trace_stopped_by_the_budget_before_its_page_cap_is_not_capped(tmp_path):
+    budget = traces_read.Budget(observation_pages=5, history_seconds=3)
+    _, coverage, _ = traces_read.history("s", _deep, tmp_path, budget, clock=_ticks(1))
+    assert (coverage["capped"], coverage["complete"]) == (0, False)
+    assert list(tmp_path.rglob("*.json")) == []
 
 
 def test_a_listing_stopped_by_the_budget_counts_what_it_did_not_reach(tmp_path):
@@ -292,21 +342,19 @@ def test_a_failed_listing_counts_no_traces_past_a_cap(tmp_path):
 
 
 def _legacy(tmp_path, trace_id, entry):
-    import json
-
     path = tmp_path / f"{trace_id}.json"
     path.write_text(json.dumps(entry))
     return path
 
 
 OBSERVED = {"type": "TOOL", "name": "Bash", "start": 1, "end": 2, "turn": 1, "error": False, "tokens": 0}
+
+
 OTHER = {**OBSERVED, "name": "Read"}
 
 
 def test_a_whole_cache_entry_written_before_the_deduplicated_flag_is_upgraded_without_a_read(tmp_path):
-    import json
-
-    path = _legacy(tmp_path, "a", {"updated_at": "u", "whole": True, "observations": [OBSERVED, OTHER, OBSERVED]})
+    path = _legacy(tmp_path, "a", {"updated_at": "u", "whole": True, "observations": [OBSERVED, OTHER]})
     langfuse = Langfuse([_trace_row("a", "u")])
     [row], coverage, _ = traces_read.history("s", langfuse, tmp_path, traces_read.Budget(history_seconds=0))
     assert [c for c in langfuse.calls if c[0] == "observations"] == []
@@ -318,6 +366,15 @@ def test_a_whole_cache_entry_written_before_the_deduplicated_flag_is_upgraded_wi
         "observations": [OBSERVED, OTHER],
         "deduplicated": True,
     }
+
+
+def test_an_old_cache_entry_holding_a_repeated_observation_is_read_again(tmp_path):
+    path = _legacy(tmp_path, "a", {"updated_at": "u", "whole": True, "observations": [OBSERVED, OTHER, OBSERVED]})
+    langfuse = Langfuse([_trace_row("a", "u")])
+    [row], _, _ = traces_read.history("s", langfuse, tmp_path, traces_read.Budget())
+    assert [c[1]["traceId"] for c in langfuse.calls if c[0] == "observations"] == ["a"]
+    assert [o["name"] for o in row["observations"]] == ["a"]
+    assert json.loads(path.read_text())["observations"] == row["observations"]
 
 
 def test_a_failed_cache_entry_written_before_the_flag_keeps_its_failure_and_is_retried(tmp_path):
