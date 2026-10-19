@@ -1,7 +1,6 @@
 """Wall time per claimed task: past one limit the master hears of it, past a second the agent is asked to push and
 hand off, and an agent still live a grace period after that ask is ended and its task reopened for the next engineer.
-Declared waits count toward the age, since an overrunning agent loses its time waiting on blockers; only a wait on
-the merge queue holds the ask and the end, because an agent keeps its seat there until the merge."""
+Declared waits count toward the age; only a wait on the merge queue holds the ask and the end."""
 
 import json
 from collections.abc import Callable
@@ -147,7 +146,7 @@ def _end(watch, mail, agent, minutes, mark):
         watch.slug, tid, {"state": "open", "claimed_by": "", "awaiting": ""}, if_state=HELD
     )
     if reopened.get("state") != "open" or reopened.get("claimed_by"):
-        return []
+        return [f"overrun: ended {agent.name} but could not reopen task {tid}, the stall watch reopens it"]
     watch.store.mark_restart(watch.slug, tid, CAUSE)
     watch.store.release(watch.slug, tid, agent.name)
     watch.store.drop_agent(watch.slug, agent.name)

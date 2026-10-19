@@ -232,7 +232,7 @@ def test_a_refused_reopen_leaves_the_claim_and_the_agent_record():
     swarm = Swarm()
     swarm.tick(PARK)
     swarm.ledger.update_task = lambda slug, task_id, fields, by="swarm", if_state=(): dict(swarm.ledger.rows[task_id])
-    assert swarm.tick(ENDED) == []
+    assert swarm.tick(ENDED) == [f"overrun: ended {OWNER} but could not reopen task t1, the stall watch reopens it"]
     assert swarm.store.claimant(SLUG, "t1") == OWNER and swarm.working() == [OWNER]
     assert swarm.store.take_restart(SLUG, "t1") == "" and swarm.ledger.comments == []
 
