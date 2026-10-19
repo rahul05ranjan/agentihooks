@@ -86,8 +86,10 @@ def adopt_rollouts(root: Path, name: str) -> Path:
             kept = home / "codex" / item
             if home.is_symlink() or kept.is_symlink() or not kept.is_dir():
                 continue
-            for path in sorted(kept.rglob("rollout-*.jsonl")):
-                _adopt(path, stable / item / path.relative_to(kept))
+            for folder, _, files in os.walk(kept):
+                for file in sorted(f for f in files if f.startswith("rollout-") and f.endswith(".jsonl")):
+                    path = Path(folder) / file
+                    _adopt(path, stable / item / path.relative_to(kept))
     return stable
 
 
