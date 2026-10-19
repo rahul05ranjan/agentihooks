@@ -178,6 +178,16 @@ gh run view <run id> --log | grep -E '"requeue"|Log only'
 
 `tests/test_ci_queue_retry.py` pins the classification and the once per head guard against recorded shard logs in `tests/fixtures/queue_retry/`. Enforcement by default was delivered by pull request [3511](https://github.com/the-cloud-clockwork/agentihooks/pull/3511) under issue [3508](https://github.com/the-cloud-clockwork/agentihooks/issues/3508). Later pull requests made the classifier wait for the queue to drop the pull request ([4166](https://github.com/the-cloud-clockwork/agentihooks/pull/4166), [4206](https://github.com/the-cloud-clockwork/agentihooks/pull/4206)), requeue through `enqueuePullRequest` ([4241](https://github.com/the-cloud-clockwork/agentihooks/pull/4241)) and count a cancelled shard that lost its runner ([4271](https://github.com/the-cloud-clockwork/agentihooks/pull/4271)).
 
+### Stalled runs
+
+A job whose runner pod or node vanished can stay `in_progress` with no failure, so its Tests run never completes and Queue retry never sees it. The Lost runner workflow, `.github/workflows/lost-runner.yml`, runs every ten minutes on a hosted runner with the TCC Main CI app token and runs `python -m scripts.ci_lost_runner --repo <owner>/<repo>`. A queued or running Tests run is stalled when:
+
+- a job has been in progress for at least ten minutes on a runner that is absent from the organization runner list,
+- no other job is running on a live runner, and
+- every queued job waits on a lost job.
+
+A stalled run is cancelled, then force cancelled if a plain cancel does not end it. On its first attempt it then reruns its failed jobs once. A second loss is cancelled and not rerun. A run where any job failed or timed out on its own is cancelled and never rerun. Each examined run prints one JSON line with its action, `none`, `cancel` or `rerun`, and the reason. Like Queue retry, a scheduled workflow runs from `main`, so a change takes effect after promotion.
+
 ## Coverage grading
 
 The coverage ratchet fails a run when a line the base tree ran is no longer run by any test. Since the queue tier landed (pull request #3303), it runs on dev pushes, which form the promotion tier, and on dispatched Tests runs. The merge queue grades no coverage, so a queue entry never looks up or waits on the run of the entry ahead of it.
