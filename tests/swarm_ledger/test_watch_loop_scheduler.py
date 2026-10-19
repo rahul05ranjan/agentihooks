@@ -22,7 +22,7 @@ def unwritable_cache(monkeypatch, tmp_path):
     for name in ("AGENTIHOOKS_DEPLOYMENT", "AGENTIHOOKS_HIVE_ID"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(process_timer, "blocking_client", lambda: fakeredis.FakeRedis(decode_responses=True))
-    monkeypatch.setattr(ledger_server, "SCHEDULER_UNAVAILABLE", threading.Event())
+    monkeypatch.setattr(ledger_server, "SCHEDULER_UNAVAILABLE", threading.Event(), raising=False)
 
 
 def test_the_watch_loop_reaches_its_second_pass_when_the_scheduler_lock_folder_cannot_be_created(
@@ -48,3 +48,13 @@ def test_the_watch_loop_reaches_its_second_pass_when_the_scheduler_lock_folder_c
     assert passes == [1, 1, 1]
     assert slept == [2.0, 2.0, 2.0]
     assert capsys.readouterr().err.count("scheduler wait unavailable, sleeping instead") == 1
+
+
+def test_a_working_scheduler_wait_is_the_only_wait(monkeypatch):
+    waited = []
+    monkeypatch.setattr(ledger_server, "SCHEDULER_UNAVAILABLE", threading.Event(), raising=False)
+    monkeypatch.setattr(process_timer, "wait", waited.append)
+    monkeypatch.setattr(ledger_server.time, "sleep", lambda seconds: pytest.fail(f"slept {seconds}"))
+    ledger_server.scheduled_wait(2.0)
+    assert waited == [2.0]
+    assert not ledger_server.SCHEDULER_UNAVAILABLE.is_set()
