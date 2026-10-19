@@ -120,6 +120,7 @@ def test_endpoint_activation_requires_ready_executions_and_moves_the_controller_
 
 
 def test_activation_never_loads_controller_authority_for_a_pinned_caller(pending, monkeypatch):
+    from scripts.swarm import ledger_cutover
     from scripts.swarm.store import SwarmError
     from scripts.swarm_ledger import authority_context
 
