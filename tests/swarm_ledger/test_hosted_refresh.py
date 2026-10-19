@@ -124,6 +124,38 @@ def test_interrupted_refresh_keeps_the_hosted_copy_and_its_media(diverged, monke
     assert archived(target, before) == before
 
 
+def test_refused_history_removes_the_media_the_refresh_wrote(diverged, monkeypatch):
+    source, target = diverged
+    snapshot = hosted.capture(source, SLUG)
+    before = hosted.capture(target, SLUG)
+
+    def refused(*args):
+        raise ValueError("imported history differs from source")
+
+    monkeypatch.setattr(hosted, "store", refused)
+    with pytest.raises(ValueError, match="^imported history differs from source$"):
+        hosted.restore(target, snapshot, (digest(snapshot), digest(before)))
+    assert hosted.capture(target, SLUG) == before
+
+
+def test_retry_finishes_a_refresh_whose_media_cleanup_failed(diverged, monkeypatch):
+    source, target = diverged
+    snapshot = hosted.capture(source, SLUG)
+    displaced = hosted.capture(target, SLUG)
+    expected = (digest(snapshot), digest(displaced))
+    with monkeypatch.context() as patch:
+        patch.setattr(hosted, "prune", lambda *args: (_ for _ in ()).throw(OSError("cleanup failed")))
+        with pytest.raises(OSError, match="cleanup failed"):
+            hosted.restore(target, snapshot, expected)
+    assert hosted.capture(target, SLUG) != snapshot
+    assert hosted.restore(target, snapshot, expected) == hosted.manifest(snapshot)
+    assert hosted.capture(target, SLUG) == snapshot
+    assert archived(target, displaced) == displaced
+    media(target, b"Uploaded after the refresh finished.")
+    with pytest.raises(ValueError, match="^hosted ledger changed since its expected digest$"):
+        hosted.restore(target, snapshot, expected)
+
+
 def test_prune_keeps_a_displaced_file_written_again_after_the_refresh(diverged):
     _, target = diverged
     folder = target.directory / f"{SLUG}.media"

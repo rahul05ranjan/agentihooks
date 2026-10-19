@@ -17,7 +17,7 @@ from pathlib import Path
 
 from scripts.swarm_ledger import storage
 from scripts.swarm_ledger.api.errors import APIError
-from scripts.swarm_ledger.repository import LedgerRepository
+from scripts.swarm_ledger.repository import LedgerRepository, Transaction
 
 LIFETIME = 900
 MAX_COMPRESSED = 64 << 20
@@ -117,8 +117,9 @@ def file_bytes(files: dict) -> dict:
     return result
 
 
-def write_files(folder: Path, files: dict) -> None:
+def write_files(folder: Path, files: dict) -> list:
     folder.mkdir(exist_ok=True)
+    created = []
     for name, data in files.items():
         path = folder / name
         if path.is_symlink() or (path.exists() and path.read_bytes() != data):
@@ -127,10 +128,12 @@ def write_files(folder: Path, files: dict) -> None:
             temporary = path.with_suffix(path.suffix + ".part")
             temporary.write_bytes(data)
             temporary.replace(path)
+            created.append(path)
+    return created
 
 
 def restore(repo: LedgerRepository, snapshot: dict, expected: tuple[str, str] | None = None) -> dict:
-    slug, state = snapshot["slug"], snapshot["state"]
+    slug = snapshot["slug"]
     if snapshot["version"] != 1 or not repo.domain.SLUG_RE.fullmatch(slug):
         raise ValueError("invalid migration identity")
     files = file_bytes(snapshot["files"])
@@ -138,31 +141,41 @@ def restore(repo: LedgerRepository, snapshot: dict, expected: tuple[str, str] | 
         raise ValueError("invalid migration registry")
     if expected and manifest(snapshot)["digest"] != expected[0]:
         raise ValueError("snapshot differs from its expected source digest")
+    folder = repo.directory / f"{slug}.media"
     with repo.transaction() as transaction:
         displaced = displace(repo, snapshot, expected) if transaction.exists(slug) else None
         if displaced == snapshot:
             return manifest(snapshot)
         if expected and displaced is None:
             raise ValueError("no hosted ledger to refresh")
-        write_files(repo.directory / f"{slug}.media", files)
-        stored = json.loads(encode(state))
-        seeds = stored["_meta"].get("seeds")
-        if seeds is not None:
-            stored["_meta"]["seeds"] = {}
-        import secrets
-
-        if displaced:
-            transaction.drop_registries(slug)
-        transaction.insert(slug, stored, seeds, transaction.token(slug) if displaced else secrets.token_urlsafe())
-        transaction.add_registries(snapshot["registries"])
-        if transaction.export(slug) != state:
-            raise ValueError("imported history differs from source")
-        folder = repo.directory / f"{slug}.media"
+        created = write_files(folder, files)
+        try:
+            store(transaction, snapshot, displaced)
+        except BaseException:
+            for path in created:
+                path.unlink(missing_ok=True)
+            raise
         displaced_only = displaced["files"].keys() - files.keys() if displaced else set()
         stale = {name: (folder / name).stat().st_mtime_ns for name in displaced_only}
     if stale:
         prune(repo, folder, stale)
     return manifest(capture(repo, slug))
+
+
+def store(transaction: Transaction, snapshot: dict, displaced: dict | None) -> None:
+    import secrets
+
+    slug, state = snapshot["slug"], snapshot["state"]
+    stored = json.loads(encode(state))
+    seeds = stored["_meta"].get("seeds")
+    if seeds is not None:
+        stored["_meta"]["seeds"] = {}
+    if displaced:
+        transaction.drop_registries(slug)
+    transaction.insert(slug, stored, seeds, transaction.token(slug) if displaced else secrets.token_urlsafe())
+    transaction.add_registries(snapshot["registries"])
+    if transaction.export(slug) != state:
+        raise ValueError("imported history differs from source")
 
 
 def prune(repo: LedgerRepository, folder: Path, stale: dict) -> None:
@@ -181,6 +194,8 @@ def displace(repo: LedgerRepository, snapshot: dict, expected: tuple[str, str] |
         return current
     if expected is None:
         raise ValueError("hosted ledger conflict")
+    if leftover(repo, current, snapshot, expected[1]):
+        return current
     digest = manifest(current)["digest"]
     if digest != expected[1]:
         raise ValueError("hosted ledger changed since its expected digest")
@@ -197,6 +212,15 @@ def displace(repo: LedgerRepository, snapshot: dict, expected: tuple[str, str] |
     finally:
         os.close(descriptor)
     return current
+
+
+def leftover(repo: LedgerRepository, current: dict, snapshot: dict, replaced: str) -> bool:
+    archive = repo.directory / f"{snapshot['slug']}.displaced" / f"{replaced}.json.gz"
+    if not archive.is_file() or {**current, "files": snapshot["files"]} != snapshot:
+        return False
+    extra = current["files"].keys() - snapshot["files"].keys()
+    archived = json.loads(gzip.decompress(archive.read_bytes()))["files"]
+    return snapshot["files"].items() <= current["files"].items() and extra <= archived.keys()
 
 
 def expectation(headers: Message | dict) -> tuple[str, str] | None:
