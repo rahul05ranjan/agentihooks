@@ -194,7 +194,7 @@ def test_a_rollback_keeps_signed_approvals_in_the_decisions(files):
 
 def test_the_operator_principal_still_needs_the_page_credential_of_that_ledger(files):
     handler = request("POST", "architecture/actions")
-    server = SimpleNamespace(repository=SimpleNamespace(token={"other": "page-token"}.get))
+    server = as_services(SimpleNamespace(repository=SimpleNamespace(token={"other": "page-token"}.get)))
     with pytest.raises(APIError) as error:
         architecture.operator_transport(handler, server, SLUG, "")
     assert (error.value.status, str(error.value)) == (403, "Architecture changes need the operator")

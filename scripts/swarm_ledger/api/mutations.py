@@ -1,14 +1,12 @@
-from types import ModuleType
-
 from scripts.swarm_ledger import ledger_task_duplicates
 
 from . import resources, schemas
 from .errors import APIError
-from .services import Services
+from .services import LedgerCore, Services
 
 
 class GuardedOperations:
-    def __init__(self, payload: dict, budget: object, core: ModuleType, fence=None, slug: str = "") -> None:
+    def __init__(self, payload: dict, budget: object, core: LedgerCore, fence=None, slug: str = "") -> None:
         self.payload = payload
         self.budget = budget
         self.core = core

@@ -8,10 +8,11 @@ from io import BytesIO
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
-from scripts.swarm_ledger.api.services import HttpPolicy, LedgerService, MediaService, Services, SwarmService
+import pytest
 
 from scripts.swarm_ledger import api
 from scripts.swarm_ledger.api import admin, architecture, hives, mutations, proofs, routes, routing
+from scripts.swarm_ledger.api.services import HttpPolicy, LedgerService, MediaService, Services, SwarmService
 from scripts.swarm_ledger.storage_migration import hosted
 
 SLUG = "fake-2026-01-01"
@@ -113,21 +114,83 @@ def test_the_services_bundle_carries_interfaces_and_no_modules():
     assert {LedgerService, SwarmService, MediaService} <= set(Services.__annotations__.values())
 
 
+@pytest.mark.parametrize(
+    ("service", "field", "source"),
+    [
+        ("ledger", "core", "core"),
+        ("ledger", "authority", "authority"),
+        ("ledger", "hub", "HUB"),
+        ("ledger", "layout_rows", "ledger_layout.ROWS"),
+        ("ledger", "home_summaries", "home_summaries"),
+        ("ledger", "bin_summaries", "bin_summaries"),
+        ("ledger", "bin_entries", "ledger_bin.entries"),
+        ("ledger", "bin_ledger", "ledger_bin.delete"),
+        ("ledger", "workspace_tails", "workspace_tails"),
+        ("ledger", "stream_resources", "stream_resources"),
+        ("ledger", "layout", "ledger_layout.read"),
+        ("ledger", "write_layout", "ledger_layout.write"),
+        ("ledger", "write_gate", "write_gate"),
+        ("ledger", "relay_to_inbox", "relay_to_inbox"),
+        ("ledger", "deliver_alerts", "deliver_alerts"),
+        ("swarm", "doctor", "DOCTOR"),
+        ("swarm", "store", "swarm_store"),
+        ("swarm", "status", "swarm_status"),
+        ("swarm", "control", "swarm_control"),
+        ("swarm", "lifecycle", "lifecycle_control"),
+        ("swarm", "refresh_quota", "refresh_quota"),
+        ("swarm", "control_argv", "control_argv"),
+        ("swarm", "doctor_phrase", "doctor_phrase"),
+        ("media", "resolve_media", "ledger_media.resolve"),
+        ("media", "resolve_artifacts", "ledger_artifacts.resolve"),
+    ],
+)
+def test_the_composition_root_wires_each_service_to_its_server_source(service, field, source):
+    from scripts.swarm_ledger import ledger_server
+
+    expected = ledger_server
+    for part in source.split("."):
+        expected = getattr(expected, part)
+    assert getattr(getattr(ledger_server.api_services(), service), field) is expected
+
+
+def test_the_composition_root_injects_the_repository_and_the_http_policy():
+    from scripts.swarm_ledger import ledger_server
+
+    services = ledger_server.api_services()
+    assert services.repository is ledger_server.repository
+    assert services.policy == HttpPolicy(
+        allowed_hosts=ledger_server.ALLOWED_HOSTS,
+        allowed_origins=ledger_server.ALLOWED_ORIGINS,
+        max_body=ledger_server.MAX_BODY,
+    )
+
+
 def test_no_api_function_takes_the_server_module():
     modules = (admin, architecture, hives, mutations, proofs, routes, routing, hosted)
     taking = [
-        f"{module.__name__}.{name}"
+        f"{module.__name__}.{name}.{parameter.name}"
         for module in modules
         for name, function in inspect.getmembers(module, inspect.isfunction)
-        if function.__module__ == module.__name__ and "server" in inspect.signature(function).parameters
+        if function.__module__ == module.__name__
+        for parameter in inspect.signature(function).parameters.values()
+        if parameter.name == "server" or parameter.annotation is ModuleType
     ]
     assert taking == []
+    services_parameters = [
+        inspect.signature(function).parameters["services"].annotation
+        for module in modules
+        for _, function in inspect.getmembers(module, inspect.isfunction)
+        if function.__module__ == module.__name__ and "services" in inspect.signature(function).parameters
+    ]
+    assert len(services_parameters) > 20
+    assert set(services_parameters) == {Services}
 
 
-def test_importing_the_api_loads_no_server_module():
+def test_the_api_serves_fake_services_without_loading_a_server_module():
     probe = (
         "import sys\n"
-        "from scripts.swarm_ledger.api import admin, architecture, hives, mutations, proofs, routes, routing, services\n"
+        "from tests.swarm_ledger.test_api_services import fake_services, served\n"
+        "assert served(fake_services([]), 'GET', '/api/v1/ledgers')[0] == 200\n"
         "loaded = sorted(name for name in sys.modules if name.endswith('ledger_server'))\n"
         "assert loaded == [], loaded\n"
     )
