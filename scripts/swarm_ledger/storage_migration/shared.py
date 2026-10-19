@@ -1,6 +1,7 @@
 import argparse
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from scripts.swarm_ledger import storage
@@ -47,7 +48,9 @@ def slugs(repo: LedgerRepository) -> list:
         return snapshot.slugs() if snapshot else []
 
 
-def copy(source: LedgerRepository, target: LedgerRepository, slug: str, finish, replace: bool = False) -> dict:
+def copy(
+    source: LedgerRepository, target: LedgerRepository, slug: str, finish: Callable[[], None], replace: bool = False
+) -> dict:
     with source.snapshot() as snapshot:
         state, registries, token = snapshot.export(slug), snapshot.registries(slug), snapshot.token(slug)
     try:
