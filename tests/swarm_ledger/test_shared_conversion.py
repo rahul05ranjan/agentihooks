@@ -81,6 +81,21 @@ def test_a_write_landing_before_the_fence_reaches_the_shared_database(stores, mo
     assert target.export_document("late-ledger") == document()
 
 
+def test_a_registry_change_alone_before_the_fence_reaches_the_shared_database(stores, monkeypatch):
+    source, target = stores
+    freeze = shared.freeze
+
+    def binned(repo):
+        with repo.connect() as connection, connection:
+            repo.save_registry(connection, "bin", {SLUG: 7})
+        freeze(repo)
+
+    monkeypatch.setattr(shared, "freeze", binned)
+    assert shared.convert(source, target)["match"] is True
+    with target.connect() as connection:
+        assert target.registry("bin", connection)[SLUG] == 7
+
+
 def test_a_dry_run_reports_counts_and_rolls_every_write_back(stores):
     source, target = stores
     report = shared.convert(source, target, dry_run=True)

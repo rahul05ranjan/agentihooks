@@ -279,6 +279,9 @@ class Transaction:
         self.connection.execute(DROP_REGISTRIES, (slug,))
         self.add_registries(rows)
 
+    def registries(self, slug: str) -> list:
+        return [list(row) for row in self.connection.execute(REGISTRIES, (slug,))]
+
     def export(self, slug: str) -> dict:
         return self.repository._export(self.connection, slug)
 

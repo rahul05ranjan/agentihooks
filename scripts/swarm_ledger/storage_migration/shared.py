@@ -50,14 +50,15 @@ def copy(source: LedgerRepository, target: LedgerRepository, slug: str, dry_run:
                 if seeds is not None:
                     stored["_meta"]["seeds"] = {}
                 transaction.insert(slug, stored, seeds, token or secrets.token_urlsafe(24))
+            if transaction.registries(slug) != registries:
                 transaction.replace_registries(slug, registries)
-            converted = transaction.export(slug)
+            converted, kept = transaction.export(slug), transaction.registries(slug)
             if dry_run:
                 raise DryRun
     except DryRun:
         pass
     source_counts, shared_counts = counts(state), counts(converted)
-    match = source_counts == shared_counts and converted == state
+    match = source_counts == shared_counts and converted == state and kept == registries
     return {"slug": slug, "source": source_counts, "shared": shared_counts, "match": match}
 
 
