@@ -37,7 +37,6 @@ EOF
 
 refuse="$(cat <<'EOF'
 import json, os, ssl, sys, tempfile, time
-from functools import partial
 from pathlib import Path
 
 from scripts.hive import auth as hive_auth
@@ -115,15 +114,23 @@ for _ in range(120):
     time.sleep(1)
 else:
     raise SystemExit(f"the planted worker {name} never reached Failed")
+retained = []
+
+
+def keep(pod, captured):
+    retain(store, slug, pod, captured)
+    retained.append(pod["metadata"]["uid"])
+
+
 hand = PodGrants(
     api,
     slug,
     lambda token: probe.grants.verify(slug, token),
     Supervision("claude", DEFAULT_EXPORTER, env["CONTROL_URL"]),
-    retain=partial(retain, store, slug),
+    retain=keep,
 ).hand(agent, grant)
 scratch.cleanup()
-print(json.dumps({"pod": name, "execution": agent.execution_id, "reason": hand.reason, "removed": hand.removed}))
+print(json.dumps({"pod": name, "execution": agent.execution_id, "reason": hand.reason, "removed": hand.removed, "retained": len(retained)}))
 EOF
 )"
 token="$(kubectl create token swarm-grant-proof --duration 10m)"
@@ -133,7 +140,9 @@ refused="$(TOKEN="$token" CA="$ca" python3 -c 'import json, os; print(json.dumps
     env SLUG="$slug" NAMESPACE="$namespace" IMAGE="$image" CONTROL_URL="http://$release-controller:8780" \
     python -c "$refuse" | tail -1)"
 unset token
-if [[ $refused != *'"reason": "project_unpermitted"'* || $refused != *'"removed": true'* ]]; then
+if [[ $refused != *'"reason": "project_unpermitted"'* || $refused != *'"removed": true'* || $refused != *'"retained": 1'* ]]; then
+  kubectl get pods -n "$namespace" -o wide || true
+  kubectl logs "deployment/$release-controller" -c controller --tail 50 || true
   printf 'the launch cleanup did not remove the refused worker: %s\n' "$refused" >&2
   exit 1
 fi
@@ -148,7 +157,7 @@ if kubectl get pod -n "$namespace" "$pod" >/dev/null 2>&1; then
   exit 1
 fi
 printf 'the refused worker %s is gone after launch cleanup\n' "$pod"
-kept="$(kubectl exec "deployment/$release-controller" -c controller -- python -c "import json; from scripts.swarm.store import connect; store = connect(); kept = store.redis.hget(store.key('$slug', 'attempt-startup-diagnostics'), '$execution'); print(kept if isinstance(kept, str) else kept.decode())")"
+kept="$(kubectl exec "deployment/$release-controller" -c controller -- python -c 'import sys; from scripts.swarm.store import connect; store = connect(); kept = store.redis.hget(store.key(sys.argv[1], "attempt-startup-diagnostics"), sys.argv[2]); print(kept if isinstance(kept, str) else kept.decode())' "$slug" "$execution")"
 python3 - "$kept" "$pod" <<'EOF'
 import json
 import sys
@@ -158,6 +167,7 @@ container = kept["startup"]["containers"][0]
 assert kept["pod"] == pod, kept
 assert kept["startup"]["phase"] == "Failed", kept
 assert container["terminated"]["exitCode"] == 78, container
+assert container["terminated"]["reason"] == "Error", container
 assert "worker startup refused: planted kind refusal" in container["log"], container
 print(f"refused worker startup log and exit reason readable after cleanup: {json.dumps(kept, sort_keys=True)}")
 EOF

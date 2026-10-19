@@ -184,8 +184,8 @@ class Logs:
         return "startup refused\n"
 
 
-def status_pod(status=None, **fields):
-    pod = {"metadata": {"name": "refused"}, **fields}
+def status_pod(status=None):
+    pod = {"metadata": {"name": "refused"}}
     if status is not None:
         pod["status"] = status
     return pod
@@ -253,12 +253,12 @@ def test_retained_startup_records_carry_the_pod_identity_and_labels(ready):
     assert json.loads(saved) == {"pod": "refused", "uid": "uid-1", "labels": labels, "startup": {"phase": "Failed"}}
 
 
-@pytest.mark.parametrize("current,removed", [(None, True), ("replaced", False)])
-def test_launch_removal_checks_the_current_pod_before_deleting(current, removed):
+@pytest.mark.parametrize("gone,removed", [(True, True), (False, False)])
+def test_launch_removal_checks_the_current_pod_before_deleting(gone, removed):
     from tests import test_swarm_v2_kubernetes_grants as grants
 
     found = grants.pod(project="github.com/other/project")
-    later = None if current is None else grants.pod(project="github.com/other/project", uid="uid-2")
+    later = None if gone else grants.pod(project="github.com/other/project", uid="uid-2")
     api = grants.Api(found)
     reads = iter([found, later])
     api.read_pod = lambda name: next(reads)
