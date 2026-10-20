@@ -40,9 +40,7 @@ def fakeredis_modules():
         if path != Path(__file__).resolve() and "fakeredis" in path.read_text()
     )
     names = [".".join(path.relative_to(_ROOT).with_suffix("").parts) for path in paths]
-    out = subprocess.run(
-        [sys.executable, "-c", _PROBE, *names], cwd=_ROOT, capture_output=True, text=True
-    )
+    out = subprocess.run([sys.executable, "-c", _PROBE, *names], cwd=_ROOT, capture_output=True, text=True)
     if out.returncode:
         pytest.fail(
             f"Import probe exited {out.returncode}\nstdout:\n{out.stdout}\nstderr:\n{out.stderr}",
