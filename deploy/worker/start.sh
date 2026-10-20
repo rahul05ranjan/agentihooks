@@ -12,10 +12,7 @@ import json, os, re, subprocess
 from pathlib import Path
 
 root = Path(os.environ['HIVE_REPO_ROOT'])
-repos = json.loads(os.environ.get('HIVE_REPOSITORIES', '[]'))
-if os.environ.get('HIVE_BUNDLE_URL'):
-    repos.append({'name': 'agentihooks-bundle', 'url': os.environ['HIVE_BUNDLE_URL'], 'ref': os.environ.get('HIVE_BUNDLE_REF') or 'dev'})
-for repo in repos:
+for repo in json.loads(os.environ.get('HIVE_REPOSITORIES', '[]')):
     name = repo['name']
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', name):
         raise SystemExit('repository name must be a single directory name')
@@ -23,6 +20,11 @@ for repo in repos:
     if not (target / '.git').is_dir():
         subprocess.run(['git', 'clone', '--branch', repo.get('ref', 'dev'), '--', repo['url'], str(target)], check=True)
 PY
+bundle_dir="$HIVE_REPO_ROOT/agentihooks-bundle"
+if [[ -n "${HIVE_BUNDLE_URL:-}" && ! -d "$bundle_dir/.git" ]]; then
+  git clone --branch "${HIVE_BUNDLE_REF:-dev}" -- "$HIVE_BUNDLE_URL" "$bundle_dir" \
+    || echo "worker-hive: bundle clone failed; init runs on the package roles alone" >&2
+fi
 
 if [[ -n "${HIVE_CREDENTIAL_FILE:-}" ]]; then
   install -m 0600 "$HIVE_CREDENTIAL_FILE" "$AGENTIHOOKS_HOME/hive.env"
@@ -69,8 +71,8 @@ EOF
   /usr/sbin/sshd -D -e -f "$ssh_state/sshd_config" &
 fi
 bundle=()
-[[ -d "$HIVE_REPO_ROOT/agentihooks-bundle" ]] && bundle=(--bundle "$HIVE_REPO_ROOT/agentihooks-bundle")
-agentihooks init "${bundle[@]}" --profile "${HIVE_PROFILE:-engineer}" \
+[[ -d "$bundle_dir/.git" ]] && bundle=(--bundle "$bundle_dir")
+agentihooks init "${bundle[@]}" \
   || echo "worker-hive: agentihooks init failed; shells run without the profile" >&2
 agentihooks deps ensure \
   || echo "worker-hive: agentihooks deps ensure failed; each launch retries the bundle dependencies" >&2
