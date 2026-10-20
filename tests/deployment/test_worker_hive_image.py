@@ -89,7 +89,7 @@ def test_base_lock_satisfies_every_requirement_of_the_workstation_install():
 def test_kind_proof_checks_init_renders_the_engineer_profile_before_the_cluster_wait():
     lines = PROOF.read_text().splitlines()
     check = (
-        'docker run --rm --entrypoint bash "$image" -c '
+        'docker run --rm --tmpfs /home/worker:uid=10001,gid=10001 --entrypoint bash "$image" -c '
         "'agentihooks init --profile engineer && "
         'grep -qx "<!-- profile: engineer -->" "$HOME/.claude/CLAUDE.md"\' > "$out/init.txt"'
     )
