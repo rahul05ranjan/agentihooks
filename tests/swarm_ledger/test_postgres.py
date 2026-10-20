@@ -243,7 +243,7 @@ def test_a_new_connection_bounds_lock_waits_idle_transactions_and_statements_and
     postgres.Pool(ADDRESS).take()
     assert opened.settings == [
         {
-            "options": "-c lock_timeout=10s -c idle_in_transaction_session_timeout=30s -c statement_timeout=60s",
+            "options": "-c lock_timeout=10s -c idle_in_transaction_session_timeout=15s -c statement_timeout=60s",
             "keepalives": 1,
             "keepalives_idle": 30,
             "keepalives_interval": 10,

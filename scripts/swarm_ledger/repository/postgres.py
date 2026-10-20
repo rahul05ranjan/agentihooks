@@ -15,7 +15,7 @@ LOCK_WAIT = 10
 LOCK_TRIES = 3
 LOCK_REFUSED = f"the ledger writer lock was not granted in {LOCK_TRIES} waits of {LOCK_WAIT} seconds"
 SESSION = {
-    "options": f"-c lock_timeout={LOCK_WAIT}s -c idle_in_transaction_session_timeout=30s -c statement_timeout=60s",
+    "options": f"-c lock_timeout={LOCK_WAIT}s -c idle_in_transaction_session_timeout=15s -c statement_timeout=60s",
     "keepalives": 1,
     "keepalives_idle": 30,
     "keepalives_interval": 10,
