@@ -244,6 +244,33 @@ def watched(monkeypatch, run, jobs, states):
     return api, ci_lost_runner.watch("o/r", run, WORKFLOW, GRACE)
 
 
+@pytest.mark.parametrize("force,completed", [(False, True), (True, True), (True, False)])
+def test_recovery_records_each_cancel_and_observed_completion(monkeypatch, no_sleep, force, completed):
+    monkeypatch.setattr(ci_lost_runner, "CANCEL_POLLS", 1)
+    moments = iter(NOW + timedelta(seconds=i) for i in range(5))
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz):
+            assert tz is UTC
+            return next(moments)
+
+    monkeypatch.setattr(ci_lost_runner, "datetime", Clock)
+    states = [RUN]
+    if force:
+        states.append(RUN)
+    states.append({**RUN, "status": "completed"} if completed else RUN)
+    api, record = watched(monkeypatch, RUN, stalled_run(), states)
+    assert record["detected_at"] == "2026-10-19T16:00:01+00:00"
+    assert record["cancel_requested_at"] == "2026-10-19T16:00:02+00:00"
+    assert record["force_cancel_requested_at"] == ("2026-10-19T16:00:03+00:00" if force else None)
+    assert record["completed_observed_at"] == (
+        f"2026-10-19T16:00:0{4 if force else 3}+00:00" if completed else None
+    )
+    assert record["action"] == ("rerun" if completed else "cancel")
+    assert api.posts()[0] == post(f"{RUNS}/cancel")
+
+
 def test_a_stalled_first_attempt_is_cancelled_then_rerun_once(monkeypatch, no_sleep):
     api, report = watched(monkeypatch, RUN, stalled_run(), [RUN, {**RUN, "status": "completed"}])
     assert report == {
