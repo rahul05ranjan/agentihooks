@@ -143,6 +143,18 @@ def test_an_engineer_placed_on_the_anton_hive_by_origin_launches_in_the_pod_chec
     assert live.config.repo != str(pod)
 
 
+def test_only_a_hive_matched_by_origin_alone_names_the_checkout_to_launch_in(live):
+    write_hive(live, **{**root(repos=[live.config.repo, ORIGIN]), "heartbeat_at": live.hive["heartbeat_at"]})
+    assert live.launcher.select(live.config, "eng", {"id": "task"}).checkout == ORIGIN
+    assert live.launcher.select(live.config, "eng", {"id": "task", "hive": "root"}).checkout == ""
+
+
+def test_a_master_placed_by_origin_names_the_checkout_to_launch_in(live):
+    write_hive(live, **{**root(repos=[ORIGIN]), "heartbeat_at": live.hive["heartbeat_at"]})
+    selected = live.launcher.select(live.config, "master", {"id": "master"})
+    assert (selected.hive, selected.checkout) == ("root", ORIGIN)
+
+
 def test_a_full_anton_hive_sends_the_engineer_to_the_workstation_with_the_reason(live):
     live.store.redis.set(f"{registry.key(ANTON)}:sessions", '{"eng": 1}')
     selected = live.launcher.select(live.config, "eng", {"id": "task"})
