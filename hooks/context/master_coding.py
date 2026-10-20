@@ -17,7 +17,7 @@ PROTECTION = re.compile(r"\bgh\s+(?:ruleset\b|api\b[^\n;&|]*(?:/rulesets\b|/bran
 NOTICES = {
     "open": "Master hotfix window open for thirty minutes: the master may create a worktree with wt.sh new, edit "
     "inside it, commit, push its branch, merge its pull request into dev on green and change rulesets or branch "
-    "protection by command. Main, condition folders, credential files and secrets stay closed. "
+    "protection by command except for main. Main, condition folders, credential files and secrets stay closed. "
     "disallow-master-coding ends it.",
     "closed": "Master hotfix window closed: the master no longer edits code.",
 }
@@ -25,9 +25,10 @@ CREDENTIALS = re.compile(
     r"(?:^|/)(?:\.env(?:\.[\w.-]+)?|[\w.-]+\.env|\.netrc|\.npmrc|\.pypirc|\.git-credentials|\.pgpass)$"
 )
 TEMPLATES = (".example", ".sample", ".template", ".dist")
+MAIN_PROTECTION = re.compile(r"(?<![\w-])(?:main|master|v1)(?![\w-])")
 PROTECTION_REFUSAL = (
-    "BLOCKED: the master changes rulesets or branch protection only inside the hotfix window; "
-    "the operator opens it by typing allow-master-coding in the master pane."
+    "BLOCKED: the master changes rulesets or branch protection only inside the hotfix window and never "
+    "for main, master or v1; the operator opens the window by typing allow-master-coding in the master pane."
 )
 
 
@@ -106,4 +107,6 @@ def protection_refusal(payload: dict) -> str:
     session_id = payload.get("session_id")
     if not (is_master(session_id) and PROTECTION.search(command)):
         return ""
-    return "" if is_open(session_id) else PROTECTION_REFUSAL
+    if is_open(session_id) and not MAIN_PROTECTION.search(command):
+        return ""
+    return PROTECTION_REFUSAL

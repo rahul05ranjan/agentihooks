@@ -318,16 +318,38 @@ def test_a_standalone_plan_prompt_is_denied_until_operator_on(unseated, capsys):
         "gh ruleset list",
     ],
 )
-def test_the_master_never_touches_rulesets_or_branch_protection(master, command):
+def test_the_master_never_touches_rulesets_or_branch_protection_outside_the_hotfix_window(master, command):
     assert master_coding.protection_refusal({"tool_input": {"command": command}}) == master_coding.PROTECTION_REFUSAL
 
 
-def test_the_open_window_lets_the_master_change_rulesets_and_closing_it_refuses_again(master):
-    payload = {"session_id": SID, "tool_input": {"command": "gh api repos/o/r/rulesets/7 -X PUT"}}
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh api repos/o/r/rulesets/7 -X PUT",
+        "gh api -X PUT repos/o/r/branches/dev/protection",
+        "gh ruleset list",
+    ],
+)
+def test_the_open_window_lets_the_master_change_rulesets_and_closing_it_refuses_again(master, command):
+    payload = {"session_id": SID, "tool_input": {"command": command}}
     assert master_coding.protection_refusal(payload) == master_coding.PROTECTION_REFUSAL
     master_coding.observe(SID, "allow-master-coding", typed=True)
     assert master_coding.protection_refusal(payload) == ""
     master_coding.observe(SID, "disallow-master-coding", typed=True)
+    assert master_coding.protection_refusal(payload) == master_coding.PROTECTION_REFUSAL
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh api -X PUT repos/o/r/branches/main/protection",
+        "gh api -X PUT repos/o/r/branches/master/protection",
+        "gh api -X PUT repos/o/r/rulesets/9 --input .github/rulesets/main-prod-lockdown.json",
+    ],
+)
+def test_the_open_window_never_lets_the_master_touch_main_protection(master, command):
+    master_coding.observe(SID, "allow-master-coding", typed=True)
+    payload = {"session_id": SID, "tool_input": {"command": command}}
     assert master_coding.protection_refusal(payload) == master_coding.PROTECTION_REFUSAL
 
 
