@@ -6,10 +6,7 @@ from scripts.swarm_ledger.api.errors import APIError
 
 @pytest.mark.parametrize("limit", [1, 10, 100])
 def test_task_page_hashes_only_selected_tasks(monkeypatch, limit):
-    rows = [
-        {"id": f"t{n}", "title": f"Task {n}", "comments": [{"text": "Measured write"}]}
-        for n in range(1000)
-    ]
+    rows = [{"id": f"t{n}", "title": f"Task {n}", "comments": [{"text": "Measured write"}]} for n in range(1000)]
     doc = {"tasks": rows, "_meta": {"task_revision": 7}}
     query = {"limit": limit, "cursor": f"{7:064x}:100"}
     expected = resources.read(doc, "tasks", query)
