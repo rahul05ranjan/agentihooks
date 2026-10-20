@@ -357,5 +357,5 @@ def test_a_comment_on_a_hidden_done_task_still_reaches_its_claimant(capsys):
     watch = watch_ledger.Watch(args(since_rev=0, name="engineer@demo-0001"), "path.json", None)
     watch.take("snapshot", {"ledger": state})
     assert [line for line in capsys.readouterr().out.splitlines() if line.startswith("OPERATOR")] == [
-        'OPERATOR rev=2 comment added [c1]: "look"'
+        'OPERATOR rev=2 comment added on tasks/t1 [c1]: "look"'
     ]
