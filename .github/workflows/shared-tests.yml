@@ -1,0 +1,15 @@
+name: Shared tests
+
+on:
+  pull_request:
+    branches: [dev]
+  merge_group:
+  push:
+    branches: [dev]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    uses: the-cloud-clockwork/.github/.github/workflows/python-tests-reusable.yml@main
