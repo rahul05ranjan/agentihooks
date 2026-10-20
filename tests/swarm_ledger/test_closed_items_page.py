@@ -79,6 +79,7 @@ def ledger(browser):
     loaded(page)
     page.click("#tasks-box > summary")
     page.click("#tasks-done > summary")
+    page.locator("#tasks-done ol > li[id^=item-tasks-]").first.wait_for()
     yield page, reads
     context.close()
 
