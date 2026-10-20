@@ -76,6 +76,31 @@ def test_a_ui_hive_saves_the_machine_then_delivers_a_minted_member(admin):
     assert _members(admin) == [f"{auth.PREFIX}:member:{grant['id']}"]
 
 
+def test_a_trusted_ledger_ca_is_delivered_after_the_env_file(admin):
+    registry.update(admin, "root", ["ui=yes"])
+    run = Runner((0, ""), (0, ""), (0, ""))
+
+    grant = machine.add(admin, "root", TARGET, label="anton-hive", url=URL, redis_url=PUBLIC, ledger_ca="PEM", run=run)
+
+    assert [call[0][-1] for call in run.calls[1:]] == [machine.DELIVER, machine.DELIVER_CA]
+    assert [call[1]["input"] for call in run.calls[1:]] == [auth.env_text(URL, grant), "PEM"]
+    assert machine.DELIVER_CA == (
+        'home="${AGENTIHOOKS_HOME:-$HOME/.agentihooks}" && ca="${LEDGER_CA_FILE:-$home/ledger-ca.pem}" '
+        '&& mkdir -p "$(dirname "$ca")" && cat > "$ca.new" && mv "$ca.new" "$ca"'
+    )
+
+
+def test_a_failed_ledger_ca_delivery_revokes_the_minted_member(admin):
+    registry.update(admin, "root", ["ui=yes"])
+    run = Runner((0, ""), (0, ""), (1, "disk full"))
+
+    with pytest.raises(auth.HiveError) as refused:
+        machine.add(admin, "root", TARGET, label="anton-hive", url=URL, redis_url=PUBLIC, ledger_ca="PEM", run=run)
+
+    assert str(refused.value) == "ssh exited 1: disk full"
+    assert _members(admin) == []
+
+
 def test_the_delivery_writes_a_private_env_file_in_the_remote_home():
     assert machine.DELIVER == (
         'umask 077 && home="${AGENTIHOOKS_HOME:-$HOME/.agentihooks}" && mkdir -p "$home" '
@@ -131,13 +156,17 @@ def test_cli_add_passes_its_settings_and_names_the_member(admin, monkeypatch, ca
     monkeypatch.setattr("scripts.swarm.commands.hive_id", lambda: "root")
     monkeypatch.delenv("AGENTIHOOKS_DEPLOYMENT", raising=False)
     monkeypatch.setenv("AGENTIHOOKS_SWARM_REDIS_URL", "redis://own:6379/0")
+    monkeypatch.setattr(cli.ledger_ca, "served", lambda: "PEM")
 
     assert cli.main(["add", TARGET, "--label", "anton-hive", "--url", URL]) == 0
     assert cli.main(["add", TARGET, "--label", "anton-hive", "--url", URL, "--redis-url", PUBLIC]) == 0
 
     assert calls == [
-        ((admin, "root", TARGET), {"label": "anton-hive", "url": URL, "redis_url": "redis://own:6379/0"}),
-        ((admin, "root", TARGET), {"label": "anton-hive", "url": URL, "redis_url": PUBLIC}),
+        (
+            (admin, "root", TARGET),
+            {"label": "anton-hive", "url": URL, "ledger_ca": "PEM", "redis_url": "redis://own:6379/0"},
+        ),
+        ((admin, "root", TARGET), {"label": "anton-hive", "url": URL, "ledger_ca": "PEM", "redis_url": PUBLIC}),
     ]
     assert capsys.readouterr().out == f"added {TARGET} to herdr as anton-hive; its hive member is ab12\n" * 2
 

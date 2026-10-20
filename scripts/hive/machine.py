@@ -18,6 +18,10 @@ DELIVER = (
     'umask 077 && home="${AGENTIHOOKS_HOME:-$HOME/.agentihooks}" && mkdir -p "$home" '
     '&& cat > "$home/hive.env.new" && mv "$home/hive.env.new" "$home/hive.env"'
 )
+DELIVER_CA = (
+    'home="${AGENTIHOOKS_HOME:-$HOME/.agentihooks}" && ca="${LEDGER_CA_FILE:-$home/ledger-ca.pem}" '
+    '&& mkdir -p "$(dirname "$ca")" && cat > "$ca.new" && mv "$ca.new" "$ca"'
+)
 
 
 def add(
@@ -28,6 +32,7 @@ def add(
     label: str,
     url: str,
     redis_url: str,
+    ledger_ca: str | None = None,
     run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
 ) -> dict:
     local = registry.show(redis, local_id)
@@ -42,6 +47,8 @@ def add(
     grant = auth.mint(redis, label, redis_url)
     try:
         _run(run, ["ssh", "-o", "BatchMode=yes", target, DELIVER], auth.env_text(url, grant), SSH_TIMEOUT_S)
+        if ledger_ca:
+            _run(run, ["ssh", "-o", "BatchMode=yes", target, DELIVER_CA], ledger_ca, SSH_TIMEOUT_S)
     except auth.HiveError:
         auth.revoke(redis, grant["id"])
         raise
