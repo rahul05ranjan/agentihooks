@@ -82,7 +82,7 @@ function outlineGroup(s) {
   const key = `ol-${s.id}`;
   return h("li", { class: "ol-sec" }, lazy(box, () => h("ul", { class: "ol-items" },
     ...firstPage(key, s.items, (i) => i.id).map((i) => h("li", {}, outlineLink(i))), moreButton(key, s.items.length, "more items", outlineAgain) || "",
-    (s.items.length && closedMore(s.id.replace(/^sec-/, ""), "done", render)) || "")));
+    (s.items.length && closedMore(s.id.replace(/^sec-/, ""), "done", () => render())) || "")));
 }
 
 export function outlineBoxes() {
