@@ -11,7 +11,7 @@ START = ROOT / "deploy/worker/start.sh"
 TOKEN = "fixture-github-token-value"
 
 
-def startup(tmp_path, *, joined=False, refused=False, bundle=False, deps_exit=0):
+def startup(tmp_path, *, joined=False, refused=False, bundle=False, deps_exit=0, bundle_url=None):
     tools = tmp_path / "bin"
     tools.mkdir()
     log = tmp_path / "commands"
@@ -56,7 +56,7 @@ def startup(tmp_path, *, joined=False, refused=False, bundle=False, deps_exit=0)
         "PATH": f"{tools}:{os.environ['PATH']}",
         "HOME": str(tmp_path / "home"),
         "GITHUB_PERSONAL_ACCESS_TOKEN": TOKEN,
-        "HIVE_BUNDLE_URL": str(repo) if bundle else "",
+        "HIVE_BUNDLE_URL": bundle_url if bundle_url is not None else str(repo) if bundle else "",
         "HIVE_BUNDLE_REF": "dev",
         "DEPS_EXIT": str(deps_exit),
         "AGENTIHOOKS_HOME": str(home),
@@ -81,7 +81,7 @@ def test_code_join_clones_repo_and_configures_before_run(tmp_path):
     assert result.returncode == 0, result.stderr
     assert commands.splitlines() == [
         "hive join https://join.example.test fixture-code",
-        "init --profile engineer",
+        "init",
         "deps ensure",
         "hive set worker-member ui=no ephemeral=yes roles=eng,ci,plan,dispatch max-agents=1",
         "hive run",
@@ -118,7 +118,7 @@ def test_bundle_is_cloned_beside_the_repos_and_linked_by_init(tmp_path):
     assert (bundle / ".git").is_dir()
     branch = subprocess.run(["git", "-C", str(bundle), "branch", "--show-current"], capture_output=True, text=True)
     assert branch.stdout == "dev\n"
-    assert commands.splitlines()[1:3] == [f"init --bundle {bundle} --profile engineer", "deps ensure"]
+    assert commands.splitlines()[1:3] == [f"init --bundle {bundle}", "deps ensure"]
     assert commands.endswith("hive run\n")
 
 
@@ -145,4 +145,13 @@ def test_failed_deps_ensure_still_runs_the_hive(tmp_path):
     result, commands, _, _ = startup(tmp_path, bundle=True, deps_exit=4)
     assert result.returncode == 0, result.stderr
     assert "worker-hive: agentihooks deps ensure failed" in result.stderr
+    assert commands.endswith("hive run\n")
+
+
+def test_a_failed_bundle_clone_is_logged_and_the_hive_runs_on_the_package_roles(tmp_path):
+    result, commands, _, repo = startup(tmp_path, bundle_url=str(tmp_path / "missing-bundle"))
+    assert result.returncode == 0, result.stderr
+    assert "worker-hive: bundle clone failed; init runs on the package roles alone\n" in result.stderr
+    assert not (repo.parent / "agentihooks-bundle").exists()
+    assert commands.splitlines()[1:3] == ["init", "deps ensure"]
     assert commands.endswith("hive run\n")
