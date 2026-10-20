@@ -49,6 +49,13 @@ def test_a_canary_timeout_flag_overrides_the_harness_deadline(tmp_path, monkeypa
     assert _launch(tmp_path, monkeypatch, target, ["--canary-timeout", "7"]) == [7.0]
 
 
+def test_the_canary_timeout_help_names_both_harness_defaults():
+    (action,) = [a for a in init_agent._parser()._actions if "--canary-timeout" in a.option_strings]
+    assert action.help == (
+        "Seconds to wait for the new session to run its profile canary; default 120 for Claude, 90 for Codex"
+    )
+
+
 @pytest.mark.parametrize("target", ["claude", "codex"])
 def test_a_canary_timeout_names_the_harness_and_the_seconds_waited(tmp_path, monkeypatch, target):
     report = tmp_path / "report.json"
