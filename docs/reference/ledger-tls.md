@@ -143,8 +143,8 @@ With the setting the chart:
 - makes the in-cluster `LEDGER_URL` `https://<fullname>-ledger:<port>`;
 - gives every pod that talks to the ledger `LEDGER_CA_PEM` from `ca.crt`;
 - runs the ledger probes and the `helm test` health check over https;
-- when `ingress.enabled` is true, annotates the ingress so nginx speaks https to the ledger and verifies its certificate against `ca.crt` with the
-  name `<fullname>-ledger`;
+- when `ingress.enabled` is true, annotates the ingress so nginx speaks https to the ledger and verifies its
+  certificate against `ca.crt` with the name `<fullname>-ledger`;
 - marks the ledger StatefulSet for a restart by Reloader when the Secret changes, so a renewed certificate takes
   effect.
 
@@ -152,8 +152,8 @@ Left empty, the default, the ledger serves plain http inside the cluster. Any po
 then sends it to a non loopback service address, and the client refuses it.
 
 The kind smoke test (`deploy/helm/agentihooks-swarm/ci/kind-smoke.sh`) renders the chart with the setting and
-checks the ingress and Reloader annotations, then installs it with a generated certificate and runs `helm install
---wait` and `helm test`.
+checks the ingress and Reloader annotations, then installs it with a generated certificate and runs
+`helm install --wait` and `helm test`.
 
 ## Troubleshooting
 
