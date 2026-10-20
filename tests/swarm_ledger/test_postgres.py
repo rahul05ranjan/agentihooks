@@ -231,7 +231,7 @@ def test_a_pool_closes_a_connection_it_cannot_roll_back_or_that_closed(opened):
 
 
 def test_a_pool_that_cannot_connect_raises_the_sqlite_error(monkeypatch):
-    def refuse(address):
+    def refuse(address, **settings):
         raise psycopg2.OperationalError("refused")
 
     monkeypatch.setattr(psycopg2, "connect", refuse)
@@ -271,6 +271,15 @@ def test_a_writer_never_granted_the_lock_fails_with_the_named_reason(opened):
     ):
         connection.execute(sqlite.BEGIN_IMMEDIATE)
     assert len(raw.log) == 3 and raw.rollbacks == 3 and raw.lost == 1
+
+
+def test_the_writer_lock_is_refused_inside_an_open_transaction_so_no_retry_discards_its_work(opened):
+    connection = postgres.Connection(ADDRESS)
+    raw = opened.raws[0]
+    raw.status = BUSY
+    with pytest.raises(sqlite3.OperationalError, match="^cannot start a transaction within a transaction$"):
+        connection.execute(sqlite.BEGIN_IMMEDIATE)
+    assert raw.log == [] and raw.rollbacks == 0
 
 
 def test_a_writer_lock_failure_other_than_a_lost_wait_is_mapped_at_once(opened):
@@ -383,7 +392,7 @@ def test_the_database_folder_opens_a_pooled_connection_and_raises_when_unreachab
         assert connection.raw is opened.raws[0]
     assert postgres.pool(ADDRESS).idle == [opened.raws[0]]
 
-    def refuse(address):
+    def refuse(address, **settings):
         raise psycopg2.OperationalError("refused")
 
     monkeypatch.setattr(postgres, "POOLS", {})
