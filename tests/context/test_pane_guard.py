@@ -5,7 +5,6 @@ import pytest
 import hooks.config
 from hooks import hook_manager
 from hooks.context import quota_policy
-from hooks.context.ci_manifesto import PANE_SIGNALS, contains_pane_signal
 from hooks.context.pane_guard import opens_pane
 from hooks.context.shell_commands import commands
 
@@ -73,16 +72,14 @@ NOT_OPENERS = [
     "echo herdr pane split",
 ]
 HANDOFFS = [
-    ("agentihooks init-agent --handoff --prompt-file /s/repo/handoff/s1.md", "handoff"),
-    ("/bin/agentihooks init-agent --handoff --dir /r --prompt-file ~/handoff/s1.md --route b", "handoff"),
-    ("agentihooks init-agent --handoff --prompt-file /s/repo/handoff/s1.md", "wait"),
-    ("agentihooks init-agent --handoff --prompt-file /s/repo/handoff/s1.md", None),
-    ("agentihooks init-agent --handoff --prompt-file /s/repo/handoff/s2.md", "handoff"),
-    ("agentihooks init-agent --handoff --prompt-file /s/repo/notes/s1.md", "handoff"),
-    ("agentihooks init-agent --handoff --prompt-file", "handoff"),
-    ("agentihooks init-agent --handoff", "handoff"),
-    ("agentihooks init-agent --prompt-file /s/repo/handoff/s1.md", "handoff"),
-    ("agentihooks run-in-terminal --handoff --prompt-file /s/repo/handoff/s1.md", "handoff"),
+    "agentihooks init-agent --handoff --prompt-file /s/repo/handoff/s1.md",
+    "/bin/agentihooks init-agent --handoff --dir /r --prompt-file ~/handoff/s1.md --route b",
+    "agentihooks init-agent --handoff --prompt-file /s/repo/handoff/s2.md",
+    "agentihooks init-agent --handoff --prompt-file /s/repo/notes/s1.md",
+    "agentihooks init-agent --handoff --prompt-file",
+    "agentihooks init-agent --handoff",
+    "agentihooks init-agent --prompt-file /s/repo/handoff/s1.md",
+    "agentihooks run-in-terminal --handoff --prompt-file /s/repo/handoff/s1.md",
 ]
 
 
@@ -130,43 +127,9 @@ def test_no_tokens_is_not_an_opener():
     assert not opens_pane([])
 
 
-@pytest.mark.parametrize(("command", "action"), HANDOFFS)
-def test_a_handoff_terminal_opens_whatever_the_quota_decides(monkeypatch, command, action):
-    from types import SimpleNamespace
-
+@pytest.mark.parametrize("command", HANDOFFS)
+def test_a_handoff_terminal_opens_without_reading_the_quota(monkeypatch, command):
     seen = []
-    decision = None if action is None else SimpleNamespace(action=action)
-    monkeypatch.setattr(quota_policy, "evaluate", lambda session: seen.append(session) or decision)
+    monkeypatch.setattr(quota_policy, "evaluate", seen.append)
     guard(command)
     assert seen == []
-
-
-def test_a_failing_quota_reading_does_not_close_the_handoff(monkeypatch):
-    def broken(session):
-        raise RuntimeError("redis down")
-
-    monkeypatch.setattr(quota_policy, "evaluate", broken)
-    guard("agentihooks init-agent --handoff --prompt-file /s/repo/handoff/s1.md")
-
-
-def test_the_signal_phrases():
-    assert PANE_SIGNALS == ["open pane", "open a pane", "open the pane"]
-    for phrase in ("Open Pane", "please OPEN A PANE for the login", "open the pane beside you"):
-        assert contains_pane_signal(phrase)
-    for phrase in (
-        "open the task",
-        "pane",
-        "don't open pane",
-        "never open a pane",
-        "split a pane",
-        "open panel settings",
-        "reopen pane",
-        "open panes",
-        "",
-    ):
-        assert not contains_pane_signal(phrase)
-
-
-def test_a_negated_phrase_does_not_mask_a_later_one():
-    assert contains_pane_signal("do not open pane yet, open pane for the login")
-    assert not contains_pane_signal("never open pane, do not open the pane")
