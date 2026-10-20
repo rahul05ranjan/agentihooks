@@ -624,6 +624,12 @@ replicas that mount the same credential would report the same hive id and agent 
 `workers.replicas` above 1. Scale by installing one release per hive credential; the pod name is used only when no
 credential is installed.
 
+The pod's memory follows its agent count: `workers.memoryPerAgentMi.request` (default 700) and `.limit` (default
+2048), in MiB, are multiplied by `workers.maxAgents` into the container's memory request and limit, so the scheduler
+places the pod only on a node with room for every agent it may run. The chart refuses a request below one or a limit
+below the request, and memory set under `workers.resources`. The pod carries no node selector, affinity or host
+network, so it schedules on any node.
+
 ## Ledger Hives panel
 
 The Swarm tab of the ledger page shows a Hives panel after Quota. It reads the hive settings API, edits hive settings
