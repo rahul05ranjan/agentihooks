@@ -99,6 +99,50 @@ def test_the_anton_hive_takes_an_engineer_for_a_swarm_repo_given_as_a_local_chec
     assert (selected.hive, selected.account.name, selected.fallback) == (ANTON, ANTON_ACCOUNT, "")
 
 
+def test_an_engineer_placed_on_the_anton_hive_by_origin_launches_in_the_pod_checkout(live, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from scripts.hive.orders import Consumer
+    from scripts.swarm.runtime import HerdrRuntime
+    from scripts.swarm.tick import Placed
+    from scripts.swarm_v2.runtime.base import Outcome, Status
+    from tests.hive.test_controller_launch import request_for
+
+    pod = tmp_path / "pod" / "agentihooks"
+    (pod / ".git").mkdir(parents=True)
+    (pod / ".git" / "config").write_text(
+        '[remote "origin"]\n\turl = https://github.com/the-cloud-clockwork/agentihooks.git\n'
+    )
+    monkeypatch.setenv("HIVE_REPO_ROOT", str(pod.parent))
+    write_hive(live, **{**anton(repos=[str(pod), ORIGIN]), "heartbeat_at": live.hive["heartbeat_at"]})
+    live.store.redis.hset(live.store.key("fixture", "config"), "repo", live.config.repo)
+    launched = []
+
+    def spawn(request):
+        home = tmp_path / "home"
+        launched.append(
+            HerdrRuntime(home=home)._argv(request.config, request.name, "claude", "open", "e.md", "engineer")
+        )
+        placed = Placed(
+            "pane", "claude", ANTON_ACCOUNT, profile="engineer", profile_decision={"validation": {"pid": 12}}
+        )
+        return Outcome("spawn", Status.OK, "local", placed)
+
+    runtime = Mock()
+    runtime.spawn.side_effect = spawn
+    runtime.namespace.return_value = "namespace"
+    runtime.table.return_value = {12: SimpleNamespace(start_time=34)}
+    consumer = Consumer(live.store.redis, ANTON, runtime)
+    live.launcher.sleep = lambda _: consumer.poll()
+    outcome = live.launcher.spawn(request_for(live))
+    assert outcome.ok, outcome.detail
+    assert outcome.value.execution.hive == ANTON
+    argv = launched[0]
+    assert argv[argv.index("--dir") + 1] == str(pod)
+    assert live.config.repo != str(pod)
+
+
 def test_a_full_anton_hive_sends_the_engineer_to_the_workstation_with_the_reason(live):
     live.store.redis.set(f"{registry.key(ANTON)}:sessions", '{"eng": 1}')
     selected = live.launcher.select(live.config, "eng", {"id": "task"})
