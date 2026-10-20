@@ -18,8 +18,8 @@ plain http to a host that is not loopback, and the ledger server serves https fr
 ## The refusal
 
 `ledger_link.urlopen` is the one opener for every request that carries a ledger credential: the remote ledger
-client (`ResourceClient`), the ledger CLI, plan reads, proof ledger calls and controls, uploads, the event stream
-and the health probe. Before it opens a connection it checks the request.
+client (`ResourceClient`), the ledger CLI, plan reads, proof ledger calls and controls, uploads and the event
+stream. Before it opens a connection it checks the request.
 
 | Request | Result |
 |---|---|
@@ -33,8 +33,8 @@ The credential headers are `X-Controller-Credential`, `X-Hive-Credential`, `X-Le
 
 The client resolves the host name and treats it as loopback only when every address it resolves to is a loopback
 address. `127.0.0.1`, `::1` and `localhost` pass. A name that does not resolve, or one that also resolves to a
-private or public address, counts as off loopback. `hive join` refuses a plain http hive URL off loopback the same
-way.
+private or public address, counts as off loopback. `hive join` has its own rule: it refuses any hive URL that is not
+`https://` off loopback, whether or not the request carries a credential.
 
 A refused request stops the command with:
 
@@ -57,17 +57,21 @@ The ledger server serves https when both settings are set:
 - Set both or neither. One without the other stops the server and every client with `the ledger serves TLS only
   with both LEDGER_TLS_CERT and LEDGER_TLS_KEY`.
 - With both set, the local base address becomes `https://<LEDGER_HOST>:<LEDGER_PORT>`, and the page accepts
-  `https://` origins for its own address and for every host in `SWARM_ALLOWED_HOSTS`.
-- The server waits at most ten seconds for a client to finish the TLS handshake, then drops the connection. A
-  failed handshake, such as a plain http client on the TLS port, is dropped without an error log entry; other
-  request errors are still logged.
+  `https://` origins for its own address and loopback.
+- During the TLS handshake each socket read or write times out after ten seconds, so a client that stalls is
+  dropped. A failed handshake, such as a plain http client on the TLS port, is dropped without an error log entry;
+  other request errors are still logged.
+- Hosts listed in `SWARM_ALLOWED_HOSTS` are accepted as page origins under both `http://` and `https://`, whatever
+  the TLS setting.
 
 The certificate must name every host clients use to reach the ledger as a subject alternative name. A client
 that reaches it on loopback through `https://127.0.0.1` needs `IP:127.0.0.1` in the certificate too.
 
-Example certificate for a ledger reached as `swarm.example.internal`, signed by your own CA:
+Example CA and certificate for a ledger reached as `swarm.example.internal`:
 
 ```bash
+openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=swarm-ledger-ca" \
+  -keyout ca.key -out ca.pem
 openssl req -newkey rsa:2048 -nodes -subj "/CN=swarm.example.internal" \
   -keyout key.pem -out ledger.csr
 openssl x509 -req -in ledger.csr -CA ca.pem -CAkey ca.key -CAcreateserial -days 365 \
@@ -84,22 +88,31 @@ An https client verifies the ledger certificate. It picks its trust in this orde
 | `LEDGER_CA_PEM` | The PEM text of the CA that signed the ledger certificate. Set, it is the only CA an https ledger request trusts. |
 | `LEDGER_CA_FILE` | Without `LEDGER_CA_PEM`, a CA file trusted beside the system roots. Defaults to `ledger-ca.pem` in the agentihooks home. A set path that names no file, or a file without a valid certificate, stops the client. |
 
-With neither set and no `ledger-ca.pem` in the agentihooks home, the client trusts the system roots only, which
-suits a ledger behind a publicly signed certificate. Every sender listed in [The refusal](#the-refusal) uses the
-same trust, each with its own timeout.
+`agentihooks init` writes `ledger-ca.pem` in the agentihooks home from OpenBao `k8s/agentihooks-swarm-ledger-ca`,
+field `ca.crt`, when `OPENBAO_URL` and `OPENBAO_TOKEN` are set. With neither variable set and no `ledger-ca.pem`,
+the client trusts the system roots only, which suits a ledger behind a publicly signed certificate. Every sender
+listed in [The refusal](#the-refusal) and the ledger health probe use this trust.
 
 ## Workstation ledger in Docker
 
-The workstation ledger started by `agentihooks ledger serve --ensure` runs `deploy/compose/ledger.yaml`, which
-passes `LEDGER_TLS_CERT` and `LEDGER_TLS_KEY` from the environment into the container; `deploy/compose/adopt.yaml`
-does the same. The container mounts `~/.agentihooks`, so keep the files there:
+`agentihooks ledger serve --ensure` runs the shared ledger folder (`~/development-ledger`) in Docker through
+`deploy/compose/ledger.yaml` when `docker` is on the path, unless `LEDGER_SERVER_RUNTIME=process`; otherwise it
+runs the server as a host process. An adopted ledger runs through `deploy/compose/adopt.yaml`. Both compose files
+pass `LEDGER_TLS_CERT` and `LEDGER_TLS_KEY` from the environment into the container and mount `~/.agentihooks`, so
+keep the files there. They do not pass `LEDGER_CA_FILE` or `LEDGER_CA_PEM`, so put the CA at the default
+`~/.agentihooks/ledger-ca.pem`, where the container health check finds it:
 
 ```bash
+mkdir -p ~/.agentihooks/ledger-tls
+cp cert.pem key.pem ~/.agentihooks/ledger-tls/
+cp ca.pem ~/.agentihooks/ledger-ca.pem
 export LEDGER_TLS_CERT=$HOME/.agentihooks/ledger-tls/cert.pem
 export LEDGER_TLS_KEY=$HOME/.agentihooks/ledger-tls/key.pem
-export LEDGER_CA_FILE=$HOME/.agentihooks/ledger-tls/ca.pem
 agentihooks ledger serve --ensure
 ```
+
+The health check reaches the ledger at `https://127.0.0.1`, so the certificate needs `IP:127.0.0.1`. Three failed
+checks in a row end the server.
 
 That ledger listens on `127.0.0.1`, so its own clients already pass the loopback rule; TLS here matters once
 another machine reaches it.
@@ -115,11 +128,11 @@ Set `ledger.tls.secretName` to a Secret in the release namespace with three keys
 | `ca.crt` | The CA that signed it. |
 
 ```bash
-kubectl create secret generic swarm-ledger-tls \
+kubectl create secret generic swarm-ledger-tls --namespace swarm \
   --from-file=tls.crt=cert.pem \
   --from-file=tls.key=key.pem \
   --from-file=ca.crt=ca.pem
-helm upgrade --install swarm deploy/helm/agentihooks-swarm \
+helm upgrade --install swarm deploy/helm/agentihooks-swarm --namespace swarm \
   --set ledger.tls.secretName=swarm-ledger-tls
 ```
 
@@ -129,7 +142,7 @@ With the setting the chart:
 - makes the in-cluster `LEDGER_URL` `https://<fullname>-ledger:<port>`;
 - gives every pod that talks to the ledger `LEDGER_CA_PEM` from `ca.crt`;
 - runs the ledger probes and the `helm test` health check over https;
-- annotates the ingress so nginx speaks https to the ledger and verifies its certificate against `ca.crt` with the
+- when `ingress.enabled` is true, annotates the ingress so nginx speaks https to the ledger and verifies its certificate against `ca.crt` with the
   name `<fullname>-ledger`;
 - marks the ledger StatefulSet for a restart by Reloader when the Secret changes, so a renewed certificate takes
   effect.
@@ -137,8 +150,9 @@ With the setting the chart:
 Left empty, the default, the ledger serves plain http inside the cluster. Any pod that sends a credential to it
 then sends it to a non loopback service address, and the client refuses it.
 
-The kind smoke test (`deploy/helm/agentihooks-swarm/ci/kind-smoke.sh`) installs the chart with a generated
-certificate and checks the ingress annotations and the TLS Secret rollout.
+The kind smoke test (`deploy/helm/agentihooks-swarm/ci/kind-smoke.sh`) renders the chart with the setting and
+checks the ingress and Reloader annotations, then installs it with a generated certificate and runs `helm install
+--wait` and `helm test`.
 
 ## Troubleshooting
 
@@ -156,11 +170,15 @@ certificate and checks the ingress annotations and the TLS Secret rollout.
 
 - The refusal covers requests sent through `ledger_link.urlopen`. A request without a credential header, such as
   an anonymous page read, still goes over plain http when the address says so.
+- The Cloudflare Access headers `CF-Access-Client-Id` and `CF-Access-Client-Secret` (from `SWARM_ACCESS_CLIENT_ID`
+  and `SWARM_ACCESS_CLIENT_SECRET`) are not credential headers for the refusal. Keep `SWARM_URL` on `https://`
+  whenever they are set.
 - The rule judges the address the client resolves, not the network path. A loopback address forwarded elsewhere,
   such as an SSH tunnel, counts as loopback.
 - The root `compose.yaml` stack does not set `LEDGER_TLS_CERT` or `LEDGER_TLS_KEY` on its `swarm` service and
-  points its `controller` at `http://swarm:8765`. That host name resolves to a container address, which is not
-  loopback.
+  points its `controller` service at `LEDGER_URL: http://swarm:8765`. That host name resolves to a container
+  address, which is not loopback, so the controller's credentialed requests are refused until that stack serves the
+  ledger over TLS.
 
 ## Evidence
 

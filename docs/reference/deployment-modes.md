@@ -27,8 +27,7 @@ one Redis, which every ledger server and controller of the swarm share.
   host capacity checks are off.
 - A client with `SWARM_URL` set, or in a mode other than `local`, uses the remote ledger and never starts a local
   ledger server. The hosted service's auth is in [Hosted ledger auth](hosted-ledger-auth.md).
-- A ledger client never sends a credential over plain http to a host that is not loopback. Off loopback, serve the
-  ledger over TLS and address it as `https://`; see [Ledger TLS](ledger-tls.md).
+- Off loopback, ledger clients send credentials only over `https://`; see [Ledger TLS](ledger-tls.md).
 - Whether a hive runs on subscriptions or api keys is a property of its slots, chosen per hive. See
   [Claude account load balancing](../pillars/load-balancing.md).
 
@@ -78,9 +77,7 @@ agentihooks hive install
 
 - The ledger answers only the host names in `SWARM_PUBLIC_URL` and `SWARM_ALLOWED_HOSTS`.
 - The hive join endpoint always serves TLS; with `rediss`, Redis does too.
-- Clients on other machines send their ledger credentials only to an `https://` ledger address. Serve the ledger
-  with `LEDGER_TLS_CERT` and `LEDGER_TLS_KEY` as described in [Ledger TLS](ledger-tls.md#serving-the-ledger-over-tls);
-  the `swarm` service in `compose.yaml` does not set them for you.
+- Serve the ledger over TLS for clients on other machines: [Ledger TLS](ledger-tls.md#limits).
 - Each joined hive gets its own Redis user that writes only its own keys.
 
 ### No public ledger

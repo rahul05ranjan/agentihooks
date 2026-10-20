@@ -53,7 +53,7 @@ Every reader of `ledger_link.remote` treats `SWARM_URL` as a non-local deploymen
 
 The tick's own service writes still need `AGENTIHOOKS_CONTROLLER_CREDENTIAL`, checked against the hosted ledger's Redis.
 
-A client refuses to send any of these credentials over plain http to a host that is not loopback, so `SWARM_URL` off loopback must be `https://`. Serving and trusting the ledger certificate are in [Ledger TLS](ledger-tls.md).
+Off loopback, `SWARM_URL` must be `https://`: clients refuse the ledger credential headers listed in [Ledger TLS](ledger-tls.md#the-refusal) over plain http.
 
 ## Evidence
 
