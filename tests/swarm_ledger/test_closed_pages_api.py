@@ -137,3 +137,4 @@ def test_the_route_refuses_state_or_offset_before_any_other_read(path):
         with pytest.raises(APIError) as caught:
             routes.ledger_get(handler, None, "s", path)
         assert caught.value.status == 400
+        assert caught.value.envelope() == REFUSED
