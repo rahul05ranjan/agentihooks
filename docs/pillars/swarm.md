@@ -1728,12 +1728,12 @@ the newest `dev`, and the agent also merges `dev` when GitHub refuses the enqueu
 
 Each task should own its plan lines. A slice is shared when another task in the same phase that is not `done` holds
 the same plan lines and is not part of the same grouped task (a group lead and its members count as one task).
-Claimed, in review and blocked tasks count; only `done` tasks are left out. The
-ledger refuses new sharing, and for a task that already shares a slice, the intent check and `agentihooks plan read`
-narrow the slice to that task's rows.
+Claimed, in review and blocked tasks count; only `done` tasks are left out. The ledger refuses new sharing, and for
+a task that already shares a slice, the intent check and `agentihooks plan read` narrow the slice to that task's rows.
 
 **Adding or setting a slice.** `ledger task add --plan-slice NAME` and `ledger task set <id> plan_slice=NAME` resolve
-the slice to plan lines first. When those lines already belong to another task in the phase that is not `done`, the write is refused:
+the slice to plan lines first. When those lines already belong to another task in the phase that is not `done`, the
+write is refused:
 
 ```text
 plan slice tasks already belongs to open task t2, t3: give each task its own slice anchor, a <!-- slice: name --> line above its own row or section, or group the tasks into one grouped task
