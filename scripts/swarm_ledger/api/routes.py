@@ -57,7 +57,7 @@ def dispatch(handler: object, services: Services) -> dict | str | None:
 def ledger_get(handler: object, services: Services, slug: str, path: str) -> dict | None:
     query = pagination(handler.path)
     if ("state" in query or "offset" in query) and path not in ledger_closed.COLLECTIONS:
-        raise APIError(400, "schema_invalid", "State and offset read the done rows of a collection")
+        raise APIError(400, "schema_invalid", resources.DONE_ONLY)
     if path == "events" and handler.headers.get("Accept") == "text/event-stream":
         return events(handler, services, slug)
     if path == "swarm/models":

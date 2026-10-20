@@ -95,30 +95,28 @@ def read(doc: dict, path: str, query: dict | None = None, cache: dict | None = N
 
 def closed_page(doc: dict, path: str, query: dict) -> dict:
     if path not in ledger_closed.COLLECTIONS or query.get("state") != "done":
-        raise APIError(400, "schema_invalid", "State and offset read the done rows of a collection")
+        raise APIError(400, "schema_invalid", DONE_ONLY)
     rows = ledger_closed.recent(path, doc.get(path) or [])
     offset = query.get("offset", 0)
     selected = []
-    size = reply_size({"data": [], "revision": "0" * 64, "total": len(rows), "next_offset": len(rows)})
     for row in rows[offset : offset + query.get("limit", ledger_closed.KEPT)]:
-        size += reply_size(row) + (2 if selected else 0)
-        if size > MAX_REPLY:
+        if reply_size(closed_reply([*selected, row], len(rows), offset)) > MAX_REPLY:
             if not selected:
                 raise APIError(413, "resource_too_large", "Use the explicit export operation for this resource")
             break
         selected.append(row)
-    end = offset + len(selected)
-    return {
-        "data": selected,
-        "revision": revision(selected),
-        "total": len(rows),
-        "next_offset": end if end < len(rows) else None,
-    }
+    return closed_reply(selected, len(rows), offset)
+
+
+def closed_reply(rows: list, total: int, offset: int) -> dict:
+    end = offset + len(rows)
+    return {"data": rows, "revision": revision(rows), "total": total, "next_offset": end if end < total else None}
 
 
 COLLECTIONS = models.COLLECTIONS
 THREADS = models.THREADS
 MAX_REPLY = 262144
+DONE_ONLY = "State and offset read the done rows of a collection"
 
 
 def value(doc: dict, path: str) -> object:
@@ -165,7 +163,7 @@ def page(rows: list, rev: str, query: dict, revisions: list | None = None, hash_
 
     validate(PAGINATION, query)
     if "state" in query or "offset" in query:
-        raise APIError(400, "schema_invalid", "State and offset read the done rows of a collection")
+        raise APIError(400, "schema_invalid", DONE_ONLY)
     offset = 0
     cursor = query.get("cursor")
     if cursor:

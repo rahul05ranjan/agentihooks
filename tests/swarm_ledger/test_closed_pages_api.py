@@ -8,6 +8,7 @@ from scripts.swarm_ledger.api.errors import APIError
 pytestmark = pytest.mark.unit
 
 COMMENT = {"id": "c1", "by": "agent", "at": 1, "text": "landed"}
+REFUSED = {"error": {"code": "schema_invalid", "message": "State and offset read the done rows of a collection"}}
 
 
 def doc(count=35):
@@ -49,13 +50,15 @@ def test_an_offset_past_the_end_reads_an_empty_page():
     assert reply == {"data": [], "revision": resources.revision([]), "total": 3, "next_offset": None}
 
 
-def test_a_done_page_stops_before_the_reply_bound(monkeypatch):
-    monkeypatch.setattr(resources, "MAX_REPLY", 2600)
+def test_a_done_page_takes_rows_while_the_whole_reply_fits_the_bound(monkeypatch):
     big = doc(12)
     for row in big["tasks"]:
         row["description"] = "x" * 1000
+    newest = list(reversed(big["tasks"][:12]))
+    monkeypatch.setattr(resources, "MAX_REPLY", resources.reply_size(resources.closed_reply(newest[:2], 12, 0)))
     reply = resources.read(big, "tasks", {"state": "done", "offset": 0, "limit": 10})
     assert ids(reply) == ["t11", "t10"]
+    assert reply == resources.closed_reply(newest[:2], 12, 0)
     assert reply["next_offset"] == 2
 
 
@@ -66,6 +69,9 @@ def test_a_done_row_larger_than_the_bound_is_refused(monkeypatch):
     with pytest.raises(APIError) as caught:
         resources.read(big, "tasks", {"state": "done"})
     assert caught.value.status == 413
+    assert caught.value.envelope() == {
+        "error": {"code": "resource_too_large", "message": "Use the explicit export operation for this resource"}
+    }
 
 
 @pytest.mark.parametrize("path", ["chat", "notes", "tasks/t1", "metadata"])
@@ -74,13 +80,39 @@ def test_state_or_offset_on_a_resource_without_done_rows_is_refused(path):
         with pytest.raises(APIError) as caught:
             resources.read({**doc(), "chat": [], "notes": []}, path, query)
         assert caught.value.status == 400
-        assert caught.value.code == "schema_invalid"
+        assert caught.value.envelope() == REFUSED
 
 
 def test_an_offset_without_the_done_state_is_refused_on_a_collection():
     with pytest.raises(APIError) as caught:
         resources.read(doc(), "tasks", {"offset": 3})
     assert caught.value.status == 400
+    assert caught.value.envelope() == REFUSED
+
+
+@pytest.mark.parametrize("query", [{"state": "done"}, {"offset": 0}])
+def test_a_plain_page_refuses_state_or_offset(query):
+    with pytest.raises(APIError) as caught:
+        resources.page([{"id": "a"}], resources.revision([]), query)
+    assert caught.value.status == 400
+    assert caught.value.envelope() == REFUSED
+
+
+def test_a_done_page_honours_a_smaller_limit():
+    reply = resources.read(doc(), "tasks", {"state": "done", "offset": 10, "limit": 3})
+    assert ids(reply) == ["t24", "t23", "t22"]
+    assert reply["next_offset"] == 13
+
+
+def test_answered_questions_page_by_their_answers_not_a_done_flag():
+    questions = [
+        {"id": "q1", "text": "Old", "answers": [{"id": "a", "text": "yes"}]},
+        {"id": "q2", "text": "Open", "answers": []},
+        {"id": "q3", "text": "New", "answers": [{"id": "b", "text": "no"}]},
+    ]
+    reply = resources.read({"questions": questions, "_meta": {"rev": 1}}, "questions", {"state": "done"})
+    assert ids(reply) == ["q3", "q1"]
+    assert reply["total"] == 2
 
 
 def test_the_query_string_carries_the_state_and_an_integer_offset():

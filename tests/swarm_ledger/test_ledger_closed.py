@@ -27,6 +27,8 @@ def test_done_means_done_flag_done_state_answered_question_or_done_alert():
 def test_recent_lists_done_rows_newest_first():
     rows = [task(1, True), task(2, False), task(3, True), task(4, True)]
     assert [row["id"] for row in ledger_closed.recent("tasks", rows)] == ["t4", "t3", "t1"]
+    questions = [{"id": "q1", "answers": [{"id": "a"}]}, {"id": "q2", "answers": []}]
+    assert [row["id"] for row in ledger_closed.recent("questions", questions)] == ["q1"]
 
 
 def test_the_view_keeps_open_rows_and_the_last_ten_done_in_order():
