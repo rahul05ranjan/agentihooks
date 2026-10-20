@@ -1,7 +1,7 @@
 {{- if gt (int .Values.workers.replicas) 0 }}
 {{- $workers := .Values.workers }}
 {{- $credential := $workers.credentialSecret }}
-{{- if and (not $credential.name) (not $workers.ssh.enabled) }}
+{{- if not $credential.name }}
 {{- fail "workers need a credentialSecret" }}
 {{- end }}
 {{- if gt (int $workers.replicas) 1 }}
@@ -9,9 +9,6 @@
 {{- end }}
 {{- if lt (int $workers.maxAgents) 1 }}
 {{- fail "workers.maxAgents must be positive" }}
-{{- end }}
-{{- if and $workers.ssh.enabled (not $credential.name) }}
-{{- fail "workers.ssh needs credentialSecret: the hive sshd keys ride in the member credential Secret" }}
 {{- end }}
 {{- if and $workers.ssh.enabled (lt (int $workers.ssh.port) 1024) }}
 {{- fail "workers.ssh.port must be 1024 or higher: sshd runs as the unprivileged worker" }}

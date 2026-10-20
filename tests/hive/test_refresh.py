@@ -444,7 +444,7 @@ def test_the_refresh_command_is_listed_with_its_help():
     (commands,) = cli._parser()._subparsers._group_actions
     helps = {action.dest: action.help for action in commands._choices_actions}
 
-    assert helps["refresh"] == "Mint a new Redis credential for this hive through its join service"
+    assert helps["refresh"] == "Mint a new Redis credential for this hive through its hive endpoint"
 
 
 def test_the_hive_home_comes_from_the_mapping_then_the_process(tmp_path, monkeypatch):

@@ -127,7 +127,7 @@ def _parser() -> argparse.ArgumentParser:
     add.add_argument("--label", required=True, help="herdr sidebar label and hive member name")
     add.add_argument("--url", required=True, help="this hive's endpoint as the machine reaches it, for hive refresh")
     add.add_argument("--redis-url", help="Redis URL the machine connects to; defaults to this host's")
-    sub.add_parser("refresh", help="Mint a new Redis credential for this hive through its join service")
+    sub.add_parser("refresh", help="Mint a new Redis credential for this hive through its hive endpoint")
     sub.add_parser("revoke", help="Delete a member's ledger credential and Redis user").add_argument("id")
     sub.add_parser(
         "controller", help="Write a new controller service credential to a private file, retiring the previous one"
