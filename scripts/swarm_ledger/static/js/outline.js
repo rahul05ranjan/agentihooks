@@ -62,7 +62,7 @@ function outlineOf(doc, heads) {
     const hidden = head.list ? closedLeft(head.list) : 0;
     const counts = grouped ? [...new Set([...list.map((i) => i.state || (i.done ? "done" : "open")), ...(hidden ? ["done"] : [])])]
       .map((state) => `${list.filter((i) => (i.state || (i.done ? "done" : "open")) === state).length + (state === "done" ? hidden : 0)} ${state}`).join(" · ") : "";
-    return { id: head.id, list: head.list, title: head.title + (counts ? ` · ${counts}` : ""),
+    return { id: head.id, title: head.title + (counts ? ` · ${counts}` : ""),
       items: head.list === "followups" ? [] : list.map(entry(head.list)) };
   });
 }
@@ -82,7 +82,7 @@ function outlineGroup(s) {
   const key = `ol-${s.id}`;
   return h("li", { class: "ol-sec" }, lazy(box, () => h("ul", { class: "ol-items" },
     ...firstPage(key, s.items, (i) => i.id).map((i) => h("li", {}, outlineLink(i))), moreButton(key, s.items.length, "more items", outlineAgain) || "",
-    (s.items.length && s.list && closedMore(s.list, "done")) || "")));
+    (s.items.length && closedMore(s.id.replace(/^sec-/, ""), "done")) || "")));
 }
 
 export function outlineBoxes() {
