@@ -84,7 +84,7 @@ def _by_origin(hives: list[dict], repo: str) -> list[dict]:
 
 
 def _matched_origin(hives: list[dict], hive: str) -> str:
-    return next((found.get(orders.ORIGIN, "") for found in hives if found["id"] == hive), "")
+    return next(found.get(orders.ORIGIN, "") for found in hives if found["id"] == hive)
 
 
 def _first_choice(
