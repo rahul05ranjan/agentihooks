@@ -838,6 +838,8 @@ def test_execution_report_deduplicates_processes_and_skips_stale_records(redis, 
 def test_beat_publishes_what_this_hive_sees_of_its_own_executions(redis, monkeypatch):
     from dataclasses import replace
 
+    from scripts.swarm_v2.runtime import process
+
     from scripts.hive import orders, reports
     from scripts.swarm.pane import PaneObservation
     from scripts.swarm.store import AgentRecord, RedisStore, SwarmConfig
@@ -857,6 +859,9 @@ def test_beat_publishes_what_this_hive_sees_of_its_own_executions(redis, monkeyp
     herdr.live_names.return_value = {here.name, "engineer@stray-0001"}
     herdr.bindings.return_value = {here.name: {"process": False}}
     herdr.conversations.return_value = {"w1:p1": "conversation"}
+    herdr.herdr.return_value = {"panes": [{"pane_id": "w1:p1"}]}
+    monkeypatch.setattr(process, "local_namespace", lambda: "hive-namespace")
+    monkeypatch.setattr(daemon.time, "time", lambda: 123)
     herdr.observe.return_value = PaneObservation("idle", typed="half")
     herdr.reported.return_value = True
     consumer = Mock(runtime=Mock(herdr=herdr))
@@ -871,6 +876,9 @@ def test_beat_publishes_what_this_hive_sees_of_its_own_executions(redis, monkeyp
     assert json.loads(redis.get(reports.key("machine"))) == {
         "names": sorted({here.name, "engineer@stray-0001"}),
         "panes": {"w1:p1": "conversation"},
+        "pane_ids": ["w1:p1"],
+        "process_namespace": "hive-namespace",
+        "observed_at": 123000,
         "executions": {
             here.execution_id: {
                 "slug": "swarm",

@@ -220,6 +220,24 @@ def test_hive_report_distinguishes_an_empty_pane_listing_from_an_outage(remote, 
     assert report["process_namespace"] == "pod-namespace"
 
 
+def test_a_hive_snapshot_from_before_launch_cannot_retire_the_new_worker(remote):
+    from scripts.swarm import tick
+
+    agent = replace(remote.agent, launched_at=200)
+    remote.store.put_agent("fixture", agent)
+    _publish(remote, state="unknown")
+    report = json.loads(remote.redis.get(remote.reports.key(HIVE)))
+    report.update(pane_ids=[], process_namespace="restarted", observed_at=100)
+    remote.redis.set(remote.reports.key(HIVE), json.dumps(report))
+    remote.store.claim("fixture", "task", agent.name, 60000)
+    rows = {"task": {"state": "claimed", "claimed_by": agent.name}}
+
+    tick._reap("fixture", remote.store, Mock(), remote.runtime, rows, agent.started_at + 10**9)
+
+    assert [found.name for found in remote.store.agents("fixture")] == [agent.name]
+    assert remote.store.claimant("fixture", "task") == agent.name
+
+
 def test_a_hive_reporting_a_dead_process_names_it_unbound(remote):
     _publish(remote)
     report = json.loads(remote.redis.get(remote.reports.key(HIVE)))

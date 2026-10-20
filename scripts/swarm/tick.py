@@ -568,7 +568,10 @@ def _watch_remote(slug, store, ledger, runtime, rows, agent, now_ms):
     """A remote agent is judged by its own runtime, never by this host's process table: no answer keeps it suspect,
     holding its claim, neither retired nor dropped."""
     store.refresh(slug, agent.task, agent.name, LEASE_MS)
-    if runtime.observe(agent).state == "unknown":
+    observed = runtime.observe(agent).state
+    if observed == "exited":
+        return [f"retired {agent.name}: its hive pane is gone" + _drop(slug, store, ledger, rows, agent)]
+    if observed == "unknown":
         if agent.state == SUSPECT:
             return []
         store.put_agent(slug, replace(agent, state=SUSPECT))
