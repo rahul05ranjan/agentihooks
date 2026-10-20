@@ -180,8 +180,8 @@ checks the ingress and Reloader annotations, then installs it with a generated c
 - The root `compose.yaml` stack does not set `LEDGER_TLS_CERT` or `LEDGER_TLS_KEY` on its `swarm` service and
   points its `controller` service at `LEDGER_URL: http://swarm:8765`. That host name resolves to a container
   address, which is not loopback, so the controller's credentialed requests are refused. Two changes are needed
-  before they succeed: the `swarm` service serves TLS, and the controller's `LEDGER_URL` becomes `https://swarm:8765`
-  with `LEDGER_CA_PEM` set to the signing CA. The ledger certificate must then also name `DNS:swarm`.
+  before they succeed: the `swarm` service serves TLS with a certificate that names `DNS:swarm`, and the
+  controller's `LEDGER_URL` becomes `https://swarm:8765` with `LEDGER_CA_PEM` set to the signing CA.
 
 ## Evidence
 
