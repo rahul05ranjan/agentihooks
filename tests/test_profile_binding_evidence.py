@@ -149,7 +149,7 @@ def test_wait_observes_failure_and_times_out_on_pending_request(mounted):
     binding.request(report, "engineer", "claude")
     assert json.loads(report.read_text()) == {"profile": "engineer", "harness": "claude", "state": "pending"}
     with pytest.raises(
-        ValueError, match="^mounted profile canary did not validate before timeout: the claude agent ran"
+        ValueError, match="^mounted profile canary did not validate before timeout: the claude agent reported"
     ):
         binding.wait(report, 0)
 

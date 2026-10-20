@@ -55,6 +55,8 @@ def test_a_canary_timeout_names_the_harness_and_the_seconds_waited(tmp_path, mon
     binding.request(report, "engineer", target)
     clock = iter([0, 91])
     monkeypatch.setattr(binding.time, "monotonic", lambda: next(clock))
-    expected = f"^mounted profile canary did not validate before timeout: the {target} agent ran no canary within 90s$"
+    expected = (
+        f"^mounted profile canary did not validate before timeout: the {target} agent reported no canary within 90s$"
+    )
     with pytest.raises(ValueError, match=expected):
-        binding.wait(report, 90)
+        binding.wait(report, 90.0)

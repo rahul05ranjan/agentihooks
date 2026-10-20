@@ -167,7 +167,7 @@ def wait(report: Path, timeout: float) -> dict:
         time.sleep(0.25)
     harness = json.loads(report.read_text())["harness"]
     raise ValueError(
-        f"mounted profile canary did not validate before timeout: the {harness} agent ran no canary within {timeout:g}s"
+        f"mounted profile canary did not validate before timeout: the {harness} agent reported no canary within {timeout:g}s"
     )
 
 
