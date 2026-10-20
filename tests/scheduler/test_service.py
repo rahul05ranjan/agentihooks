@@ -118,6 +118,7 @@ def test_agentihooks_starts_one_detached_supervisor_when_redis_is_configured(
 
     monkeypatch.setattr(service, "runtime_dir", lambda *_args: tmp_path)
     monkeypatch.setattr(service, "revision", lambda root: "loaded")
+    monkeypatch.setattr(service, "installed", lambda: True)
     spawn = Mock()
     monkeypatch.setattr(service, "subprocess", SimpleNamespace(Popen=spawn, DEVNULL=subprocess.DEVNULL))
     assert service.ensure_running({}) is False
@@ -265,6 +266,7 @@ def test_supervisor_startup_and_log_use_the_explicit_domain(tmp_path, monkeypatc
     from scripts.scheduler import service
 
     monkeypatch.setattr(service.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(service, "installed", lambda: True)
     active = {
         "AGENTIHOOKS_DEPLOYMENT": "cloud",
         "AGENTIHOOKS_HIVE_ID": "member",
