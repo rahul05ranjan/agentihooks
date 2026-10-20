@@ -27,6 +27,7 @@ def startup(tmp_path, *, joined=False, refused=False, bundle=False, deps_exit=0)
     cli.chmod(0o755)
     home = tmp_path / "state"
     home.mkdir()
+    (tmp_path / "home").mkdir()
     credential = tmp_path / "member"
     credential.write_text("fixture member credential\n")
     code = tmp_path / "code"
