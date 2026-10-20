@@ -473,9 +473,62 @@ def test_each_request_is_capped_under_half_the_active_read_budget(monkeypatch):
             return {"data": []}
 
     monkeypatch.setattr(traces_read.httpx, "get", lambda url, **kw: timeouts.append(kw["timeout"]) or Response())
-    traces_read.client({"LANGFUSE_PUBLIC_KEY": "pk", "LANGFUSE_SECRET_KEY": "sk"})("traces", {})
+    traces_read.client({"LANGFUSE_HOST": "https://lf", "LANGFUSE_PUBLIC_KEY": "pk", "LANGFUSE_SECRET_KEY": "sk"})(
+        "traces", {}
+    )
     assert timeouts == [budget.request_seconds]
     assert budget.request_seconds < budget.active_seconds / 2
+
+
+def _routes(monkeypatch, internal):
+    import httpx
+
+    sent, client = [], httpx.Client
+
+    def handler(request):
+        sent.append(request)
+        if request.url.host == "langfuse.homeofanton.com":
+            return httpx.Response(502, text="tunnel error")
+        return internal(request)
+
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(traces_read.httpx, "Client", lambda: client(transport=transport))
+    monkeypatch.setattr(traces_read.httpx, "get", lambda url, **kw: client(transport=transport).get(url, **kw))
+    return sent
+
+
+@pytest.mark.parametrize("host", [None, "https://langfuse.homeofanton.com/"])
+def test_reads_reach_langfuse_through_the_internal_ingress_while_the_public_tunnel_answers_502(monkeypatch, host):
+    import httpx
+
+    sent = _routes(monkeypatch, lambda request: httpx.Response(200, json={"data": []}))
+    env = {"LANGFUSE_PUBLIC_KEY": "pk", "LANGFUSE_SECRET_KEY": "sk"} | ({"LANGFUSE_HOST": host} if host else {})
+    assert traces_read.client(env)("traces", {"page": 1}) == {"data": []}
+    [request] = sent
+    assert str(request.url) == "https://10.10.30.200/api/public/traces?page=1"
+    assert request.headers["Host"] == "langfuse.homeofanton.com"
+    assert request.extensions["sni_hostname"] == "langfuse.homeofanton.com"
+    assert request.headers["Authorization"] == "Basic cGs6c2s="
+    assert request.extensions["timeout"]["read"] == traces_read.Budget.request_seconds
+
+
+@pytest.mark.parametrize("failure", ["backend 503", "internal timeout"])
+def test_a_real_backend_failure_on_the_internal_path_still_raises_the_reader_finding(monkeypatch, tmp_path, failure):
+    import httpx
+
+    from scripts.doctor import traces
+
+    def internal(request):
+        if failure == "internal timeout":
+            raise httpx.ReadTimeout("timed out", request=request)
+        return httpx.Response(503, text="langfuse down")
+
+    _routes(monkeypatch, internal)
+    get = traces_read.client({"LANGFUSE_PUBLIC_KEY": "pk", "LANGFUSE_SECRET_KEY": "sk"})
+    data = traces_read.record("s", [], [], 1000, get, home=tmp_path)
+    assert [f.kind for f in traces.findings(data, traces.Limits())] == ["trace reader unavailable"]
+    raised = {"backend 503": "HTTPStatusError", "internal timeout": "ReadTimeout"}[failure]
+    assert data["reader"]["failures"][0].startswith(f"trace listing failed: {raised}")
 
 
 def test_the_listing_keeps_every_page_and_stops_when_the_budget_is_spent(tmp_path):
