@@ -838,11 +838,10 @@ def test_execution_report_deduplicates_processes_and_skips_stale_records(redis, 
 def test_beat_publishes_what_this_hive_sees_of_its_own_executions(redis, monkeypatch):
     from dataclasses import replace
 
-    from scripts.swarm_v2.runtime import process
-
     from scripts.hive import orders, reports
     from scripts.swarm.pane import PaneObservation
     from scripts.swarm.store import AgentRecord, RedisStore, SwarmConfig
+    from scripts.swarm_v2.runtime import process
 
     store = RedisStore(redis)
     store.create(SwarmConfig("swarm", "repo", 8, 0))

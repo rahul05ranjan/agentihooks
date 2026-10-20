@@ -46,7 +46,6 @@ class Reports:
         found = report["executions"].get(agent.execution_id, {})
         return found if found.get("generation") == agent.generation else {}
 
-
     def gone(self, agent: "AgentRecord") -> bool:
         report = self.read(host(agent))
         if report is None:
