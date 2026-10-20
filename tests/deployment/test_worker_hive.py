@@ -10,25 +10,19 @@ ROOT = Path(__file__).resolve().parents[2]
 START = ROOT / "deploy/worker/start.sh"
 
 
-def startup(tmp_path, *, joined=False, refused=False):
+def startup(tmp_path, *, joined=False, pre_existing_env=False, wait_s=None):
     tools = tmp_path / "bin"
     tools.mkdir()
     log = tmp_path / "commands"
     cli = tools / "agentihooks"
-    cli.write_text(
-        "#!/usr/bin/env bash\nset -euo pipefail\n"
-        'printf "%s\\n" "$*" >> "$COMMAND_LOG"\n'
-        'if [[ "$*" == "hive join "* ]]; then\n'
-        '  [[ "$REFUSE_JOIN" == no ]] || exit 9\n'
-        '  touch "$AGENTIHOOKS_HOME/hive.env"\nfi\n'
-    )
+    cli.write_text('#!/usr/bin/env bash\nset -euo pipefail\nprintf "%s\\n" "$*" >> "$COMMAND_LOG"\n')
     cli.chmod(0o755)
     home = tmp_path / "state"
     home.mkdir()
     credential = tmp_path / "member"
     credential.write_text("fixture member credential\n")
-    code = tmp_path / "code"
-    code.write_text("fixture-code\n")
+    if pre_existing_env:
+        (home / "hive.env").write_text("fixture hive env\n")
     repo = tmp_path / "source"
     subprocess.run(["git", "init", "--initial-branch=dev", str(repo)], check=True, capture_output=True)
     subprocess.run(
@@ -58,45 +52,43 @@ def startup(tmp_path, *, joined=False, refused=False):
         "AGENTIHOOKS_HIVE_REDIS_URL": "redis://localhost:6379/15",
         "HIVE_REPO_ROOT": str(tmp_path / "repos"),
         "HIVE_REPOSITORIES": json.dumps([{"url": str(repo), "name": "checkout", "ref": "dev"}]),
-        "HIVE_JOIN_URL": "https://join.example.test",
-        "HIVE_JOIN_CODE_FILE": str(code),
         "HIVE_CREDENTIAL_FILE": str(credential) if joined else "",
         "COMMAND_LOG": str(log),
-        "REFUSE_JOIN": "yes" if refused else "no",
     }
+    if wait_s is not None:
+        env["HIVE_DELIVERY_WAIT_S"] = str(wait_s)
     result = subprocess.run(["bash", str(START)], env=env, capture_output=True, text=True)
     return result, log.read_text() if log.exists() else "", home, tmp_path / "repos/checkout"
 
 
-def test_code_join_clones_repo_and_configures_before_run(tmp_path):
-    result, commands, home, repo = startup(tmp_path)
+def test_mounted_member_skips_wait_and_keeps_private_credentials(tmp_path):
+    result, commands, home, _ = startup(tmp_path, joined=True)
     assert result.returncode == 0, result.stderr
     assert commands.splitlines() == [
-        "hive join https://join.example.test fixture-code",
+        "init --profile engineer",
+        "hive set worker-member ui=no ephemeral=yes roles=eng,ci,plan,dispatch max-agents=1",
+        "hive run",
+    ]
+    assert (home / "hive.env").stat().st_mode & 0o777 == 0o600
+    assert "fixture member credential" not in result.stdout + result.stderr
+
+
+def test_preexisting_hive_env_proceeds_without_waiting(tmp_path):
+    result, commands, _, repo = startup(tmp_path, pre_existing_env=True)
+    assert result.returncode == 0, result.stderr
+    assert commands.splitlines() == [
         "init --profile engineer",
         "hive set worker-member ui=no ephemeral=yes roles=eng,ci,plan,dispatch max-agents=1",
         "hive run",
     ]
     assert (repo / ".git").is_dir()
-    assert (home / "hive.env").exists()
-    container_env = home / "hive-container.env"
-    assert container_env.stat().st_mode & 0o777 == 0o600
-    assert "AGENTIHOOKS_HIVE_ID=worker-member\n" in container_env.read_text()
-    assert "COMMAND_LOG=" not in container_env.read_text()
 
 
-def test_mounted_member_skips_join_and_keeps_private_credentials(tmp_path):
-    result, commands, home, _ = startup(tmp_path, joined=True)
-    assert result.returncode == 0, result.stderr
-    assert "hive join" not in commands
-    assert "hive set worker-member ui=no ephemeral=yes roles=eng,ci,plan,dispatch max-agents=1\n" in commands
-    assert commands.endswith("hive run\n")
-    assert (home / "hive.env").stat().st_mode & 0o777 == 0o600
-    assert "fixture member credential" not in result.stdout + result.stderr
-
-
-def test_refused_join_never_runs_the_worker(tmp_path):
-    result, commands, _, _ = startup(tmp_path, refused=True)
-    assert result.returncode == 9
+def test_no_credential_delivered_exits_before_running(tmp_path):
+    result, commands, _, _ = startup(tmp_path, wait_s=0)
+    assert result.returncode == 1
+    assert commands == ""
     assert "hive run" not in commands
-    assert "hive set" not in commands
+    assert result.stderr.strip().endswith(
+        "worker-hive: no member credential was delivered within 0s; run agentihooks hive add from the UI hive"
+    )
