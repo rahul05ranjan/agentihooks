@@ -97,3 +97,17 @@ def test_worker_token_refresh_uses_scheduled_thirty_minute_renewals(tmp_path, mo
     assert target.read_text() == "renewed"
     assert target.stat().st_mode & 0o777 == 0o600
     assert not (tmp_path / "github-token.next").exists()
+
+
+def test_worker_refresh_command_describes_the_renewal_schedule(capsys, monkeypatch):
+    import pytest
+
+    from scripts import github_app_cli
+
+    monkeypatch.setenv("COLUMNS", "200")
+    with pytest.raises(SystemExit) as shown:
+        github_app_cli.main(["--help"])
+    assert shown.value.code == 0
+    assert "refresh-file Renew the worker token file every thirty minutes" in [
+        " ".join(line.split()) for line in capsys.readouterr().out.splitlines()
+    ]
