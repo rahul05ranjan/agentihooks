@@ -250,7 +250,7 @@ def test_a_request_is_kept_under_its_own_key_with_its_time_reason_and_item(swarm
     assert master_retire.hold(store, "sw", master, "a test", True, 200).startswith("asked")
     record = json.loads(store.redis.hget(store.key("sw", "master-retire-requests"), master.name))
     (ask,) = asks(store, master.name)
-    assert record == {"at": 200, "reason": "a test", "item": ask.id}
+    assert record == {"at": 200, "reason": "a test", "item": ask.id, "world": ""}
     assert ask.sender == "swarm"
     assert master_retire.reason(store, "sw", master.name) == "a test"
 
@@ -284,6 +284,18 @@ def test_forget_closes_an_open_request_once_and_reports_whether_one_existed(swar
     second = next(i for i in asks(store, master.name) if i.id != ask.id)
     master_retire.forget(store, "sw", master.name)
     assert inbox.get(second.id).state == "done"
+
+
+def test_a_master_on_a_joined_hive_is_retired_and_its_ask_closed_in_the_hive_inbox(swarm, monkeypatch):
+    store, _, _, master = swarm
+    monkeypatch.setattr(InboxStore, "home", lambda self, address: "hive-a" if address == master.name else "")
+    assert master_retire.hold(store, "sw", master, "test", True, 200).startswith("asked")
+    hive = InboxStore(store.redis, world="hive-a")
+    (ask,) = [i for i in hive.inbox(master.name) if i.ref == master_retire.REF]
+    assert asks(store, master.name) == []
+    assert master_retire.hold(store, "sw", master, "test", True, 200 + WAIT) == ""
+    assert hive.get(ask.id).state == "done"
+    assert master_retire.reason(store, "sw", master.name) == ""
 
 
 def test_the_idle_limit_leaves_a_master_held_for_another_reason_alone(swarm):
