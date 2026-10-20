@@ -40,3 +40,23 @@ def test_planted_fault_a_successor_asking_what_the_handoff_answered_is_raised():
     assert found.id == f"reasked-handoff/{planted['to']}"
     assert found.measure == 1
     assert any(line.startswith("message q1 to master@x") for line in found.evidence)
+
+
+def test_a_handoff_without_seat_or_sender_is_reported_apart_naming_its_task():
+    record = {
+        "seat": "",
+        "task": "doc-79030d0c5613b0f2",
+        "from": "",
+        "to": "",
+        "at": 0,
+        "document": "",
+        "recaps": [],
+        "asked": [],
+    }
+    found = handoffs.missing_recap([record])
+    assert all(f.subject for f in found)
+    [unattributed] = found
+    assert unattributed.id == "unattributed-handoff/doc-79030d0c5613b0f2"
+    assert unattributed.measure == 1
+    assert "task doc-79030d0c5613b0f2 with no seat on record" in unattributed.evidence
+    assert "successor not started yet" in unattributed.evidence
