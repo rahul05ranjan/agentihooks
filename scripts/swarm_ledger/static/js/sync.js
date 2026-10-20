@@ -117,8 +117,8 @@ function keepDropped(previous, next) {
     const gone = hiddenDone(next, name);
     const have = new Set([...next[name], ...(older[name] || [])].map((i) => i.id));
     const dropped = previous[name].filter((i) => gone.has(i.id) && !have.has(i.id)).reverse();
-    older[name] = [...dropped, ...older[name]];
-    pulled[name] += dropped.length;
+    older[name] = [...dropped, ...older[name]].filter((i) => gone.has(i.id));
+    pulled[name] = older[name].length;
   }
 }
 
@@ -136,8 +136,9 @@ export async function loadClosed(name) {
   if (!resp.ok) return;
   const { data } = await resp.json();
   const have = new Set((older[name] || []).map((i) => i.id));
-  pulled[name] = data.length ? (pulled[name] || 0) + data.length : closed.hidden;
-  older[name] = [...(older[name] || []), ...withDefaults({ [name]: data })[name].filter((i) => !have.has(i.id))];
+  const fresh = withDefaults({ [name]: data })[name].filter((i) => !have.has(i.id));
+  older[name] = [...(older[name] || []), ...fresh];
+  pulled[name] = fresh.length ? older[name].length : closed.hidden;
   mergeOlder(doc);
 }
 

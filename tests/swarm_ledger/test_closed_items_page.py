@@ -183,6 +183,24 @@ def test_a_row_leaving_the_server_window_after_a_load_stays_and_the_next_page_fo
     assert done_ids(page)[-5:] == ["t4", "t3", "t2", "t1", "t0"]
 
 
+def test_reopening_a_loaded_row_keeps_the_next_page_aligned(ledger):
+    page, reads, served = ledger
+    more(page, "#tasks-done", "tasks").click()
+    page.wait_for_function("() => document.querySelectorAll('#tasks-done ol > li[id^=item-tasks-]').length === 20")
+    reopened = {**HIDDEN_TASKS[10], "state": "open", "done": False}
+    hidden = [t for t in HIDDEN_TASKS if t["id"] != "t10"]
+    served["store"] = {**STORE, "tasks": hidden}
+    closed = {"tasks": {"hidden": 14, "kept": 10, "ids": [t["id"] for t in hidden], "plan_phases": []}}
+    serve(served, 2, tasks=KEPT_TASKS + [reopened] + OPEN_TASKS, _meta={"closed": {**DOC["_meta"]["closed"], **closed}})
+    page.wait_for_function("() => document.querySelectorAll('#tasks-done ol > li[id^=item-tasks-]').length === 19")
+    assert page.locator("#tasks-done > summary").text_content() == "24 done"
+    assert more(page, "#tasks-done", "tasks").text_content() == "Show 5 more done tasks · 5 left"
+    more(page, "#tasks-done", "tasks").click()
+    page.wait_for_function("() => document.querySelectorAll('#tasks-done ol > li[id^=item-tasks-]').length === 24")
+    assert reads[1] == ("tasks", {"state": "done", "offset": "19", "limit": "10"})
+    assert done_ids(page)[-5:] == ["t4", "t3", "t2", "t1", "t0"]
+
+
 def test_a_priority_on_a_hidden_done_task_reads_done_not_removed(ledger):
     page, _, served = ledger
     priorities = [
