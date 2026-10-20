@@ -105,7 +105,7 @@ service; no flag or environment variable changes one.
 
 The request deadline does not interrupt a handler waiting on Redis, which holds a separate connection, so the
 Redis client's own timeout is what frees a handler while Redis stalls. The swarm Redis client reads with a
-ten-second timeout; the join service lowers it to five seconds. A stalled call then raises after five seconds, the
+ten-second timeout; the hive endpoint lowers it to five seconds. A stalled call then raises after five seconds, the
 handler answers 503 and its slot is free for the next request.
 
 The service applies the bound when `agentihooks hive serve` builds the server. It sets the socket timeout on the
@@ -119,36 +119,26 @@ seconds.
 
 | Status | Body `error` | Cause |
 |---|---|---|
-| 200 | none | The code or credential was accepted; the body carries the grant. |
-| 400 | `the body must be a JSON object with a string code` (`string ledger_credential` on refresh) | The body is missing, over 4096 bytes, not JSON, or lacks that string field. |
-| 403 | the refusal reason, such as `invite code is invalid, expired or already used` | The code or credential is not valid, or Redis returned an error other than a timeout, a lost connection or a refused login while the service wrote or refreshed the member. |
-| 404 | `not found` | The path is not `/hive/join` or `/hive/refresh`. |
+| 200 | none | The credential was accepted; the body carries the grant. |
+| 400 | `the body must be a JSON object with a string ledger_credential` | The body is missing, over 4096 bytes, not JSON, or lacks that string field. |
+| 403 | the refusal reason, such as `the ledger credential belongs to no hive member` | The credential is not valid, or Redis returned an error other than a timeout, a lost connection or a refused login while the service refreshed the member. |
+| 404 | `not found` | The path is not `/hive/refresh`. |
 | 503 | `the hive Redis did not answer; try again` | A Redis call timed out, the connection to Redis was refused or dropped, or Redis refused the service's own login (`WRONGPASS`, `NOAUTH`). |
 
 The 503 text is fixed and carries no Redis detail. The service writes no request log, so for an answered request the
 client's reply is the only record.
 
-The first Redis call of a join, which deletes the invite, sits outside the 403 handling. A Redis error there other
-than a timeout, a lost connection or a refused login, such as an access control denial (`NOPERM`), gets no answer:
-the service prints a traceback to its standard error and closes the connection, and `hive join` reports the hive as
-unreachable.
-
 ### What a client sees
 
 ```text
-$ agentihooks hive join https://swarm.example.internal:8770 <code>
-hive join refused: the hive Redis did not answer; try again
-
 $ agentihooks hive refresh
 hive refresh refused: the hive Redis did not answer; try again
 ```
 
-Both commands exit 1. The bound is per Redis call. When Redis stalls after the invite was deleted, a join spends one
-timeout on writing the member and a second on removing it, about ten seconds, which is as long as the client waits. The
-client may then report the timeout instead of the 503:
+The command exits 1. The bound is per Redis call. The client may report the timeout instead of the 503:
 
 ```text
-hive join refused: the hive at https://swarm.example.internal:8770 is unreachable (timed out)
+hive refresh refused: the hive at https://swarm.example.internal:8770 is unreachable (timed out)
 ```
 
 A hive whose own Redis credential was refused refreshes it through this service. When the service answers 503, the
@@ -159,31 +149,30 @@ refusals. This error comes from the swarm's `redis_client()` helper, so commands
 
 ### Check the bound against a live service
 
-A made-up code reaches Redis through the service without consuming a real invite. Add `--cacert` for a private
-certificate authority.
+A made-up credential reaches Redis through the service without touching a real member. Add `--cacert` for a
+private certificate authority.
 
 ```bash
 curl -sS -m 15 -w '\nstatus %{http_code} in %{time_total}s\n' \
-  -d '{"code":"not-a-real-code"}' https://swarm.example.internal:8770/hive/join
+  -d '{"ledger_credential": "not-a-real-credential"}' https://swarm.example.internal:8770/hive/refresh
 ```
 
 | Redis state | Output |
 |---|---|
-| Answering | `{"error": "invite code is invalid, expired or already used"}` and `status 403` at once |
+| Answering | `{"error": "the ledger credential belongs to no hive member"}` and `status 403` at once |
 | Accepting the connection, never replying | `{"error": "the hive Redis did not answer; try again"}` and `status 503` after about 5 seconds |
 
-The CI test `test_a_request_stalled_inside_redis_answers_and_frees_its_slot_within_the_bound` runs both routes
+The CI test `test_a_request_stalled_inside_redis_answers_and_frees_its_slot_within_the_bound` runs this route
 against a listener that accepts connections and never replies, with one handler slot and a Redis timeout of one
-second: each answers 503 and the slot is free within twice that timeout.
+second: it answers 503 and the slot is free within twice that timeout.
 
-### Join service troubleshooting
+### Hive endpoint troubleshooting
 
 | Symptom | Reading | Action |
 |---|---|---|
-| `hive join` answers 503 or reports the hive unreachable, then the same code answers `invite code is invalid, expired or already used` | The service deletes the invite with its first Redis call, so a call that Redis applied before the timeout, or a later call that failed, leaves the code used. On a Redis error it tries to remove the partly created member. | Run `agentihooks hive invite <name>` on the swarm host for a new code. |
 | `hive refresh` answers 503 | The refresh did not complete, or completed without the reply reaching the client. | Run `agentihooks hive refresh` again. Each success replaces the previous Redis password, and the command takes a per-host lock so two callers do not retire each other's password. |
-| Every join and refresh answers 503 | Redis is stalled, unreachable or refusing the service's connection. | From the swarm host, run `agentihooks hive list`. It opens its own Redis connection with a 3-second connect and 10-second read timeout, so an error or a pause there points at Redis and not at the join service. Fix Redis, then repeat the request. |
-| 403 text `Redis refused the new member (...)` or `Redis refused the refreshed member (...)` | Redis returned an error other than a timeout, a lost connection or a refused login; see Answers. | Read the detail in the message. |
+| Every refresh answers 503 | Redis is stalled, unreachable or refusing the service's connection. | From the swarm host, run `agentihooks hive list`. It opens its own Redis connection with a 3-second connect and 10-second read timeout, so an error or a pause there points at Redis and not at the hive endpoint. Fix Redis, then repeat the request. |
+| 403 text `Redis refused the refreshed member (...)` | Redis returned an error other than a timeout, a lost connection or a refused login; see Answers. | Read the detail in the message. |
 
 ## Member keys
 
@@ -210,7 +199,7 @@ by Redis with `NOPERM`. So every piece of state a member process writes lives be
 ### Which keys a process uses
 
 A process counts as the member only while it talks Redis as that member: `AGENTIHOOKS_HIVE_ID` is set and the
-Redis URL it resolves is `AGENTIHOOKS_HIVE_REDIS_URL`. `hive join` writes both to `hive.env`; a process resolves the
+Redis URL it resolves is `AGENTIHOOKS_HIVE_REDIS_URL`. `hive add` delivers both in `hive.env`; a process resolves the
 hive Redis URL only when `AGENTIHOOKS_DEPLOYMENT` is `compose` or `distributed`. Any other process, the
 controller included, uses the controller keys under the plain root.
 

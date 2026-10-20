@@ -104,11 +104,11 @@ spec:
       volumes:
         - name: join
           secret:
-            secretName: {{ $secret.name }}
+            secretName: {{ $credential.name }}
             defaultMode: 0440
             items:
-              - key: {{ required "worker join Secret key is required" $secret.key }}
-                path: {{ $path }}
+              - key: {{ required "worker join Secret key is required" $credential.key }}
+                path: credential
               {{- if $workers.ssh.enabled }}
               - key: authorized_keys
                 path: ssh/authorized_keys
@@ -116,12 +116,7 @@ spec:
                 path: ssh/host_key
               {{- end }}
         - name: home
-          {{- if $code.name }}
-          persistentVolumeClaim:
-            claimName: {{ include "swarm.fullname" . }}-worker-hive-state
-          {{- else }}
           emptyDir: {}
-          {{- end }}
         - name: tmp
           emptyDir: {}
         {{- if $workers.caSecret.name }}
