@@ -282,3 +282,23 @@ def test_one_task_failing_in_the_intent_check_never_ends_the_tick_run(tmp_path):
     [row] = [row for row in rows(tmp_path) if row["kind"] == "fail-open"]
     assert row["gate"] == intent.NAME and row["task"] == "t0" and row["agent"] == ""
     assert row["reason"] == "RuntimeError: boom"
+
+
+def test_one_task_failing_before_it_is_judged_never_ends_the_tick_run(tmp_path, monkeypatch):
+    bind = intent._bind_pulls
+
+    def bound(verdicts, task, url, doc):
+        if task["id"] == "t0":
+            raise OSError("disk")
+        return bind(verdicts, task, url, doc)
+
+    monkeypatch.setattr(intent, "_bind_pulls", bound)
+    view = {"title": PULLS[HERE]["title"], "body": "", "files": [".github/workflows/sonar.yml"]}
+    ask = lambda state: intent.judge(state, classifier(0.9))  # noqa: E731
+    actions = intent.Check(SLUG, "enforce", NOW, Ledger(), Mail(), lambda url: view, ask, home=tmp_path).run(
+        {**DOC, "tasks": [{**task(), "id": "t0", "claimed_by": "eng"}, task()]}
+    )
+    assert actions == ["task t0 intent check failed: OSError", f"task {WHO.task} intent check pass"]
+    assert verdicts(tmp_path).read("t0") is None
+    [row] = [row for row in rows(tmp_path) if row["kind"] == "fail-open"]
+    assert row["task"] == "t0" and row["agent"] == "eng" and row["reason"] == "OSError: disk"

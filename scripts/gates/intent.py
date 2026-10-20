@@ -761,39 +761,42 @@ class Check:
             states = ("pr", "claimed") if self.mode == "coach" else ("pr",)
             if task.get("state") not in states or not task.get("pr_url"):
                 continue
-            _bind_pulls(verdicts, task, task["pr_url"], doc)
-            record = verdicts.read(task["id"])
-            judged = record and record["verdict"] != PENDING and not record.get("planned")
-            moved = (
-                self.mode != "coach"
-                and judged
-                and (record.get("inputs") != _fingerprint(doc, task) or self._named_moved(record))
-            )
-            if self.mode != "coach" and judged and _same_phase(record, task) and not moved:
-                continue
-            tasks.append((task, record, moved))
-        for task, record, _ in tasks:
-            if _drafted(record):
-                verdicts.write(
-                    task["id"],
-                    PENDING,
-                    RUNNING,
-                    self.now_ms,
-                    phase=task.get("phase"),
-                    **_split_fields(task, task["pr_url"]),
-                )
+            actions += self._isolated(task, self._queue, doc, task, verdicts, tasks)
         with ThreadPoolExecutor(max_workers=2) as workers:
             pending = [
                 (task, record, moved, workers.submit(copy_context().run, self._judge, doc, task))
                 for task, record, moved in tasks
             ]
             for task, record, moved, future in pending:
-                actions += self._settled(task, record, moved, future, verdicts)
+                actions += self._isolated(task, self._settle, task, record, moved, future, verdicts)
         return actions
 
-    def _settled(self, task, record, moved, future, verdicts):
+    def _queue(self, doc, task, verdicts, tasks):
+        _bind_pulls(verdicts, task, task["pr_url"], doc)
+        record = verdicts.read(task["id"])
+        judged = record and record["verdict"] != PENDING and not record.get("planned")
+        moved = (
+            self.mode != "coach"
+            and judged
+            and (record.get("inputs") != _fingerprint(doc, task) or self._named_moved(record))
+        )
+        if self.mode != "coach" and judged and _same_phase(record, task) and not moved:
+            return []
+        if _drafted(record):
+            verdicts.write(
+                task["id"],
+                PENDING,
+                RUNNING,
+                self.now_ms,
+                phase=task.get("phase"),
+                **_split_fields(task, task["pr_url"]),
+            )
+        tasks.append((task, record, moved))
+        return []
+
+    def _isolated(self, task, step, *args):
         try:
-            return self._settle(task, record, moved, future, verdicts)
+            return step(*args)
         except Exception as exc:  # one task's failure is logged and never ends the tick run
             who = Who(name=task.get("claimed_by", ""), task=task["id"])
             log.append(self.slug, log.Row.of(NAME, "fail-open", who, reason=f"{type(exc).__name__}: {exc}"), self.home)
