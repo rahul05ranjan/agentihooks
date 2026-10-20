@@ -82,8 +82,11 @@ def test_a_trusted_ledger_ca_is_delivered_after_the_env_file(admin):
 
     grant = machine.add(admin, "root", TARGET, "anton-hive", machine.Delivery(URL, PUBLIC, "PEM"), run)
 
-    assert [call[0][-1] for call in run.calls[1:]] == [machine.DELIVER, machine.DELIVER_CA]
-    assert [call[1]["input"] for call in run.calls[1:]] == [auth.env_text(URL, grant), "PEM"]
+    delivered = {"capture_output": True, "text": True, "timeout": 60, "check": False}
+    assert run.calls[1:] == [
+        (["ssh", "-o", "BatchMode=yes", TARGET, machine.DELIVER], {"input": auth.env_text(URL, grant), **delivered}),
+        (["ssh", "-o", "BatchMode=yes", TARGET, machine.DELIVER_CA], {"input": "PEM", **delivered}),
+    ]
     assert machine.DELIVER_CA == (
         'home="${AGENTIHOOKS_HOME:-$HOME/.agentihooks}" && ca="${LEDGER_CA_FILE:-$home/ledger-ca.pem}" '
         '&& mkdir -p "$(dirname "$ca")" && cat > "$ca.new" && mv "$ca.new" "$ca"'
@@ -175,6 +178,38 @@ def test_cli_add_reports_a_refusal(admin, monkeypatch, capsys):
     assert cli.main(["add", TARGET, "--label", "anton-hive", "--url", URL]) == 1
 
     assert capsys.readouterr().err == "hive add refused: hive root is headless; only a UI hive adds machines\n"
+
+
+@pytest.mark.parametrize(
+    ("argv", "missing"),
+    [
+        (["add", TARGET, "--url", URL], "--label"),
+        (["add", TARGET, "--label", "anton-hive"], "--url"),
+        (["add", "--label", "anton-hive", "--url", URL], "target"),
+    ],
+)
+def test_cli_add_needs_its_target_label_and_url(argv, missing, capsys):
+    with pytest.raises(SystemExit) as refused:
+        cli.main(argv)
+
+    assert refused.value.code == 2
+    assert capsys.readouterr().err.splitlines()[-1].endswith(f"the following arguments are required: {missing}")
+
+
+def test_cli_add_help_names_every_option(monkeypatch, capsys):
+    monkeypatch.setenv("COLUMNS", "300")
+
+    with pytest.raises(SystemExit):
+        cli.main(["add", "--help"])
+
+    out = capsys.readouterr().out
+    for text in (
+        "SSH target herdr machine add dials, such as ssh://worker@host:2222",
+        "herdr sidebar label and hive member name",
+        "this hive's endpoint as the machine reaches it, for hive refresh",
+        "Redis URL the machine connects to; defaults to this host's",
+    ):
+        assert f" {text}\n" in out
 
 
 @pytest.mark.parametrize("command", [["invite", "laptop"], ["join", URL, "code"]])
