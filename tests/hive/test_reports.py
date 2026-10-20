@@ -160,7 +160,7 @@ def test_a_lost_hive_marks_its_executions_unknown_not_dead(remote):
 @pytest.mark.parametrize(
     ("panes", "namespace", "retired"),
     [
-        (["w1:p1"], "theirs", True),
+        (["w9:p9"], "theirs", True),
         ([], "theirs", True),
         ([PANE], "restarted", True),
         ([PANE], "theirs", False),
@@ -183,6 +183,7 @@ def test_tick_retires_only_hive_workers_proven_gone(remote, panes, namespace, re
     now = remote.agent.started_at + 10**9
     idle.beat(remote.redis, "fixture", remote.agent.name, idle.WORKING, now)
     ledger = Mock()
+    ledger.update_task.return_value = {"state": "open", "claimed_by": ""}
     remote.runtime.retire = Mock(side_effect=AssertionError("a gone pane needs no remote process command"))
 
     actions = tick._reap("fixture", remote.store, ledger, remote.runtime, rows, now)
