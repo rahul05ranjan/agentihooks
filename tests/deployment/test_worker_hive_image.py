@@ -1,6 +1,7 @@
 import os
 import re
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -64,6 +65,32 @@ def test_kind_proof_rebuilds_the_base_only_when_it_is_not_current():
     assert f"if bash deploy/worker/base-current.sh {BASE}; then" in current
     assert "docker/swarm-node/Dockerfile" not in current
     assert "docker/swarm-node/Dockerfile" in stale.split("\nfi\n")[0]
+
+
+def normalized(name):
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def test_base_lock_carries_every_dependency_of_the_workstation_install():
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    specs = project["dependencies"] + project["optional-dependencies"]["all"]
+    wanted = {normalized(re.match(r"[A-Za-z0-9._-]+", spec)[0]) for spec in specs}
+    lock = (ROOT / "docker/swarm-node/requirements.lock").read_text()
+    locked = {normalized(name) for name in re.findall(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==", lock, re.M)}
+    assert {"croniter", "boto3", "psycopg2-binary", "redis"} <= wanted
+    assert sorted(wanted - locked) == []
+
+
+def test_kind_proof_fails_the_build_when_init_does_not_render_the_engineer_profile():
+    proof = PROOF.read_text()
+    check = (
+        'docker run --rm --entrypoint bash "$image" -c '
+        "'agentihooks init --profile engineer && "
+        'grep -qx "<!-- profile: engineer -->" "$HOME/.claude/CLAUDE.md"\' > "$out/init.txt"\n'
+    )
+    assert proof.startswith("#!/usr/bin/env bash\nset -euo pipefail\n")
+    assert proof.count(check) == 1
+    assert proof.index(check) < proof.index('kind load docker-image "$image"')
 
 
 def test_base_inputs_cover_every_base_source_the_wheel_does_not_replace():
