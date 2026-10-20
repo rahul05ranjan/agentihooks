@@ -114,7 +114,7 @@ def protection_refusal(payload: dict) -> str:
         return ""
     if not is_open(session_id) or MAIN_PROTECTION.search(command):
         return PROTECTION_REFUSAL
-    if RULESET_BY_ID.search(command) and not _committed_payload(command, Path(payload.get("cwd") or ".")):
+    if RULESET_BY_ID.search(command) and not _committed_payload(command, Path(payload.get("cwd") or os.getcwd())):
         return PROTECTION_REFUSAL
     return ""
 
@@ -124,6 +124,7 @@ def _committed_payload(command: str, cwd: Path) -> bool:
     if not found:
         return False
     target = str((cwd / found.group(0)).resolve())
-    tracked = subprocess.run(["git", "-C", str(cwd), "ls-files", "--error-unmatch", target], capture_output=True)
-    clean = subprocess.run(["git", "-C", str(cwd), "diff", "--quiet", "HEAD", "--", target], capture_output=True)
+    quiet = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+    tracked = subprocess.run(["git", "-C", str(cwd), "ls-files", "--error-unmatch", target], **quiet)
+    clean = subprocess.run(["git", "-C", str(cwd), "diff", "--quiet", "HEAD", "--", target], **quiet)
     return tracked.returncode == 0 and clean.returncode == 0

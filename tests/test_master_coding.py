@@ -390,9 +390,11 @@ def test_a_ruleset_write_by_id_needs_its_payload_committed_in_the_checkout(maste
         "tool_input": {"command": "gh api -X PUT repos/o/r/rulesets/7 --input .github/rulesets/dev-no-delete.json"},
     }
     assert master_coding.protection_refusal(payload) == master_coding.PROTECTION_REFUSAL
-    _payload_repo(master / "two", committed=True)
-    payload["cwd"] = str(master / "two" / "repo")
+    committed = _payload_repo(master / "two", committed=True)
+    payload["cwd"] = str(committed)
     assert master_coding.protection_refusal(payload) == ""
+    (committed / ".github" / "rulesets" / "dev-no-delete.json").write_text('{"relaxed": true}')
+    assert master_coding.protection_refusal(payload) == master_coding.PROTECTION_REFUSAL
 
 
 def test_ordinary_gh_calls_missing_input_and_other_seats_pass_the_protection_check(master, monkeypatch):
