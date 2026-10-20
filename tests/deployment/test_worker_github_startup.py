@@ -32,3 +32,48 @@ def test_live_worker_start_mints_before_bundle_clone_without_saving_the_app_cred
         assert "pem" not in text
         assert "fixture" not in text if path.name == ".gitconfig" else "GITHUB_APP_PRIVATE_KEY" not in text
     assert "GITHUB_PERSONAL_ACCESS_TOKEN" not in (tmp_path / "home/.gitconfig").read_text()
+
+
+def test_worker_token_refresh_uses_scheduled_thirty_minute_renewals(tmp_path, monkeypatch):
+    import subprocess
+    import sys
+
+    import pytest
+
+    from scripts import github_app_cli
+    from scripts.scheduler import process_timer
+
+    monkeypatch.setenv("AGENTIHOOKS_HOME", str(tmp_path))
+    target = tmp_path / "github-token"
+    target.write_text("initial")
+    target.chmod(0o600)
+    waits = []
+    calls = []
+
+    class Finished(BaseException):
+        pass
+
+    def wait(delay):
+        waits.append(delay)
+        if len(waits) == 3:
+            raise Finished
+        assert target.read_text() == "initial"
+        assert target.stat().st_mode & 0o777 == 0o600
+
+    def mint(command, *, stdout):
+        calls.append(command)
+        assert target.read_text() == "initial"
+        assert stdout.name == str(tmp_path / "github-token.next")
+        assert (tmp_path / "github-token.next").stat().st_mode & 0o777 == 0o600
+        stdout.write("renewed")
+        return subprocess.CompletedProcess(command, 1 if len(calls) == 1 else 0)
+
+    monkeypatch.setattr(process_timer, "wait", wait)
+    monkeypatch.setattr(subprocess, "run", mint)
+    with pytest.raises(Finished):
+        github_app_cli.main(["refresh-file"])
+    assert waits == [1800, 1800, 1800]
+    assert calls == [[sys.executable, "-m", "scripts.github_app_cli", "token"]] * 2
+    assert target.read_text() == "renewed"
+    assert target.stat().st_mode & 0o777 == 0o600
+    assert not (tmp_path / "github-token.next").exists()
