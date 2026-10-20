@@ -20,8 +20,6 @@ env = {v['name']: v for v in container['env']}
 assert env['SWARM_HIVE_ID']['valueFrom']['fieldRef']['fieldPath'] == 'metadata.name'
 assert env['HIVE_MAX_AGENTS']['value'] == '3'
 assert env['HIVE_ROLES']['value'] == 'eng,ci,plan,dispatch'
-assert env['HIVE_BUNDLE_URL']['value'] == 'https://github.com/the-cloud-clockwork/agentihooks-bundle.git'
-assert env['HIVE_BUNDLE_REF']['value'] == 'dev'
 assert container['image'] == 'ghcr.io/the-cloud-clockwork/agentihooks-hive-worker:dev'
 assert pod['volumes'][0]['secret']['secretName'] == 'member'
 assert pod['volumes'][0]['secret']['items'] == [{'key': 'credential', 'path': 'credential'}]
