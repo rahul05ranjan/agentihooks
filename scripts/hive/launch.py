@@ -28,7 +28,7 @@ class Selection:
     route_kind: str
     master_placement: placement.MasterPlacement | None = None
     fallback: str = ""
-    checkout: str = ""
+    origin: str = ""
 
 
 def loaded_hives(store: RedisStore) -> list[dict]:
@@ -76,15 +76,15 @@ def _by_origin(hives: list[dict], repo: str) -> list[dict]:
 
     identity = origin(Path(repo))
     return [
-        {**hive, "repos": [*hive["repos"], repo], orders.CHECKOUT: identity}
+        {**hive, "repos": [*hive["repos"], repo], orders.ORIGIN: identity}
         if identity and identity in hive["repos"] and repo not in hive["repos"]
         else hive
         for hive in hives
     ]
 
 
-def _checkout(hives: list[dict], hive: str) -> str:
-    return next((found.get(orders.CHECKOUT, "") for found in hives if found["id"] == hive), "")
+def _matched_origin(hives: list[dict], hive: str) -> str:
+    return next((found.get(orders.ORIGIN, "") for found in hives if found["id"] == hive), "")
 
 
 def _first_choice(
@@ -159,7 +159,7 @@ class HiveLaunch:
                 f"the task is pinned to {task['hive']}" if choice.fallback and task.get("hive") else choice.fallback
             )
             found = Selection(
-                decision, choice.hive, row, route_kind, fallback=fallback, checkout=_checkout(hives, choice.hive)
+                decision, choice.hive, row, route_kind, fallback=fallback, origin=_matched_origin(hives, choice.hive)
             )
         return self._record_wait(lane, task, found)
 
@@ -177,7 +177,12 @@ class HiveLaunch:
             row = accounts[_key(selected.account)]
             account = replace(row, name=selected.account, cap=_slot_cap(available, selected, row.cap))
         return Selection(
-            decision, selected.hive, account, selected.route_kind, selected, checkout=_checkout(hives, selected.hive)
+            decision,
+            selected.hive,
+            account,
+            selected.route_kind,
+            selected,
+            origin=_matched_origin(hives, selected.hive),
         )
 
     def orders_for(self, task: str) -> LaunchOrder | None:
@@ -202,7 +207,7 @@ class HiveLaunch:
             {
                 **request.task,
                 "profile_decision": selected.profile.record(),
-                **({orders.CHECKOUT: selected.checkout} if selected.checkout else {}),
+                **({orders.ORIGIN: selected.origin} if selected.origin else {}),
             },
             self.opening(request),
         )

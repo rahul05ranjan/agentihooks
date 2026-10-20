@@ -140,19 +140,20 @@ def test_an_engineer_placed_on_the_anton_hive_by_origin_launches_in_the_pod_chec
     assert outcome.value.execution.hive == ANTON
     argv = launched[0]
     assert argv[argv.index("--dir") + 1] == str(pod)
-    assert live.config.repo != str(pod)
 
 
-def test_only_a_hive_matched_by_origin_alone_names_the_checkout_to_launch_in(live):
+def test_a_hive_that_also_lists_the_swarm_path_launches_there_and_names_no_origin(live):
     write_hive(live, **{**root(repos=[live.config.repo, ORIGIN]), "heartbeat_at": live.hive["heartbeat_at"]})
-    assert live.launcher.select(live.config, "eng", {"id": "task"}).checkout == ORIGIN
-    assert live.launcher.select(live.config, "eng", {"id": "task", "hive": "root"}).checkout == ""
+    anton_pick = live.launcher.select(live.config, "eng", {"id": "task"})
+    root_pick = live.launcher.select(live.config, "eng", {"id": "task", "hive": "root"})
+    assert (anton_pick.hive, anton_pick.origin) == (ANTON, ORIGIN)
+    assert (root_pick.hive, root_pick.origin) == ("root", "")
 
 
-def test_a_master_placed_by_origin_names_the_checkout_to_launch_in(live):
+def test_a_master_placed_by_origin_names_the_origin_to_launch_in(live):
     write_hive(live, **{**root(repos=[ORIGIN]), "heartbeat_at": live.hive["heartbeat_at"]})
     selected = live.launcher.select(live.config, "master", {"id": "master"})
-    assert (selected.hive, selected.checkout) == ("root", ORIGIN)
+    assert (selected.hive, selected.origin) == ("root", ORIGIN)
 
 
 def test_a_full_anton_hive_sends_the_engineer_to_the_workstation_with_the_reason(live):
