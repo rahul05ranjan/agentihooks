@@ -225,9 +225,7 @@ def test_hive_report_distinguishes_an_empty_pane_listing_from_an_outage(remote, 
     assert report["process_namespace"] == "pod-namespace"
 
 
-@pytest.mark.parametrize(
-    ("launched", "started", "stamp"), [(200, 0, 100), (0, 200, 100), (1, 0, None), (0, 1, None)]
-)
+@pytest.mark.parametrize(("launched", "started", "stamp"), [(200, 0, 100), (0, 200, 100), (1, 0, None), (0, 1, None)])
 def test_a_hive_snapshot_from_before_launch_cannot_retire_the_new_worker(remote, launched, started, stamp):
     from scripts.swarm import tick
 
