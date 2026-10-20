@@ -264,9 +264,7 @@ def test_recovery_records_each_cancel_and_observed_completion(monkeypatch, no_sl
     assert record["detected_at"] == "2026-10-19T16:00:01+00:00"
     assert record["cancel_requested_at"] == "2026-10-19T16:00:02+00:00"
     assert record["force_cancel_requested_at"] == ("2026-10-19T16:00:03+00:00" if force else None)
-    assert record["completed_observed_at"] == (
-        f"2026-10-19T16:00:0{4 if force else 3}+00:00" if completed else None
-    )
+    assert record["completed_observed_at"] == (f"2026-10-19T16:00:0{4 if force else 3}+00:00" if completed else None)
     assert record["action"] == ("rerun" if completed else "cancel")
     assert api.posts()[0] == post(f"{RUNS}/cancel")
 
