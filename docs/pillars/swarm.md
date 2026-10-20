@@ -1727,12 +1727,13 @@ the newest `dev`, and the agent also merges `dev` when GitHub refuses the enqueu
 ### Plan slices shared by several tasks
 
 Each task should own its plan lines. A slice is shared when another task in the same phase that is not `done` holds
-the same plan lines and is not part of the same grouped task (a group lead and its members count as one task). The
+the same plan lines and is not part of the same grouped task (a group lead and its members count as one task).
+Claimed, in review and blocked tasks count; only `done` tasks are left out. The
 ledger refuses new sharing, and for a task that already shares a slice, the intent check and `agentihooks plan read`
 narrow the slice to that task's rows.
 
 **Adding or setting a slice.** `ledger task add --plan-slice NAME` and `ledger task set <id> plan_slice=NAME` resolve
-the slice to plan lines first. When those lines already belong to another open task in the phase, the write is refused:
+the slice to plan lines first. When those lines already belong to another task in the phase that is not `done`, the write is refused:
 
 ```text
 plan slice tasks already belongs to open task t2, t3: give each task its own slice anchor, a <!-- slice: name --> line above its own row or section, or group the tasks into one grouped task
@@ -1741,7 +1742,8 @@ plan slice tasks already belongs to open task t2, t3: give each task its own sli
 `task set` checks only a changed slice, so resending a task's current slice is not refused. Two ways clear the
 refusal:
 
-- Put a unique anchor line directly above each task's own row or section and name it on each task:
+- Put a unique anchor line directly above each task's own row or section and name it on each task. The slice runs
+  from the anchor line through the row or section it labels, so `plan read` prints the anchor line too:
 
   ```markdown
   <!-- slice: t1-ledger-route -->
@@ -1758,11 +1760,10 @@ refusal:
 - Fold the tasks into one grouped task (the master's `fold-tasks` skill), so one agent delivers them in one pull
   request.
 
-**Intent verdict on a shared slice.** Tasks given their slice before this refusal existed can still
-share one. For such a task the
-intent check judges only the rows that name it: a row whose first cell, after a list or heading marker, starts with
-the task id or equals the task title, ignoring case. Only the first run of consecutive matching rows counts. The
-verdict reason ends with what it judged:
+**Intent verdict on a shared slice.** Tasks given their slice before this refusal existed can still share one. For
+such a task the intent check judges only the rows that name it: a row whose first cell, after a list or heading
+marker, starts with the task id as a whole word (`t1` does not match `t10`) or equals the task title ignoring case.
+Only the first run of consecutive matching rows counts. The verdict reason ends with what it judged:
 
 ```text
 ...; plan lines 51-82 are shared with tasks t735, t737; this task's scope is plan lines 58-58, the rows that name it
@@ -1770,7 +1771,7 @@ verdict reason ends with what it judged:
 
 When no row names the task, the check judges it on the task text without plan lines, and the reason ends with
 `plan lines 51-82 are shared with tasks t735, t737, and no row names this task, so none of them is its scope`. A slice
-named after its own task id stays whole for that task's intent check.
+named after its own task id stays whole for that task's intent check; `plan read` still scopes it.
 
 **Plan read on a shared slice.** `agentihooks plan read` for such a task prints the matched rows as scope and the
 rest as context:
@@ -1794,7 +1795,7 @@ linked sections the plain read appends. With no matching row, the scope part is 
 
 | Symptom | Cause and fix |
 |---|---|
-| `plan slice <name> already belongs to open task ...` | Another open task in the phase resolves to the same plan lines. Add a per task `<!-- slice: name -->` anchor and set each task to its own anchor, or group the tasks. |
+| `plan slice <name> already belongs to open task ...` | Another task in the phase that is not `done` resolves to the same plan lines. Add a per task `<!-- slice: name -->` anchor and set each task to its own anchor, or group the tasks. |
 | Intent fails a task for leaving out rows of other tasks | Check the verdict reason. Without `this task's scope is plan lines`, no row's first cell names the task id or title; put the task id first in its row, or give the task its own anchor. |
 | `plan read` prints the whole slice for one of several tasks | The other tasks are `done`, or they and this task are one grouped task, so the slice is no longer shared. |
 
