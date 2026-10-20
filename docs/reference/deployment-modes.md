@@ -59,7 +59,7 @@ In `.env` next to `compose.yaml`:
 ```bash
 AGENTIHOOKS_DEPLOYMENT=compose
 SWARM_BIND=10.20.0.5                                  # the private interface, never 0.0.0.0 on a public host
-SWARM_PUBLIC_URL=https://swarm.example.internal:8765
+SWARM_PUBLIC_URL=http://swarm.example.internal:8765
 SWARM_ALLOWED_HOSTS=swarm.example.internal:8765
 SWARM_REDIS_PASSWORD=<from your secret store>
 SWARM_TLS_DIR=./deploy/compose/tls                    # cert.pem, key.pem, ca.pem
@@ -77,7 +77,8 @@ agentihooks hive install
 
 - The ledger answers only the host names in `SWARM_PUBLIC_URL` and `SWARM_ALLOWED_HOSTS`.
 - The hive join endpoint always serves TLS; with `rediss`, Redis does too.
-- Serve the ledger over TLS for clients on other machines: [Ledger TLS](ledger-tls.md#limits).
+- This stack serves the ledger over plain http, so a client on another machine refuses to send it a credential.
+  What TLS on this stack needs is in [Ledger TLS](ledger-tls.md#limits).
 - Each joined hive gets its own Redis user that writes only its own keys.
 
 ### No public ledger

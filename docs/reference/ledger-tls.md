@@ -97,9 +97,10 @@ listed in [The refusal](#the-refusal) and the ledger health probe use this trust
 
 `agentihooks ledger serve --ensure` runs the shared ledger folder (`~/development-ledger`) in Docker through
 `deploy/compose/ledger.yaml` when `docker` is on the path, unless `LEDGER_SERVER_RUNTIME=process`; otherwise it
-runs the server as a host process. An adopted ledger runs through `deploy/compose/adopt.yaml`. Both compose files
-pass `LEDGER_TLS_CERT` and `LEDGER_TLS_KEY` from the environment into the container and mount `~/.agentihooks`, so
-keep the files there. They do not pass `LEDGER_CA_FILE` or `LEDGER_CA_PEM`, so put the CA at the default
+runs the server as a host process. Its compose file passes `LEDGER_TLS_CERT` and `LEDGER_TLS_KEY` from the
+environment into the container and mounts `~/.agentihooks`, so keep the files there. An adopted ledger runs through
+`deploy/compose/adopt.yaml`, which passes the same two settings but mounts `$SWARM_ADOPT_HOME/.agentihooks` as its
+home; for it, read `~/.agentihooks` below as that folder. They do not pass `LEDGER_CA_FILE` or `LEDGER_CA_PEM`, so put the CA at the default
 `~/.agentihooks/ledger-ca.pem`, where the container health check finds it:
 
 ```bash
@@ -177,8 +178,9 @@ checks the ingress and Reloader annotations, then installs it with a generated c
   such as an SSH tunnel, counts as loopback.
 - The root `compose.yaml` stack does not set `LEDGER_TLS_CERT` or `LEDGER_TLS_KEY` on its `swarm` service and
   points its `controller` service at `LEDGER_URL: http://swarm:8765`. That host name resolves to a container
-  address, which is not loopback, so the controller's credentialed requests are refused until that stack serves the
-  ledger over TLS.
+  address, which is not loopback, so the controller's credentialed requests are refused. Two changes are needed
+  before they succeed: the `swarm` service serves TLS, and the controller's `LEDGER_URL` becomes `https://swarm:8765`
+  with `LEDGER_CA_PEM` set to the signing CA.
 
 ## Evidence
 
