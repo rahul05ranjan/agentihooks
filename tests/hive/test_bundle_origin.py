@@ -32,7 +32,7 @@ def environ(home):
 
 def test_an_ssh_remote_becomes_an_https_address_with_the_current_branch(tmp_path):
     home = linked(tmp_path, bundle(tmp_path, branch="main"))
-    assert bundle_origin.origin(home) == {
+    assert bundle_origin.origin(home, {}) == {
         "HIVE_BUNDLE_URL": "https://github.com/the-cloud-clockwork/agentihooks-bundle.git",
         "HIVE_BUNDLE_REF": "main",
     }
@@ -40,7 +40,7 @@ def test_an_ssh_remote_becomes_an_https_address_with_the_current_branch(tmp_path
 
 def test_an_https_remote_keeps_its_address(tmp_path):
     home = linked(tmp_path, bundle(tmp_path, remote="https://github.com/the-cloud-clockwork/agentihooks-bundle"))
-    assert bundle_origin.origin(home)["HIVE_BUNDLE_URL"] == (
+    assert bundle_origin.origin(home, {})["HIVE_BUNDLE_URL"] == (
         "https://github.com/the-cloud-clockwork/agentihooks-bundle.git"
     )
 
@@ -51,13 +51,28 @@ def test_no_linked_bundle_gives_an_empty_origin(tmp_path, state):
     home.mkdir()
     if state is not None:
         (home / "state.json").write_text(state)
-    assert bundle_origin.origin(home) == {"HIVE_BUNDLE_URL": "", "HIVE_BUNDLE_REF": ""}
+    assert bundle_origin.origin(home, {}) == {"HIVE_BUNDLE_URL": "", "HIVE_BUNDLE_REF": ""}
+
+
+def test_the_bundle_path_variable_names_the_bundle_when_none_is_linked(tmp_path):
+    home = tmp_path / "state"
+    home.mkdir()
+    checkout = bundle(tmp_path, branch="main")
+    assert bundle_origin.origin(home, {"AGENTIHOOKS_BUNDLE_PATH": str(checkout)}) == {
+        "HIVE_BUNDLE_URL": "https://github.com/the-cloud-clockwork/agentihooks-bundle.git",
+        "HIVE_BUNDLE_REF": "main",
+    }
+
+
+def test_the_linked_bundle_wins_over_the_bundle_path_variable(tmp_path):
+    home = linked(tmp_path, bundle(tmp_path, branch="dev"))
+    assert bundle_origin.origin(home, {"AGENTIHOOKS_BUNDLE_PATH": str(tmp_path / "other")})["HIVE_BUNDLE_REF"] == "dev"
 
 
 def test_a_bundle_without_an_origin_remote_is_refused(tmp_path):
     checkout = bundle(tmp_path, remote="")
     with pytest.raises(auth.HiveError) as refused:
-        bundle_origin.origin(linked(tmp_path, checkout))
+        bundle_origin.origin(linked(tmp_path, checkout), {})
     assert str(refused.value) == f"the linked bundle at {checkout} has no origin remote naming a host and repository"
 
 
@@ -67,7 +82,7 @@ def test_a_detached_bundle_is_refused(tmp_path):
     subprocess.run([*git, "commit", "--allow-empty", "-m", "fixture"], check=True, capture_output=True)
     subprocess.run([*git, "checkout", "--detach"], check=True, capture_output=True)
     with pytest.raises(auth.HiveError) as refused:
-        bundle_origin.origin(linked(tmp_path, checkout))
+        bundle_origin.origin(linked(tmp_path, checkout), {})
     assert str(refused.value) == f"the linked bundle at {checkout} is not on a branch"
 
 

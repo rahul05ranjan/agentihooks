@@ -73,7 +73,7 @@ fi
 bundle=()
 [[ -d "$bundle_dir/.git" ]] && bundle=(--bundle "$bundle_dir")
 agentihooks init "${bundle[@]}" \
-  || echo "worker-hive: agentihooks init failed; shells run without the profile" >&2
+  || echo "worker-hive: agentihooks init failed; the pod serves without the bundle" >&2
 agentihooks deps ensure \
   || echo "worker-hive: agentihooks deps ensure failed; each launch retries the bundle dependencies" >&2
 member="$(python3 -c 'import hooks.config; from scripts.swarm.commands import hive_id; print(hive_id())')"

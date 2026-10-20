@@ -13,13 +13,14 @@ URL_KEY = "HIVE_BUNDLE_URL"
 REF_KEY = "HIVE_BUNDLE_REF"
 
 
-def origin(home: Path) -> dict[str, str]:
+def origin(home: Path, environ: Mapping[str, str]) -> dict[str, str]:
     from scripts.hive.daemon import origin as remote
 
     try:
         bundle = (json.loads((home / "state.json").read_text()).get("bundle") or {}).get("path")
     except (OSError, ValueError, AttributeError):
         bundle = None
+    bundle = bundle or environ.get("AGENTIHOOKS_BUNDLE_PATH")
     if not bundle:
         return {URL_KEY: "", REF_KEY: ""}
     identity = remote(Path(bundle))
@@ -37,7 +38,7 @@ def publish(environ: Mapping[str, str], path: str, opener: Callable | None = Non
     bao = openbao_kv.from_env(environ, opener)
     if bao is None:
         raise auth.HiveError(f"{openbao_kv.URL_ENV} and {openbao_kv.TOKEN_ENV} must both be set")
-    entries = origin(registry.home(environ))
+    entries = origin(registry.home(environ), environ)
     try:
         total = openbao_kv.merge(bao, path, entries)
     except openbao_kv.OpenBaoError as exc:

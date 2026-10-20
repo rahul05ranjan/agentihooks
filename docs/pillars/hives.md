@@ -677,7 +677,8 @@ The `agentihooks-swarm` chart runs worker pods from the hive worker image. Each 
 6. Runs `agentihooks hive run`.
 
 The bundle origin and the token come from the hive settings record through `workers.envFromSecrets`. Write the
-origin from the workstation, read from the linked bundle's `origin` remote and current branch:
+origin from the workstation, read from the `origin` remote and current branch of the linked bundle, else of
+`AGENTIHOOKS_BUNDLE_PATH`:
 
 ```bash
 agentihooks hive bundle-origin                 # into secret/k8s/agentihooks-swarm-workstation-hive-settings
