@@ -537,7 +537,7 @@ def test_a_tied_supervisor_stops_its_runner_once_its_starter_is_gone(monkeypatch
     assert stop.wait.call_count == 3
 
 
-def test_a_tied_supervisor_spawns_no_new_runner_after_its_starter_is_gone(monkeypatch, tmp_path):
+def test_a_tied_supervisor_ends_between_runners_once_its_starter_is_gone(monkeypatch, tmp_path):
     from scripts.scheduler import service
 
     child, spawn, stop = _tied_supervisor(monkeypatch, tmp_path, service, [41, 1], [1, 1])
