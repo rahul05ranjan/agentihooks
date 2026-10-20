@@ -322,6 +322,15 @@ def test_the_master_never_touches_rulesets_or_branch_protection(master, command)
     assert master_coding.protection_refusal({"tool_input": {"command": command}}) == master_coding.PROTECTION_REFUSAL
 
 
+def test_the_open_window_lets_the_master_change_rulesets_and_closing_it_refuses_again(master):
+    payload = {"session_id": SID, "tool_input": {"command": "gh api repos/o/r/rulesets/7 -X PUT"}}
+    assert master_coding.protection_refusal(payload) == master_coding.PROTECTION_REFUSAL
+    master_coding.observe(SID, "allow-master-coding", typed=True)
+    assert master_coding.protection_refusal(payload) == ""
+    master_coding.observe(SID, "disallow-master-coding", typed=True)
+    assert master_coding.protection_refusal(payload) == master_coding.PROTECTION_REFUSAL
+
+
 def test_ordinary_gh_calls_missing_input_and_other_seats_pass_the_protection_check(master, monkeypatch):
     assert master_coding.protection_refusal({"tool_input": {"command": "gh pr create --base dev"}}) == ""
     assert master_coding.protection_refusal({"tool_name": "Bash"}) == ""
@@ -334,5 +343,5 @@ def test_the_shell_guard_blocks_a_master_ruleset_call(master, monkeypatch):
     monkeypatch.setattr("hooks.context.swarm_wait_nudge.check_github_watch", Mock())
     monkeypatch.setattr("hooks.context.branch_guard.check_branch_guard", Mock())
     monkeypatch.setattr("hooks.context.branch_guard.check_commit_on_main", Mock())
-    with pytest.raises(hook_manager.BlockAction, match="never changes rulesets or branch protection"):
+    with pytest.raises(hook_manager.BlockAction, match="only inside the hotfix window"):
         hook_manager._check_shell_guards({"tool_name": "Bash", "tool_input": {"command": "gh ruleset list"}})

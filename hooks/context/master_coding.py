@@ -16,8 +16,9 @@ PERMISSION_TOOLS = ("AskUserQuestion", "ExitPlanMode")
 PROTECTION = re.compile(r"\bgh\s+(?:ruleset\b|api\b[^\n;&|]*(?:/rulesets\b|/branches/[^\s/]+/protection\b))")
 NOTICES = {
     "open": "Master hotfix window open for thirty minutes: the master may create a worktree with wt.sh new, edit "
-    "inside it, commit, push its branch and merge its pull request into dev on green. Main, rulesets, branch "
-    "protection, condition folders, credential files and secrets stay closed. disallow-master-coding ends it.",
+    "inside it, commit, push its branch, merge its pull request into dev on green and change rulesets or branch "
+    "protection by command. Main, condition folders, credential files and secrets stay closed. "
+    "disallow-master-coding ends it.",
     "closed": "Master hotfix window closed: the master no longer edits code.",
 }
 CREDENTIALS = re.compile(
@@ -25,7 +26,8 @@ CREDENTIALS = re.compile(
 )
 TEMPLATES = (".example", ".sample", ".template", ".dist")
 PROTECTION_REFUSAL = (
-    "BLOCKED: the master never changes rulesets or branch protection, inside the hotfix window or out of it."
+    "BLOCKED: the master changes rulesets or branch protection only inside the hotfix window; "
+    "the operator opens it by typing allow-master-coding in the master pane."
 )
 
 
@@ -101,4 +103,7 @@ def asks_operator(tool_name: str, session_id: str | None) -> bool:
 
 def protection_refusal(payload: dict) -> str:
     command = str((payload.get("tool_input") or {}).get("command"))
-    return PROTECTION_REFUSAL if is_master(payload.get("session_id")) and PROTECTION.search(command) else ""
+    session_id = payload.get("session_id")
+    if not (is_master(session_id) and PROTECTION.search(command)):
+        return ""
+    return "" if is_open(str(session_id or "")) else PROTECTION_REFUSAL
