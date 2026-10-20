@@ -332,7 +332,8 @@ def test_the_master_never_touches_rulesets_or_branch_protection_outside_the_hotf
     ],
 )
 def test_the_open_window_lets_the_master_change_rulesets_and_closing_it_refuses_again(master, command):
-    payload = {"session_id": SID, "tool_input": {"command": command}}
+    repo = _payload_repo(master, committed=True)
+    payload = {"session_id": SID, "cwd": str(repo), "tool_input": {"command": command}}
     assert master_coding.protection_refusal(payload) == master_coding.PROTECTION_REFUSAL
     master_coding.observe(SID, "allow-master-coding", typed=True)
     assert master_coding.protection_refusal(payload) == ""
@@ -358,13 +359,30 @@ def test_the_open_window_never_lets_the_master_touch_main_protection(master, com
     assert master_coding.protection_refusal(payload) == master_coding.PROTECTION_REFUSAL
 
 
-def test_a_ruleset_write_by_id_needs_its_payload_committed_in_the_checkout(master):
+GIT_IDENTITY = {
+    "GIT_AUTHOR_NAME": "t",
+    "GIT_AUTHOR_EMAIL": "t@t",
+    "GIT_COMMITTER_NAME": "t",
+    "GIT_COMMITTER_EMAIL": "t@t",
+}
+
+
+def _payload_repo(root, committed):
     import subprocess
 
-    repo = master / "repo"
+    repo = root / "repo"
     (repo / ".github" / "rulesets").mkdir(parents=True)
     (repo / ".github" / "rulesets" / "dev-no-delete.json").write_text("{}")
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    if committed:
+        subprocess.run(["git", "-C", str(repo), "add", ".github/rulesets/dev-no-delete.json"], check=True)
+        env = {**os.environ, **GIT_IDENTITY}
+        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "payload"], check=True, env=env)
+    return repo
+
+
+def test_a_ruleset_write_by_id_needs_its_payload_committed_in_the_checkout(master):
+    repo = _payload_repo(master, committed=False)
     master_coding.observe(SID, "allow-master-coding", typed=True)
     payload = {
         "session_id": SID,
@@ -372,9 +390,8 @@ def test_a_ruleset_write_by_id_needs_its_payload_committed_in_the_checkout(maste
         "tool_input": {"command": "gh api -X PUT repos/o/r/rulesets/7 --input .github/rulesets/dev-no-delete.json"},
     }
     assert master_coding.protection_refusal(payload) == master_coding.PROTECTION_REFUSAL
-    subprocess.run(["git", "-C", str(repo), "add", ".github/rulesets/dev-no-delete.json"], check=True)
-    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
-    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "payload"], check=True, env={**os.environ, **env})
+    _payload_repo(master / "two", committed=True)
+    payload["cwd"] = str(master / "two" / "repo")
     assert master_coding.protection_refusal(payload) == ""
 
 
