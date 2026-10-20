@@ -193,6 +193,33 @@ def test_tick_retires_only_hive_workers_proven_gone(remote, panes, namespace, re
         assert remote.store.claimant("fixture", "task") == remote.agent.name
 
 
+@pytest.mark.parametrize("listed", [[], [{"pane_id": PANE}], None])
+def test_hive_report_distinguishes_an_empty_pane_listing_from_an_outage(remote, monkeypatch, listed):
+    from scripts.hive import daemon
+    from scripts.swarm.pane import PaneObservation
+    from scripts.swarm_v2.runtime import process
+
+    monkeypatch.setattr(process, "local_namespace", lambda: "pod-namespace")
+    herdr = Mock()
+    herdr.live_names.return_value = set()
+    herdr.bindings.return_value = {}
+    herdr.conversations.return_value = {}
+    herdr.observe.return_value = PaneObservation("unknown")
+    herdr.reported.return_value = False
+
+    def listing(args):
+        assert args == ["pane", "list"]
+        if listed is None:
+            raise RuntimeError("hive herdr cannot be read")
+        return {"panes": listed}
+
+    herdr.herdr.side_effect = listing
+    report = daemon.execution_report(remote.redis, HIVE, herdr)
+
+    assert report["pane_ids"] == (None if listed is None else [row["pane_id"] for row in listed])
+    assert report["process_namespace"] == "pod-namespace"
+
+
 def test_a_hive_reporting_a_dead_process_names_it_unbound(remote):
     _publish(remote)
     report = json.loads(remote.redis.get(remote.reports.key(HIVE)))
