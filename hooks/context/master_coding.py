@@ -106,4 +106,4 @@ def protection_refusal(payload: dict) -> str:
     session_id = payload.get("session_id")
     if not (is_master(session_id) and PROTECTION.search(command)):
         return ""
-    return "" if is_open(str(session_id or "")) else PROTECTION_REFUSAL
+    return "" if is_open(session_id) else PROTECTION_REFUSAL
