@@ -18,7 +18,7 @@ def _herdr(args):
 
 
 @pytest.fixture
-def remote(monkeypatch):
+def remote(monkeypatch, request):
     import fakeredis
 
     from scripts import terminate_agent
@@ -42,6 +42,8 @@ def remote(monkeypatch):
             harness="claude",
             profile="engineer",
             account="account",
+            started_at=getattr(request, "param", {}).get("started_at", 0),
+            launched_at=getattr(request, "param", {}).get("launched_at", 0),
             hive=HIVE,
             runtime_target={"host_id": HIVE, "process_namespace": "theirs", "pid": 12, "pid_start": 34},
             profile_decision={"validation": {"pid": 12}},
@@ -191,7 +193,19 @@ def test_tick_retires_only_hive_workers_proven_gone(remote, panes, namespace, re
     if retired:
         assert remote.store.agents("fixture") == []
         assert remote.store.claimant("fixture", "task") is None
-        assert remote.agent.seat not in remote.store.execution_registry.occupants("fixture")
+        assert remote.store.execution_registry.occupants("fixture")[remote.agent.seat].state == "ended"
+        successor = remote.store.start_execution(
+            "fixture",
+            replace(
+                remote.agent,
+                name=remote.store.next_name("fixture", "eng"),
+                execution_id="",
+                generation=0,
+                state="starting",
+            ),
+            remote.agent.execution_id,
+        )
+        assert remote.store.execution_registry.occupants("fixture")[remote.agent.seat].name == successor.name
         assert actions == [f"retired {remote.agent.name}: its hive pane is gone, task task reopened"]
     else:
         assert [agent.name for agent in remote.store.agents("fixture")] == [remote.agent.name]
