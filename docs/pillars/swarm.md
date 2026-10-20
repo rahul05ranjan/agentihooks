@@ -1728,7 +1728,7 @@ the newest `dev`, and the agent also merges `dev` when GitHub refuses the enqueu
 
 Each task should own its plan lines. A slice is shared when another task in the same phase that is not `done` holds
 the same plan lines and is not part of the same grouped task (a group lead and its members count as one task).
-Claimed, in review and blocked tasks count; only `done` tasks are left out. The ledger refuses new sharing, and for
+Tasks in any state except `done` (`open`, `claimed`, `blocked` or `pr`) count. The ledger refuses new sharing, and for
 a task that already shares a slice, the intent check and `agentihooks plan read` narrow the slice to that task's rows.
 
 **Adding or setting a slice.** `ledger task add --plan-slice NAME` and `ledger task set <id> plan_slice=NAME` resolve
