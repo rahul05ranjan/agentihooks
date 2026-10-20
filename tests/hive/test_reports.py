@@ -157,6 +157,42 @@ def test_a_lost_hive_marks_its_executions_unknown_not_dead(remote):
     assert remote.store.claimant("fixture", "task") == agent.name
 
 
+@pytest.mark.parametrize(
+    ("panes", "namespace", "retired"),
+    [
+        (["w1:p1"], "theirs", True),
+        ([], "theirs", True),
+        ([PANE], "restarted", True),
+        ([PANE], "theirs", False),
+        (None, "theirs", False),
+    ],
+)
+def test_tick_retires_only_hive_workers_proven_gone(remote, panes, namespace, retired):
+    from scripts.swarm import idle, tick
+
+    _publish(remote, state="unknown")
+    report = json.loads(remote.redis.get(remote.reports.key(HIVE)))
+    report.update(pane_ids=panes, process_namespace=namespace)
+    remote.redis.set(remote.reports.key(HIVE), json.dumps(report))
+    remote.store.claim("fixture", "task", remote.agent.name, 60000)
+    rows = {"task": {"state": "claimed", "claimed_by": remote.agent.name}}
+    now = remote.agent.started_at + 10**9
+    idle.beat(remote.redis, "fixture", remote.agent.name, idle.WORKING, now)
+    ledger = Mock()
+    remote.runtime.retire = Mock(side_effect=AssertionError("a gone pane needs no remote process command"))
+
+    actions = tick._reap("fixture", remote.store, ledger, remote.runtime, rows, now)
+
+    if retired:
+        assert remote.store.agents("fixture") == []
+        assert remote.store.claimant("fixture", "task") == ""
+        assert remote.store.occupant("fixture", remote.agent.seat) == ""
+        assert actions == [f"retired {remote.agent.name}: its hive pane is gone, task task reopened"]
+    else:
+        assert [agent.name for agent in remote.store.agents("fixture")] == [remote.agent.name]
+        assert remote.store.claimant("fixture", "task") == remote.agent.name
+
+
 def test_a_hive_reporting_a_dead_process_names_it_unbound(remote):
     _publish(remote)
     report = json.loads(remote.redis.get(remote.reports.key(HIVE)))
