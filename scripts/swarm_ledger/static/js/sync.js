@@ -109,7 +109,9 @@ export function closedLeftIn(name, key) {
   const closed = (meta.closed || {})[name];
   const field = { phases: "plan", tasks: "slice" }[name];
   if (!closed || !closed.groups || !field) return 0;
-  return Math.max(0, (closed.groups[key] || 0) - (older[name] || []).filter((i) => (i[field] || "unplanned") === key).length);
+  const plans = new Set(doc.plans.map((p) => `plans/${p.id}`));
+  const group = (i) => (name === "phases" && !plans.has(i.plan) ? "unplanned" : i[field]);
+  return Math.max(0, (closed.groups[key] || 0) - (older[name] || []).filter((i) => group(i) === key).length);
 }
 
 function keepDropped(previous, next) {

@@ -111,8 +111,8 @@ def test_hidden_rows_count_per_plan_and_slice_and_keep_their_claimants():
         {"id": f"p{n}", "done": True, "plan": "plans/a" if n == 1 else "" if n == 0 else "plans/b"} for n in range(13)
     ]
     tasks = [task(n, True, slice="slices/s1" if n % 2 else "", claimed_by="eng" if n == 1 else "") for n in range(14)]
-    _, hidden = ledger_closed.trimmed({"phases": phases, "tasks": tasks})
-    assert hidden["phases"]["groups"] == {"unplanned": 1, "plans/a": 1, "plans/b": 1}
+    _, hidden = ledger_closed.trimmed({"plans": [{"id": "a"}], "phases": phases, "tasks": tasks})
+    assert hidden["phases"]["groups"] == {"unplanned": 2, "plans/a": 1}
     assert "claimed_by" not in hidden["phases"]
     assert hidden["tasks"]["groups"] == {"slices/s1": 2}
     assert hidden["tasks"]["claimed_by"] == {"t1": "eng"}

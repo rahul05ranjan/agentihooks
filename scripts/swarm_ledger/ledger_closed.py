@@ -30,16 +30,23 @@ def trimmed(state: dict) -> tuple[dict, dict]:
         if not drop:
             continue
         view[name] = [row for index, row in enumerate(rows) if index not in drop]
-        hidden[name] = entry(name, [rows[index] for index in sorted(drop)])
+        hidden[name] = entry(name, [rows[index] for index in sorted(drop)], plan_keys(state))
     if "tasks" in hidden:
         hidden["tasks"]["plan_phases"] = plan_phases(state, hidden["tasks"]["ids"])
     return view, hidden
 
 
-def entry(name: str, gone: list) -> dict:
+def plan_keys(state: dict) -> set:
+    return {f"plans/{plan.get('id')}" for plan in state.get("plans") or [] if isinstance(plan, dict)}
+
+
+def entry(name: str, gone: list, plans: set) -> dict:
     result = {"hidden": len(gone), "kept": KEPT, "ids": [row.get("id") for row in gone]}
     if name in GROUPS:
-        keys = [row.get(GROUPS[name]) or ("unplanned" if name == "phases" else None) for row in gone]
+        keys = [
+            (row.get("plan") if row.get("plan") in plans else "unplanned") if name == "phases" else row.get("slice")
+            for row in gone
+        ]
         result["groups"] = dict(Counter(key for key in keys if key))
     if name == "tasks":
         result["claimed_by"] = {row.get("id"): row["claimed_by"] for row in gone if row.get("claimed_by")}
