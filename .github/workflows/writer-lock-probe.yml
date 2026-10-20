@@ -1,0 +1,36 @@
+name: Writer lock probe
+on:
+  push:
+    branches: [wip/engineer-d44a5a-0748-probe]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        side:
+          - {name: base, sha: 32928b91d10bbfeafec1396620731a22e0726bd4}
+          - {name: head, sha: d1722bdbb202c7cf2d3f30c70d03118e0d1a411c}
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: ledger
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 2s --health-timeout 2s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: probe
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.side.sha }}
+          path: code
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install psycopg2-binary
+      - name: ${{ matrix.side.name }} ${{ matrix.side.sha }}
+        run: python -I probe/.github/probe/writer_lock.py "$GITHUB_WORKSPACE/code" "postgresql://postgres@localhost:5432/ledger"
