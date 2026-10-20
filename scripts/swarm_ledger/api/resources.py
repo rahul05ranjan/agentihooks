@@ -1,7 +1,7 @@
 import hashlib
 import json
 
-from scripts.swarm_ledger import models, ports
+from scripts.swarm_ledger import ledger_closed, models, ports
 
 from .errors import APIError
 
@@ -77,6 +77,8 @@ def collection_revisions(rows: list) -> tuple[str, list]:
 
 
 def read(doc: dict, path: str, query: dict | None = None, cache: dict | None = None) -> dict:
+    if query and ("state" in query or "offset" in query):
+        return closed_page(doc, path, query)
     raw = value(doc, path)
     if isinstance(raw, list):
         hash_page = path == "tasks"
@@ -89,6 +91,29 @@ def read(doc: dict, path: str, query: dict | None = None, cache: dict | None = N
         rev = resource_revision(doc, path) if hash_page else digest
         return page(raw, rev, query or {}, items, hash_page)
     return bounded({"data": project(raw), "revision": resource_revision(doc, path)})
+
+
+def closed_page(doc: dict, path: str, query: dict) -> dict:
+    if path not in ledger_closed.COLLECTIONS or query.get("state") != "done":
+        raise APIError(400, "schema_invalid", "State and offset read the done rows of a collection")
+    rows = ledger_closed.recent(path, doc.get(path) or [])
+    offset = query.get("offset", 0)
+    selected = []
+    size = reply_size({"data": [], "revision": "0" * 64, "total": len(rows), "next_offset": len(rows)})
+    for row in rows[offset : offset + query.get("limit", ledger_closed.KEPT)]:
+        size += reply_size(row) + (2 if selected else 0)
+        if size > MAX_REPLY:
+            if not selected:
+                raise APIError(413, "resource_too_large", "Use the explicit export operation for this resource")
+            break
+        selected.append(row)
+    end = offset + len(selected)
+    return {
+        "data": selected,
+        "revision": revision(selected),
+        "total": len(rows),
+        "next_offset": end if end < len(rows) else None,
+    }
 
 
 COLLECTIONS = models.COLLECTIONS
@@ -139,6 +164,8 @@ def page(rows: list, rev: str, query: dict, revisions: list | None = None, hash_
     from .schemas import PAGINATION, validate
 
     validate(PAGINATION, query)
+    if "state" in query or "offset" in query:
+        raise APIError(400, "schema_invalid", "State and offset read the done rows of a collection")
     offset = 0
     cursor = query.get("cursor")
     if cursor:

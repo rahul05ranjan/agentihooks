@@ -142,7 +142,7 @@ def test_the_outline_lists_the_held_items_and_loads_more_done_items(ledger):
     more(page, outline, "tasks").click()
     page.wait_for_function("() => document.querySelectorAll('#ol-sec-tasks .ol-items a').length === 22")
     assert reads == [("tasks", {"state": "done", "offset": "10", "limit": "10"})]
-    assert more(page, outline, "tasks").text_content() == "Show 5 more done items · 5 left"
+    assert more(page, outline, "tasks").text_content() == "Show 5 more done · 5 left"
 
 
 def test_the_show_more_button_wears_the_page_more_link_style(ledger):

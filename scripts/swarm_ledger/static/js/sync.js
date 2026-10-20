@@ -1,6 +1,6 @@
 import { OFFLINE, PAGE } from "./config.js";
 import { $, banner, newId, span, status } from "./dom.js";
-import { readMetadata, writeLedger } from "./api.js";
+import { readClosed, readMetadata, writeLedger } from "./api.js";
 import { applyChecks, applyOp, itemOf, lsRead, lsWrite, setState, withDefaults } from "./state.js";
 import { attaching } from "./media.js";
 import { composing, editing } from "./threads.js";
@@ -97,11 +97,38 @@ export function toggle(key, value, field) {
   flush(false);
 }
 
+const older = {};
+const pulled = {};
+
+export function closedLeft(name) {
+  const closed = (meta.closed || {})[name];
+  return closed ? Math.max(0, closed.hidden - (pulled[name] || 0)) : 0;
+}
+
+function mergeOlder(d) {
+  for (const [name, rows] of Object.entries(older)) {
+    const known = new Set(d[name].map((i) => i.id));
+    d[name] = [...rows.filter((i) => !known.has(i.id)).reverse(), ...d[name]];
+  }
+}
+
+export async function loadClosed(name) {
+  const closed = (meta.closed || {})[name];
+  if (!closed) return;
+  const resp = await readClosed(name, closed.kept + (pulled[name] || 0));
+  if (!resp.ok) return;
+  const { data } = await resp.json();
+  pulled[name] = data.length ? (pulled[name] || 0) + data.length : closed.hidden;
+  older[name] = [...(older[name] || []), ...withDefaults({ [name]: data })[name]];
+  mergeOlder(doc);
+}
+
 function applyServer(server) {
   if ((server._meta || {}).rev < rev) return;
   meta = server._meta || {};
   rev = meta.rev;
   doc = withDefaults(server);
+  mergeOlder(doc);
   for (const op of ops) applyOp(doc, op);
   applyChecks(doc);
   banner([meta.seed_error]);

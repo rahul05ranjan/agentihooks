@@ -214,10 +214,11 @@ def pagination(url: str) -> dict:
     if any(len(values) != 1 for values in parsed.values()):
         raise APIError(400, "schema_invalid", "Query parameters must be unique")
     query = {key: values[0] for key, values in parsed.items()}
-    if "limit" in query:
-        try:
-            query["limit"] = int(query["limit"])
-        except ValueError:
-            raise APIError(400, "schema_invalid", "Limit must be an integer") from None
+    for key in ("limit", "offset"):
+        if key in query:
+            try:
+                query[key] = int(query[key])
+            except ValueError:
+                raise APIError(400, "schema_invalid", f"{key.capitalize()} must be an integer") from None
     schemas.validate(schemas.PAGINATION, query)
     return query

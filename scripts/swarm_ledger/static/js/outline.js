@@ -1,12 +1,12 @@
 import { $, h } from "./dom.js";
 import { itemState } from "./state.js";
-import { doc } from "./sync.js";
+import { closedLeft, doc } from "./sync.js";
 import { noticeTarget, showAlerts, showNotifications } from "./notices.js";
 import { showArtifacts } from "./artifacts.js";
 import { renderSwarm, swarm } from "./swarm.js";
 import { collapsible, groupOpen, markToggles, rememberGroup } from "./folds.js";
 import { selectTab } from "./layout.js";
-import { render } from "./render.js";
+import { closedMore, render } from "./render.js";
 import { firstPage, lazy, moreButton, wanted } from "./pages.js";
 
 let outlinePick = null;
@@ -59,9 +59,10 @@ function outlineOf(doc, heads) {
   return heads.map((head) => {
     const list = (head.list ? doc[head.list] || [] : []).filter((i) => !i.deleted);
     const grouped = ["tasks", "followups"].includes(head.list);
-    const counts = grouped ? [...new Set(list.map((i) => i.state || (i.done ? "done" : "open")))]
-      .map((state) => `${list.filter((i) => (i.state || (i.done ? "done" : "open")) === state).length} ${state}`).join(" · ") : "";
-    return { id: head.id, title: head.title + (counts ? ` · ${counts}` : ""),
+    const hidden = head.list ? closedLeft(head.list) : 0;
+    const counts = grouped ? [...new Set([...list.map((i) => i.state || (i.done ? "done" : "open")), ...(hidden ? ["done"] : [])])]
+      .map((state) => `${list.filter((i) => (i.state || (i.done ? "done" : "open")) === state).length + (state === "done" ? hidden : 0)} ${state}`).join(" · ") : "";
+    return { id: head.id, list: head.list, title: head.title + (counts ? ` · ${counts}` : ""),
       items: head.list === "followups" ? [] : list.map(entry(head.list)) };
   });
 }
@@ -80,7 +81,8 @@ function outlineGroup(s) {
   collapsible(box);
   const key = `ol-${s.id}`;
   return h("li", { class: "ol-sec" }, lazy(box, () => h("ul", { class: "ol-items" },
-    ...firstPage(key, s.items, (i) => i.id).map((i) => h("li", {}, outlineLink(i))), moreButton(key, s.items.length, "more items", outlineAgain) || "")));
+    ...firstPage(key, s.items, (i) => i.id).map((i) => h("li", {}, outlineLink(i))), moreButton(key, s.items.length, "more items", outlineAgain) || "",
+    (s.items.length && s.list && closedMore(s.list, "done")) || "")));
 }
 
 export function outlineBoxes() {
