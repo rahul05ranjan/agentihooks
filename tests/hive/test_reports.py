@@ -225,14 +225,19 @@ def test_hive_report_distinguishes_an_empty_pane_listing_from_an_outage(remote, 
     assert report["process_namespace"] == "pod-namespace"
 
 
-def test_a_hive_snapshot_from_before_launch_cannot_retire_the_new_worker(remote):
+@pytest.mark.parametrize(
+    ("launched", "started", "stamp"), [(200, 0, 100), (0, 200, 100), (1, 0, None), (0, 1, None)]
+)
+def test_a_hive_snapshot_from_before_launch_cannot_retire_the_new_worker(remote, launched, started, stamp):
     from scripts.swarm import tick
 
-    agent = replace(remote.agent, launched_at=200)
+    agent = replace(remote.agent, launched_at=launched, started_at=started)
     remote.store.put_agent("fixture", agent)
     _publish(remote, state="unknown")
     report = json.loads(remote.redis.get(remote.reports.key(HIVE)))
-    report.update(pane_ids=[], process_namespace="restarted", observed_at=100)
+    report.update(pane_ids=[], process_namespace="restarted")
+    if stamp is not None:
+        report["observed_at"] = stamp
     remote.redis.set(remote.reports.key(HIVE), json.dumps(report))
     remote.store.claim("fixture", "task", agent.name, 60000)
     rows = {"task": {"state": "claimed", "claimed_by": agent.name}}
