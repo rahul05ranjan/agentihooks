@@ -5,6 +5,8 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 
 pytestmark = pytest.mark.unit
 ROOT = Path(__file__).resolve().parents[2]
@@ -67,30 +69,33 @@ def test_kind_proof_rebuilds_the_base_only_when_it_is_not_current():
     assert "docker/swarm-node/Dockerfile" in stale.split("\nfi\n")[0]
 
 
-def normalized(name):
-    return re.sub(r"[-_.]+", "-", name).lower()
-
-
-def test_base_lock_carries_every_dependency_of_the_workstation_install():
+def test_base_lock_satisfies_every_requirement_of_the_workstation_install():
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
-    specs = project["dependencies"] + project["optional-dependencies"]["all"]
-    wanted = {normalized(re.match(r"[A-Za-z0-9._-]+", spec)[0]) for spec in specs}
+    wanted = [Requirement(spec) for spec in project["dependencies"] + project["optional-dependencies"]["all"]]
     lock = (ROOT / "docker/swarm-node/requirements.lock").read_text()
-    locked = {normalized(name) for name in re.findall(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==", lock, re.M)}
-    assert {"croniter", "boto3", "psycopg2-binary", "redis"} <= wanted
-    assert sorted(wanted - locked) == []
+    pins = {
+        canonicalize_name(name): version
+        for name, version in re.findall(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==(\S+)", lock, re.M)
+    }
+    assert {"croniter", "boto3", "psycopg2-binary", "redis"} <= {canonicalize_name(r.name) for r in wanted}
+    unmet = [
+        str(r)
+        for r in wanted
+        if not r.specifier.contains(pins.get(canonicalize_name(r.name), "0.0.0a0"), prereleases=True)
+    ]
+    assert unmet == []
 
 
-def test_kind_proof_fails_the_build_when_init_does_not_render_the_engineer_profile():
-    proof = PROOF.read_text()
+def test_kind_proof_checks_init_renders_the_engineer_profile_before_the_cluster_wait():
+    lines = PROOF.read_text().splitlines()
     check = (
         'docker run --rm --entrypoint bash "$image" -c '
         "'agentihooks init --profile engineer && "
-        'grep -qx "<!-- profile: engineer -->" "$HOME/.claude/CLAUDE.md"\' > "$out/init.txt"\n'
+        'grep -qx "<!-- profile: engineer -->" "$HOME/.claude/CLAUDE.md"\' > "$out/init.txt"'
     )
-    assert proof.startswith("#!/usr/bin/env bash\nset -euo pipefail\n")
-    assert proof.count(check) == 1
-    assert proof.index(check) < proof.index('kind load docker-image "$image"')
+    assert lines[:2] == ["#!/usr/bin/env bash", "set -euo pipefail"]
+    assert lines.count(check) == 1
+    assert lines.index(check) < lines.index('wait "$cluster_pid"')
 
 
 def test_base_inputs_cover_every_base_source_the_wheel_does_not_replace():
