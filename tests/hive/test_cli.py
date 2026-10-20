@@ -295,6 +295,30 @@ def test_refresh_names_the_status_of_an_error_without_a_json_body(tmp_path, monk
     assert capsys.readouterr().err == "hive refresh refused: HTTP 502\n"
 
 
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        (urllib.error.URLError("connection refused"), "<urlopen error connection refused>"),
+        (OSError("connection refused"), "connection refused"),
+    ],
+)
+def test_refresh_reports_an_unreachable_hive(tmp_path, monkeypatch, capsys, error, reason):
+    def urlopen(request, timeout):
+        raise error
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    monkeypatch.setenv("AGENTIHOOKS_HOME", str(tmp_path))
+    monkeypatch.setenv("AGENTIHOOKS_HIVE_URL", "https://hive.example")
+    monkeypatch.setenv("AGENTIHOOKS_HIVE_LEDGER_CREDENTIAL", "led")
+
+    assert cli.main(["refresh"]) == 1
+
+    output = capsys.readouterr()
+    assert output.err == f"hive refresh refused: the hive at https://hive.example is unreachable ({reason})\n"
+    assert output.out == ""
+    assert not (tmp_path / "hive.env").exists()
+
+
 def test_is_loopback_refuses_a_missing_host():
     assert server.is_loopback(None) is False
 
