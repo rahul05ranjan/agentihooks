@@ -12,7 +12,11 @@ SET_PIPEFAIL = re.compile(r"^\s*set\s+-[a-z]*o\s+pipefail\b|^\s*set\s+-o\s+pipef
 
 
 def _shell(workflow, job, step):
-    for scope in (step, (job.get("defaults") or {}).get("run") or {}, (workflow.get("defaults") or {}).get("run") or {}):
+    for scope in (
+        step,
+        (job.get("defaults") or {}).get("run") or {},
+        (workflow.get("defaults") or {}).get("run") or {},
+    ):
         if "shell" in scope:
             return scope["shell"]
     return None
