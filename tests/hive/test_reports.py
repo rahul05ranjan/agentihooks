@@ -165,11 +165,15 @@ def test_a_lost_hive_marks_its_executions_unknown_not_dead(remote):
         ([PANE], "restarted", True),
         ([PANE], "theirs", False),
         (None, "theirs", False),
+        (None, "restarted", False),
     ],
 )
-def test_tick_retires_only_hive_workers_proven_gone(remote, panes, namespace, retired):
+@pytest.mark.parametrize("state", ["working", "suspect", "retiring"])
+def test_tick_retires_only_hive_workers_proven_gone(remote, panes, namespace, retired, state):
     from scripts.swarm import idle, tick
 
+    remote.agent = replace(remote.agent, state=state)
+    remote.store.put_agent("fixture", remote.agent)
     _publish(remote, state="unknown")
     report = json.loads(remote.redis.get(remote.reports.key(HIVE)))
     report.update(pane_ids=panes, process_namespace=namespace)
