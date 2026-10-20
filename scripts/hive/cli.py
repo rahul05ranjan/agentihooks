@@ -1,4 +1,4 @@
-"""agentihooks hive invite|join|revoke|controller|serve|set|show|list."""
+"""agentihooks hive add|refresh|revoke|controller|serve|set|show|list|run|install."""
 
 import argparse
 import contextlib
@@ -29,10 +29,6 @@ def redis_client() -> "Redis":
 
 def now_ms() -> int:
     return time.time_ns() // 1_000_000
-
-
-def _join(url: str, code: str) -> dict:
-    return _post(url, server.JOIN_PATH, {"code": code}, "join")
 
 
 def refresh_env(environ: MutableMapping[str, str]) -> str:
@@ -92,6 +88,21 @@ def _post(url: str, path: str, body: dict, action: str) -> dict:
         raise auth.HiveError(f"the hive at {url} answered with a body that is not JSON") from exc
 
 
+def _add(args: argparse.Namespace) -> dict:
+    from scripts.hive import machine
+    from scripts.swarm.commands import hive_id
+    from scripts.swarm.store import redis_url
+
+    return machine.add(
+        redis_client(),
+        hive_id(),
+        args.target,
+        label=args.label,
+        url=args.url,
+        redis_url=args.redis_url or redis_url(os.environ),
+    )
+
+
 def _serve(args: argparse.Namespace) -> int:
     from scripts.swarm.store import redis_url
 
@@ -100,7 +111,7 @@ def _serve(args: argparse.Namespace) -> int:
     tls = (args.tls_cert, args.tls_key) if args.tls_cert else None
     httpd = server.make_server(redis_client(), args.redis_url or redis_url(os.environ), args.host, args.port, tls)
     scheme = "https" if tls else "http"
-    print(f"hive join endpoint on {scheme}://{args.host}:{httpd.server_address[1]}{server.JOIN_PATH}", flush=True)
+    print(f"hive endpoint on {scheme}://{args.host}:{httpd.server_address[1]}{server.REFRESH_PATH}", flush=True)
     httpd.serve_forever()
     return 0
 
@@ -108,16 +119,17 @@ def _serve(args: argparse.Namespace) -> int:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agentihooks hive", description="Hive credentials for remote swarm hosts")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("invite", help="Print a one-time join code, valid fifteen minutes").add_argument("name")
-    join = sub.add_parser("join", help="Exchange a join code for credentials in hive.env")
-    join.add_argument("url")
-    join.add_argument("code")
+    add = sub.add_parser("add", help="Save an SSH machine in herdr and deliver its member credential to it")
+    add.add_argument("target", help="SSH target herdr machine add dials, such as ssh://worker@host:2222")
+    add.add_argument("--label", required=True, help="herdr sidebar label and hive member name")
+    add.add_argument("--url", required=True, help="this hive's endpoint as the machine reaches it, for hive refresh")
+    add.add_argument("--redis-url", help="Redis URL the machine connects to; defaults to this host's")
     sub.add_parser("refresh", help="Mint a new Redis credential for this hive through its join service")
     sub.add_parser("revoke", help="Delete a member's ledger credential and Redis user").add_argument("id")
     sub.add_parser(
         "controller", help="Write a new controller service credential to a private file, retiring the previous one"
     )
-    serve = sub.add_parser("serve", help="Run the join endpoint")
+    serve = sub.add_parser("serve", help="Run the hive refresh endpoint")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8770)
     serve.add_argument("--redis-url", help="Redis URL members connect to; defaults to this host's")
@@ -164,12 +176,9 @@ def _daemon(command: str) -> int:
 def main(argv: list[str]) -> int:
     args = _parser().parse_args(argv)
     try:
-        if args.command == "invite":
-            print(auth.invite(redis_client(), args.name))
-        elif args.command == "join":
-            grant = _join(args.url, args.code)
-            path = auth.write_env(registry.home(), args.url, grant)
-            print(f"joined the hive as {grant['id']}; credentials are in {path}")
+        if args.command == "add":
+            grant = _add(args)
+            print(f"added {args.target} to herdr as {args.label}; its hive member is {grant['id']}")
         elif args.command == "refresh":
             with refresh_lock(os.environ):
                 member_id = refresh_env(os.environ)
