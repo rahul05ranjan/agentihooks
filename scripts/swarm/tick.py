@@ -515,10 +515,17 @@ def _restore_owner(slug, store, ledger, rows, agent):
     rows[agent.task] = ledger.update_task(slug, agent.task, fields, if_state=(row["state"],), if_match=expected)
 
 
+def _remote_exited(runtime, agent):
+    return bool(reports.host(agent)) and runtime.observe(agent).state == "exited"
+
+
 def _reap(slug, store, ledger, runtime, rows, now_ms):
     live, actions = runtime.live_names(), []
     for agent in store.agents(slug):
         if agent.state == "awaiting-decision" or (agent.lane == MASTER and agent.state == "starting"):
+            continue
+        if _remote_exited(runtime, agent):
+            actions += _watch_remote(slug, store, ledger, runtime, rows, agent, now_ms)
             continue
         ended = _ended(agent, rows)
         if agent.state == "retiring" and not ended:
