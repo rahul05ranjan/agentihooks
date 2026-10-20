@@ -186,7 +186,7 @@ def test_tick_retires_only_hive_workers_proven_gone(remote, panes, namespace, re
     if retired:
         assert remote.store.agents("fixture") == []
         assert remote.store.claimant("fixture", "task") == ""
-        assert remote.store.occupant("fixture", remote.agent.seat) == ""
+        assert remote.agent.seat not in remote.store.execution_registry.occupants("fixture")
         assert actions == [f"retired {remote.agent.name}: its hive pane is gone, task task reopened"]
     else:
         assert [agent.name for agent in remote.store.agents("fixture")] == [remote.agent.name]
