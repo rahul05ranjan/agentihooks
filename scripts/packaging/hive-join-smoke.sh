@@ -34,14 +34,14 @@ docker run -d --name "$run-member" --network "$run" -v "$tls/cert.pem:/tls/cert.
 ready=""
 for _ in $(seq 60); do
   logs="$(docker logs "$run-hive" 2>&1)"
-  if [[ $logs == *"hive join endpoint on https://"* ]]; then
+  if [[ $logs == *"hive endpoint on https://"* ]]; then
     ready=1
     break
   fi
   sleep 1
 done
 if [[ -z $ready ]]; then
-  printf 'the hive join endpoint never started:\n%s\n' "$logs" >&2
+  printf 'the hive endpoint never started:\n%s\n' "$logs" >&2
   exit 1
 fi
 
