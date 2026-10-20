@@ -208,6 +208,10 @@ workers:
   envFromSecrets: []
   # The agentihooks profile the hive installs at start, as on the workstation.
   profile: engineer
+  # The bundle the hive clones beside its repositories and installs with the profile; an empty url clones none.
+  bundle:
+    url: https://github.com/the-cloud-clockwork/agentihooks-bundle.git
+    ref: dev
   # sshd on the hive for herdr machine add from the operator's machine. The operator public keys and the
   # stable host key are the authorized_keys and host_key entries of credentialSecret; publish the port
   # with a LoadBalancer outside this chart.

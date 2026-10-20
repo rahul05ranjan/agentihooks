@@ -87,6 +87,10 @@ spec:
             {{- end }}
             - name: HIVE_PROFILE
               value: {{ $workers.profile | quote }}
+            - name: HIVE_BUNDLE_URL
+              value: {{ $workers.bundle.url | quote }}
+            - name: HIVE_BUNDLE_REF
+              value: {{ $workers.bundle.ref | quote }}
             {{- if $workers.ssh.enabled }}
             - name: HIVE_SSH_AUTHORIZED_KEYS_FILE
               value: /run/hive-join/ssh/authorized_keys

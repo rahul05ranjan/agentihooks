@@ -5,12 +5,17 @@ umask 077
 export AGENTIHOOKS_HOME="${AGENTIHOOKS_HOME:-$HOME/.agentihooks}"
 export HIVE_REPO_ROOT="${HIVE_REPO_ROOT:-$HOME/dev}"
 mkdir -p "$AGENTIHOOKS_HOME" "$HIVE_REPO_ROOT"
+git config --global credential.https://github.com.helper \
+  '!f() { test "$1" = get || return 0; printf "username=x-access-token\npassword=%s\n" "${GITHUB_PERSONAL_ACCESS_TOKEN:?}"; }; f'
 python3 - <<'PY'
 import json, os, re, subprocess
 from pathlib import Path
 
 root = Path(os.environ['HIVE_REPO_ROOT'])
-for repo in json.loads(os.environ.get('HIVE_REPOSITORIES', '[]')):
+repos = json.loads(os.environ.get('HIVE_REPOSITORIES', '[]'))
+if os.environ.get('HIVE_BUNDLE_URL'):
+    repos.append({'name': 'agentihooks-bundle', 'url': os.environ['HIVE_BUNDLE_URL'], 'ref': os.environ.get('HIVE_BUNDLE_REF') or 'dev'})
+for repo in repos:
     name = repo['name']
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', name):
         raise SystemExit('repository name must be a single directory name')
@@ -58,7 +63,7 @@ UsePAM no
 StrictModes no
 PermitRootLogin no
 X11Forwarding no
-SetEnv PATH=/opt/venv/bin:/usr/local/bin:/usr/bin:/bin AGENTIHOOKS_HOME=$AGENTIHOOKS_HOME
+SetEnv PATH=$HOME/.local/bin:/opt/venv/bin:/usr/local/bin:/usr/bin:/bin NPM_CONFIG_PREFIX=$HOME/.local AGENTIHOOKS_HOME=$AGENTIHOOKS_HOME
 LogLevel VERBOSE
 EOF
   /usr/sbin/sshd -D -e -f "$ssh_state/sshd_config" &
@@ -67,6 +72,8 @@ bundle=()
 [[ -d "$HIVE_REPO_ROOT/agentihooks-bundle" ]] && bundle=(--bundle "$HIVE_REPO_ROOT/agentihooks-bundle")
 agentihooks init "${bundle[@]}" --profile "${HIVE_PROFILE:-engineer}" \
   || echo "worker-hive: agentihooks init failed; shells run without the profile" >&2
+agentihooks deps ensure \
+  || echo "worker-hive: agentihooks deps ensure failed; each launch retries the bundle dependencies" >&2
 member="$(python3 -c 'import hooks.config; from scripts.swarm.commands import hive_id; print(hive_id())')"
 agentihooks hive set "$member" ui=no ephemeral=yes \
   "roles=${HIVE_ROLES:-eng,ci,plan,dispatch}" "max-agents=${HIVE_MAX_AGENTS:-1}"
