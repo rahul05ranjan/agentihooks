@@ -2,7 +2,7 @@ import json
 from types import SimpleNamespace
 
 from scripts.gates import intent, intent_history
-from tests.gates.test_intent import NOW, SLUG, WHO, Ledger, Mail, classifier, verdicts
+from tests.gates.test_intent import NOW, SLUG, WHO, Ledger, Mail, classifier, rows, verdicts
 
 HERE = "https://github.com/o/agentihooks/pull/9"
 THERE = "https://github.com/o/antoncore/pull/580"
@@ -216,3 +216,69 @@ def test_named_pulls_reads_task_text_comments_and_the_body_and_skips_this_reposi
         "Binding: o/antoncore#580 and https://github.com/o/bridge/pull/7, closes #2, see docs/a/b#3 and scripts/gates#2.",
     )
     assert named == [THERE, "https://github.com/o/bridge/pull/7", "https://github.com/o/kernel/pull/12"]
+
+
+def many(count):
+    return [f"https://github.com/o/r{n}/pull/{n}" for n in range(count)]
+
+
+def test_a_body_naming_over_a_hundred_other_pull_requests_keeps_lists_and_names_a_few(tmp_path):
+    others = many(140)
+    seen, record = judged(tmp_path, task(), body=" ".join(others), pulls={HERE: PULLS[HERE]})
+    [(state, _, _)] = seen
+    assert state["judged_pull_requests"] == [HERE]
+    assert state["unread_pull_requests"] == others[: intent_history.URL_COUNT]
+    assert state["unread_overflow"] == 140 - intent_history.URL_COUNT
+    assert record["verdict"] == "pass"
+    assert record["reason"].endswith(f"; judged on {HERE}; could not read {', '.join(others[:4])} and 136 more")
+
+
+def test_exactly_the_count_of_unread_pull_requests_carries_no_overflow(tmp_path):
+    others = many(intent_history.URL_COUNT)
+    seen, record = judged(tmp_path, task(), body=" ".join(others), pulls={HERE: PULLS[HERE]})
+    [(state, _, _)] = seen
+    assert state["unread_pull_requests"] == others
+    assert "unread_overflow" not in state
+    assert record["reason"].endswith(f"; could not read {', '.join(others[:4])} and 6 more")
+
+
+def test_the_reason_names_four_pull_requests_in_full_and_counts_a_fifth():
+    four, five = many(4), many(5)
+    assert intent._judged_on({"judged_pull_requests": four}) == f"; judged on {', '.join(four[:3])} and {four[3]}"
+    assert intent._judged_on({"unread_pull_requests": five}) == f"; could not read {', '.join(five[:4])} and 1 more"
+    unread = {"unread_pull_requests": four, "unread_overflow": 2}
+    assert intent._judged_on(unread) == f"; could not read {', '.join(four)} and 2 more"
+
+
+def test_prepare_keeps_long_url_lists_as_lists_capped_by_count():
+    urls = [f"https://github.com/o/repository-with-a-long-name/pull/{n}" for n in range(400)]
+    state = intent_history.prepare({"judged_pull_requests": urls, "unread_pull_requests": urls, "other": urls})
+    assert state["judged_pull_requests"] == urls[: intent_history.URL_COUNT]
+    assert state["unread_pull_requests"] == urls[: intent_history.URL_COUNT]
+    assert state["other"]["truncated"] is True
+
+
+def test_named_pulls_skip_links_inside_the_generated_parent_intent_section():
+    inside = f"{intent.START}\n## Parent intent\n\nSee {THERE} and o/kernel#3.\n{intent.END}"
+    named = intent.named_pulls(task(), f"Binding https://github.com/o/bridge/pull/7.\n\n{inside}")
+    assert named == ["https://github.com/o/bridge/pull/7"]
+    assert intent.named_pulls(task(description=f"Gate {THERE}."), inside) == [THERE]
+
+
+def test_one_task_failing_in_the_intent_check_never_ends_the_tick_run(tmp_path):
+    broken = {**task(), "id": "t0", "description": "Broken."}
+
+    def ask(state):
+        if state["task_text"] == "Broken.":
+            raise KeyError(slice(None, -1, None))
+        return intent.judge(state, classifier(0.9))
+
+    view = {"title": PULLS[HERE]["title"], "body": "", "files": [".github/workflows/sonar.yml"]}
+    actions = intent.Check(SLUG, "enforce", NOW, Ledger(), Mail(), lambda url: view, ask, home=tmp_path).run(
+        {**DOC, "tasks": [broken, task()]}
+    )
+    assert verdicts(tmp_path).read(WHO.task)["verdict"] == "pass"
+    assert actions == ["task t0 intent check failed: KeyError", f"task {WHO.task} intent check pass"]
+    [row] = [row for row in rows(tmp_path) if row["kind"] == "fail-open"]
+    assert row["gate"] == intent.NAME and row["task"] == "t0"
+    assert row["reason"] == "KeyError: slice(None, -1, None)"
