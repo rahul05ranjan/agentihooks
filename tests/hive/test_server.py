@@ -37,7 +37,7 @@ def _post(port, path, body):
 
 
 def _raises(error):
-    def operation(*_):
+    def operation(*_, **__):
         raise error
 
     return operation
