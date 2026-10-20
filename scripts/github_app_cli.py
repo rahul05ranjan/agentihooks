@@ -1,5 +1,6 @@
 import argparse
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import TextIO
@@ -57,10 +58,25 @@ def environment() -> dict[str, str]:
     return env
 
 
+def refresh_file() -> None:
+    from scripts.scheduler.process_timer import wait
+
+    target = token_file()
+    pending = target.with_suffix(".next")
+    while True:
+        wait(1800)
+        with pending.open("w") as output:
+            pending.chmod(0o600)
+            result = subprocess.run([sys.executable, "-m", "scripts.github_app_cli", "token"], stdout=output)
+        if result.returncode == 0:
+            pending.replace(target)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Use GitHub App installation credentials without saving tokens")
     sub = parser.add_subparsers(dest="action", required=True)
     sub.add_parser("token", help="Print a current installation token for scripts")
+    sub.add_parser("refresh-file", help="Renew the worker token file every thirty minutes")
     helper = sub.add_parser("credential", help="Git HTTPS credential helper")
     helper.add_argument("operation", choices=("get", "store", "erase"))
     execute = sub.add_parser("exec", help="Refresh GitHub credentials and execute a process")
@@ -71,6 +87,8 @@ def main(argv: list[str] | None = None) -> int:
             return credential(args.operation, sys.stdin, sys.stdout)
         if args.action == "token":
             print(token())
+        elif args.action == "refresh-file":
+            refresh_file()
         else:
             if not args.command:
                 parser.error("exec requires a command")
