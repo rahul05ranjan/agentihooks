@@ -707,6 +707,10 @@ places the pod only on a node with room for every agent it may run. The chart re
 below the request, and memory set under `workers.resources`. The pod carries no node selector, affinity or host
 network, so it schedules on any node.
 
+A distributed controller can also serve a workstation swarm without worker hives, launching that swarm's engineer and
+CI work as Pods while its master, planners and dispatcher stay on the workstation; see
+[Serving a live swarm from a distributed controller](../reference/deployment-modes.md#serving-a-live-swarm-from-a-distributed-controller).
+
 ## Ledger Hives panel
 
 The Swarm tab of the ledger page shows a Hives panel after Quota. It reads the hive settings API, edits hive settings
