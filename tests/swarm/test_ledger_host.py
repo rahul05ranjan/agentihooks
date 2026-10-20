@@ -77,26 +77,30 @@ def test_cpu_over_a_pass_requires_the_same_process_and_measured_elapsed_time():
         assert ledger_host.cpu_over_pass(before, {**after, field: after[field] + 1}, 8) is None
 
 
-def test_the_newest_commit_on_dev_names_its_subject_and_age(tmp_path):
+def test_the_newest_commit_on_dev_counts_from_when_it_reached_dev_not_its_commit_date(tmp_path):
     def git(*args, **env):
         subprocess.run(["git", "-C", str(tmp_path), *args], check=True, capture_output=True, env=env or None)
 
-    stamp = {
-        "GIT_AUTHOR_DATE": "@1000000000 +0000",
-        "GIT_COMMITTER_DATE": "@1000000000 +0000",
+    identity = {
         "GIT_AUTHOR_NAME": "a",
         "GIT_AUTHOR_EMAIL": "a@b",
         "GIT_COMMITTER_NAME": "a",
         "GIT_COMMITTER_EMAIL": "a@b",
         "PATH": "/usr/bin:/bin",
     }
+    built = {**identity, "GIT_AUTHOR_DATE": "@1000000000 +0000", "GIT_COMMITTER_DATE": "@1000000000 +0000"}
     git("init", "-q")
-    git("commit", "-q", "--allow-empty", "-m", "Time the ledger every pass", **stamp)
-    assert ledger_host.newest_on_dev(tmp_path, 1_000_000_600) == {"newest": None, "merged_minutes": None}
-    git("update-ref", "refs/remotes/origin/dev", "HEAD")
-    assert ledger_host.newest_on_dev(tmp_path, 1_000_000_600) == {
+    git("commit", "-q", "--allow-empty", "-m", "Time the ledger every pass", **built)
+    now = 1_000_000_000 + 90 * 60
+    assert ledger_host.newest_on_dev(tmp_path, now) == {"newest": None, "merged_minutes": None}
+    git("-c", "core.logAllRefUpdates=false", "update-ref", "refs/remotes/origin/dev", "HEAD", **identity)
+    assert ledger_host.newest_on_dev(tmp_path, now) == {"newest": None, "merged_minutes": None}
+    git("update-ref", "-d", "refs/remotes/origin/dev", **identity)
+    reached = {**identity, "GIT_COMMITTER_DATE": f"@{now - 5 * 60} +0000"}
+    git("update-ref", "-m", "fetch origin dev: fast-forward", "refs/remotes/origin/dev", "HEAD", **reached)
+    assert ledger_host.newest_on_dev(tmp_path, now) == {
         "newest": "Time the ledger every pass",
-        "merged_minutes": 10,
+        "merged_minutes": 5,
     }
 
 
