@@ -34,7 +34,7 @@ def _members(admin):
 
 
 def _add(admin, run):
-    return machine.add(admin, "root", TARGET, label="anton-hive", url=URL, redis_url=PUBLIC, run=run)
+    return machine.add(admin, "root", TARGET, "anton-hive", machine.Delivery(URL, PUBLIC), run)
 
 
 def _herdr_call():
@@ -80,7 +80,7 @@ def test_a_trusted_ledger_ca_is_delivered_after_the_env_file(admin):
     registry.update(admin, "root", ["ui=yes"])
     run = Runner((0, ""), (0, ""), (0, ""))
 
-    grant = machine.add(admin, "root", TARGET, label="anton-hive", url=URL, redis_url=PUBLIC, ledger_ca="PEM", run=run)
+    grant = machine.add(admin, "root", TARGET, "anton-hive", machine.Delivery(URL, PUBLIC, "PEM"), run)
 
     assert [call[0][-1] for call in run.calls[1:]] == [machine.DELIVER, machine.DELIVER_CA]
     assert [call[1]["input"] for call in run.calls[1:]] == [auth.env_text(URL, grant), "PEM"]
@@ -95,7 +95,7 @@ def test_a_failed_ledger_ca_delivery_revokes_the_minted_member(admin):
     run = Runner((0, ""), (0, ""), (1, "disk full"))
 
     with pytest.raises(auth.HiveError) as refused:
-        machine.add(admin, "root", TARGET, label="anton-hive", url=URL, redis_url=PUBLIC, ledger_ca="PEM", run=run)
+        machine.add(admin, "root", TARGET, "anton-hive", machine.Delivery(URL, PUBLIC, "PEM"), run)
 
     assert str(refused.value) == "ssh exited 1: disk full"
     assert _members(admin) == []
@@ -162,11 +162,8 @@ def test_cli_add_passes_its_settings_and_names_the_member(admin, monkeypatch, ca
     assert cli.main(["add", TARGET, "--label", "anton-hive", "--url", URL, "--redis-url", PUBLIC]) == 0
 
     assert calls == [
-        (
-            (admin, "root", TARGET),
-            {"label": "anton-hive", "url": URL, "ledger_ca": "PEM", "redis_url": "redis://own:6379/0"},
-        ),
-        ((admin, "root", TARGET), {"label": "anton-hive", "url": URL, "ledger_ca": "PEM", "redis_url": PUBLIC}),
+        ((admin, "root", TARGET, "anton-hive", machine.Delivery(URL, "redis://own:6379/0", "PEM")), {}),
+        ((admin, "root", TARGET, "anton-hive", machine.Delivery(URL, PUBLIC, "PEM")), {}),
     ]
     assert capsys.readouterr().out == f"added {TARGET} to herdr as anton-hive; its hive member is ab12\n" * 2
 

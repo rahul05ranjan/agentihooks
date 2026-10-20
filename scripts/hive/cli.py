@@ -99,10 +99,8 @@ def _add(args: argparse.Namespace) -> dict:
         redis_client(),
         hive_id(),
         args.target,
-        label=args.label,
-        url=args.url,
-        redis_url=args.redis_url or redis_url(os.environ),
-        ledger_ca=ledger_ca.served(),
+        args.label,
+        machine.Delivery(args.url, args.redis_url or redis_url(os.environ), ledger_ca.served()),
     )
 
 

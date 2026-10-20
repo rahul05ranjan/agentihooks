@@ -2,6 +2,7 @@
 
 import subprocess
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from scripts.hive import auth, registry
@@ -24,15 +25,19 @@ DELIVER_CA = (
 )
 
 
+@dataclass(frozen=True)
+class Delivery:
+    url: str
+    redis_url: str
+    ledger_ca: str | None = None
+
+
 def add(
     redis: "Redis",
     local_id: str,
     target: str,
-    *,
     label: str,
-    url: str,
-    redis_url: str,
-    ledger_ca: str | None = None,
+    delivery: Delivery,
     run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
 ) -> dict:
     local = registry.show(redis, local_id)
@@ -44,11 +49,11 @@ def add(
         None,
         HERDR_TIMEOUT_S,
     )
-    grant = auth.mint(redis, label, redis_url)
+    grant = auth.mint(redis, label, delivery.redis_url)
     try:
-        _run(run, ["ssh", "-o", "BatchMode=yes", target, DELIVER], auth.env_text(url, grant), SSH_TIMEOUT_S)
-        if ledger_ca:
-            _run(run, ["ssh", "-o", "BatchMode=yes", target, DELIVER_CA], ledger_ca, SSH_TIMEOUT_S)
+        _run(run, ["ssh", "-o", "BatchMode=yes", target, DELIVER], auth.env_text(delivery.url, grant), SSH_TIMEOUT_S)
+        if delivery.ledger_ca:
+            _run(run, ["ssh", "-o", "BatchMode=yes", target, DELIVER_CA], delivery.ledger_ca, SSH_TIMEOUT_S)
     except auth.HiveError:
         auth.revoke(redis, grant["id"])
         raise
