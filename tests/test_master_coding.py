@@ -347,6 +347,8 @@ def test_the_open_window_lets_the_master_change_rulesets_and_closing_it_refuses_
         "gh api -X PUT repos/o/r/branches/master/protection",
         "gh api -X PUT repos/o/r/rulesets/9 --input .github/rulesets/main-prod-lockdown.json",
         "gh api -X PUT repos/o/r/rulesets/9 --input /home/x/payload.json",
+        "gh api -X PUT repos/o/r/rulesets/9 --input /elsewhere/.github/rulesets/dev-no-delete.json",
+        "gh api -X PUT repos/o/r/rulesets/9 --input ../.github/rulesets/dev-no-delete.json",
         "gh api -X DELETE repos/o/r/rulesets/9",
     ],
 )

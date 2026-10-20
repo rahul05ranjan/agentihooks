@@ -29,7 +29,7 @@ CREDENTIALS = re.compile(
 TEMPLATES = (".example", ".sample", ".template", ".dist")
 MAIN_PROTECTION = re.compile(r"(?<!\w)(?:main|master|v1)(?!\w)")
 RULESET_BY_ID = re.compile(r"/rulesets/\d+")
-RULESET_PAYLOAD = re.compile(r"\.github/rulesets/[\w.-]+\.json")
+RULESET_PAYLOAD = re.compile(r"(?<![\w/.~-])\.github/rulesets/[\w.-]+\.json")
 PROTECTION_REFUSAL = (
     "BLOCKED: the master changes rulesets or branch protection only inside the hotfix window, a ruleset write "
     "only from its committed payload file under .github/rulesets, and never for main, master or v1; the operator "
