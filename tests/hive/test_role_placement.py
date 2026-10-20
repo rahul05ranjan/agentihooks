@@ -117,7 +117,7 @@ MASTER_WAIT = "no live hive can run the master with interactive, subscription or
 
 
 @pytest.mark.parametrize("lacks", [{"repos": []}, {"slots": []}], ids=["repo", "slot"])
-def test_a_master_with_no_fitting_ui_hive_goes_to_the_workstation_never_headless(setup, lacks):
+def test_a_master_with_no_fitting_ui_hive_is_left_to_the_workstation_never_headless(setup, lacks):
     from scripts.hive.placement import Wait
     from scripts.swarm import controller
     from scripts.swarm.profile_choice import ProfileDecision

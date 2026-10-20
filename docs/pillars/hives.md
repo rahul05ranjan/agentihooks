@@ -92,9 +92,8 @@ hive over an ephemeral one, then the hive id.
 hives first and takes the UI hive only when no headless hive taking the role has room or none is live. A headless
 hive with room that lacks the account slot, the repo or the login makes the launch wait instead. The agent record
 carries the fallback reason as `placement_fallback` in its profile decision; a task pinned to a UI hive records the
-pin as its reason. UI roles, the master
-included, take only UI hives. The engineer, cicd and planner
-profiles place as `eng`, `ci` and `plan`; a frontend or qa profile on any lane places as its UI role.
+pin as its reason. UI roles, the master included, take only UI hives. The engineer, cicd and planner profiles
+place as `eng`, `ci` and `plan`; a frontend or qa profile on any lane places as its UI role.
 
 When no live hive takes the role:
 
@@ -116,9 +115,9 @@ A headless hive never runs the master, whatever its roles.
 
 ## Workstation fallback
 
-When no UI hive fits, because none is live or the live ones lack the repo, the slot or the login, the hive
-controller leaves the master to the workstation herdr server. It refuses the launch with "the workstation hive
-spawns master work" followed by the placement reason, and the tick logs that line.
+When no UI hive fits, because none is live or the live ones lack the repo or a slot for the master's harness, the
+hive controller leaves the master to the workstation herdr server. It refuses the launch with "the workstation
+hive spawns master work" followed by the placement reason, and the tick reports that line in its actions.
 
 The `master-headless` health finding marks a master record placed on a headless hive before this rule. The
 `master-fallback-auth` finding marks a master that wanted its interactive login and runs on another route, so phone

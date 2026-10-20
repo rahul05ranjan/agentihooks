@@ -55,6 +55,13 @@ CASES = {
         REPO,
         NO_UI,
     ),
+    "unfit UI master hive beside a headless master hive": (
+        "master",
+        fleet("pc", vm={"repos": []}, pods={"roles": ["master", "eng"]}),
+        "subscription",
+        REPO,
+        Wait(f"no hive for master lists the repo {REPO}"),
+    ),
     "both off qa": ("qa", fleet("pc", "vm"), "subscription", REPO, NO_UI),
     "both off frontend": ("frontend", fleet("pc", "vm"), "subscription", REPO, NO_UI),
     "both off eng": ("eng", fleet("pc", "vm"), "subscription", REPO, "pods"),
