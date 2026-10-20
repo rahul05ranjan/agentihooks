@@ -45,7 +45,7 @@ def test_an_https_remote_keeps_its_address(tmp_path):
     )
 
 
-@pytest.mark.parametrize("state", [None, "{}", '{"bundle": {}}', "not json"])
+@pytest.mark.parametrize("state", [None, "{}", '{"bundle": {}}', "not json", "[]", '{"bundle": "path"}'])
 def test_no_linked_bundle_gives_an_empty_origin(tmp_path, state):
     home = tmp_path / "state"
     home.mkdir()
@@ -58,7 +58,7 @@ def test_a_bundle_without_an_origin_remote_is_refused(tmp_path):
     checkout = bundle(tmp_path, remote="")
     with pytest.raises(auth.HiveError) as refused:
         bundle_origin.origin(linked(tmp_path, checkout))
-    assert str(refused.value) == f"the linked bundle at {checkout} has no origin remote"
+    assert str(refused.value) == f"the linked bundle at {checkout} has no origin remote naming a host and repository"
 
 
 def test_a_detached_bundle_is_refused(tmp_path):

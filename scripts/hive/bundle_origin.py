@@ -18,13 +18,13 @@ def origin(home: Path) -> dict[str, str]:
 
     try:
         bundle = (json.loads((home / "state.json").read_text()).get("bundle") or {}).get("path")
-    except (OSError, ValueError):
+    except (OSError, ValueError, AttributeError):
         bundle = None
     if not bundle:
         return {URL_KEY: "", REF_KEY: ""}
     identity = remote(Path(bundle))
     if not identity:
-        raise auth.HiveError(f"the linked bundle at {bundle} has no origin remote")
+        raise auth.HiveError(f"the linked bundle at {bundle} has no origin remote naming a host and repository")
     branch = subprocess.run(
         ["git", "-C", bundle, "branch", "--show-current"], capture_output=True, text=True, check=False
     ).stdout.strip()
