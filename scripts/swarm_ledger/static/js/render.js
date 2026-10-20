@@ -132,7 +132,7 @@ function planActions(key, plan) {
 
 function planRow({ key, id, title, phases, plan }) {
   const idOf = (p) => `item-phases-${p.id}`;
-  const total = phases.length + (plan ? closedLeftIn("phases", key) : 0);
+  const total = phases.length + closedLeftIn("phases", key);
   const fold = h("details", { class: "plan-fold" }, h("summary", {}, plan ? holdMark(key) : null, h("span", { class: "plan-title", text: title }),
     h("span", { class: "plan-count", text: `${total} ${total === 1 ? "phase" : "phases"}` }), planActions(key, plan)));
   fold.open = !closedComments.has(`${key}/row`) || phases.some((p) => idOf(p) === wanted.id);

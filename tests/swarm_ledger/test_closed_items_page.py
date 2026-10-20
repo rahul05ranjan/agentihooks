@@ -196,8 +196,8 @@ def test_a_priority_on_a_hidden_done_task_reads_done_not_removed(ledger):
 
 def test_a_plan_counts_its_hidden_phases(ledger):
     page, _, served = ledger
-    phases = [{**p, "plan": "plans/pl1"} for p in KEPT_PHASES + OPEN_PHASES]
-    closed = {"phases": {**DOC["_meta"]["closed"]["phases"], "groups": {"plans/pl1": 3}}}
+    phases = [{**p, "plan": "plans/pl1"} for p in KEPT_PHASES] + OPEN_PHASES
+    closed = {"phases": {**DOC["_meta"]["closed"]["phases"], "groups": {"plans/pl1": 2, "unplanned": 1}}}
     serve(
         served,
         2,
@@ -206,4 +206,5 @@ def test_a_plan_counts_its_hidden_phases(ledger):
         _meta={"closed": {**DOC["_meta"]["closed"], **closed}},
     )
     page.wait_for_function("() => document.querySelector('#item-plans-pl1 .plan-count')")
-    assert page.locator("#item-plans-pl1 .plan-count").text_content() == "14 phases"
+    assert page.locator("#item-plans-pl1 .plan-count").text_content() == "12 phases"
+    assert page.locator("#phases-unplanned .plan-count").text_content() == "2 phases"

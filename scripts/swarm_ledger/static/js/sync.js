@@ -109,7 +109,7 @@ export function closedLeftIn(name, key) {
   const closed = (meta.closed || {})[name];
   const field = { phases: "plan", tasks: "slice" }[name];
   if (!closed || !closed.groups || !field) return 0;
-  return Math.max(0, (closed.groups[key] || 0) - (older[name] || []).filter((i) => i[field] === key).length);
+  return Math.max(0, (closed.groups[key] || 0) - (older[name] || []).filter((i) => (i[field] || "unplanned") === key).length);
 }
 
 function keepDropped(previous, next) {

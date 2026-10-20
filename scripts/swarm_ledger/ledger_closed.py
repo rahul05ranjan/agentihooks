@@ -39,7 +39,8 @@ def trimmed(state: dict) -> tuple[dict, dict]:
 def entry(name: str, gone: list) -> dict:
     result = {"hidden": len(gone), "kept": KEPT, "ids": [row.get("id") for row in gone]}
     if name in GROUPS:
-        result["groups"] = dict(Counter(row[GROUPS[name]] for row in gone if row.get(GROUPS[name])))
+        keys = [row.get(GROUPS[name]) or ("unplanned" if name == "phases" else None) for row in gone]
+        result["groups"] = dict(Counter(key for key in keys if key))
     if name == "tasks":
         result["claimed_by"] = {row.get("id"): row["claimed_by"] for row in gone if row.get("claimed_by")}
     return result
