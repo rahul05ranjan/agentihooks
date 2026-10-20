@@ -16,31 +16,44 @@ once, beats every fifteen seconds, and takes the roles its settings allow.
 
 ---
 
-## Joining a hive
+## Adding a machine to a hive
 
-The swarm host mints a one time code; the new machine exchanges it for its own credentials.
+A machine joins a hive only through the UI hive: a UI hive adds the machine and delivers its credentials to it
+over SSH. A headless hive cannot add one.
 
 ```bash
-# On the swarm host: a code valid for fifteen minutes
-agentihooks hive invite lab-vm
+# On the UI hive
+agentihooks hive add ssh://worker@lab-vm:22 --label lab-vm \
+  --url https://swarm.example.internal:8770/hive/refresh
 
-# On the new machine
-agentihooks hive join https://swarm.example.internal:8770 <code>
+# On the new machine, once hive add has delivered its hive.env
 agentihooks hive install          # user service that runs agentihooks hive run
 ```
 
-- `hive join` writes `~/.agentihooks/hive.env` (mode 0600) with the hive id, the swarm URL, a ledger credential
-  and a Redis URL for the hive's own Redis user. The join URL must be https unless it is loopback.
-- The join endpoint is `agentihooks hive serve`, or the Compose `hive` service started with `--profile join`.
+- `hive add <ssh target> --label <name> --url <url> [--redis-url URL]` refuses unless the local hive record has
+  `ui=yes`, with `hive add refused: hive <id> is headless; only a UI hive adds machines`. On a UI hive it runs
+  `herdr machine add --label <name> --remote-session default <target>` (300 second timeout), mints a hive member
+  named after the label, and delivers it: `ssh -o BatchMode=yes <target>` (60 second timeout) writes the member's
+  `hive.env` (mode 0600) into `${AGENTIHOOKS_HOME:-$HOME/.agentihooks}/hive.env` on the remote machine. If delivery
+  fails, the minted member is revoked and the command exits 1. On success it prints
+  `added <target> to herdr as <label>; its hive member is <id>`.
+- `--url` is this hive's refresh endpoint as the new machine reaches it, saved into the delivered `hive.env`.
+  A refusal prints `hive add refused: <reason>`, such as `herdr exited 1: <stderr>`, `ssh exited 255: <stderr>`
+  or `herdr failed (<error>)`.
+- The delivered `hive.env` carries the hive id, the hive URL, a ledger credential and a Redis URL for the hive's
+  own Redis user: `AGENTIHOOKS_HIVE_ID`, `AGENTIHOOKS_HIVE_URL`, `AGENTIHOOKS_HIVE_LEDGER_CREDENTIAL` and
+  `AGENTIHOOKS_HIVE_REDIS_URL`. `agentihooks hive refresh` posts to the URL saved there. The hive URL must be https
+  unless it is loopback.
+- The hive endpoint is `agentihooks hive serve`, or the Compose `hive` service started with `--profile join`.
   The Compose service always serves TLS from `SWARM_TLS_DIR`; bare `hive serve` serves TLS only with `--tls-cert`
-  and `--tls-key`, and refuses to serve on a non-loopback address without them. The join endpoint's request,
-  handler and Redis time limits, and the 503 it answers when Redis does not reply, are under
-  [Join service limits](#join-service-limits).
+  and `--tls-key`, and refuses to serve on a non-loopback address without them. It serves only
+  `POST /hive/refresh`; the endpoint's request, handler and Redis time limits, and the 503 it answers when Redis
+  does not reply, are under [Hive endpoint limits](#hive-endpoint-limits).
 - Each member gets the Redis user `hive-<id>`: it reads the swarm keyspace and writes only its own hive keys;
   [Member keys](#member-keys) lists what lives there.
   A launch order's receipt and acknowledgement live under those keys. The controller reads the acknowledgement and
   records the execution as working, with the hive's process target, pane, model and effort.
-  Invites and credentials sit outside what a member can read.
+  Credentials sit outside what a member can read.
 - `hive install` writes and enables the `agentihooks-hive` user service, which runs `hive run` and restarts five
   seconds after any exit. `hive run` publishes sessions, quota, slots and repos every fifteen seconds.
 - `agentihooks hive refresh` mints a new Redis credential; `agentihooks hive revoke <id>` deletes a member's
@@ -48,7 +61,7 @@ agentihooks hive install          # user service that runs agentihooks hive run
 - `agentihooks hive list` prints one line per hive: id, `live` or `stale`, ui, roles and max agents.
   `agentihooks hive show <id>` prints the full record as JSON.
 
-A Kubernetes worker pod joins the same way from its entrypoint; see
+A Kubernetes worker pod joins the same way, waiting for `hive add` to deliver its credential; see
 [Worker hives in Kubernetes](#worker-hives-in-kubernetes).
 
 ## Repos and checkouts
@@ -76,11 +89,11 @@ Placement drops a hive whose list lacks the task's repo, with "no hive for `<rol
 When a launch names the repo by origin identity, the hive starts the agent in its own checkout with that origin,
 the first by path when it holds several. A repo given as a path launches in that path.
 
-## Join service limits
+## Hive endpoint limits
 
-`agentihooks hive serve` answers `POST /hive/join` (a one time code for credentials) and `POST /hive/refresh` (a
-ledger credential for a new Redis password) on one thread per request. Every limit in this table is a constant in
-the service; no flag or environment variable changes one.
+`agentihooks hive serve` answers `POST /hive/refresh` (a ledger credential for a new Redis password) on one thread
+per request; any other path answers 404, like any unknown path. Every limit in this table is a constant in the
+service; no flag or environment variable changes one.
 
 | Limit | Value | Effect |
 |---|---|---|

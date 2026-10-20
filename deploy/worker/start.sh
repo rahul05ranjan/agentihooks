@@ -19,13 +19,6 @@ for repo in json.loads(os.environ.get('HIVE_REPOSITORIES', '[]')):
         subprocess.run(['git', 'clone', '--branch', repo.get('ref', 'dev'), '--', repo['url'], str(target)], check=True)
 PY
 
-if [[ -n "${HIVE_CREDENTIAL_FILE:-}" ]]; then
-  install -m 0600 "$HIVE_CREDENTIAL_FILE" "$AGENTIHOOKS_HOME/hive.env"
-elif [[ ! -f "$AGENTIHOOKS_HOME/hive.env" ]]; then
-  code="$(< "${HIVE_JOIN_CODE_FILE:?a mounted join code or member credential is required}")"
-  agentihooks hive join "${HIVE_JOIN_URL:?the hive join URL is required}" "$code"
-  unset code
-fi
 python3 - <<'PY'
 import os, re
 from pathlib import Path
@@ -62,6 +55,19 @@ SetEnv PATH=/opt/venv/bin:/usr/local/bin:/usr/bin:/bin AGENTIHOOKS_HOME=$AGENTIH
 LogLevel VERBOSE
 EOF
   /usr/sbin/sshd -D -e -f "$ssh_state/sshd_config" &
+fi
+if [[ -n "${HIVE_CREDENTIAL_FILE:-}" ]]; then
+  install -m 0600 "$HIVE_CREDENTIAL_FILE" "$AGENTIHOOKS_HOME/hive.env"
+elif [[ ! -f "$AGENTIHOOKS_HOME/hive.env" ]]; then
+  wait_s="${HIVE_DELIVERY_WAIT_S:-900}"
+  deadline=$(( $(date +%s) + wait_s ))
+  until [[ -f "$AGENTIHOOKS_HOME/hive.env" ]]; do
+    if (( $(date +%s) >= deadline )); then
+      echo "worker-hive: no member credential was delivered within ${wait_s}s; run agentihooks hive add from the UI hive" >&2
+      exit 1
+    fi
+    sleep 2
+  done
 fi
 bundle=()
 [[ -d "$HIVE_REPO_ROOT/agentihooks-bundle" ]] && bundle=(--bundle "$HIVE_REPO_ROOT/agentihooks-bundle")
