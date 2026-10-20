@@ -219,7 +219,7 @@ def test_named_pulls_reads_task_text_comments_and_the_body_and_skips_this_reposi
 
 
 def many(count):
-    return [f"https://github.com/o/r{n}/pull/{n}" for n in range(count)]
+    return [f"https://github.com/the-cloud-clockwork/repository-{n}/pull/{n}" for n in range(count)]
 
 
 def test_a_body_naming_over_a_hundred_other_pull_requests_keeps_lists_and_names_a_few(tmp_path):
