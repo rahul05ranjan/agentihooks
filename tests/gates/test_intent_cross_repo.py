@@ -219,7 +219,7 @@ def test_named_pulls_reads_task_text_comments_and_the_body_and_skips_this_reposi
 
 
 def many(count):
-    return [f"https://github.com/o/r{n}/pull/{n}" for n in range(count)]
+    return [f"https://github.com/the-cloud-clockwork/repository-{n}/pull/{n}" for n in range(count)]
 
 
 def test_a_body_naming_over_a_hundred_other_pull_requests_keeps_lists_and_names_a_few(tmp_path):
@@ -228,7 +228,7 @@ def test_a_body_naming_over_a_hundred_other_pull_requests_keeps_lists_and_names_
     [(state, _, _)] = seen
     assert state["judged_pull_requests"] == [HERE]
     assert state["unread_pull_requests"] == others[: intent_history.URL_COUNT]
-    assert state["unread_overflow"] == 140 - intent_history.URL_COUNT
+    assert state["unread_overflow"] == 130
     assert record["verdict"] == "pass"
     assert record["reason"].endswith(f"; judged on {HERE}; could not read {', '.join(others[:4])} and 136 more")
 
@@ -253,8 +253,8 @@ def test_the_reason_names_four_pull_requests_in_full_and_counts_a_fifth():
 def test_prepare_keeps_long_url_lists_as_lists_capped_by_count():
     urls = [f"https://github.com/o/repository-with-a-long-name/pull/{n}" for n in range(400)]
     state = intent_history.prepare({"judged_pull_requests": urls, "unread_pull_requests": urls, "other": urls})
-    assert state["judged_pull_requests"] == urls[: intent_history.URL_COUNT]
-    assert state["unread_pull_requests"] == urls[: intent_history.URL_COUNT]
+    assert state["judged_pull_requests"] == urls[:10]
+    assert state["unread_pull_requests"] == urls[:10]
     assert state["other"]["truncated"] is True
 
 
@@ -280,5 +280,5 @@ def test_one_task_failing_in_the_intent_check_never_ends_the_tick_run(tmp_path):
     assert verdicts(tmp_path).read(WHO.task)["verdict"] == "pass"
     assert actions == ["task t0 intent check failed: KeyError", f"task {WHO.task} intent check pass"]
     [row] = [row for row in rows(tmp_path) if row["kind"] == "fail-open"]
-    assert row["gate"] == intent.NAME and row["task"] == "t0"
+    assert row["gate"] == intent.NAME and row["task"] == "t0" and row["agent"] == ""
     assert row["reason"] == "KeyError: slice(None, -1, None)"
