@@ -193,3 +193,17 @@ export function itemState(list, i) {
   const done = list === "questions" ? (i.answers || []).some((a) => !a.deleted) : !!i.done;
   return done ? "done" : "open";
 }
+
+export function taskBlockers(task, tasks) {
+  if ((task.state || "open") !== "open") return "";
+  const byId = Object.fromEntries(tasks.map((t) => [t.id, t]));
+  const title = (id) => (byId[id] ? byId[id].title : `task ${id}`);
+  const unfinished = (ids) => (ids || []).filter((id) => (byId[id] || {}).state !== "done");
+  const done = (ids) => ids.map((id) => `${title(id)} is done`).join(", and ");
+  const parked = unfinished(task.parked_on);
+  if (parked.length) return `Parked on ${task.branch ? `branch ${task.branch}` : "its branch"} until ${done(parked)}`;
+  const open = unfinished(task.depends_on);
+  const held = open.filter((id) => !(["claimed", "pr"].includes((byId[id] || {}).state) && byId[id].branch));
+  if (held.length) return `Waiting until ${done(held)}`;
+  return open.length ? `Ready to start on ${open.map((id) => `branch ${byId[id].branch} of ${title(id)}`).join(", and ")}` : "";
+}

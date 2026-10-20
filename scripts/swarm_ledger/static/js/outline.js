@@ -6,8 +6,8 @@ import { showArtifacts } from "./artifacts.js";
 import { renderSwarm, swarm } from "./swarm.js";
 import { collapsible, groupOpen, markToggles, rememberGroup } from "./folds.js";
 import { selectTab } from "./layout.js";
-import { closedMore, render } from "./render.js";
-import { firstPage, lazy, moreButton, wanted } from "./pages.js";
+import { render } from "./render.js";
+import { closedMore, firstPage, lazy, moreButton, wanted } from "./pages.js";
 
 let outlinePick = null;
 
@@ -82,7 +82,7 @@ function outlineGroup(s) {
   const key = `ol-${s.id}`;
   return h("li", { class: "ol-sec" }, lazy(box, () => h("ul", { class: "ol-items" },
     ...firstPage(key, s.items, (i) => i.id).map((i) => h("li", {}, outlineLink(i))), moreButton(key, s.items.length, "more items", outlineAgain) || "",
-    (s.items.length && closedMore(s.id.replace(/^sec-/, ""), "done")) || "")));
+    (s.items.length && closedMore(s.id.replace(/^sec-/, ""), "done", render)) || "")));
 }
 
 export function outlineBoxes() {

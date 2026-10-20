@@ -1,8 +1,8 @@
 import { ACTIVE_MS, PHASE_LABELS } from "./config.js";
 import { $, closedText, excerpt, h, headCount, newId, span, when } from "./dom.js";
 import { renderCycle } from "./render_cycle.js";
-import { hiddenDone, inScope, itemState, phaseLifecycle, taskRank, taskRanks } from "./state.js";
-import { closedLeft, closedLeftIn, doc, loadClosed, meta, queue, renderSync, toggle } from "./sync.js";
+import { hiddenDone, inScope, itemState, phaseLifecycle, taskBlockers, taskRank, taskRanks } from "./state.js";
+import { closedLeft, closedLeftIn, doc, meta, queue, renderSync, toggle } from "./sync.js";
 import { renderArtifacts } from "./artifacts.js";
 import { closedComments, commentsView, openComments, rememberComment, taskLink, threadView } from "./threads.js";
 import { bottleneckStat, renderAlerts, renderNotifications, renderPriorities, statGrip, statKey } from "./notices.js";
@@ -11,7 +11,7 @@ import { collapsible, markToggles } from "./folds.js";
 import { renderChat, renderChatBadge } from "./chat.js";
 import { inboxPending, renderSwarm, swarm } from "./swarm.js";
 import { readWorkspace } from "./api.js";
-import { firstPage, lazy, moreButton, wanted } from "./pages.js";
+import { closedMore, firstPage, lazy, moreButton, wanted } from "./pages.js";
 import { frozen, held, ownFreeze, snowflake } from "./freezes.js";
 
 function scopeDot(key, item, off) {
@@ -145,11 +145,11 @@ function planRow({ key, id, title, phases, plan }) {
 function phaseList(cooperative = false, current = () => true) {
   sliceTaskCounts.clear();
   for (const task of doc.tasks) if (!task.deleted && task.slice) sliceTaskCounts.set(task.slice, (sliceTaskCounts.get(task.slice) || 0) + 1);
-  if (!doc.plans.length) return listInto("phases", doc.phases, (p, i) => phaseRow(p, i + 1), undefined, closedMore("phases", "done phases"));
+  if (!doc.plans.length) return listInto("phases", doc.phases, (p, i) => phaseRow(p, i + 1), undefined, closedMore("phases", "done phases", render));
   if (!sectionOpen("phases")) return;
   const groups = planGroups();
   const target = $("phases");
-  if (!cooperative) return target.replaceChildren(...groups.map(planRow), closedMore("phases", "done phases") || "");
+  if (!cooperative) return target.replaceChildren(...groups.map(planRow), closedMore("phases", "done phases", render) || "");
   const paint = async () => {
     const rows = document.createDocumentFragment();
     for (const group of groups) {
@@ -157,7 +157,7 @@ function phaseList(cooperative = false, current = () => true) {
       if (!current()) return;
       rows.append(planRow(group));
     }
-    if (current()) target.replaceChildren(rows, closedMore("phases", "done phases") || "");
+    if (current()) target.replaceChildren(rows, closedMore("phases", "done phases", render) || "");
   };
   return paint();
 }
@@ -168,20 +168,6 @@ function questionRow(item, n) {
     itemActions(key, item));
   return h("li", { class: itemClass(item), id: `item-questions-${item.id}` }, row, threadView(`${key}/answers`, item.answers, "thread"),
     commentsView(key, item.comments));
-}
-
-function taskBlockers(task, tasks) {
-  if ((task.state || "open") !== "open") return "";
-  const byId = Object.fromEntries(tasks.map((t) => [t.id, t]));
-  const title = (id) => (byId[id] ? byId[id].title : `task ${id}`);
-  const unfinished = (ids) => (ids || []).filter((id) => (byId[id] || {}).state !== "done");
-  const done = (ids) => ids.map((id) => `${title(id)} is done`).join(", and ");
-  const parked = unfinished(task.parked_on);
-  if (parked.length) return `Parked on ${task.branch ? `branch ${task.branch}` : "its branch"} until ${done(parked)}`;
-  const open = unfinished(task.depends_on);
-  const held = open.filter((id) => !(["claimed", "pr"].includes((byId[id] || {}).state) && byId[id].branch));
-  if (held.length) return `Waiting until ${done(held)}`;
-  return open.length ? `Ready to start on ${open.map((id) => `branch ${byId[id].branch} of ${title(id)}`).join(", and ")}` : "";
 }
 
 function proofRows(...sources) {
@@ -278,17 +264,6 @@ function listInto(id, items, make, idOf = (i) => `item-${id}-${i.id}`, tail = nu
   if (!items.length) el.append(h("li", { class: "empty", text: "None." }));
 }
 
-export function closedMore(name, label, again = render) {
-  const left = closedLeft(name);
-  if (!left) return null;
-  const button = h("button", { class: "link", type: "button", "data-closed": name, text: `Show ${Math.min(left, 10)} more ${label} · ${left} left` });
-  button.addEventListener("click", () => {
-    button.disabled = true;
-    loadClosed(name).catch(() => null).finally(() => { button.disabled = false; again(); });
-  });
-  return h("li", { class: "page-more" }, button);
-}
-
 export function render(focusKey, cooperative = false) {
   return renderCycle(focusKey, cooperative, (current) => {
     document.title = doc.title;
@@ -312,7 +287,7 @@ export function render(focusKey, cooperative = false) {
       },
       () => {
         $("questions-count").textContent = stateCounts("questions", { open: "open", done: "answered" });
-        listInto("questions", [...doc.questions].sort((a, b) => (a.answers || []).length - (b.answers || []).length), (q, i) => questionRow(q, i + 1), undefined, closedMore("questions", "answered questions"));
+        listInto("questions", [...doc.questions].sort((a, b) => (a.answers || []).length - (b.answers || []).length), (q, i) => questionRow(q, i + 1), undefined, closedMore("questions", "answered questions", render));
       },
       () => {
         $("notes-count").textContent = headCount([[doc.notes.filter((e) => !e.deleted).length]]);
@@ -345,7 +320,7 @@ function groupedWork(name, items, row) {
   const box = h("details", { class: "fold", id: name + "-done" }, h("summary", { text: `${done.length + closedLeft(name)} done` }));
   collapsible(box);
   if (done.some((i) => idOf(i) === wanted.id)) box.open = true;
-  lazy(box, () => h("ol", {}, ...done.map(row), closedMore(name, `done ${NOUNS[name]}`) || ""));
+  lazy(box, () => h("ol", {}, ...done.map(row), closedMore(name, `done ${NOUNS[name]}`, render) || ""));
   $(name).append(h("li", {}, box));
 }
 
