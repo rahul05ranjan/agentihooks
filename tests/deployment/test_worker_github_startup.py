@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 
 from tests.deployment.test_worker_hive import startup
@@ -23,9 +24,28 @@ def test_live_worker_start_mints_before_bundle_clone_without_saving_the_app_cred
     monkeypatch.setenv("GITHUB_APP_ID", "123")
     monkeypatch.setenv("GITHUB_APP_INSTALLATION_ID", "456")
     monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY", "pem")
+    launcher = tmp_path / "launcher"
+    launcher.mkdir()
+    refresh = tmp_path / "refresh"
+    python = launcher / "python3"
+    python.write_text(
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        'if [[ "$*" == "-m scripts.github_app_cli refresh-file" ]]; then\n'
+        '  [[ "$GITHUB_APP_PRIVATE_KEY" == pem ]]\n'
+        '  readlink /proc/$$/fd/{0,1,2} > "$APP_REFRESH_PROOF"\n'
+        "  exit 0\nfi\n"
+        'exec "$APP_PROOF_PYTHON" "$@"\n'
+    )
+    python.chmod(0o755)
+    monkeypatch.setenv("APP_REFRESH_PROOF", str(refresh))
+    monkeypatch.setenv("APP_PROOF_PYTHON", sys.executable)
+    monkeypatch.setenv("PATH", f"{launcher}:{os.environ['PATH']}")
     result, _, home, repo = startup(tmp_path, bundle=True)
     assert result.returncode == 0, result.stderr
     assert marker.exists()
+    assert refresh.read_text().splitlines() == ["/dev/null"] * 3
+    assert (home / "github-token").read_text().strip() == "fixture"
+    assert (home / "github-token").stat().st_mode & 0o777 == 0o600
     assert (repo.parent / "agentihooks-bundle/.git").is_dir()
     for path in [home / "hive-container.env", tmp_path / "home/.gitconfig"]:
         text = path.read_text()
