@@ -8,9 +8,21 @@ import pytest
 pytestmark = pytest.mark.unit
 ROOT = Path(__file__).resolve().parents[2]
 START = ROOT / "deploy/worker/start.sh"
+TOKEN = "fixture-github-token-value"
 
 
-def startup(tmp_path, *, joined=True, delivered=False, wait_s=None, init_fails=False, ssh=False, sshd_dies=False):
+def startup(
+    tmp_path,
+    *,
+    joined=True,
+    delivered=False,
+    wait_s=None,
+    refuse="",
+    ssh=False,
+    sshd_dies=False,
+    bundle=False,
+    bundle_url="",
+):
     tools = tmp_path / "bin"
     tools.mkdir()
     log = tmp_path / "commands"
@@ -27,11 +39,19 @@ def startup(tmp_path, *, joined=True, delivered=False, wait_s=None, init_fails=F
     cli.write_text(
         "#!/usr/bin/env bash\nset -euo pipefail\n"
         'printf "%s\\n" "$*" >> "$COMMAND_LOG"\n'
-        'if [[ "$1" == init ]]; then [[ "$REFUSE_INIT" == no ]] || exit 7; fi\n'
+        'if [[ "$*" == "bundle unlink" ]]; then rm -f "$AGENTIHOOKS_HOME/linked-bundle"; fi\n'
+        'if [[ "$1" == init ]]; then\n'
+        '  [[ "$*" != "init --bundle "* ]] || printf %s "$3" > "$AGENTIHOOKS_HOME/linked-bundle"\n'
+        '  [[ "$REFUSE" != init ]] || exit 7\n'
+        '  [[ "$REFUSE" != bundle-init || "$*" == init ]] || exit 7\nfi\n'
+        'if [[ "$*" == "deps ensure" ]]; then [[ "$REFUSE" != deps ]] || exit 4; fi\n'
+        'if [[ "$*" == "hive run" && "${GH_TOKEN:-}" == "$GITHUB_PERSONAL_ACCESS_TOKEN" ]]; then\n'
+        '  touch "$AGENTIHOOKS_HOME/gh-token-matches"\nfi\n'
     )
     cli.chmod(0o755)
     home = tmp_path / "state"
     home.mkdir()
+    (tmp_path / "home").mkdir()
     credential = tmp_path / "member"
     credential.write_text("fixture member credential\n")
     if delivered:
@@ -58,6 +78,10 @@ def startup(tmp_path, *, joined=True, delivered=False, wait_s=None, init_fails=F
     env = {
         **os.environ,
         "PATH": f"{tools}:{os.environ['PATH']}",
+        "HOME": str(tmp_path / "home"),
+        "GITHUB_PERSONAL_ACCESS_TOKEN": TOKEN,
+        "HIVE_BUNDLE_URL": str(repo) if bundle else bundle_url,
+        "HIVE_BUNDLE_REF": "dev",
         "AGENTIHOOKS_HOME": str(home),
         "SWARM_HIVE_ID": "worker-pod",
         "AGENTIHOOKS_HIVE_ID": "worker-member",
@@ -67,7 +91,7 @@ def startup(tmp_path, *, joined=True, delivered=False, wait_s=None, init_fails=F
         "HIVE_REPOSITORIES": json.dumps([{"url": str(repo), "name": "checkout", "ref": "dev"}]),
         "HIVE_CREDENTIAL_FILE": str(credential) if joined else "",
         "COMMAND_LOG": str(log),
-        "REFUSE_INIT": "yes" if init_fails else "no",
+        "REFUSE": refuse,
         "AH_CC_TOKEN_fixture": "fixture $token (value)",
         "AH_CC_TOKEN_quoted": "it's quoted",
         "AH_CC_TOKEN_escaped": "back\\\\slash",
@@ -87,7 +111,9 @@ def startup(tmp_path, *, joined=True, delivered=False, wait_s=None, init_fails=F
 
 
 RUN = [
-    "init --profile engineer",
+    "bundle unlink",
+    "init",
+    "deps ensure",
     "hive set worker-member ui=no ephemeral=yes roles=eng,ci,plan,dispatch max-agents=1",
     "hive run",
 ]
@@ -145,10 +171,11 @@ def test_ssh_checks_its_config_then_serves_the_mounted_keys_before_init(tmp_path
     assert result.returncode == 0, result.stderr
     state = home / "ssh"
     config = (state / "sshd_config").read_text()
-    assert commands.splitlines()[0:3] == [
+    assert commands.splitlines()[0:4] == [
         f"sshd -t -f {state}/sshd_config",
         f"sshd -D -e -f {state}/sshd_config",
-        "init --profile engineer",
+        "bundle unlink",
+        "init",
     ]
     assert (state / "host_key").stat().st_mode & 0o777 == 0o600
     assert f"AuthorizedKeysFile {tmp_path}/keys/authorized_keys\n" in config
@@ -160,10 +187,91 @@ def test_ssh_checks_its_config_then_serves_the_mounted_keys_before_init(tmp_path
 def test_an_sshd_that_dies_at_start_never_runs_the_worker(tmp_path):
     result, commands, _, _ = startup(tmp_path, ssh=True, sshd_dies=True)
     assert result.returncode != 0
-    assert "init --profile engineer" not in commands
+    assert "init" not in commands.splitlines()
 
 
 def test_failed_profile_init_never_runs_the_worker(tmp_path):
-    result, commands, _, _ = startup(tmp_path, init_fails=True)
+    result, commands, _, _ = startup(tmp_path, refuse="init")
     assert result.returncode == 7
-    assert commands.splitlines()[-1] == "init --profile engineer"
+    assert commands.splitlines()[-1] == "init"
+
+
+def test_failed_init_with_the_bundle_runs_again_on_the_package_roles(tmp_path):
+    result, commands, home, repo = startup(tmp_path, refuse="bundle-init", bundle=True)
+    assert result.returncode == 0, result.stderr
+    assert (
+        "worker-hive: agentihooks init with the bundle failed; init runs on the package roles alone\n" in result.stderr
+    )
+    assert commands.splitlines()[0:4] == [
+        f"init --bundle {repo.parent / 'agentihooks-bundle'}",
+        "bundle unlink",
+        "init",
+        "deps ensure",
+    ]
+    assert not (home / "linked-bundle").exists()
+    assert commands.endswith("hive run\n")
+
+
+def test_failed_init_with_the_bundle_and_on_the_package_roles_never_runs_the_worker(tmp_path):
+    result, commands, _, _ = startup(tmp_path, refuse="init", bundle=True)
+    assert result.returncode == 7
+    assert commands.splitlines()[-1] == "init"
+    assert "hive set" not in commands
+
+
+def test_bundle_is_cloned_beside_the_repos_and_linked_by_init(tmp_path):
+    result, commands, _, repo = startup(tmp_path, bundle=True)
+    assert result.returncode == 0, result.stderr
+    bundle = repo.parent / "agentihooks-bundle"
+    assert (bundle / ".git").is_dir()
+    branch = subprocess.run(["git", "-C", str(bundle), "branch", "--show-current"], capture_output=True, text=True)
+    assert branch.stdout == "dev\n"
+    assert commands.splitlines()[0:2] == [f"init --bundle {bundle}", "deps ensure"]
+    assert (repo.parent.parent / "state/linked-bundle").read_text() == str(bundle)
+    assert commands.endswith("hive run\n")
+
+
+def test_github_token_reaches_git_by_reference_and_is_never_written(tmp_path):
+    result, _, home, repo = startup(tmp_path, bundle=True)
+    assert result.returncode == 0, result.stderr
+    config = (tmp_path / "home/.gitconfig").read_text()
+    assert "GITHUB_PERSONAL_ACCESS_TOKEN" in config
+    assert (home / "gh-token-matches").exists()
+    assert "GH_TOKEN" not in (home / "hive-container.env").read_text()
+    written = [path for root in (tmp_path / "home", home, repo.parent) for path in root.rglob("*") if path.is_file()]
+    assert not [path for path in written if TOKEN.encode() in path.read_bytes()]
+    assert TOKEN not in result.stdout + result.stderr
+    fill = subprocess.run(
+        ["git", "credential", "fill"],
+        input="protocol=https\nhost=github.com\n\n",
+        env={**os.environ, "HOME": str(tmp_path / "home"), "GITHUB_PERSONAL_ACCESS_TOKEN": TOKEN},
+        capture_output=True,
+        text=True,
+    )
+    assert fill.returncode == 0, fill.stderr
+    assert f"username=x-access-token\npassword={TOKEN}\n" in fill.stdout
+
+
+def test_failed_deps_ensure_still_runs_the_hive(tmp_path):
+    result, commands, _, _ = startup(tmp_path, bundle=True, refuse="deps")
+    assert result.returncode == 0, result.stderr
+    assert "worker-hive: agentihooks deps ensure failed" in result.stderr
+    assert commands.endswith("hive run\n")
+
+
+def test_a_failed_bundle_clone_is_logged_and_the_hive_runs_on_the_package_roles(tmp_path):
+    result, commands, _, repo = startup(tmp_path, bundle_url=str(tmp_path / "missing-bundle"))
+    assert result.returncode == 0, result.stderr
+    assert "worker-hive: bundle clone failed; init runs on the package roles alone\n" in result.stderr
+    assert not (repo.parent / "agentihooks-bundle").exists()
+    assert commands.splitlines()[0:3] == ["bundle unlink", "init", "deps ensure"]
+    assert commands.endswith("hive run\n")
+
+
+def test_an_emptied_origin_unlinks_the_bundle_a_persistent_home_kept(tmp_path):
+    kept = tmp_path / "repos/agentihooks-bundle"
+    (kept / ".git").mkdir(parents=True)
+    result, commands, _, _ = startup(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert f"init --bundle {kept}" not in commands
+    assert commands.splitlines()[0:3] == ["bundle unlink", "init", "deps ensure"]
