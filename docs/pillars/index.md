@@ -24,4 +24,4 @@ See [plan tracing for promotion fixer tasks](swarm.md#plan-tracing-for-promotion
 
 See [hives](hives.md) for joining machines, roles, placement, launches on a hive, failover and fencing, and [deployment modes](../reference/deployment-modes.md) for where the controller, ledger and Redis run.
 
-See [join service limits](hives.md#join-service-limits) for the join endpoint request, handler and Redis time limits, the 503 it answers when Redis does not reply, and what a client does after it.
+See [hive endpoint limits](hives.md#hive-endpoint-limits) for the hive endpoint request, handler and Redis time limits, the 503 it answers when Redis does not reply, and what a client does after it.
