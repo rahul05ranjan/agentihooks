@@ -2323,7 +2323,7 @@ jobs:
                 and ($event != "merge_group" or has("queue-fail-fast"))
                 and all($required[]; . as $job | $jobs[$job].result == "success")
                 and all(to_entries[]; .key as $job |
-                  if $required | index($job) then .value.result == "success" elif $event == "merge_group" and $job == "queue-fail-fast" then (.value.result | IN("success", "failure", "cancelled")) and (.value.outputs.failed // "") == "" else .value.result == "skipped" end)
+                  if $required | index($job) then .value.result == "success" elif $event == "merge_group" and $job == "queue-fail-fast" then (.value.result | IN("success", "failure")) and (.value.outputs.failed // "") == "" else .value.result == "skipped" end)
             ' <<< "$NEEDS"; then
               echo "::error::Every gate required for this event must succeed and other gates must be skipped."
               exit 1
