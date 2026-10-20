@@ -1,4 +1,5 @@
 import json
+import os
 import runpy
 from pathlib import Path
 from unittest.mock import Mock
@@ -353,6 +354,26 @@ def test_the_open_window_never_lets_the_master_touch_main_protection(master, com
     master_coding.observe(SID, "allow-master-coding", typed=True)
     payload = {"session_id": SID, "tool_input": {"command": command}}
     assert master_coding.protection_refusal(payload) == master_coding.PROTECTION_REFUSAL
+
+
+def test_a_ruleset_write_by_id_needs_its_payload_committed_in_the_checkout(master):
+    import subprocess
+
+    repo = master / "repo"
+    (repo / ".github" / "rulesets").mkdir(parents=True)
+    (repo / ".github" / "rulesets" / "dev-no-delete.json").write_text("{}")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    master_coding.observe(SID, "allow-master-coding", typed=True)
+    payload = {
+        "session_id": SID,
+        "cwd": str(repo),
+        "tool_input": {"command": "gh api -X PUT repos/o/r/rulesets/7 --input .github/rulesets/dev-no-delete.json"},
+    }
+    assert master_coding.protection_refusal(payload) == master_coding.PROTECTION_REFUSAL
+    subprocess.run(["git", "-C", str(repo), "add", ".github/rulesets/dev-no-delete.json"], check=True)
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "payload"], check=True, env={**os.environ, **env})
+    assert master_coding.protection_refusal(payload) == ""
 
 
 def test_ordinary_gh_calls_missing_input_and_other_seats_pass_the_protection_check(master, monkeypatch):
