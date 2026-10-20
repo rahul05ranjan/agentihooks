@@ -270,7 +270,7 @@ def test_one_task_failing_in_the_intent_check_never_ends_the_tick_run(tmp_path):
 
     def ask(state):
         if state["task_text"] == "Broken.":
-            raise KeyError(slice(None, -1, None))
+            raise RuntimeError("boom")
         return intent.judge(state, classifier(0.9))
 
     view = {"title": PULLS[HERE]["title"], "body": "", "files": [".github/workflows/sonar.yml"]}
@@ -278,7 +278,7 @@ def test_one_task_failing_in_the_intent_check_never_ends_the_tick_run(tmp_path):
         {**DOC, "tasks": [broken, task()]}
     )
     assert verdicts(tmp_path).read(WHO.task)["verdict"] == "pass"
-    assert actions == ["task t0 intent check failed: KeyError", f"task {WHO.task} intent check pass"]
+    assert actions == ["task t0 intent check failed: RuntimeError", f"task {WHO.task} intent check pass"]
     [row] = [row for row in rows(tmp_path) if row["kind"] == "fail-open"]
     assert row["gate"] == intent.NAME and row["task"] == "t0" and row["agent"] == ""
-    assert row["reason"] == "KeyError: slice(None, -1, None)"
+    assert row["reason"] == "RuntimeError: boom"
