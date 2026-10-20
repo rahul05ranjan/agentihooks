@@ -515,6 +515,10 @@ def _restore_owner(slug, store, ledger, rows, agent):
     rows[agent.task] = ledger.update_task(slug, agent.task, fields, if_state=(row["state"],), if_match=expected)
 
 
+def _drop_remote(slug, store, ledger, rows, agent):
+    return f"retired {agent.name}: its hive pane is gone" + _drop(slug, store, ledger, rows, agent)
+
+
 def _remote_exited(runtime, agent):
     return bool(reports.host(agent)) and runtime.observe(agent).state == "exited"
 
@@ -541,7 +545,7 @@ def _reap(slug, store, ledger, runtime, rows, now_ms):
         if agent.state == "awaiting-decision" or (agent.lane == MASTER and agent.state == "starting"):
             continue
         if _remote_exited(runtime, agent):
-            actions += _watch_remote(slug, store, ledger, runtime, rows, agent, now_ms)
+            actions.append(_drop_remote(slug, store, ledger, rows, agent))
             continue
         ended = _ended(agent, rows)
         if agent.state == "retiring" and not ended:
@@ -578,7 +582,7 @@ def _watch_remote(slug, store, ledger, runtime, rows, agent, now_ms):
     store.refresh(slug, agent.task, agent.name, LEASE_MS)
     observed = runtime.observe(agent).state
     if observed == "exited":
-        return [f"retired {agent.name}: its hive pane is gone" + _drop(slug, store, ledger, rows, agent)]
+        return [_drop_remote(slug, store, ledger, rows, agent)]
     if observed == "unknown":
         if agent.state == SUSPECT:
             return []

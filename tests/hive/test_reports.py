@@ -212,6 +212,65 @@ def test_tick_retires_only_hive_workers_proven_gone(remote, panes, namespace, re
         assert remote.store.claimant("fixture", "task") == remote.agent.name
 
 
+def test_one_tick_releases_every_missing_hive_worker_and_keeps_each_action(remote):
+    from scripts.swarm import tick
+
+    second = remote.store.start_execution(
+        "fixture",
+        replace(
+            remote.agent,
+            name=remote.store.next_name("fixture", "eng"),
+            task="second",
+            seat="eng-2@fixture",
+            execution_id="",
+            generation=0,
+        ),
+    )
+    remote.store.put_agent("fixture", second)
+    _publish(remote, state="unknown")
+    report = json.loads(remote.redis.get(remote.reports.key(HIVE)))
+    report.update(pane_ids=[], process_namespace="theirs")
+    remote.redis.set(remote.reports.key(HIVE), json.dumps(report))
+    rows = {}
+    for agent in (remote.agent, second):
+        remote.store.claim("fixture", agent.task, agent.name, 60000)
+        rows[agent.task] = {"state": "claimed", "claimed_by": agent.name}
+    ledger = Mock()
+    ledger.update_task.side_effect = lambda slug, task, patch, **kwargs: patch
+
+    actions = tick._reap("fixture", remote.store, ledger, remote.runtime, rows, 10**9)
+
+    assert remote.store.agents("fixture") == []
+    assert actions == [
+        f"retired {remote.agent.name}: its hive pane is gone, task task reopened",
+        f"retired {second.name}: its hive pane is gone, task second reopened",
+    ]
+
+
+@pytest.mark.parametrize("handoff", [False, True])
+def test_retiring_a_finished_hive_worker_records_its_inbox_exit(remote, handoff):
+    from scripts.inbox.store import InboxStore
+    from scripts.swarm import tick
+
+    remote.agent = replace(remote.agent, state="finished")
+    remote.store.put_agent("fixture", remote.agent)
+    _publish(remote)
+    if handoff:
+        remote.store.put_handoff("fixture", "task", "continue the task")
+    rows = {"task": {"state": "claimed" if handoff else "done", "claimed_by": remote.agent.name}}
+    ledger = Mock()
+    ledger.update_task.return_value = {"state": "open", "claimed_by": ""}
+    remote.runtime.retire = Mock(return_value=True)
+
+    actions = tick._reap("fixture", remote.store, ledger, remote.runtime, rows, 10**9)
+
+    assert actions == [f"retired {remote.agent.name}"]
+    assert remote.store.agents("fixture") == []
+    exit_record = InboxStore(remote.redis).seats.exit_of(remote.agent.name)
+    assert exit_record["reason"] == "exited"
+    assert exit_record["seat"] == (remote.agent.seat if handoff else "")
+
+
 @pytest.mark.parametrize("listed", [[], [{"pane_id": PANE}], None])
 def test_hive_report_distinguishes_an_empty_pane_listing_from_an_outage(remote, monkeypatch, listed):
     from scripts.hive import daemon
@@ -240,16 +299,18 @@ def test_hive_report_distinguishes_an_empty_pane_listing_from_an_outage(remote, 
 
 
 @pytest.mark.parametrize(
-    ("remote", "stamp"),
+    ("remote", "stamp", "retired"),
     [
-        ({"launched_at": 200}, 100),
-        ({"started_at": 200}, 100),
-        ({"launched_at": 1}, None),
-        ({"started_at": 1}, None),
+        ({"launched_at": 200}, 100, False),
+        ({"started_at": 200}, 100, False),
+        ({"launched_at": 1}, None, False),
+        ({"started_at": 1}, None, False),
+        ({"launched_at": 200}, 300, True),
+        ({"started_at": 200}, 300, True),
     ],
     indirect=["remote"],
 )
-def test_a_hive_snapshot_from_before_launch_cannot_retire_the_new_worker(remote, stamp):
+def test_a_hive_snapshot_from_before_launch_cannot_retire_the_new_worker(remote, stamp, retired):
     from scripts.swarm import tick
 
     agent = remote.agent
@@ -262,10 +323,12 @@ def test_a_hive_snapshot_from_before_launch_cannot_retire_the_new_worker(remote,
     remote.store.claim("fixture", "task", agent.name, 60000)
     rows = {"task": {"state": "claimed", "claimed_by": agent.name}}
 
-    tick._reap("fixture", remote.store, Mock(), remote.runtime, rows, agent.started_at + 10**9)
+    ledger = Mock()
+    ledger.update_task.return_value = {"state": "open", "claimed_by": ""}
+    tick._reap("fixture", remote.store, ledger, remote.runtime, rows, agent.started_at + 10**9)
 
-    assert [found.name for found in remote.store.agents("fixture")] == [agent.name]
-    assert remote.store.claimant("fixture", "task") == agent.name
+    assert [found.name for found in remote.store.agents("fixture")] == ([] if retired else [agent.name])
+    assert remote.store.claimant("fixture", "task") == (None if retired else agent.name)
 
 
 def test_a_hive_reporting_a_dead_process_names_it_unbound(remote):
