@@ -239,12 +239,20 @@ def test_hive_report_distinguishes_an_empty_pane_listing_from_an_outage(remote, 
     assert report["process_namespace"] == "pod-namespace"
 
 
-@pytest.mark.parametrize(("launched", "started", "stamp"), [(200, 0, 100), (0, 200, 100), (1, 0, None), (0, 1, None)])
-def test_a_hive_snapshot_from_before_launch_cannot_retire_the_new_worker(remote, launched, started, stamp):
+@pytest.mark.parametrize(
+    ("remote", "stamp"),
+    [
+        ({"launched_at": 200}, 100),
+        ({"started_at": 200}, 100),
+        ({"launched_at": 1}, None),
+        ({"started_at": 1}, None),
+    ],
+    indirect=["remote"],
+)
+def test_a_hive_snapshot_from_before_launch_cannot_retire_the_new_worker(remote, stamp):
     from scripts.swarm import tick
 
-    agent = replace(remote.agent, launched_at=launched, started_at=started)
-    remote.store.put_agent("fixture", agent)
+    agent = remote.agent
     _publish(remote, state="unknown")
     report = json.loads(remote.redis.get(remote.reports.key(HIVE)))
     report.update(pane_ids=[], process_namespace="restarted")
