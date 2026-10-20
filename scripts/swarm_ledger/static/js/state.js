@@ -163,7 +163,7 @@ export function lsWrite() {
 export function phaseLifecycle(phase, doc) {
   if (phase.out_of_scope) return "out_of_scope";
   if (phase.done) return "done";
-  const done = new Set([...doc.phases.filter((p) => p.done).map((p) => p.id), ...hiddenDone(doc, "phases")]);
+  const done = new Set([...doc.phases.filter((p) => p.done).map((p) => p.id), ...(((doc.closed || {}).phases || {}).ids || [])]);
   if ((phase.depends_on || []).some((id) => !done.has(id))) return "waiting";
   if (phase.planning !== "auto") return "building";
   const plan = doc.tasks.find((t) => t.phase === phase.id && t.kind === "plan");

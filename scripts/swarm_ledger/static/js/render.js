@@ -70,8 +70,8 @@ function phaseLabel(phase, doc) {
   const state = phaseLifecycle(phase, doc);
   if (state !== "waiting") return PHASE_LABELS[state];
   const byId = Object.fromEntries(doc.phases.map((p) => [p.id, p]));
-  const hidden = hiddenDone(doc, "phases");
-  const waits = phase.depends_on.filter((id) => !(byId[id] || {}).done && !hidden.has(id)).map((id) => (byId[id] || {}).title || id);
+  const hidden = ((doc.closed || {}).phases || {}).ids || [];
+  const waits = phase.depends_on.filter((id) => !(byId[id] || {}).done && !hidden.includes(id)).map((id) => (byId[id] || {}).title || id);
   return `Waits for phase ${waits.join(", ")}`;
 }
 
@@ -174,8 +174,7 @@ function taskBlockers(task, tasks) {
   if ((task.state || "open") !== "open") return "";
   const byId = Object.fromEntries(tasks.map((t) => [t.id, t]));
   const title = (id) => (byId[id] ? byId[id].title : `task ${id}`);
-  const hidden = hiddenDone(doc, "tasks");
-  const unfinished = (ids) => (ids || []).filter((id) => (byId[id] || {}).state !== "done" && !hidden.has(id));
+  const unfinished = (ids) => (ids || []).filter((id) => (byId[id] || {}).state !== "done");
   const done = (ids) => ids.map((id) => `${title(id)} is done`).join(", and ");
   const parked = unfinished(task.parked_on);
   if (parked.length) return `Parked on ${task.branch ? `branch ${task.branch}` : "its branch"} until ${done(parked)}`;
@@ -308,7 +307,8 @@ export function render(focusKey, cooperative = false) {
       },
       () => {
         $("tasks-count").textContent = taskCounts(doc.tasks);
-        groupedWork("tasks", doc.tasks, (t) => taskRow(t, doc.tasks));
+        const known = [...doc.tasks, ...[...hiddenDone(doc, "tasks")].map((id) => ({ id, state: "done" }))];
+        groupedWork("tasks", doc.tasks, (t) => taskRow(t, known));
       },
       () => {
         $("questions-count").textContent = stateCounts("questions", { open: "open", done: "answered" });
