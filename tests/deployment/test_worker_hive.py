@@ -11,18 +11,7 @@ START = ROOT / "deploy/worker/start.sh"
 TOKEN = "fixture-github-token-value"
 
 
-def startup(
-    tmp_path,
-    *,
-    joined=True,
-    delivered=False,
-    wait_s=None,
-    refuse="",
-    ssh=False,
-    sshd_dies=False,
-    bundle=False,
-    bundle_url="",
-):
+def startup(tmp_path, *, credential="mounted", refuse="", ssh=False, sshd_dies=False, bundle=False, bundle_url=""):
     tools = tmp_path / "bin"
     tools.mkdir()
     log = tmp_path / "commands"
@@ -52,9 +41,9 @@ def startup(
     home = tmp_path / "state"
     home.mkdir()
     (tmp_path / "home").mkdir()
-    credential = tmp_path / "member"
-    credential.write_text("fixture member credential\n")
-    if delivered:
+    member = tmp_path / "member"
+    member.write_text("fixture member credential\n")
+    if credential == "delivered":
         (home / "hive.env").write_text("fixture delivered hive env\n")
     repo = tmp_path / "source"
     subprocess.run(["git", "init", "--initial-branch=dev", str(repo)], check=True, capture_output=True)
@@ -89,7 +78,7 @@ def startup(
         "AGENTIHOOKS_HIVE_REDIS_URL": "redis://localhost:6379/15",
         "HIVE_REPO_ROOT": str(tmp_path / "repos"),
         "HIVE_REPOSITORIES": json.dumps([{"url": str(repo), "name": "checkout", "ref": "dev"}]),
-        "HIVE_CREDENTIAL_FILE": str(credential) if joined else "",
+        "HIVE_CREDENTIAL_FILE": str(member) if credential == "mounted" else "",
         "COMMAND_LOG": str(log),
         "REFUSE": refuse,
         "AH_CC_TOKEN_fixture": "fixture $token (value)",
@@ -98,8 +87,8 @@ def startup(
         "SWARM_SECRET": "fixture tick secret",
         "SSHD_DIES": "yes" if sshd_dies else "no",
     }
-    if wait_s is not None:
-        env["HIVE_DELIVERY_WAIT_S"] = str(wait_s)
+    if credential != "mounted":
+        env["HIVE_DELIVERY_WAIT_S"] = "0"
     if ssh:
         env |= {
             "HIVE_SSHD": str(sshd),
@@ -144,14 +133,14 @@ def test_mounted_member_clones_repo_and_configures_before_run(tmp_path):
 
 
 def test_a_delivered_hive_env_runs_without_waiting(tmp_path):
-    result, commands, home, _ = startup(tmp_path, joined=False, delivered=True, wait_s=0)
+    result, commands, home, _ = startup(tmp_path, credential="delivered")
     assert result.returncode == 0, result.stderr
     assert commands.splitlines() == RUN
     assert (home / "hive.env").read_text() == "fixture delivered hive env\n"
 
 
 def test_no_delivered_credential_by_the_deadline_never_runs_the_worker(tmp_path):
-    result, commands, _, _ = startup(tmp_path, joined=False, wait_s=0)
+    result, commands, _, _ = startup(tmp_path, credential="none")
     assert result.returncode == 1
     assert commands == ""
     assert result.stderr.splitlines()[-1] == (
@@ -160,7 +149,7 @@ def test_no_delivered_credential_by_the_deadline_never_runs_the_worker(tmp_path)
 
 
 def test_ssh_serves_the_mounted_keys_before_waiting_for_a_delivered_credential(tmp_path):
-    result, commands, home, _ = startup(tmp_path, joined=False, wait_s=0, ssh=True)
+    result, commands, home, _ = startup(tmp_path, credential="none", ssh=True)
     assert result.returncode == 1
     state = home / "ssh"
     assert commands.splitlines() == [f"sshd -t -f {state}/sshd_config", f"sshd -D -e -f {state}/sshd_config"]
