@@ -826,7 +826,7 @@ curl -X PATCH http://127.0.0.1:8765/api/v1/hives/pod-a \
 |---|---|---|
 | 400 | `schema_invalid` | The body has no field, an unknown field or a wrong type (`Request does not match the resource schema`), or the hive registry refuses the value and names why. |
 | 403 | `forbidden` | `Missing or wrong ledger credential`: no `X-Ledger-Slug`, an unknown ledger or a wrong token. `Hive settings need the operator`: the credential is an agent's. |
-| 404 | `resource_missing` | `No such hive`. A PATCH never creates a hive; register one with `agentihooks hive join`. |
+| 404 | `resource_missing` | `No such hive`. A PATCH never creates a hive; register one with `agentihooks hive add`. |
 | 405 | `method_not_allowed` | Anything but GET on the list, or GET and PATCH on one hive. |
 | 503 | `storage_error` | Redis is unreachable or a hive record is unreadable. |
 
