@@ -663,3 +663,24 @@ def test_a_binding_trace_missing_from_an_empty_listing_is_not_an_empty_project(t
     data = traces_read.record("s", [], WORKING[:1], 10**9, project, home=tmp_path)
     assert data["reader"]["failures"] == []
     assert data["active"][0]["read"] is True
+
+
+def test_wait_reads_stop_at_their_budget_and_name_the_agents_left_unread():
+    now = [0.0]
+    read = []
+
+    def history(name):
+        read.append(name)
+        now[0] += 4
+        return [{"at": 1, "until": 2, "who": name}]
+
+    found, unread = traces_read.waits(history, ["a", "b", "c", "d"], 8, clock=lambda: now[0])
+    assert read == ["a", "b"]
+    assert found == {"a": [{"at": 1, "until": 2, "who": "a"}], "b": [{"at": 1, "until": 2, "who": "b"}]}
+    assert unread == ["c", "d"]
+
+
+def test_wait_reads_inside_budget_read_every_agent():
+    found, unread = traces_read.waits(lambda name: [name], ["a", "b"], 8, clock=lambda: 0.0)
+    assert (found, unread) == ({"a": ["a"], "b": ["b"]}, [])
+    assert traces_read.Budget().wait_seconds == 15.0

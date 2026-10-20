@@ -55,3 +55,41 @@ def test_gap_threshold_keeps_existing_whole_minute_precision(gap_ms, flagged):
     sample = record([])
     sample["traces"][0]["observations"][1].update(start=60_000 + gap_ms, end=120_000 + gap_ms)
     assert bool(traces.turn_gaps(sample, traces.Limits())) is flagged
+
+
+def _quiet(name):
+    return {
+        "name": name,
+        "tags": [f"agent:{name}"],
+        "session_id": f"{name}-session",
+        "observations": [
+            {"type": "SPAN", "turn": 1, "start": 0, "end": 60_000},
+            {"type": "SPAN", "turn": 2, "start": 1_860_000, "end": 1_920_000},
+        ],
+    }
+
+
+def test_only_agents_with_a_gap_over_the_limit_need_their_wait_history():
+    sample = record([])
+    sample["traces"] += [_quiet("ci"), {**_quiet("engineer"), "session_id": "again"}]
+    assert traces.gap_agents(sample, traces.Limits()) == ["engineer"]
+    assert traces.gap_agents(sample, traces.Limits(turn_gap_minutes=29)) == ["ci", "engineer"]
+
+
+def test_an_agent_whose_wait_history_was_not_read_is_not_judged_and_the_read_is_partial():
+    sample = {**record([]), "slug": "sw", "waits": {}, "waits_unread": ["engineer"]}
+    assert traces.turn_gaps(sample, traces.Limits()) == []
+    [partial] = traces.wait_coverage(sample, traces.Limits())
+    assert (partial.kind, partial.subject, partial.measure) == ("wait history partial", "sw", 1)
+    assert partial.summary == "wait history of 1 agents with turn gaps over 30 minutes not read in budget"
+    assert partial.evidence == (
+        "unread: engineer",
+        "turn gap findings skip agents whose wait history was not read",
+        "each Doctor scan reads the wait history again within its budget",
+    )
+    assert partial in traces.findings({**sample, "sessions": [], "merged": [], "now_ms": 0}, traces.Limits())
+
+
+def test_a_whole_wait_read_reports_no_partial_read():
+    assert traces.wait_coverage(record([]), traces.Limits()) == []
+    assert traces.wait_coverage({**record([]), "waits_unread": []}, traces.Limits()) == []
