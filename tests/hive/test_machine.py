@@ -17,11 +17,16 @@ def admin():
 
 
 class Runner:
-    def __init__(self, *results):
+    def __init__(self, *results, saved="[]"):
         self.calls = []
+        self.listed = []
         self.results = list(results)
+        self.saved = saved
 
     def __call__(self, argv, **kwargs):
+        if argv == list(machine.LIST):
+            self.listed.append(kwargs)
+            return subprocess.CompletedProcess(argv, 0, self.saved, "")
         self.calls.append((argv, kwargs))
         result = self.results.pop(0)
         if isinstance(result, BaseException):
@@ -71,9 +76,42 @@ def test_a_ui_hive_saves_the_machine_then_delivers_a_minted_member(admin):
             {"input": auth.env_text(URL, grant), "capture_output": True, "text": True, "timeout": 60, "check": False},
         ),
     ]
+    assert run.listed == [{"input": None, "capture_output": True, "text": True, "timeout": 300, "check": False}]
     assert grant["name"] == "anton-hive"
     assert auth.ledger_member(admin, grant["ledger_credential"]) == grant["id"]
     assert _members(admin) == [f"{auth.PREFIX}:member:{grant['id']}"]
+
+
+def test_an_already_saved_machine_is_not_added_again_and_still_gets_a_member(admin):
+    registry.update(admin, "root", ["ui=yes"])
+    saved = '[{"id": "fc2e", "label": "anton-hive", "target": "' + TARGET + '"}, {"target": "ssh://other"}]'
+    run = Runner((0, ""), saved=saved)
+
+    grant = _add(admin, run)
+
+    assert [call[0][0] for call in run.calls] == ["ssh"]
+    assert _members(admin) == [f"{auth.PREFIX}:member:{grant['id']}"]
+
+
+def test_another_saved_machine_does_not_stop_the_add(admin):
+    registry.update(admin, "root", ["ui=yes"])
+    run = Runner((0, ""), (0, ""), saved='[{"target": "ssh://other"}]')
+
+    _add(admin, run)
+
+    assert run.calls[0] == _herdr_call()
+
+
+def test_an_unreadable_machine_list_mints_no_member(admin):
+    registry.update(admin, "root", ["ui=yes"])
+    run = Runner(saved="not json")
+
+    with pytest.raises(auth.HiveError) as refused:
+        _add(admin, run)
+
+    assert str(refused.value).startswith("herdr machine list answered with output that is not JSON (")
+    assert run.calls == []
+    assert _members(admin) == []
 
 
 def test_a_trusted_ledger_ca_is_delivered_after_the_env_file(admin):

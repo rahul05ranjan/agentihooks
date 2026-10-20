@@ -32,7 +32,8 @@ agentihooks hive install          # user service that runs agentihooks hive run
 
 - `hive add <ssh target> --label <name> --url <url> [--redis-url URL]` refuses unless the local hive record has
   `ui=yes`, with `hive add refused: hive <id> is headless; only a UI hive adds machines`. On a UI hive it runs
-  `herdr machine add --label <name> --remote-session default <target>` (300 second timeout), mints a hive member
+  `herdr machine add --label <name> --remote-session default <target>` (300 second timeout) unless
+  `herdr machine list --json` already holds that target, so a rerun only redelivers the credential; it mints a hive member
   named after the label, and delivers it: `ssh -o BatchMode=yes <target>` (60 second timeout) writes the member's
   `hive.env` (mode 0600) into `${AGENTIHOOKS_HOME:-$HOME/.agentihooks}/hive.env` on the remote machine. If delivery
   fails, the minted member is revoked and the command exits 1. On success it prints
