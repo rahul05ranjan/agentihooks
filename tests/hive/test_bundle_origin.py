@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 
 import pytest
@@ -127,11 +128,20 @@ def test_a_failed_write_is_refused_with_the_openbao_status(tmp_path):
 
 def test_the_cli_writes_the_named_record(tmp_path, monkeypatch, capsys):
     calls = []
-    monkeypatch.setattr(bundle_origin, "publish", lambda env, path: calls.append(path) or "written")
+    monkeypatch.setattr(bundle_origin, "publish", lambda env, path: calls.append((env, path)) or "written")
     assert cli.main(["bundle-origin"]) == 0
     assert cli.main(["bundle-origin", "--path", "k8s/other"]) == 0
-    assert calls == ["k8s/agentihooks-swarm-workstation-hive-settings", "k8s/other"]
+    assert calls == [(os.environ, "k8s/agentihooks-swarm-workstation-hive-settings"), (os.environ, "k8s/other")]
+    assert all(env is os.environ for env, _ in calls)
     assert capsys.readouterr().out == "written\nwritten\n"
+
+
+def test_the_cli_help_names_the_record_it_writes():
+    sub = next(action for action in cli._parser()._actions if action.dest == "command")
+    helps = {choice.dest: choice.help for choice in sub._choices_actions}
+    assert helps["bundle-origin"] == "Write the linked bundle's git address and branch into the hive settings record"
+    path = next(action for action in sub.choices["bundle-origin"]._actions if action.dest == "path")
+    assert path.help == "OpenBao record under the secret mount"
 
 
 def test_the_cli_reports_a_refusal(monkeypatch, capsys):

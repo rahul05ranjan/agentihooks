@@ -16,22 +16,25 @@ REF_KEY = "HIVE_BUNDLE_REF"
 def origin(home: Path, environ: Mapping[str, str]) -> dict[str, str]:
     from scripts.hive.daemon import origin as remote
 
-    try:
-        bundle = (json.loads((home / "state.json").read_text()).get("bundle") or {}).get("path")
-    except (OSError, ValueError, AttributeError):
-        bundle = None
-    bundle = bundle or environ.get("AGENTIHOOKS_BUNDLE_PATH")
+    bundle = _linked(home) or environ.get("AGENTIHOOKS_BUNDLE_PATH")
     if not bundle:
         return {URL_KEY: "", REF_KEY: ""}
     identity = remote(Path(bundle))
     if not identity:
         raise auth.HiveError(f"the linked bundle at {bundle} has no origin remote naming a host and repository")
     branch = subprocess.run(
-        ["git", "-C", bundle, "branch", "--show-current"], capture_output=True, text=True, check=False
+        ["git", "-C", bundle, "branch", "--show-current"], capture_output=True, text=True
     ).stdout.strip()
     if not branch:
         raise auth.HiveError(f"the linked bundle at {bundle} is not on a branch")
     return {URL_KEY: f"https://{identity}.git", REF_KEY: branch}
+
+
+def _linked(home: Path) -> str:
+    try:
+        return json.loads((home / "state.json").read_text())["bundle"]["path"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return ""
 
 
 def publish(environ: Mapping[str, str], path: str, opener: Callable | None = None) -> str:
