@@ -2,7 +2,7 @@ import { ACTIVE_MS, PHASE_LABELS } from "./config.js";
 import { $, closedText, excerpt, h, headCount, newId, span, when } from "./dom.js";
 import { renderCycle } from "./render_cycle.js";
 import { hiddenDone, inScope, itemState, phaseLifecycle, taskRank, taskRanks } from "./state.js";
-import { closedLeft, doc, loadClosed, meta, queue, renderSync, toggle } from "./sync.js";
+import { closedLeft, closedLeftIn, doc, loadClosed, meta, queue, renderSync, toggle } from "./sync.js";
 import { renderArtifacts } from "./artifacts.js";
 import { closedComments, commentsView, openComments, rememberComment, taskLink, threadView } from "./threads.js";
 import { bottleneckStat, renderAlerts, renderNotifications, renderPriorities, statGrip, statKey } from "./notices.js";
@@ -111,7 +111,7 @@ const sliceTaskCounts = new Map();
 function phaseSlices(phase) {
   const rows = doc.slices.filter((s) => s.phase === `phases/${phase.id}`);
   if (!rows.length) return null;
-  const count = (s) => sliceTaskCounts.get(`slices/${s.id}`) || 0;
+  const count = (s) => (sliceTaskCounts.get(`slices/${s.id}`) || 0) + closedLeftIn("tasks", `slices/${s.id}`);
   return h("div", { class: "phase-slices" }, h("span", { class: "phase-slices-label", text: "slices" }),
     ...rows.map((s) => h("span", { class: "slice" + holdClass(`slices/${s.id}`), id: `item-slices-${s.id}` }, holdMark(`slices/${s.id}`),
       h("span", { class: "slice-name", text: `${s.anchor} ${count(s)}` }), freezeButton(`slices/${s.id}`))));
@@ -132,8 +132,9 @@ function planActions(key, plan) {
 
 function planRow({ key, id, title, phases, plan }) {
   const idOf = (p) => `item-phases-${p.id}`;
+  const total = phases.length + (plan ? closedLeftIn("phases", key) : 0);
   const fold = h("details", { class: "plan-fold" }, h("summary", {}, plan ? holdMark(key) : null, h("span", { class: "plan-title", text: title }),
-    h("span", { class: "plan-count", text: `${phases.length} ${phases.length === 1 ? "phase" : "phases"}` }), planActions(key, plan)));
+    h("span", { class: "plan-count", text: `${total} ${total === 1 ? "phase" : "phases"}` }), planActions(key, plan)));
   fold.open = !closedComments.has(`${key}/row`) || phases.some((p) => idOf(p) === wanted.id);
   fold.addEventListener("toggle", () => rememberComment(`${key}/row`, fold.open));
   lazy(fold, () => h("ol", { class: "plan-phases" }, ...firstPage(key, phases, idOf).map((p, i) => phaseRow(p, i + 1)),

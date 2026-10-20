@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 
 from scripts.swarm_ledger.api import resources, routes
@@ -94,3 +96,12 @@ def test_the_query_string_refuses_another_state_or_a_bad_offset(query):
     with pytest.raises(APIError) as caught:
         routes.pagination(f"/api/v1/ledgers/s/tasks?{query}")
     assert caught.value.status == 400
+
+
+@pytest.mark.parametrize("path", ["architecture", "controller-lease", "hierarchy", "swarm", "swarm/agents", "events"])
+def test_the_route_refuses_state_or_offset_before_any_other_read(path):
+    for query in ("state=done", "offset=3"):
+        handler = SimpleNamespace(path=f"/api/v1/ledgers/s/{path}?{query}", headers={})
+        with pytest.raises(APIError) as caught:
+            routes.ledger_get(handler, None, "s", path)
+        assert caught.value.status == 400

@@ -35,7 +35,16 @@ def test_the_view_keeps_open_rows_and_the_last_ten_done_in_order():
     done = [row["id"] for row in rows if row["done"]]
     kept = [row["id"] for row in view["tasks"]]
     assert kept == [row["id"] for row in rows if not row["done"] or row["id"] in done[-10:]]
-    assert hidden == {"tasks": {"hidden": len(done) - 10, "kept": 10, "ids": done[:-10], "plan_phases": []}}
+    assert hidden == {
+        "tasks": {
+            "hidden": len(done) - 10,
+            "kept": 10,
+            "ids": done[:-10],
+            "groups": {},
+            "claimed_by": {},
+            "plan_phases": [],
+        }
+    }
 
 
 def test_ten_done_rows_or_fewer_leave_the_collection_whole():
@@ -95,3 +104,22 @@ def test_the_page_view_of_a_small_ledger_adds_no_closed_entry():
     view = ledger_server.page_view(ledger_state({"tasks": [task(1, True)], "freezes": []}), "", False)
     assert "closed" not in view["_meta"]
     assert view["tasks"] == [task(1, True)]
+
+
+def test_hidden_rows_count_per_plan_and_slice_and_keep_their_claimants():
+    phases = [{"id": f"p{n}", "done": True, "plan": "plans/a" if n < 2 else "plans/b"} for n in range(13)]
+    tasks = [task(n, True, slice="slices/s1" if n % 2 else "", claimed_by="eng" if n == 1 else "") for n in range(14)]
+    _, hidden = ledger_closed.trimmed({"phases": phases, "tasks": tasks})
+    assert hidden["phases"]["groups"] == {"plans/a": 2, "plans/b": 1}
+    assert "claimed_by" not in hidden["phases"]
+    assert hidden["tasks"]["groups"] == {"slices/s1": 2}
+    assert hidden["tasks"]["claimed_by"] == {"t1": "eng"}
+    questions = [{"id": f"q{n}", "answers": [{"id": "a"}]} for n in range(11)]
+    assert "groups" not in ledger_closed.trimmed({"questions": questions})[1]["questions"]
+
+
+def test_hidden_claims_read_the_claimants_from_the_view_meta():
+    state = {"_meta": {"closed": {"tasks": {"claimed_by": {"t1": "eng", "t2": "ci"}}}}}
+    assert ledger_closed.hidden_claims(state) == [{"id": "t1", "claimed_by": "eng"}, {"id": "t2", "claimed_by": "ci"}]
+    assert ledger_closed.hidden_claims({"_meta": {}}) == []
+    assert ledger_closed.hidden_claims({}) == []

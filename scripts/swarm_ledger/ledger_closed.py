@@ -1,5 +1,8 @@
+from collections import Counter
+
 KEPT = 10
 COLLECTIONS = ("phases", "tasks", "questions", "followups", "alerts")
+GROUPS = {"phases": "plan", "tasks": "slice"}
 
 
 def closed(name: str, item: object) -> bool:
@@ -27,11 +30,19 @@ def trimmed(state: dict) -> tuple[dict, dict]:
         if not drop:
             continue
         view[name] = [row for index, row in enumerate(rows) if index not in drop]
-        gone = [rows[index] for index in sorted(drop)]
-        hidden[name] = {"hidden": len(gone), "kept": KEPT, "ids": [row.get("id") for row in gone]}
+        hidden[name] = entry(name, [rows[index] for index in sorted(drop)])
     if "tasks" in hidden:
         hidden["tasks"]["plan_phases"] = plan_phases(state, hidden["tasks"]["ids"])
     return view, hidden
+
+
+def entry(name: str, gone: list) -> dict:
+    result = {"hidden": len(gone), "kept": KEPT, "ids": [row.get("id") for row in gone]}
+    if name in GROUPS:
+        result["groups"] = dict(Counter(row[GROUPS[name]] for row in gone if row.get(GROUPS[name])))
+    if name == "tasks":
+        result["claimed_by"] = {row.get("id"): row["claimed_by"] for row in gone if row.get("claimed_by")}
+    return result
 
 
 def plan_phases(state: dict, ids: list) -> list:
@@ -43,3 +54,8 @@ def plan_phases(state: dict, ids: list) -> list:
             if isinstance(task, dict) and task.get("kind") == "plan" and task.get("id") in gone and task.get("phase")
         }
     )
+
+
+def hidden_claims(state: dict) -> list:
+    claims = state.get("_meta", {}).get("closed", {}).get("tasks", {}).get("claimed_by", {})
+    return [{"id": task, "claimed_by": claimer} for task, claimer in claims.items()]
