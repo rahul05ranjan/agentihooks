@@ -267,7 +267,7 @@ redis-cli -u "$AGENTIHOOKS_HIVE_REDIS_URL" SET agentihooks:inbox:probe 1
 # (error) NOPERM ...
 ```
 
-The packaged smoke tests check the same scope end to end: `scripts/packaging/hive-join-smoke.sh` joins a member on
+The packaged smoke tests check the same scope end to end: `scripts/packaging/hive-join-smoke.sh` adds a member on
 Redis 7 and asserts that the shared inbox, shared session readings and another member's keys are refused, that the
 member's own inbox and readings are allowed, and that the relay refuses a sender the member does not run.
 `scripts/packaging/compose-hive-smoke.sh` relays a member agent's mail to the master and reads the host's reply from
@@ -291,7 +291,7 @@ the member's own keys.
 | Mail a member agent sent never reaches the master | No swarm tick has run since the send; the relay runs once per tick. | Check the swarm is started and its controller lease is held: `agentihooks swarm <slug> status`. |
 | A member item closes as `refused: the hive member that sent it does not run its sender` | The sender named on the item is not an agent placed on that member. | Send from the agent's own session on the member; the sender is the session, never an argument. |
 | A member process fails a write with `NOPERM` | The process writes outside its hive key, such as an agent record or a launch slot row. | Expected for agent record writes, see Limitations; anything else is a bug to file with the key named. |
-| The controller shows a member agent idle though it works | The agent's execution record names a hive with no member record, so the controller reads its readings from the controller keys. | Check `agentihooks hive show <id>` lists the hive and that it joined with `hive join`. |
+| The controller shows a member agent idle though it works | The agent's execution record names a hive with no member record, so the controller reads its readings from the controller keys. | Check `agentihooks hive show <id>` lists the hive and that it was added with `hive add`. |
 | A slot stays taken after a member lost an agent | The member still reports the execution. | The row lapses within two ticks once the execution leaves the member's sessions report. |
 
 ## Settings
@@ -373,14 +373,14 @@ full".
 ### Who writes placement
 
 A member's Redis user reads agent records and placement but never writes them. Only the controller and the ledger
-server write placement; join, refresh and revoke keep the hive index.
+server write placement; add, refresh and revoke keep the hive index.
 
 | Keys under the swarm root | Member Redis user | Written by |
 |---|---|---|
 | Agent records: `swarm:<slug>:agents`, `swarm:<slug>:executions`, `swarm:<slug>:state-since` | read only | The controller and the ledger server. |
 | Claims, seats, names and placement waits | read only | The controller and the ledger server. |
 | Launch slot rows `launch-slot:*` | read only | The controller, which reserves, acknowledges and refreshes them. |
-| Hive index `hives` | read only | `hive join` and `hive refresh` add the member; `hive revoke` and a failed join remove it. |
+| Hive index `hives` | read only | `hive add` and `hive refresh` add the member; `hive revoke` and a failed add remove it. |
 | The member's own hive record and every key below it | read and write | The member's `hive run` beat and the agents it runs. |
 
 The ledger issues an agent token to a member only for an agent whose record names that member as its hive. A member
@@ -399,7 +399,7 @@ What a member process does differently:
   `failed` with the reason `refused` to the member's own acknowledgement hash and drops the order. The `hive run`
   service keeps running and takes the next order.
 
-Check a member's scope from the member, with the credentials `hive join` wrote:
+Check a member's scope from the member, with the credentials `hive add` delivered:
 
 ```bash
 . ~/.agentihooks/hive.env
@@ -408,7 +408,7 @@ redis-cli -u "$AGENTIHOOKS_HIVE_REDIS_URL" HSET agentihooks:swarm:<slug>:agents 
 redis-cli -u "$AGENTIHOOKS_HIVE_REDIS_URL" SADD agentihooks:hives forged                      # (error) NOPERM ...
 ```
 
-`scripts/packaging/hive-join-smoke.sh` runs the same check on Redis 7 after a join. The member's writes to agent
+`scripts/packaging/hive-join-smoke.sh` runs the same check on Redis 7 after an add. The member's writes to agent
 records, executions, another member's keys, the hive index and a launch slot row are refused. Its beat, an agent
 heartbeat and an inbox send succeed, and the member stays in the hive index. `scripts/packaging/compose-hive-smoke.sh`
 also checks that a member stays indexed after a Redis restart and a refresh.
@@ -670,15 +670,17 @@ tick. On a machine in any other mode the setting changes nothing.
 The `agentihooks-swarm` chart runs worker pods from the hive worker image. Each pod:
 
 1. Clones the repos in `workers.repositories` under its repo root.
-2. Installs a mounted credential as `hive.env`, or joins with a mounted one time code.
+2. Installs a mounted credential as `hive.env`. With no mounted credential and no `hive.env` yet, it starts sshd
+   and waits for one, up to `HIVE_DELIVERY_WAIT_S` (default 900) seconds, then exits 1 with
+   `worker-hive: no member credential was delivered within <n>s; run agentihooks hive add from the UI hive`.
 3. Sets itself `ui=no ephemeral=yes roles=eng,ci,plan,dispatch max-agents=<workers.maxAgents>`.
 4. Runs `agentihooks hive run`.
 
-Give exactly one of `workers.joinCodeSecret` or `workers.credentialSecret`. A join code runs with a persistent
-home. Credentials come from ExternalSecrets by name. The hive id is the one minted when the code was exchanged, so
-replicas that mount the same credential would report the same hive id and agent limit; the chart refuses
-`workers.replicas` above 1. Scale by installing one release per hive credential; the pod name is used only when no
-credential is installed.
+`workers.credentialSecret` is required; it carries the member credential and, with `workers.ssh.enabled`, also the
+sshd `authorized_keys` and host key the pod installs for `agentihooks hive add` to reach it. Credentials come from
+ExternalSecrets by name. Replicas that mount the same credential would report the same hive id and agent limit, so
+the chart refuses `workers.replicas` above 1. Scale by installing one release per hive credential and adding each
+pod with `agentihooks hive add` from the UI hive; the pod name is used only when no credential is installed.
 
 The pod's memory follows its agent count: `workers.memoryPerAgentMi.request` (default 700) and `.limit` (default
 2048), in MiB, are multiplied by `workers.maxAgents` into the container's memory request and limit, so the scheduler
