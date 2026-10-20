@@ -115,9 +115,10 @@ A headless hive never runs the master, whatever its roles.
 
 ## Workstation fallback
 
-When no UI hive fits, because none is live or the live ones lack the repo or a slot for the master's harness, the
-hive controller leaves the master to the workstation herdr server. It refuses the launch with "the workstation
-hive spawns master work" followed by the placement reason, and the tick reports that line in its actions.
+When no UI hive fits, because none is live, or the live ones lack the repo, or lack both a slot and the interactive
+login for the master's harness, the hive controller leaves the master to the workstation herdr server. It refuses
+the launch with "the workstation hive spawns master work" followed by the placement reason, and the tick reports
+that line in its actions.
 
 The `master-headless` health finding marks a master record placed on a headless hive before this rule. The
 `master-fallback-auth` finding marks a master that wanted its interactive login and runs on another route, so phone
