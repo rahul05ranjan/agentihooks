@@ -117,9 +117,11 @@ def test_an_engineer_placed_on_the_anton_hive_by_origin_launches_in_the_pod_chec
     monkeypatch.setenv("HIVE_REPO_ROOT", str(pod.parent))
     write_hive(live, **{**anton(repos=[str(pod), ORIGIN]), "heartbeat_at": live.hive["heartbeat_at"]})
     live.store.redis.hset(live.store.key("fixture", "config"), "repo", live.config.repo)
-    launched = []
+    launched, openings = [], []
+    live.launcher.opening = lambda request: f"working in the repo {request.config.repo}"
 
     def spawn(request):
+        openings.append(request.task["hive_opening"])
         home = tmp_path / "home"
         launched.append(
             HerdrRuntime(home=home)._argv(request.config, request.name, "claude", "open", "e.md", "engineer")
@@ -140,9 +142,10 @@ def test_an_engineer_placed_on_the_anton_hive_by_origin_launches_in_the_pod_chec
     assert outcome.value.execution.hive == ANTON
     argv = launched[0]
     assert argv[argv.index("--dir") + 1] == str(pod)
+    assert openings == [f"working in the repo {ORIGIN}"]
 
 
-def test_a_hive_that_also_lists_the_swarm_path_launches_there_and_names_no_origin(live):
+def test_a_hive_that_also_lists_the_swarm_path_is_selected_with_no_origin(live):
     write_hive(live, **{**root(repos=[live.config.repo, ORIGIN]), "heartbeat_at": live.hive["heartbeat_at"]})
     anton_pick = live.launcher.select(live.config, "eng", {"id": "task"})
     root_pick = live.launcher.select(live.config, "eng", {"id": "task", "hive": "root"})

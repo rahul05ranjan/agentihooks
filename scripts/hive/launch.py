@@ -202,6 +202,7 @@ class HiveLaunch:
         selected = self.select(request.config, request.lane, request.task)
         if isinstance(selected, placement.Wait):
             return Outcome("spawn", Status.UNAVAILABLE, HIVE, detail=selected.reason)
+        named = replace(request, config=replace(request.config, repo=selected.origin)) if selected.origin else request
         task = orders.carried(
             self.slug,
             {
@@ -209,7 +210,7 @@ class HiveLaunch:
                 "profile_decision": selected.profile.record(),
                 **({orders.ORIGIN: selected.origin} if selected.origin else {}),
             },
-            self.opening(request),
+            self.opening(named),
         )
         admitted = self.admit(request, selected)
         if not self.slots.reserve(
