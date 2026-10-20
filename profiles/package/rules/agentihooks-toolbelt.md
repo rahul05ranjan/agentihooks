@@ -73,9 +73,9 @@ The deterministic CLI primitives behind these skills are respectively
 
 `init-agent`, `run-in-terminal`, `swarm <slug> master up`, `swarm <slug>
 <profile> up` and herdr pane, tab and workspace commands run without any typed
-phrase: there is no pane guard. The quota handoff directive's own
-`init-agent --handoff` runs only while the quota policy has that handoff due,
-and never in a swarm session, which hands off through its seat.
+phrase: there is no pane guard. Run `init-agent --handoff` only as the quota
+handoff directive's own command while that handoff is due, and never in a swarm
+session, which hands off through its seat; no hook checks this.
 
 ## Swarm, small ledger or nothing
 
