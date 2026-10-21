@@ -8,9 +8,10 @@ def test_hive_launch_uses_report_and_keeps_brain_optional():
 
     from scripts.hive import join_report
     from scripts.swarm import launch_check
-    from scripts.swarm.store import AgentRecord, RedisStore
+    from scripts.swarm.store import AgentRecord, RedisStore, SwarmConfig
 
     store = RedisStore(FakeRedis(decode_responses=True))
+    store.create(SwarmConfig("sw", "/repo", state="running"))
     code = store.ensure_code("sw").code
     agent = AgentRecord(f"engineer@{code}-0001", "eng", "task", execution_id="execution", hive="worker")
     checks = dict.fromkeys((*join_report.REQUIRED, *join_report.OPTIONAL), True)
@@ -29,9 +30,10 @@ def test_hive_missing_required_evidence_is_enforced(missing):
 
     from scripts.hive import join_report
     from scripts.swarm import launch_check
-    from scripts.swarm.store import AgentRecord, RedisStore
+    from scripts.swarm.store import AgentRecord, RedisStore, SwarmConfig
 
     store = RedisStore(FakeRedis(decode_responses=True))
+    store.create(SwarmConfig("sw", "/repo", state="running"))
     code = store.ensure_code("sw").code
     agent = AgentRecord(f"engineer@{code}-0001", "eng", "task", execution_id="execution", hive="worker")
     if missing:

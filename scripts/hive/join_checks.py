@@ -90,3 +90,18 @@ def cheap(redis, report: dict) -> dict:
         "started_at": report["started_at"] > 0,
         "brain": checked(lambda: "brain" in rendered_overlays(Path(context["home"]))),
     }
+
+
+def startup(redis, report: dict) -> dict:
+    from scripts.swarm.ledger_client import LedgerClient, _op
+
+    ledger = LedgerClient()
+    slug, name = report["slug"], report["agent"]
+    joined = checked(lambda: ledger.join(slug, name, "member") is None)
+    written = checked(lambda: ledger._call(slug, [_op("ack", name, rev=0)]))
+    return {
+        **cheap(redis, report),
+        "ledger_join": joined,
+        "ledger_write": written,
+        "github": github_ready(),
+    }
