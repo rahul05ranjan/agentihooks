@@ -61,6 +61,7 @@ def startup(tmp_path, *, credential="mounted", refuse="", ssh=False, sshd_dies=F
         (home / "hive.env").write_text("fixture delivered hive env\n")
     if credential in SAVED:
         (home / "hive.env").write_text(SAVED[credential])
+        (home / "hive.env").chmod(0o600)
         credential = "mounted"
     repo = tmp_path / "source"
     subprocess.run(["git", "init", "--initial-branch=dev", str(repo)], check=True, capture_output=True)
@@ -194,6 +195,7 @@ def test_the_charted_hive_url_replaces_the_endpoint_in_the_saved_credential(
 
     assert result.returncode == 0, result.stderr
     assert (home / "hive.env").read_text() == saved
+    assert (home / "hive.env").stat().st_mode & 0o777 == 0o600
 
 
 def test_no_delivered_credential_by_the_deadline_never_runs_the_worker(tmp_path):
