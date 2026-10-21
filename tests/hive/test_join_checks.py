@@ -43,6 +43,7 @@ def test_cheap_checks_require_rendered_profile_settings_transcript_and_pane(tmp_
         "pane": "pane",
         "transcript_dir": str(tmp_path),
     }
+    before = sorted(p.name for p in tmp_path.iterdir())
     report = {"context": context, "slug": "sw", "execution_id": "execution", "started_at": 1000}
     checks = join_checks.cheap(FakeRedis(decode_responses=True), report)
     assert checks["profile"] is True
@@ -51,7 +52,7 @@ def test_cheap_checks_require_rendered_profile_settings_transcript_and_pane(tmp_
     assert checks["pane"] is True
     assert checks["started_at"] is True
     assert checks["brain"] is False
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["home"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == before
 
 
 def test_command_checks_suppress_output_and_fail_on_refusal(monkeypatch):
