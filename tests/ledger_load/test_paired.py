@@ -125,3 +125,24 @@ def test_the_command_pairs_runs_in_order_and_refuses_a_margin_below_the_same_cod
     assert "::error::the base run of pair 1 printed no load measure" in capsys.readouterr().out
     with pytest.raises(SystemExit):
         paired.main(["--base", str(base), "--head", str(head), str(head)])
+
+
+def test_compare_schedules_each_side_of_every_pair_on_a_separate_runner():
+    jobs = yaml.safe_load((ROOT / ".github/workflows/ledger-load.yml").read_text())["jobs"]
+    compare = jobs["compare"]
+    assert compare["strategy"]["matrix"] == {"pair": [1, 2, 3, 4, 5], "side": ["base", "head"]}
+    assert compare["strategy"].get("max-parallel", 10) >= 10
+    assert compare["strategy"]["fail-fast"] is False
+    steps = compare["steps"]
+    gate = next(step for step in steps if "tests.ledger_load.gate" in step.get("run", ""))
+    assert gate["run"].count("-m tests.ledger_load.gate") == 1
+    assert "for side in" not in gate["run"]
+    assert gate["env"]["SIDE"] == "${{ matrix.side }}"
+    upload = next(step for step in steps if step.get("uses") == "actions/upload-artifact@v4")
+    assert upload["with"]["name"] == "compare-pair-${{ matrix.pair }}-${{ matrix.side }}"
+    assert upload["if"] == "always()"
+    grade = next(
+        step["run"] for step in jobs["compare-grade"]["steps"] if "tests.ledger_load.paired" in step.get("run", "")
+    )
+    assert "--base load-evidence/compare-pair-{1,2,3,4,5}-base/base.log" in grade
+    assert "--head load-evidence/compare-pair-{1,2,3,4,5}-head/head.log" in grade
