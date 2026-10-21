@@ -23,9 +23,7 @@ MOVED = "AGENTIHOOKS_HIVE_URL=https://tailnet.example:8770\n" + REFRESHED
 SAVED = {"refreshed": REFRESHED, "rejoined": OTHER, "moved": MOVED}
 
 
-def startup(
-    tmp_path, *, credential="mounted", refuse="", ssh=False, sshd_dies=False, bundle=False, bundle_url="", hive_url=""
-):
+def startup(tmp_path, *, credential="mounted", refuse="", ssh=False, sshd_dies=False, bundle=False, bundle_url=""):
     tools = tmp_path / "bin"
     tools.mkdir()
     log = tmp_path / "commands"
@@ -109,9 +107,6 @@ def startup(
     }
     if credential != "mounted":
         env["HIVE_DELIVERY_WAIT_S"] = "0"
-    env.pop("AGENTIHOOKS_HIVE_URL", None)
-    if hive_url:
-        env["AGENTIHOOKS_HIVE_URL"] = hive_url
     if ssh:
         env |= {
             "HIVE_SSHD": str(sshd),
@@ -184,8 +179,11 @@ def test_a_new_join_replaces_the_saved_credential_of_another_member(tmp_path):
         ("", MOVED),
     ],
 )
-def test_the_charted_hive_url_replaces_the_endpoint_in_the_saved_credential(tmp_path, hive_url, saved):
-    result, _, home, _ = startup(tmp_path, credential="moved", hive_url=hive_url)
+def test_the_charted_hive_url_replaces_the_endpoint_in_the_saved_credential(tmp_path, monkeypatch, hive_url, saved):
+    monkeypatch.delenv("AGENTIHOOKS_HIVE_URL", raising=False)
+    if hive_url:
+        monkeypatch.setenv("AGENTIHOOKS_HIVE_URL", hive_url)
+    result, _, home, _ = startup(tmp_path, credential="moved")
 
     assert result.returncode == 0, result.stderr
     assert (home / "hive.env").read_text() == saved
