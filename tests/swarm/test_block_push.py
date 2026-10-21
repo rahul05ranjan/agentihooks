@@ -99,6 +99,36 @@ def test_block_records_the_pushed_branch_on_the_task(worktree, monkeypatch):
     assert ("t1", ["branch", "branch_repo", "repository_branches"], AGENT) in writers
 
 
+@pytest.fixture
+def hive_worktree(env, monkeypatch, tmp_path):
+    _, ledger, _ = env
+    origin, primary, top = _repository(tmp_path, "repo")
+    monkeypatch.setattr(publish, "pushed_branches", PUSHED)
+    monkeypatch.chdir(primary)
+    cli.main(["sw", "create", "--repo", str(tmp_path / "workstation" / "repo")])
+    cli.main(["sw", "start"])
+    monkeypatch.setenv("AGENTIHOOKS_SWARM_REPO", str(primary))
+    return ledger, origin, primary, top
+
+
+def test_block_on_a_hive_reads_the_local_checkout_the_launch_named(hive_worktree, monkeypatch):
+    ledger, origin, primary, top = hive_worktree
+    monkeypatch.setenv("AGENTIHOOKS_SWARM", "sw")
+    _git(top, "commit", "--allow-empty", "-m", "Task work")
+    _git(top, "push", "-u", "origin", BRANCH)
+    assert block() == 0
+    row = ledger.rows["t1"]
+    assert (row["state"], row["branch"], row["branch_repo"]) == ("blocked", BRANCH, str(origin))
+    assert row["repository_branches"] == {str(primary): BRANCH}
+
+
+def test_block_for_another_swarm_keeps_that_swarm_repo(hive_worktree, monkeypatch):
+    monkeypatch.setenv("AGENTIHOOKS_SWARM", "other")
+    _git(hive_worktree[3], "commit", "--allow-empty", "-m", "Task work")
+    with pytest.raises(FileNotFoundError):
+        block()
+
+
 @pytest.mark.parametrize("tracking", [True, False])
 @pytest.mark.parametrize("ahead", [True, False])
 def test_block_checks_the_published_continuation_branch(worktree, capsys, tracking, ahead):
