@@ -10,13 +10,14 @@ def test_hive_hook_starts_and_ends_the_same_execution(monkeypatch, tmp_path):
 
     client = store.RedisStore(FakeRedis(decode_responses=True))
     client.create(store.SwarmConfig("sw", "/repo", max_eng=1, max_ci=0))
-    agent = store.AgentRecord("engineer", "eng", "task", hive="worker", harness="claude", seat="eng-1@sw")
+    name = client.next_name("sw", "eng")
+    agent = store.AgentRecord(name, "eng", "task", hive="worker", harness="claude", seat="eng-1@sw")
     agent = client.start_execution("sw", agent)
     client.put_agent("sw", agent)
     for name, value in {
         "AGENTIHOOKS_HIVE_ID": "worker",
         "AGENTIHOOKS_SWARM": "sw",
-        "AGENTIHOOKS_AGENT_NAME": "engineer",
+        "AGENTIHOOKS_AGENT_NAME": name,
         "CLAUDE_CONFIG_DIR": str(tmp_path),
         "HERDR_PANE_ID": "pane",
     }.items():
@@ -39,7 +40,7 @@ def test_hive_hook_starts_and_ends_the_same_execution(monkeypatch, tmp_path):
     assert report["exit_reason"] == "logout"
     assert report["status"] == 0
     assert report["ended_at"] >= report["started_at"]
-    assert join_report.read(client.redis, replace(agent, generation=1)) == {}
+    assert join_report.read(client.redis, replace(agent, generation=agent.generation + 1)) == {}
 
 
 def test_workstation_hook_does_not_connect(monkeypatch):
