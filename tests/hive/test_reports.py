@@ -247,6 +247,26 @@ def test_one_tick_releases_every_missing_hive_worker_and_keeps_each_action(remot
     ]
 
 
+def test_a_gone_hive_worker_refunds_its_parked_life_and_forgets_its_retire_request(remote):
+    from scripts.swarm import master_retire, tick
+
+    _publish(remote, state="unknown")
+    report = json.loads(remote.redis.get(remote.reports.key(HIVE)))
+    report.update(pane_ids=[], process_namespace="theirs")
+    remote.redis.set(remote.reports.key(HIVE), json.dumps(report))
+    remote.store.claim("fixture", "task", remote.agent.name, 60000)
+    remote.store.count_claim("fixture", "task")
+    requests = master_retire._key(remote.store, "fixture")
+    remote.redis.hset(requests, remote.agent.name, json.dumps({"at": 0, "item": "missing"}))
+    rows = {"task": {"state": "parked", "parked_on": ["dep"]}, "dep": {"state": "claimed"}}
+
+    actions = tick._reap("fixture", remote.store, Mock(), remote.runtime, rows, 10**9)
+
+    assert actions == [f"retired {remote.agent.name}: its hive pane is gone"]
+    assert remote.store.claims("fixture", "task") == 0
+    assert remote.redis.hget(requests, remote.agent.name) is None
+
+
 @pytest.mark.parametrize("handoff", [False, True])
 def test_retiring_a_finished_hive_worker_records_its_inbox_exit(remote, handoff):
     from scripts.inbox.store import InboxStore
