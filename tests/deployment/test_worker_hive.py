@@ -173,17 +173,24 @@ def test_a_new_join_replaces_the_saved_credential_of_another_member(tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("hive_url", "saved"),
+    ("credential", "hive_url", "saved"),
     [
-        ("https://anton.example:8770", MOVED.replace("tailnet.example", "anton.example")),
-        ("", MOVED),
+        ("moved", "https://anton.example:8770", MOVED.replace("tailnet.example", "anton.example")),
+        ("moved", "", MOVED),
+        (
+            "refreshed",
+            "https://anton.example:8770/?a=1&b=2",
+            "AGENTIHOOKS_HIVE_URL=https://anton.example:8770/?a=1&b=2\n" + REFRESHED,
+        ),
     ],
 )
-def test_the_charted_hive_url_replaces_the_endpoint_in_the_saved_credential(tmp_path, monkeypatch, hive_url, saved):
+def test_the_charted_hive_url_replaces_the_endpoint_in_the_saved_credential(
+    tmp_path, monkeypatch, credential, hive_url, saved
+):
     monkeypatch.delenv("AGENTIHOOKS_HIVE_URL", raising=False)
     if hive_url:
         monkeypatch.setenv("AGENTIHOOKS_HIVE_URL", hive_url)
-    result, _, home, _ = startup(tmp_path, credential="moved")
+    result, _, home, _ = startup(tmp_path, credential=credential)
 
     assert result.returncode == 0, result.stderr
     assert (home / "hive.env").read_text() == saved

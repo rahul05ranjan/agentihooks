@@ -123,7 +123,14 @@ elif [[ ! -f "$AGENTIHOOKS_HOME/hive.env" ]]; then
 fi
 if [[ -n "${AGENTIHOOKS_HIVE_URL:-}" ]]; then
   # hive refresh from an ssh shell has no pod environment, so it reads the endpoint from hive.env.
-  sed -i "s|^AGENTIHOOKS_HIVE_URL=.*|AGENTIHOOKS_HIVE_URL=$AGENTIHOOKS_HIVE_URL|" "$AGENTIHOOKS_HOME/hive.env"
+  python3 - <<'PY'
+import os
+from pathlib import Path
+
+saved = Path(os.environ['AGENTIHOOKS_HOME']) / 'hive.env'
+kept = [line for line in saved.read_text().splitlines() if not line.startswith('AGENTIHOOKS_HIVE_URL=')]
+saved.write_text('\n'.join([f"AGENTIHOOKS_HIVE_URL={os.environ['AGENTIHOOKS_HIVE_URL']}", *kept]) + '\n')
+PY
 fi
 bundle=()
 [[ -n "${HIVE_BUNDLE_URL:-}" && -d "$bundle_dir/.git" ]] && bundle=(--bundle "$bundle_dir")
