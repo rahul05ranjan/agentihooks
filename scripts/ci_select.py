@@ -74,9 +74,9 @@ def reshaped(root: Path, base: str, head: str) -> bool:
     return bool(subprocess.check_output(command, cwd=root))
 
 
-def selected_tests(root: Path, changed: list[str], reshaped: bool) -> set[str]:
+def selected_tests(root: Path, changed: list[str], tree_reshaped: bool) -> set[str]:
     tests = {path for path in changed if is_test(path)}
-    if reshaped:
+    if tree_reshaped:
         tests.update(TREE_CHECKS)
     needles = set()
     for path in changed:
@@ -130,11 +130,11 @@ def legs_for(root: Path, tests: set[str], durations: dict[str, float], limit: in
 
 
 def decide(
-    root: Path, changed: list[str], durations: dict[str, float], limit: int, reshaped: bool = False
+    root: Path, changed: list[str], durations: dict[str, float], limit: int, tree_reshaped: bool = False
 ) -> tuple[str, list[list[str]]]:
     if needs_full_suite(changed):
         return FULL, []
-    tests = selected_tests(root, changed, reshaped)
+    tests = selected_tests(root, changed, tree_reshaped)
     if not tests:
         return (NONE if all(is_doc(path) for path in changed) else FULL), []
     legs = legs_for(root, tests, durations, limit)

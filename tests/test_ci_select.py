@@ -304,12 +304,12 @@ def test_the_changed_files_come_from_the_merge_base(repo):
     assert ci_select.changed_files(repo, base, head) == ["hooks/sample.py"]
 
 
-TREE_CHECKS = {"tests/test_codeowners.py": "OWNERS = 1\n", "tests/test_ci_pull_request_api.py": "API = 1\n"}
+TREE_CHECK_FILES = {"tests/test_codeowners.py": "OWNERS = 1\n", "tests/test_ci_pull_request_api.py": "API = 1\n"}
 
 
 @pytest.fixture
 def tree(repo):
-    write(repo, TREE_CHECKS)
+    write(repo, TREE_CHECK_FILES)
     git(repo, "add", ".")
     git(repo, "commit", "-m", "tree checks")
     return repo
@@ -344,14 +344,17 @@ def test_editing_a_file_leaves_the_tree_shape(tree):
 
 
 def test_a_reshaped_tree_selects_the_whole_tree_checks(tree):
-    assert ci_select.decide(tree, ["hooks/sample.py"], {}, 3, reshaped=True) == (
+    assert ci_select.decide(tree, ["hooks/sample.py"], {}, 3, tree_reshaped=True) == (
         "selected",
-        [sorted(["tests/test_sample.py", *TREE_CHECKS])],
+        [sorted(["tests/test_sample.py", *TREE_CHECK_FILES])],
     )
 
 
-def test_an_added_document_selects_the_whole_tree_checks(tree):
-    assert ci_select.decide(tree, ["docs/unnamed.md"], {}, 3, reshaped=True) == ("selected", [sorted(TREE_CHECKS)])
+def test_a_reshaped_doc_selects_the_whole_tree_checks(tree):
+    assert ci_select.decide(tree, ["docs/unnamed.md"], {}, 3, tree_reshaped=True) == (
+        "selected",
+        [sorted(TREE_CHECK_FILES)],
+    )
 
 
 def test_an_edited_file_leaves_the_whole_tree_checks_out(tree):
