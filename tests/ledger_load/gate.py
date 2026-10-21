@@ -236,7 +236,29 @@ def free_port() -> int:
 def start_server(folder: Path, port: int, log: TextIO) -> subprocess.Popen:
     env = {**os.environ, "LEDGER_DIR": str(folder), "LEDGER_PORT": str(port), "SWARM_RELOAD": "0"}
     server = subprocess.Popen(
-        [sys.executable, ledger_server.__file__, "--serve"], env=env, stdout=log, stderr=log, stdin=subprocess.DEVNULL
+        [
+            sys.executable,
+            "-c",
+            """import time
+from scripts.swarm_ledger import ledger_server as server
+original = server.Handler.do_GET
+def stalled(handler):
+    if handler.path.endswith('/events'):
+        handler.send_response(200)
+        handler.send_header('Content-Type', 'text/event-stream')
+        handler.end_headers()
+        handler.wfile.flush()
+        time.sleep(20)
+        return
+    return original(handler)
+server.Handler.do_GET = stalled
+server.serve()
+""",
+        ],
+        env=env,
+        stdout=log,
+        stderr=log,
+        stdin=subprocess.DEVNULL,
     )
     deadline = time.monotonic() + SERVER_WAIT_S
     while time.monotonic() < deadline:
