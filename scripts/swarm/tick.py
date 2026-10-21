@@ -13,8 +13,6 @@ from dataclasses import dataclass, field, replace
 from itertools import count
 from typing import Protocol
 
-from redis.exceptions import ConnectionError as RedisConnectionError
-
 from hooks.context import context_recycle
 from scripts.ci_budget import defects as ci_defects
 from scripts.ci_budget import flakes as ci_flakes
@@ -281,6 +279,8 @@ def skip_refused(function, *args):
 
 
 def skip_dropped(function, *args):
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
     for _ in range(2):
         try:
             return timing.call(function, *args) or []
