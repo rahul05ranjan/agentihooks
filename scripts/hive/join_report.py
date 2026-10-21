@@ -90,13 +90,23 @@ def start(redis: "Redis", slug: str, agent: "AgentRecord", session: str, checks:
     return report
 
 
-def end(redis: "Redis", agent: "AgentRecord", session: str, reason: str, status: str, at: int) -> dict:
-    report = read(redis, agent)
-    if report.get("session_id") != session:
-        return {}
-    report = {**report, "ended_at": at, "exit_reason": reason, "status": status}
-    redis.hset(key(host(agent)), agent.execution_id, json.dumps(report))
-    return report
+def end(redis: "Redis", agent: "AgentRecord", session: str, reason: str, status: str | int, at: int) -> dict:
+    from redis.exceptions import WatchError
+
+    while True:
+        with redis.pipeline() as pipe:
+            try:
+                pipe.watch(key(host(agent)))
+                report = read(pipe, agent)
+                if report.get("session_id") != session:
+                    return {}
+                report = {**report, "ended_at": at, "exit_reason": reason, "status": status}
+                pipe.multi()
+                pipe.hset(key(host(agent)), agent.execution_id, json.dumps(report))
+                pipe.execute()
+                return report
+            except WatchError:
+                continue
 
 
 def cheap_checks(redis: "Redis", report: dict) -> dict:

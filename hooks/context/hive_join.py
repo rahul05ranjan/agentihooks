@@ -11,18 +11,33 @@ def run(payload: dict, event: str) -> None:
         return
     from scripts.hive import join_checks, join_report
     from scripts.profiles.binding import HOMES
-    from scripts.swarm.store import connect
+    from scripts.swarm.store import AgentRecord, connect
 
     store = connect()
-    agent = next((a for a in store.agents(slug) if a.name == name and join_report.host(a) == hive), None)
-    if agent is None:
-        return
     session = payload.get("session_id", "")
     at = int(time.time() * 1000)
     if event == "end":
-        join_report.end(
-            store.redis, agent, session, payload.get("reason", "unknown"), payload.get("exit_status", "ended"), at
-        )
+        for report in join_report.listing(store.redis, hive):
+            if report["agent"] == name and report["session_id"] == session:
+                agent = AgentRecord(
+                    name,
+                    "",
+                    report["task"],
+                    hive=hive,
+                    execution_id=report["execution_id"],
+                    generation=report["generation"],
+                )
+                join_report.end(
+                    store.redis,
+                    agent,
+                    session,
+                    payload.get("reason", "unknown"),
+                    payload.get("exit_status", "ended"),
+                    at,
+                )
+        return
+    agent = next((a for a in store.agents(slug) if a.name == name and join_report.host(a) == hive), None)
+    if agent is None or join_report.read(store.redis, agent).get("session_id") == session:
         return
     transcript = payload.get("transcript_path")
     context = {

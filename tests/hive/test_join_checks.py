@@ -79,3 +79,15 @@ def test_a_probe_exception_becomes_a_failed_check(exception):
         raise exception
 
     assert join_checks.checked(probe) is False
+
+
+def test_github_app_credentials_are_checked_as_an_installation(monkeypatch):
+    from scripts.hive import join_checks
+
+    monkeypatch.setenv("HIVE_GITHUB_AUTH_MODE", "app")
+    calls = []
+    monkeypatch.setattr(
+        join_checks.subprocess, "run", lambda argv, **kwargs: calls.append(argv) or SimpleNamespace(returncode=0)
+    )
+    assert join_checks.github_ready() is True
+    assert calls == [["gh", "api", "installation/repositories", "--silent"]]

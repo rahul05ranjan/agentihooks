@@ -32,6 +32,7 @@ OUTCOMES = {
     "relaunch": "It is being retired and relaunched once.",
     "spent": "Its one automatic relaunch is spent; operator action is required.",
     "report": "This is reported only; the master keeps running.",
+    "retired": "The failed hive agent was retired.",
 }
 
 
@@ -214,7 +215,7 @@ def clear_relaunched(store: RedisStore, slug: str, task: str) -> None:
 
 
 def told(found: dict, outcome: str) -> str:
-    fields = ", ".join(WORDS[field] for field in found)
+    fields = ", ".join(WORDS.get(field, field.removeprefix("hive_").replace("_", " ")) for field in found)
     return f"The master failed its launch check within a minute on {fields}. {OUTCOMES[outcome]}"
 
 

@@ -1,7 +1,11 @@
+import os
 import subprocess
 from pathlib import Path
 from tempfile import TemporaryFile
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
+
+if TYPE_CHECKING:
+    from redis import Redis
 
 
 def checked(probe: Callable[[], object]) -> bool:
@@ -15,7 +19,12 @@ def github_ready() -> bool:
     return checked(
         lambda: (
             subprocess.run(
-                ["gh", "api", "user", "--silent"],
+                [
+                    "gh",
+                    "api",
+                    "installation/repositories" if os.environ.get("HIVE_GITHUB_AUTH_MODE") == "app" else "user",
+                    "--silent",
+                ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=15,
@@ -60,7 +69,7 @@ def _verdict(redis, store, slug, execution):
         redis.hdel(key, field)
 
 
-def redis_checks(redis, slug: str, execution: str) -> dict:
+def redis_checks(redis: "Redis", slug: str, execution: str) -> dict:
     from scripts.swarm.store import RedisStore
 
     store = RedisStore(redis)
@@ -76,7 +85,7 @@ def redis_checks(redis, slug: str, execution: str) -> dict:
     }
 
 
-def cheap(redis, report: dict) -> dict:
+def cheap(redis: "Redis", report: dict) -> dict:
     from hooks.context.profile_chain import rendered_overlays
     from scripts.swarm.launch_check import chain
 
@@ -92,7 +101,7 @@ def cheap(redis, report: dict) -> dict:
     }
 
 
-def startup(redis, report: dict) -> dict:
+def startup(redis: "Redis", report: dict) -> dict:
     from scripts.swarm.ledger_client import LedgerClient, _op
 
     ledger = LedgerClient()

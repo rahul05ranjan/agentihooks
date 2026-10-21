@@ -5,9 +5,24 @@ import pytest
 
 
 def passing():
-    from scripts.hive import join_report
-
-    return {name: True for name in (*join_report.REQUIRED, *join_report.OPTIONAL)}
+    return dict.fromkeys(
+        (
+            "ledger_join",
+            "ledger_write",
+            "redis_claim",
+            "redis_release",
+            "redis_status",
+            "redis_verdict",
+            "transcript",
+            "github",
+            "profile",
+            "settings",
+            "pane",
+            "started_at",
+            "brain",
+        ),
+        True,
+    )
 
 
 @pytest.mark.parametrize(
@@ -29,7 +44,7 @@ def test_missing_required_check_cannot_grade_complete():
 
     report = join_report.graded({"checks": {"brain": True}})
     assert report["grade"] == "failed"
-    assert set(report["misses"]) == set(join_report.REQUIRED)
+    assert set(report["misses"]) == set(passing()) - {"brain"}
 
 
 def test_report_is_execution_scoped_and_exit_is_preserved(monkeypatch):
@@ -76,10 +91,10 @@ def test_heartbeat_refreshes_cheap_checks_at_cadence(monkeypatch):
     )
     join_report.heartbeat(redis, "worker", 1001)
     assert calls == []
-    join_report.heartbeat(redis, "worker", 1000 + join_report.HEARTBEAT_MS)
+    join_report.heartbeat(redis, "worker", 181000)
     assert len(calls) == 1
     report = join_report.read(redis, agent)
-    assert report["heartbeat_at"] == 1000 + join_report.HEARTBEAT_MS
+    assert report["heartbeat_at"] == 181000
     assert report["grade"] == "failed"
     assert report["checks"]["github"] is True
     assert report["misses"] == {"pane": {"required": True}, "brain": {"required": False}}
@@ -96,3 +111,49 @@ def test_old_session_cannot_end_current_report():
     report = join_report.start(redis, "swarm", agent, "new", passing(), {}, 1000)
     assert join_report.end(redis, agent, "old", "logout", "exited", 2000) == {}
     assert join_report.read(redis, agent) == report
+
+
+@pytest.mark.parametrize("replacement", [False, True])
+def test_exit_rechecks_session_identity_after_a_concurrent_write(monkeypatch, replacement):
+    from fakeredis import FakeRedis
+
+    from scripts.hive import join_report
+    from scripts.swarm.store import AgentRecord
+
+    redis = FakeRedis(decode_responses=True)
+    agent = AgentRecord("engineer", "eng", "task", execution_id="execution", hive="worker")
+    join_report.start(redis, "sw", agent, "old", passing(), {}, 1000)
+    original = redis.pipeline
+    changed = False
+
+    def pipeline(*args, **kwargs):
+        pipe = original(*args, **kwargs)
+        execute = pipe.execute
+
+        def conflict(*args, **kwargs):
+            nonlocal changed
+            if not changed:
+                changed = True
+                if replacement:
+                    join_report.start(redis, "sw", agent, "new", passing(), {}, 1500)
+                else:
+                    redis.hset(join_report.key("worker"), "other", "{}")
+            return execute(*args, **kwargs)
+
+        pipe.execute = conflict
+        return pipe
+
+    monkeypatch.setattr(redis, "pipeline", pipeline)
+    result = join_report.end(redis, agent, "old", "logout", 0, 2000)
+    current = join_report.read(redis, agent)
+    assert changed
+    if replacement:
+        assert result == {}
+        assert current["session_id"] == "new"
+        assert current["status"] == "running"
+        assert "ended_at" not in current
+    else:
+        assert current == result
+        assert current["exit_reason"] == "logout"
+        assert current["status"] == 0
+        assert current["ended_at"] == 2000

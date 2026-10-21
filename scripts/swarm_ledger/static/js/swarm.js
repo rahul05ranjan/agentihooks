@@ -149,7 +149,7 @@ function agentRows(sw, now) {
 
 function agentRow(a, remote) {
   return agentCellTips(withId(cells(a.account ? h("span", {}, idCell(a.name), h("span", { class: "sw-sub", title: `account ${a.account}`, text: a.account })) : idCell(a.name), a.lane, a.profile, a.overlays, a.model, a.remoteControl ? h("span", { "data-tip": `Remote Control: ${a.remoteControl.state} (${a.remoteControl.detail})` }, label(`remote control ${a.remoteControl.state}`, a.remoteControl.state), h("span", { class: "sw-sub", text: a.remoteControl.detail }), ...(a.transport ? [transportCell(a.transport)] : [])) : transportCell(a.transport), a.task ? h("a", { href: `#item-tasks-${a.task}`, text: a.task }) : "—",
-    h("span", {}, joinCell(a.hiveJoin), a.promoted ? h("span", { class: "sw-promoted", "data-tip": `${a.state} · promoted` }, label(a.state), " ", label("promoted")) : label(a.state)),
+    h("span", {}, a.promoted ? h("span", { class: "sw-promoted", "data-tip": `${a.state} · promoted` }, label(a.state), " ", label("promoted")) : label(a.state), joinCell(a.hiveJoin)),
     ...(remote ? [executionCell(a.execution), terminalCell(a.terminal, a.execution)] : []), a.age, a.finished ? h("span") : agentActions(a, pending, swarmReadError)), `agent-${a.name}`));
 }
 
@@ -158,9 +158,9 @@ const transportCell = (c) => c ? h("span", { class: "sw-transport", "data-tip": 
 
 function joinCell(report) {
   if (!report || !report.grade) return "";
-  const tone = { complete: "done", partial: "waiting", failed: "bad" }[report.grade];
-  return h("span", {}, label(report.grade, tone), ...Object.entries(report.misses || {}).map(([name, miss]) =>
-    h("span", { class: "sw-sub", text: `${name.replace(/_/g, " ")} (${miss.required ? "required" : "optional"})` })));
+  const tone = { complete: "live", partial: "waiting", failed: "stalled" }[report.grade];
+  return h("span", { class: "sw-sub" }, label(report.grade, tone), ...Object.entries(report.misses || {}).map(([name, miss]) =>
+    h("span", { class: "sw-sub", "data-tip": `${name.replace(/_/g, " ")} missing (${miss.required ? "required" : "optional"})`, text: name.replace(/_/g, " ") })));
 }
 
 function executionCell(e) {

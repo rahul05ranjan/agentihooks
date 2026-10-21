@@ -35,6 +35,7 @@ def test_hive_hook_starts_and_ends_the_same_execution(monkeypatch, tmp_path):
     assert report["context"]["pane"] == "pane"
     assert report["context"]["transcript_dir"] == str(tmp_path)
     assert report["started_at"] > 0
+    client.redis.hdel(client.key("sw", "agents"), agent.name)
     hive_join.run({**payload, "reason": "logout", "exit_status": 0}, "end")
     report = join_report.read(client.redis, agent)
     assert report["exit_reason"] == "logout"
