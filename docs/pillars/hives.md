@@ -67,7 +67,9 @@ agentihooks hive install          # user service that runs agentihooks hive run
   `agentihooks hive show <id>` prints the full record as JSON.
 
 A Kubernetes worker pod joins the same way, waiting for `hive add` to deliver its credential; see
-[Worker hives in Kubernetes](#worker-hives-in-kubernetes).
+[Worker hives in Kubernetes](#worker-hives-in-kubernetes). A pod can instead mount a credential that
+`agentihooks hive invite <label>` writes into OpenBao, which brings a new hive up from an empty namespace; see
+[Reproducible hive](../reference/reproducible-hive.md).
 
 ## Repos and checkouts
 

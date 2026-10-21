@@ -1,5 +1,8 @@
 deployment: distributed
 
+# Render only the worker hive, so one release per hive installs into its own namespace beside a swarm elsewhere.
+hiveOnly: false
+
 image:
   repository: ghcr.io/the-cloud-clockwork/agentihooks-swarm
   tag: dev
