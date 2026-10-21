@@ -58,7 +58,7 @@ def test_cheap_checks_require_rendered_profile_settings_transcript_and_pane(tmp_
 def test_command_checks_suppress_output_and_fail_on_refusal(monkeypatch):
     from scripts.hive import join_checks
 
-    monkeypatch.setenv("HIVE_GITHUB_AUTH_MODE", "pat")
+    monkeypatch.setenv("HIVE_GITHUB_AUTH_MODE", "token")
     calls = []
 
     def run(argv, **kwargs):
