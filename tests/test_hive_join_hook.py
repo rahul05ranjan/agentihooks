@@ -10,9 +10,8 @@ def test_hive_hook_starts_and_ends_the_same_execution(monkeypatch, tmp_path):
 
     client = store.RedisStore(FakeRedis(decode_responses=True))
     client.create(store.SwarmConfig("sw", "/repo", max_eng=1, max_ci=0))
-    agent = store.AgentRecord(
-        "engineer", "eng", "task", execution_id="execution", hive="worker", harness="claude", seat="eng-1@sw"
-    )
+    agent = store.AgentRecord("engineer", "eng", "task", hive="worker", harness="claude", seat="eng-1@sw")
+    agent = client.start_execution("sw", agent)
     client.put_agent("sw", agent)
     for name, value in {
         "AGENTIHOOKS_HIVE_ID": "worker",

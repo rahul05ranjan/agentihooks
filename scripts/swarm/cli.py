@@ -1207,9 +1207,7 @@ def cmd_status(store, args):
         )
     from scripts.hive import join_report
 
-    for agent in agents:
-        if report := join_report.read(store.redis, agent):
-            print("hive join  " + join_report.summary(report))
+    sys.stdout.write(join_report.text(store.redis, agents))
     for r in store.restored(args.slug):
         print(f"restored  {r['name']}  {r['outcome']}  {r['reason']}")
     for launch in launch_check.reports(store, args.slug):

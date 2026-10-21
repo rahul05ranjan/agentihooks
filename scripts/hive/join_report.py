@@ -47,6 +47,10 @@ def summary(report: dict) -> str:
     return line
 
 
+def text(redis: "Redis", agents: list["AgentRecord"]) -> str:
+    return "".join("hive join  " + summary(report) + "\n" for agent in agents if (report := read(redis, agent)))
+
+
 def host(agent: "AgentRecord") -> str:
     return agent.hive or agent.runtime_target.get("host_id", "")
 
