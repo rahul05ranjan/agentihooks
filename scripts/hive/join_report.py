@@ -37,6 +37,16 @@ def graded(report: dict) -> dict:
     return {**report, "grade": grade, "misses": misses}
 
 
+def summary(report: dict) -> str:
+    misses = ", ".join(
+        f"{name} ({'required' if miss['required'] else 'optional'})" for name, miss in report["misses"].items()
+    )
+    line = f"{report['agent']}\t{report['grade']}\tmisses={misses or 'none'}\theartbeat={report['heartbeat_at']}"
+    if "ended_at" in report:
+        line += f"\texit={report['exit_reason']}\tstatus={report['status']}"
+    return line
+
+
 def host(agent: "AgentRecord") -> str:
     return agent.hive or agent.runtime_target.get("host_id", "")
 

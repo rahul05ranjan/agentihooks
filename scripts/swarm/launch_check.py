@@ -27,7 +27,7 @@ WORDS = {
     "overlay": "every overlay its profile declares",
     "name": "its name",
 }
-REPORT_ONLY = frozenset({"late"})
+REPORT_ONLY = frozenset({"late", "hive_brain"})
 OUTCOMES = {
     "relaunch": "It is being retired and relaunched once.",
     "spent": "Its one automatic relaunch is spent; operator action is required.",
@@ -153,6 +153,16 @@ def _name(store, slug, agent):
 def misses(
     store: RedisStore, slug: str, agent: AgentRecord, facts: dict, doc: dict, on_bundle: bool, declared: list[str]
 ) -> dict:
+    from scripts.hive import join_report, reports
+
+    if agent.hive or reports.host(agent):
+        report = join_report.read(store.redis, agent)
+        if not report:
+            return {"hive_join": {"expected": "session join report", "actual": "missing"}}
+        return {
+            f"hive_{name}": {"expected": "available", "actual": "missing"}
+            for name in join_report.graded(report)["misses"]
+        }
     found = _joined(store, agent, doc, session_started_at(agent))
     if not facts or facts.get("process", True) is not True:
         found["observation"] = {"expected": "available process observation", "actual": "unavailable"}

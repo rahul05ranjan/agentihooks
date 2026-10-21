@@ -1205,6 +1205,11 @@ def cmd_status(store, args):
         print(
             f"{a.name}\t{a.lane}\t{a.harness}\t{a.profile or 'unknown'}\t{model}\t{a.account or '-'}\t{a.pane_id}\t{a.task}\t{agent_status(a)}\t{a.conversation_id or '-'}\t{push}\t{attach}\t{a.model_source or '-'}\t{a.model_confidence if a.model_confidence is not None else '-'}"
         )
+    from scripts.hive import join_report
+
+    for agent in agents:
+        if report := join_report.read(store.redis, agent):
+            print("hive join  " + join_report.summary(report))
     for r in store.restored(args.slug):
         print(f"restored  {r['name']}  {r['outcome']}  {r['reason']}")
     for launch in launch_check.reports(store, args.slug):
