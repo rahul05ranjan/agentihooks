@@ -226,6 +226,36 @@ def hives_problems(chart: str) -> list[str]:
     )
     if rendered.returncode != 0:
         found.append(f"the chart refused a hive hostPath home beside emptyDir null: {rendered.stderr.strip()!r}")
+    claimed = [
+        {
+            "name": f"pool-{i}",
+            "credentialSecret": {"name": f"m{i}", "key": "c"},
+            "homeVolume": {"emptyDir": None, "persistentVolumeClaim": {"claimName": f"home-{i}"}},
+        }
+        for i in (1, 2)
+    ]
+    rendered = subprocess.run(
+        ["helm", "template", "fixture", chart, *BASE, "-f", "-"],
+        input=yaml.safe_dump({"workers": {"hives": claimed}}),
+        capture_output=True,
+        text=True,
+    )
+    if rendered.returncode != 0:
+        found.append(f"the chart refused hive claim homes beside emptyDir null: {rendered.stderr.strip()!r}")
+    else:
+        for i in (1, 2):
+            pod = hive_pods(rendered.stdout)[f"-pool-{i}"]
+            home = next(v for v in pod["spec"]["template"]["spec"]["volumes"] if v["name"] == "home")
+            if home != {"name": "home", "persistentVolumeClaim": {"claimName": f"home-{i}"}}:
+                found.append(f"hive-pool-{i} home is {home}, expected its claim")
+            if pod["spec"].get("strategy", {}).get("type") != "Recreate":
+                found.append(f"hive-pool-{i} with a claim home does not roll out by Recreate")
+    cases.append(
+        (
+            {"hives": [{**h, "homeVolume": {"persistentVolumeClaim": {"claimName": "home"}}} for h in claimed]},
+            "shares its home volume",
+        )
+    )
     for workers, reason in cases:
         refused = subprocess.run(
             ["helm", "template", "fixture", chart, *BASE, "-f", "-"],
