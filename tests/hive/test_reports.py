@@ -26,6 +26,7 @@ def remote(monkeypatch, request):
     from scripts.swarm.runtime import HerdrRuntime
     from scripts.swarm.store import AgentRecord, RedisStore, SwarmConfig
 
+    params = getattr(request, "param", {})
     monkeypatch.setenv("SWARM_HIVE_ID", "controller")
     monkeypatch.setattr(terminate_agent, "sessions", lambda *args, **kwargs: [])
     redis = fakeredis.FakeRedis(decode_responses=True)
@@ -42,8 +43,8 @@ def remote(monkeypatch, request):
             harness="claude",
             profile="engineer",
             account="account",
-            started_at=getattr(request, "param", {}).get("started_at", 0),
-            launched_at=getattr(request, "param", {}).get("launched_at", 0),
+            started_at=params.get("started_at", 0),
+            launched_at=params.get("launched_at", 0),
             hive=HIVE,
             runtime_target={"host_id": HIVE, "process_namespace": "theirs", "pid": 12, "pid_start": 34},
             profile_decision={"validation": {"pid": 12}},

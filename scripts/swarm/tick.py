@@ -516,6 +516,8 @@ def _restore_owner(slug, store, ledger, rows, agent):
 
 
 def _drop_remote(slug, store, ledger, rows, agent):
+    master_retire.forget(store, slug, agent.name)
+    _refund_parked(slug, store, rows, agent.task)
     return f"retired {agent.name}: its hive pane is gone" + _drop(slug, store, ledger, rows, agent)
 
 

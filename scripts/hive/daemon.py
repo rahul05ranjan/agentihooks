@@ -367,7 +367,7 @@ def _executions(redis: "Redis", local_id: str, processes: dict[str, dict[int, st
 def _pane_ids(herdr: "HerdrRuntime") -> list[str] | None:
     try:
         return [pane["pane_id"] for pane in herdr.herdr(["pane", "list"])["panes"]]
-    except Exception:
+    except (RuntimeError, OSError, subprocess.SubprocessError, KeyError, TypeError):
         return None
 
 
