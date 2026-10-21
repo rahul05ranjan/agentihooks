@@ -80,14 +80,16 @@ scripts/packaging/hive-reproduce.sh anton-2 agentihooks-hive-anton-2
 | engineer working | the swarm runs a non master agent on the hive in state working | `HIVE_ENGINEER_TIMEOUT_S` (1800) |
 | join report | a join report on the hive grades an agent complete or partial | `HIVE_STEP_TIMEOUT_S` |
 
-`HIVE_RECORD` and `HIVE_LIKE` override the record paths; `HIVE_TIMING_FILE` appends the table to a file. A step past its
+`HIVE_RECORD` and `HIVE_LIKE` override the record paths, `HIVE_EXTERNAL_SECRETS` the number of ExternalSecrets the
+namespace holds; `HIVE_TIMING_FILE` appends the table to a file. A step past its
 bound prints `timed out: <what>` with the table so far and exits 1. Each row carries its UTC time, the seconds the step
 took and the seconds since the script started.
 
 The clock starts when the script starts, after ArgoCD created the namespace; the time from the antoncore merge to the
 namespace is the namespace's `creationTimestamp` minus the merge time.
 
-The script refuses to start unless a swarm has `hive-placement=on`, naming `agentihooks swarm <slug> set
+The script refuses to start unless at least one swarm has `hive-placement=on`; it does not check that this is the
+swarm holding the engineer task. The refusal names `agentihooks swarm <slug> set
 hive-placement=on`; turning placement on is the operator's call. The engineer step also needs an open engineer task
 for a repo the hive lists. Placement fills hives first, so the next engineer the tick spawns lands on the new hive while
 it has a free slot.
