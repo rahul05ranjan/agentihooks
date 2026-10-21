@@ -16,6 +16,7 @@ def main() -> int:
         return stop(process)
 
     def memory_run(folder):
+        folder.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir="/dev/shm", prefix="ledger-load-") as directory:
             scratch = Path(directory)
             try:
