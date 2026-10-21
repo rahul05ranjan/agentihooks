@@ -51,7 +51,10 @@ def test_report_is_execution_scoped_and_exit_is_preserved(monkeypatch):
     assert ended["exit_reason"] == "logout"
     assert ended["status"] == "exited"
     assert ended["ended_at"] == 2000
-    probe = lambda *args: pytest.fail("ended reports must not be probed")
+
+    def probe(*args):
+        pytest.fail("ended reports must not be probed")
+
     monkeypatch.setattr(join_report, "cheap_checks", probe)
     join_report.heartbeat(redis, "worker", 500000)
     assert join_report.read(redis, agent) == ended
@@ -68,7 +71,9 @@ def test_heartbeat_refreshes_cheap_checks_at_cadence(monkeypatch):
     agent = AgentRecord("engineer", "eng", "task", execution_id="execution", hive="worker")
     join_report.start(redis, "swarm", agent, "session", passing(), {}, 1000)
     calls = []
-    monkeypatch.setattr(join_report, "cheap_checks", lambda *args: calls.append(args) or {"pane": False, "brain": False})
+    monkeypatch.setattr(
+        join_report, "cheap_checks", lambda *args: calls.append(args) or {"pane": False, "brain": False}
+    )
     join_report.heartbeat(redis, "worker", 1001)
     assert calls == []
     join_report.heartbeat(redis, "worker", 1000 + join_report.HEARTBEAT_MS)
