@@ -276,20 +276,21 @@ def test_stop_directive_asks_for_another_account():
 
 
 @pytest.mark.parametrize(
-    ("five", "week", "tool", "blocked", "context"),
+    ("five", "week", "tool", "head"),
     [
-        (10, 98.5, "Bash", True, False),
-        (99.2, 50, "Bash", True, False),
-        (99.2, 50, "CronCreate", False, True),
+        (10, 98.5, "Bash", "QUOTA STOP"),
+        (99.2, 50, "Bash", "QUOTA WAIT"),
+        (99.2, 50, "CronCreate", "QUOTA WAIT"),
     ],
 )
-def test_pretool_blocks_stop_and_wait(five, week, tool, blocked, context):
+def test_pretool_alerts_stop_and_wait_without_blocking(five, week, tool, head):
     d = _decide(five, week, [])
     with patch.object(qp, "evaluate", return_value=d), patch.object(qp, "handed_off_block", return_value=None):
         block, ctx = qp.pretool("sess-1", tool, "/tmp")
 
-    assert bool(block) is blocked
-    assert bool(ctx) is context
+    assert block is None
+    assert ctx.startswith(head)
+    assert "Tools are not blocked." in ctx
 
 
 def test_pretool_injects_handoff_without_blocking():
@@ -432,15 +433,14 @@ def test_handoff_ignores_cached_accounts_without_credentials(tmp_path, monkeypat
     assert (decision.target.account if decision.target else None) == ("beta" if available else None)
 
 
-def test_pre_tool_use_raises_the_stop_block():
+def test_pre_tool_use_lets_the_tool_run_under_the_stop_alert():
     from hooks import hook_manager
 
     d = _decide(10, 98.5, [])
     with patch.object(qp, "evaluate", return_value=d), patch.object(qp, "handed_off_block", return_value=None):
-        with pytest.raises(hook_manager.BlockAction, match="QUOTA STOP"):
-            hook_manager.on_pre_tool_use(
-                {"tool_name": "Read", "tool_input": {"file_path": "/tmp/x"}, "session_id": "sess-stop", "cwd": "/tmp"}
-            )
+        hook_manager.on_pre_tool_use(
+            {"tool_name": "Read", "tool_input": {"file_path": "/tmp/x"}, "session_id": "sess-stop", "cwd": "/tmp"}
+        )
 
 
 def test_reserve_account_is_the_last_handoff_target():
