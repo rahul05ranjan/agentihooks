@@ -26,11 +26,15 @@ def matches(found: list[tuple[str, str]], kind: str, suffix: str) -> bool:
 
 def problems(chart: str) -> list[str]:
     alone = render(chart, "--set", "hiveOnly=true")
-    found = [f"a hive only release renders no {kind} {suffix}" for kind, suffix in HIVE if not matches(alone, kind, suffix)]
+    found = [
+        f"a hive only release renders no {kind} {suffix}" for kind, suffix in HIVE if not matches(alone, kind, suffix)
+    ]
     extra = [item for item in alone if not any(item[0] == kind and item[1].endswith(suffix) for kind, suffix in HIVE)]
     found += [f"a hive only release renders {kind} {name}" for kind, name in extra]
     swarm = render(chart)
-    found += [f"the default release lost its {kind} {suffix}" for kind, suffix in SWARM if not matches(swarm, kind, suffix)]
+    found += [
+        f"the default release lost its {kind} {suffix}" for kind, suffix in SWARM if not matches(swarm, kind, suffix)
+    ]
     return found
 
 
