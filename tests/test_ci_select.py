@@ -343,6 +343,11 @@ def test_editing_a_file_leaves_the_tree_shape(tree):
     assert ci_select.reshaped(tree, base, "change") is False
 
 
+def test_a_reshape_check_on_an_unknown_revision_fails(tree):
+    with pytest.raises(subprocess.CalledProcessError):
+        ci_select.reshaped(tree, "not-a-revision", "HEAD")
+
+
 def test_a_reshaped_tree_selects_the_whole_tree_checks(tree):
     assert ci_select.decide(tree, ["hooks/sample.py"], {}, 3, tree_reshaped=True) == (
         "selected",

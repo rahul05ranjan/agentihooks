@@ -71,7 +71,10 @@ def naming_tests(root: Path, needles: set[str]) -> set[str]:
 
 def reshaped(root: Path, base: str, head: str) -> bool:
     command = ["git", "diff", "--quiet", "--no-renames", "--diff-filter=AD", f"{base}...{head}"]
-    return subprocess.run(command, cwd=root).returncode == 1
+    result = subprocess.run(command, cwd=root)
+    if result.returncode > 1:
+        raise subprocess.CalledProcessError(result.returncode, command)
+    return result.returncode == 1
 
 
 def selected_tests(root: Path, changed: list[str], tree_reshaped: bool) -> set[str]:
