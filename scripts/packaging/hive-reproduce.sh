@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Times one new hive from its OpenBao invite to the first engineer its join report grades healthy.
 # Run on the UI hive after the hive's GitOps values are synced into their own namespace.
 label="${1:?usage: hive-reproduce.sh LABEL [NAMESPACE]}"
 namespace="${2:-agentihooks-hive-$label}"
 record="${HIVE_RECORD:-k8s/agentihooks-hive-$label}"
 like="${HIVE_LIKE:-k8s/agentihooks-swarm-workstation-hive}"
+secrets="${HIVE_EXTERNAL_SECRETS:-4}"
 step_timeout="${HIVE_STEP_TIMEOUT_S:-900}"
 engineer_timeout="${HIVE_ENGINEER_TIMEOUT_S:-1800}"
 out="${HIVE_TIMING_FILE:-}"
@@ -18,12 +18,13 @@ timeline=()
 mark() {
   local now
   now=$(date +%s)
-  timeline+=("$(printf '%-22s %5ss  %5ss total  %s' "$1" "$((now - last))" "$((now - start))" "$2")")
+  timeline+=("$(printf '%-18s %s %5ss %5ss  %s' "$1" "$(date -u -d "@$now" +%FT%TZ)" "$((now - last))" \
+    "$((now - start))" "$2")")
   printf 'hive-reproduce: %s after %ss: %s\n' "$1" "$((now - start))" "$2"
   last=$now
 }
 report() {
-  printf '\nstep                    took   elapsed\n'
+  printf '\nstep               at                    took elapsed\n'
   printf '%s\n' "${timeline[@]}"
   if [[ -n $out ]]; then
     printf '%s %s %s\n' "$(date -u +%FT%TZ)" "$label" "$*" >> "$out"
@@ -54,8 +55,12 @@ import hooks.config  # noqa: F401
 from scripts.hive import registry
 from scripts.swarm.store import RedisStore, redis_client
 
-what, member = sys.argv[1:3]
+what = sys.argv[1]
 redis = redis_client()
+if what == "placement":
+    store = RedisStore(redis)
+    sys.exit(0 if any(store.config(slug).hive_placement for slug in store.slugs()) else 1)
+member = sys.argv[2]
 if what == "live":
     record = registry.show(redis, member)
     sys.exit(0 if record and registry.live(record, time.time_ns() // 1_000_000) else 1)
@@ -75,17 +80,29 @@ for raw in redis.hvals(f"{registry.key(member)}:join-reports"):
 sys.exit(1)
 PY
 }
+listed() {
+  local names
+  names=$(kubectl -n "$namespace" get externalsecret -o name) || return 1
+  [[ $(grep -c . <<<"$names") -ge $secrets ]]
+}
 synced() {
-  [[ -z $(kubectl -n "$namespace" get externalsecret \
-    -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' | grep -v '^True$') ]]
+  local ready
+  ready=$(kubectl -n "$namespace" get externalsecret \
+    -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}') || return 1
+  [[ $(grep -cx True <<<"$ready") -ge $secrets ]] && ! grep -qvx True <<<"$ready"
 }
 pod_ready() {
   kubectl -n "$namespace" wait pod -l app.kubernetes.io/component=worker-hive --for=condition=Ready --timeout=5s \
     >/dev/null 2>&1
 }
 
+if ! probe placement; then
+  echo "hive-reproduce: no swarm places work on hives; run agentihooks swarm <slug> set hive-placement=on" >&2
+  exit 1
+fi
 kubectl get namespace "$namespace" >/dev/null
-mark "namespace" "$namespace exists"
+until_true "namespace" "$step_timeout" "ArgoCD listed fewer than $secrets ExternalSecrets in $namespace" listed
+mark "namespace" "$namespace holds its $secrets ExternalSecrets"
 
 invited=$(agentihooks hive invite "$label" --path "$record" --like "$like")
 member=$(sed -n 's/^invited hive member \([0-9a-f]*\) .*/\1/p' <<<"$invited")

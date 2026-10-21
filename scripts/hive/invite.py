@@ -51,7 +51,10 @@ def invite(redis: "Redis", bao: openbao_kv.OpenBao, request: Request, local_redi
     try:
         total = openbao_kv.merge(bao, request.path, entries)
     except openbao_kv.OpenBaoError as exc:
-        auth.revoke(redis, grant["id"])
+        try:
+            auth.revoke(redis, grant["id"])
+        except auth.HiveError as revoked:
+            raise auth.HiveError(f"{exc}; the new member {grant['id']} was not revoked ({revoked})") from None
         raise auth.HiveError(str(exc)) from None
     done = f"invited hive member {grant['id']} as {request.label}; {openbao_kv.summary(request.path, entries, total)}"
     previous = _env(current.get(CREDENTIAL, "")).get(HIVE_ID)

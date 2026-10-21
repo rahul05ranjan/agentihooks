@@ -1,5 +1,7 @@
+import hashlib
 import io
 import json
+import urllib.parse
 
 import pytest
 
@@ -66,6 +68,12 @@ def _env(text):
     return dict(line.split("=", 1) for line in text.splitlines())
 
 
+def _redis(admin, env):
+    parts = urllib.parse.urlsplit(env["AGENTIHOOKS_HIVE_REDIS_URL"])
+    assert hashlib.sha256(parts.password.encode()).hexdigest() in admin.acl_getuser(parts.username)["passwords"]
+    return parts.scheme, parts.username, parts.hostname, parts.port, parts.path
+
+
 def _members(admin):
     return sorted(key.rsplit(":", 1)[1] for key in admin.keys(f"{auth.PREFIX}:member:*"))
 
@@ -93,8 +101,7 @@ def test_like_copies_the_addresses_and_ca_of_another_hive_and_mints_a_new_member
     ]
     assert env["AGENTIHOOKS_HIVE_ID"] == member
     assert env["AGENTIHOOKS_HIVE_URL"] == URL
-    assert env["AGENTIHOOKS_HIVE_REDIS_URL"].startswith(f"rediss://hive-{member}:")
-    assert env["AGENTIHOOKS_HIVE_REDIS_URL"].endswith("@hive.example:6380/2")
+    assert _redis(admin, env) == ("rediss", f"hive-{member}", "hive.example", 6380, "/2")
     assert auth.ledger_member(admin, env["AGENTIHOOKS_HIVE_LEDGER_CREDENTIAL"]) == member
     assert admin.hget(f"{auth.PREFIX}:member:{member}", "name") == "lab"
     assert fake.records[LIKE] == _sample()
@@ -115,7 +122,7 @@ def test_flags_win_over_the_like_record_except_the_ca(admin):
     record = fake.records[RECORD]
     env = _env(record["credential"])
     assert env["AGENTIHOOKS_HIVE_URL"] == "https://other:8770"
-    assert env["AGENTIHOOKS_HIVE_REDIS_URL"].endswith("@other:6379/1")
+    assert _redis(admin, env) == ("redis", f"hive-{env['AGENTIHOOKS_HIVE_ID']}", "other", 6379, "/1")
     assert record["swarm_url"] == "https://other:8765"
     assert record["ca_pem"] == CA
 
@@ -128,7 +135,8 @@ def test_without_like_the_flags_and_this_hosts_redis_and_ca_fill_the_record(admi
     record = fake.records[RECORD]
     assert sorted(record) == ["ca_pem", "credential"]
     assert record["ca_pem"] == "local-ca"
-    assert _env(record["credential"])["AGENTIHOOKS_HIVE_REDIS_URL"].endswith("@127.0.0.1:6379/0")
+    env = _env(record["credential"])
+    assert _redis(admin, env) == ("redis", f"hive-{env['AGENTIHOOKS_HIVE_ID']}", "127.0.0.1", 6379, "/0")
 
 
 def test_an_unknown_hive_url_is_refused_before_any_member_is_minted(admin):
@@ -159,6 +167,23 @@ def test_a_failed_write_revokes_the_new_member(admin):
     assert str(refused.value) == "OpenBao HTTP 503: sealed"
     assert _members(admin) == []
     assert admin.smembers(auth.INDEX) == set()
+
+
+def test_a_failed_write_whose_revoke_fails_reports_both(admin, monkeypatch):
+    fake = Bao({LIKE: _sample()}, fail_writes=True)
+
+    def refuse(redis, member_id):
+        raise auth.HiveError(f"no hive member {member_id}")
+
+    monkeypatch.setattr(auth, "revoke", refuse)
+
+    with pytest.raises(auth.HiveError) as refused:
+        invite.invite(admin, _bao(fake), invite.Request("lab", RECORD, like=LIKE), LOCAL)
+
+    [member] = _members(admin)
+    assert str(refused.value) == (
+        f"OpenBao HTTP 503: sealed; the new member {member} was not revoked (no hive member {member})"
+    )
 
 
 def test_a_failed_read_is_refused_with_the_openbao_status(admin):
