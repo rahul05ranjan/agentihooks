@@ -1,5 +1,4 @@
 import pytest
-from redis.exceptions import ConnectionError as RedisConnectionError
 
 from scripts.inbox import exits
 from scripts.swarm.store import RedisStore, SwarmConfig
@@ -17,6 +16,8 @@ def store():
 
 
 def _dropping(drops):
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
     calls = []
 
     def sweep(*args):
