@@ -58,6 +58,7 @@ def test_cheap_checks_require_rendered_profile_settings_transcript_and_pane(tmp_
 def test_command_checks_suppress_output_and_fail_on_refusal(monkeypatch):
     from scripts.hive import join_checks
 
+    monkeypatch.setenv("HIVE_GITHUB_AUTH_MODE", "pat")
     calls = []
 
     def run(argv, **kwargs):
@@ -81,10 +82,14 @@ def test_a_probe_exception_becomes_a_failed_check(exception):
     assert join_checks.checked(probe) is False
 
 
-def test_github_app_credentials_are_checked_as_an_installation(monkeypatch):
+@pytest.mark.parametrize("mode", [None, "app"])
+def test_github_app_credentials_are_checked_as_an_installation(monkeypatch, mode):
     from scripts.hive import join_checks
 
-    monkeypatch.setenv("HIVE_GITHUB_AUTH_MODE", "app")
+    if mode is None:
+        monkeypatch.delenv("HIVE_GITHUB_AUTH_MODE", raising=False)
+    else:
+        monkeypatch.setenv("HIVE_GITHUB_AUTH_MODE", mode)
     calls = []
     monkeypatch.setattr(
         join_checks.subprocess, "run", lambda argv, **kwargs: calls.append(argv) or SimpleNamespace(returncode=0)

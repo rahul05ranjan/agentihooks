@@ -22,7 +22,7 @@ def github_ready() -> bool:
                 [
                     "gh",
                     "api",
-                    "installation/repositories" if os.environ.get("HIVE_GITHUB_AUTH_MODE") == "app" else "user",
+                    "installation/repositories" if os.environ.get("HIVE_GITHUB_AUTH_MODE", "app") == "app" else "user",
                     "--silent",
                 ],
                 stdout=subprocess.DEVNULL,
