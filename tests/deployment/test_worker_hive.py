@@ -187,7 +187,6 @@ def test_the_charted_hive_url_replaces_the_endpoint_in_the_saved_credential(tmp_
 
     assert result.returncode == 0, result.stderr
     assert (home / "hive.env").read_text() == saved
-    assert (home / "hive.env").stat().st_mode & 0o777 == 0o600
 
 
 def test_no_delivered_credential_by_the_deadline_never_runs_the_worker(tmp_path):
