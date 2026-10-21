@@ -203,6 +203,8 @@ workers:
   credentialSecret:
     name: ""
     key: ""
+  # Join endpoint hive refresh posts to; replaces the URL in the mounted member credential.
+  hiveUrl: ""
   caSecret:
     name: ""
     key: ""

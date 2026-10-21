@@ -121,6 +121,10 @@ elif [[ ! -f "$AGENTIHOOKS_HOME/hive.env" ]]; then
     sleep 2
   done
 fi
+if [[ -n "${AGENTIHOOKS_HIVE_URL:-}" ]]; then
+  # hive refresh from an ssh shell has no pod environment, so it reads the endpoint from hive.env.
+  sed -i "s|^AGENTIHOOKS_HIVE_URL=.*|AGENTIHOOKS_HIVE_URL=$AGENTIHOOKS_HIVE_URL|" "$AGENTIHOOKS_HOME/hive.env"
+fi
 bundle=()
 [[ -n "${HIVE_BUNDLE_URL:-}" && -d "$bundle_dir/.git" ]] && bundle=(--bundle "$bundle_dir")
 if (( ${#bundle[@]} )) && ! agentihooks init "${bundle[@]}"; then

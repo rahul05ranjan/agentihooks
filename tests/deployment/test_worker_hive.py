@@ -19,10 +19,13 @@ TOKEN = "fixture-github-token-value"
 JOINED = "AGENTIHOOKS_HIVE_LEDGER_CREDENTIAL=fixture-ledger\nAGENTIHOOKS_HIVE_REDIS_URL=redis://joined\n"
 REFRESHED = "AGENTIHOOKS_HIVE_LEDGER_CREDENTIAL=fixture-ledger\nAGENTIHOOKS_HIVE_REDIS_URL=redis://refreshed\n"
 OTHER = "AGENTIHOOKS_HIVE_LEDGER_CREDENTIAL=fixture-old-ledger\nAGENTIHOOKS_HIVE_REDIS_URL=redis://old\n"
-SAVED = {"refreshed": REFRESHED, "rejoined": OTHER}
+MOVED = "AGENTIHOOKS_HIVE_URL=https://tailnet.example:8770\n" + REFRESHED
+SAVED = {"refreshed": REFRESHED, "rejoined": OTHER, "moved": MOVED}
 
 
-def startup(tmp_path, *, credential="mounted", refuse="", ssh=False, sshd_dies=False, bundle=False, bundle_url=""):
+def startup(
+    tmp_path, *, credential="mounted", refuse="", ssh=False, sshd_dies=False, bundle=False, bundle_url="", hive_url=""
+):
     tools = tmp_path / "bin"
     tools.mkdir()
     log = tmp_path / "commands"
@@ -106,6 +109,9 @@ def startup(tmp_path, *, credential="mounted", refuse="", ssh=False, sshd_dies=F
     }
     if credential != "mounted":
         env["HIVE_DELIVERY_WAIT_S"] = "0"
+    env.pop("AGENTIHOOKS_HIVE_URL", None)
+    if hive_url:
+        env["AGENTIHOOKS_HIVE_URL"] = hive_url
     if ssh:
         env |= {
             "HIVE_SSHD": str(sshd),
@@ -168,6 +174,21 @@ def test_a_new_join_replaces_the_saved_credential_of_another_member(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert (home / "hive.env").read_text() == JOINED
+    assert (home / "hive.env").stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize(
+    ("hive_url", "saved"),
+    [
+        ("https://anton.example:8770", MOVED.replace("tailnet.example", "anton.example")),
+        ("", MOVED),
+    ],
+)
+def test_the_charted_hive_url_replaces_the_endpoint_in_the_saved_credential(tmp_path, hive_url, saved):
+    result, _, home, _ = startup(tmp_path, credential="moved", hive_url=hive_url)
+
+    assert result.returncode == 0, result.stderr
+    assert (home / "hive.env").read_text() == saved
     assert (home / "hive.env").stat().st_mode & 0o777 == 0o600
 
 
