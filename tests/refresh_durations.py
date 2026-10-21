@@ -13,7 +13,7 @@ from tests.duration_coverage import collected_tests, validate_coverage
 _ROOT = Path(__file__).parent.parent
 RUNS = 5
 VERSIONS = ("3.12",)
-SHARDS = 12
+SHARDS = 20
 ARTIFACTS = "repos/{owner}/{repo}/actions/artifacts?name=durations-3.12-1&per_page=100"
 
 
@@ -125,6 +125,9 @@ def main(argv: list[str] | None = None) -> None:
     candidates[".test_durations"] = merged
     for durations in candidates.values():
         validate_coverage(durations, collected)
+        fallback = statistics.median(durations.values())
+        for node in collected:
+            durations.setdefault(node, fallback)
     for name, durations in candidates.items():
         (_ROOT / name).write_text(json.dumps(durations, indent=4, sort_keys=True) + "\n")
 

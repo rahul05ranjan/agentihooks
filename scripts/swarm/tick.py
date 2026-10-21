@@ -1217,7 +1217,9 @@ def _recover_master(slug, config, store, runtime, now_ms):
     if not candidates:
         return []
     name = occupant if occupant in candidates else candidates[0]
-    record = AgentRecord(name, MASTER, MASTER, started_at=now_ms, seat=seat)
+    record = store.execution_occupants(slug).get(seat)
+    if not record or record.name != name:
+        record = AgentRecord(name, MASTER, MASTER, started_at=now_ms, seat=seat)
     store.put_agent(slug, placed_record(record, runtime.recover(name)))
     for agent in agents:
         if agent.name not in live and agent.state != "finished":
@@ -1261,6 +1263,8 @@ def _master(slug, config, store, runtime, now_ms, past_host=False):
     if not past_host and (held := seat_spawn.host_hold(slug, store, now_ms, MASTER)):
         return [held]
 
+    launched = {}
+
     def prepare(record):
         transfer = transfers.attach(store, slug, record)
         task = (
@@ -1276,6 +1280,7 @@ def _master(slug, config, store, runtime, now_ms, past_host=False):
         task = master_move.pinned(store, slug, task, transfer)
         master_start.begin(store, slug, record.name, task, now_ms)
         affinity.handed_off(store, slug)
+        launched.update(task)
         return task
 
     try:
@@ -1296,7 +1301,7 @@ def _master(slug, config, store, runtime, now_ms, past_host=False):
         store.redis.delete(store.key(slug, "master-start"))
         store.clear_handoff(slug, MASTER)
     store.redis.hdel(store.key(slug, "launch-assignments"), MASTER)
-    return [f"spawned master {record.name}"]
+    return [f"spawned master {record.name}", *master_move.account_moved(slug, launched, record)]
 
 
 def _retire_master(slug, store, runtime, master, now_ms):

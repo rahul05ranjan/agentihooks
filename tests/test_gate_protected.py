@@ -276,9 +276,12 @@ def test_main_refuses_an_unknown_head(repo):
 
 
 def test_the_repository_grades_itself_green():
+    from scripts import ci_runner_trust
+
     workflows = ci_wiring.load(_ROOT)
     config = json.loads((_ROOT / ci_wiring.CONFIG).read_text())
-    assert gate_protected.grade(workflows, config, workflows, config, _TODAY) == []
+    actors = json.loads((_ROOT / ci_runner_trust.ACTORS).read_text())
+    assert gate_protected.grade(workflows, config, workflows, config, _TODAY, actors) == []
 
 
 def _protected_workflow():
@@ -856,6 +859,39 @@ def test_the_reviewed_summary_may_run_outside_required_grading(separate, declare
         else ["test.yml/test-summary runs on pull requests but is not a need of Gate — Required."]
     )
     assert gate_protected.grade({"test.yml": base}, {}, {"test.yml": head}, config, _TODAY, _POLICY) == expected
+
+
+@pytest.mark.parametrize("shell", [None, "bash", "sh", "pwsh"])
+@pytest.mark.parametrize("declared_on_base", [False, True])
+def test_the_separate_summary_accepts_only_the_reviewed_shell(shell, declared_on_base):
+    from scripts import ci_reuse
+
+    base, head = _aggregators()
+    steps = ci_reuse.summary_steps()
+    if shell is not None:
+        steps[-1]["shell"] = shell
+    head["jobs"]["test-summary"] = {
+        "needs": ["unit", "unit-selected"],
+        "if": "${{ always() }}",
+        "runs-on": "ubuntu-latest",
+        "timeout-minutes": 5,
+        "steps": steps,
+    }
+    head["jobs"]["unit-selected"] = {"runs-on": "ubuntu-latest"}
+    head["jobs"]["gate-required"]["needs"].append("unit-selected")
+    config = {"not_gates": {"test.yml/test-summary": _entry()}}
+    problems = gate_protected.grade(
+        {"test.yml": base},
+        config if declared_on_base else {},
+        {"test.yml": head},
+        config,
+        _TODAY,
+        _POLICY,
+    )
+    if shell in (None, "bash"):
+        assert problems == []
+    else:
+        assert "The test summary must use the reviewed reporting job." in problems
 
 
 @pytest.mark.parametrize("change", ["steps", "needs", "if", "runs-on", "timeout-minutes", "env"])
