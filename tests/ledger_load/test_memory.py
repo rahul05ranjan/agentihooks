@@ -45,3 +45,21 @@ def test_paired_load_keeps_the_server_log_and_removes_storage_when_the_run_raise
     if log is not None:
         assert (tmp_path / "server.log").read_text() == log
     assert not folders[0].exists()
+
+
+def test_paired_load_preserves_both_logs_when_a_write_breach_repeats(monkeypatch, tmp_path):
+    runs = []
+
+    def run(folder):
+        runs.append(folder)
+        (folder / "server.log").write_text(f"measure {len(runs)}")
+        return (["write p95 3.0s exceeds 2.0s"], 3.0) if len(runs) == 1 else ([], 0.2)
+
+    monkeypatch.setattr(gate, "stop_server", lambda process: None)
+    monkeypatch.setattr(gate, "run", run)
+    monkeypatch.setattr(gate, "main", lambda: int(bool(gate.measured(tmp_path))))
+    assert memory.main() == 0
+    assert (tmp_path / "server.log").read_text() == "measure 1"
+    assert (tmp_path / "repeat" / "server.log").read_text() == "measure 2"
+    assert len(set(runs)) == 2
+    assert all(not folder.exists() for folder in runs)
