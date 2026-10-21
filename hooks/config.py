@@ -420,6 +420,9 @@ MEMORY_AUTO_SAVE = _env_bool("MEMORY_AUTO_SAVE", "true")
 # The front door master of every swarm launches on the one claude ai master login
 MASTER_CLAUDE_LOGIN = _env_bool("AGENTIHOOKS_MASTER_CLAUDE_LOGIN", "false")
 
+# The most claude ai master logins agentihooks claude login --master stores
+MASTER_LOGIN_MAX = int(os.getenv("AGENTIHOOKS_MASTER_LOGIN_MAX", "5"))
+
 # =============================================================================
 # SECRETS SCANNING MODE
 # =============================================================================

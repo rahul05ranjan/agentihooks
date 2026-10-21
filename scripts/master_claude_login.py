@@ -67,6 +67,14 @@ LEGACY_HELD = "the legacy master login {path} is held by {owner}, still running"
 LEGACY = "master-claude"
 PUBLISH_FAILED = "master login recovery copy not stored: {error}"
 RECOVERY_FAILED = "master login recovery copy not read: {error}"
+SLOTS = "logins"
+INCOMING = ".incoming"
+INDEX = "logins"
+RECORD_KEYS = ("grant", "account", "epoch", "generation")
+FULL = "{count} master claude ai logins are stored, the most AGENTIHOOKS_MASTER_LOGIN_MAX allows: remove one first"
+ALL_HELD = "every stored master claude ai login is held by a live master ({held}): add one with {command}"
+UNKNOWN = "no stored master claude ai login {slug}"
+ADD = "agentihooks claude login --master"
 
 
 class LoginRefused(RuntimeError):
@@ -92,13 +100,45 @@ def root() -> Path:
     return Path(hooks_config.AGENTIHOOKS_HOME) / "master-login"
 
 
-def home() -> Path:
-    return root() / "claude"
+def home(folder: Path | None = None) -> Path:
+    return (folder or root()) / "claude"
+
+
+def slot(slug: str) -> Path:
+    return root() / SLOTS / slug
+
+
+def folders() -> list[Path]:
+    extra = root() / SLOTS
+    found = extra.iterdir() if extra.is_dir() else ()
+    return [root(), *sorted(path for path in found if path.is_dir() and not path.name.startswith("."))]
+
+
+def record(folder: Path) -> str:
+    return CREDS if folder == root() else f"{CREDS}/{folder.name}"
+
+
+def login_slug(folder: Path, copy: Mapping[str, str]) -> str:
+    account = _read(home(folder) / CONFIG).get(ACCOUNT) or json.loads(copy.get("account") or "{}")
+    email = account.get("emailAddress") if isinstance(account, dict) else None
+    return aicode_tokens.slug(email) if email else ""
+
+
+def logins() -> dict[str, Path]:
+    return {login_slug(folder, {}): folder for folder in folders() if _private(home(folder))}
+
+
+def holders(folder: Path) -> dict[str, int]:
+    held = (_read(folder / OWNER).get("holders") or {}).items()
+    return {owner: pid for owner, pid in held if _alive(pid)}
+
+
+def free(name: str) -> list[str]:
+    return [found for found, folder in logins().items() if set(holders(folder)) <= {name}]
 
 
 @contextmanager
-def _locked() -> Iterator[Path]:
-    folder = root()
+def _locked(folder: Path) -> Iterator[Path]:
     folder.mkdir(mode=PRIVATE_DIR, parents=True, exist_ok=True)
     with (folder / LOCK).open("a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -123,16 +163,16 @@ def _private(target: Path) -> Path | None:
     return path if path.is_file() and not path.is_symlink() else None
 
 
-def build(rendered: Path, report: str | None = None) -> Path:
-    with _locked() as folder:
-        target = _rebuild(folder, rendered)
+def build(rendered: Path, report: str | None = None, folder: Path | None = None) -> Path:
+    with _locked(folder or root()) as found:
+        target = _rebuild(found, rendered)
     if report:
         binding.rehome(Path(report), target)
     return target
 
 
 def _rebuild(folder: Path, rendered: Path) -> Path:
-    target, staging = home(), folder / "staging"
+    target, staging = home(folder), folder / "staging"
     kept = _private(target)
     grant = kept.read_bytes() if kept else None
     account = _read(target / CONFIG).get(ACCOUNT)
@@ -230,7 +270,7 @@ def _alive(pid: object) -> bool:
 
 
 def claim(name: str, pid: int, alive: Callable[[object], bool] = _alive, floor: int = 0, alone: bool = False) -> int:
-    with _locked() as folder:
+    with _locked(root()) as folder:
         return _claim(folder, name, pid, alive, floor, alone)[0]
 
 
@@ -253,7 +293,8 @@ def publish(bao: openbao_kv.OpenBao, target: Path, epoch: int) -> bool:
     if not grant.get("refreshToken"):
         return False
     generation = int(grant.get("expiresAt", 0))
-    stored, _ = openbao_kv.read(bao, CREDS)
+    path = record(target.parent)
+    stored, _ = openbao_kv.read(bao, path)
     if (int(stored.get("epoch", 0)), int(stored.get("generation", 0))) >= (epoch, generation):
         return False
     entries = {
@@ -262,7 +303,7 @@ def publish(bao: openbao_kv.OpenBao, target: Path, epoch: int) -> bool:
         "epoch": str(epoch),
         "generation": str(generation),
     }
-    openbao_kv.merge(bao, CREDS, entries)
+    openbao_kv.merge(bao, path, entries)
     return True
 
 
@@ -274,11 +315,11 @@ def restore(stored: Mapping[str, str], target: Path) -> bool:
     return True
 
 
-def stored(bao: openbao_kv.OpenBao | None) -> dict[str, str]:
+def stored(bao: openbao_kv.OpenBao | None, folder: Path) -> dict[str, str]:
     if bao is None:
         return {}
     try:
-        return openbao_kv.read(bao, CREDS)[0]
+        return openbao_kv.read(bao, record(folder))[0]
     except openbao_kv.OpenBaoError as exc:
         print(RECOVERY_FAILED.format(error=exc), file=sys.stderr)
         return {}
@@ -295,10 +336,83 @@ def keep(bao: openbao_kv.OpenBao | None, target: Path, epoch: int) -> bool:
 
 
 def checkpoint(environ: Mapping[str, str]) -> bool:
-    if environ.get("CLAUDE_CONFIG_DIR") != str(home()):
+    folder = next((found for found in folders() if environ.get("CLAUDE_CONFIG_DIR") == str(home(found))), None)
+    if folder is None:
         return False
-    epoch = int(_read(root() / OWNER).get("epoch", 0))
-    return keep(openbao_kv.from_env(environ), home(), epoch)
+    epoch = int(_read(folder / OWNER).get("epoch", 0))
+    return keep(openbao_kv.from_env(environ), home(folder), epoch)
+
+
+def hold(folder: Path, name: str, floor: int) -> int:
+    with _locked(folder):
+        return _claim(folder, name, os.getpid(), _alive, floor, True)[0]
+
+
+def settle(incoming: Path, maximum: int) -> Path:
+    found = login_slug(incoming, {})
+    if not (found and _private(home(incoming))):
+        raise LoginRefused(NO_LOGIN)
+    kept = logins()
+    if found not in kept and len(kept) >= maximum:
+        raise LoginRefused(FULL.format(count=len(kept)))
+    folder = kept.get(found) or slot(found)
+    with _locked(folder):
+        held = holders(folder)
+        if held:
+            raise LoginRefused(HELD.format(owner=", ".join(sorted(held))))
+        shutil.rmtree(home(folder), ignore_errors=True)
+        home(incoming).rename(home(folder))
+    shutil.rmtree(incoming)
+    return folder
+
+
+def remove(found: str) -> Path:
+    folder = logins().get(found)
+    if folder is None:
+        raise LoginRefused(UNKNOWN.format(slug=found))
+    with _locked(folder):
+        held = holders(folder)
+        if held:
+            raise LoginRefused(HELD.format(owner=", ".join(sorted(held))))
+        shutil.rmtree(home(folder))
+    if folder != root():
+        shutil.rmtree(folder)
+    return folder
+
+
+def forget(bao: openbao_kv.OpenBao, folder: Path) -> None:
+    openbao_kv.merge(bao, record(folder), {}, RECORD_KEYS)
+
+
+def index(bao: openbao_kv.OpenBao) -> None:
+    extra = sorted(folder.name for folder in folders()[1:] if _private(home(folder)))
+    openbao_kv.merge(bao, CREDS, {INDEX: json.dumps(extra)})
+
+
+def _offered(bao: openbao_kv.OpenBao | None, first: dict[str, str]) -> dict[Path, dict[str, str]]:
+    copies = {root(): first, **{folder: stored(bao, folder) for folder in folders()[1:]}}
+    for found in json.loads(first.get(INDEX) or "[]"):
+        copies.setdefault(slot(found), stored(bao, slot(found)))
+    return {folder: copy for folder, copy in copies.items() if _private(home(folder)) or copy.get("grant")}
+
+
+def _take(name: str, bao: openbao_kv.OpenBao | None, first: dict[str, str]) -> tuple[Path, int, dict[str, str]]:
+    from scripts import master_logins
+
+    offered = _offered(bao, first)
+    if not offered:
+        raise LoginRefused(NO_LOGIN)
+    named = {login_slug(folder, copy): folder for folder, copy in offered.items()}
+    held = []
+    for found in master_logins.ranked(named, time.time()):
+        folder = named[found]
+        try:
+            epoch = hold(folder, name, int(offered[folder].get("epoch", 0)))
+        except LoginRefused:
+            held.append(f"{found} by {', '.join(sorted(holders(folder)))}")
+            continue
+        return folder, epoch, offered[folder]
+    raise LoginRefused(ALL_HELD.format(held="; ".join(held), command=ADD))
 
 
 def prepare(environ: Mapping[str, str], cwd: Path) -> tuple[Path, str]:
@@ -307,18 +421,15 @@ def prepare(environ: Mapping[str, str], cwd: Path) -> tuple[Path, str]:
     if refused:
         raise LoginRefused(refused)
     bao = openbao_kv.from_env(environ)
-    copy = stored(bao)
-    with _locked() as folder:
-        epoch, shared = _claim(
-            folder, environ["AGENTIHOOKS_AGENT_NAME"], os.getpid(), _alive, int(copy.get("epoch", 0))
-        )
-        if not (shared or copy.get("grant")):
+    first = stored(bao, root())
+    if not first.get("grant"):
+        with _locked(root()):
             _adopt()
-            if not _private(home()):
-                raise LoginRefused(NO_LOGIN)
-        target = home() if shared else _rebuild(folder, rendered)
+    folder, epoch, copy = _take(environ["AGENTIHOOKS_AGENT_NAME"], bao, first)
+    with _locked(folder):
+        target = _rebuild(folder, rendered)
     if environ.get(binding.REPORT):
-        binding.rehome(Path(environ[binding.REPORT]), target, shared=shared)
+        binding.rehome(Path(environ[binding.REPORT]), target, shared=False)
     restore(copy, target)
     found = account(target, environ)
     keep(bao, target, epoch)

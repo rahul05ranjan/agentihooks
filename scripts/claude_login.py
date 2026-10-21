@@ -11,11 +11,13 @@ import struct
 import subprocess
 import sys
 import termios
+import time
 import tty
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from hooks import config as hooks_config
 from hooks.context.account_sessions import TOKEN_PREFIX
 from scripts import aicode_tokens, openbao_kv, openbao_step, term_colors
 from scripts.openbao_step import Console, StoreRefused
@@ -41,7 +43,11 @@ SUMMARY = "{name} written to {rc} ({length} chars). run: source {rc}"
 STEP_MASTER = "Sign in to the master claude ai account in the browser; the login stays in {home}"
 MASTER_FAILED = "claude auth login exited {code}; the master login is unchanged"
 STEP_RECOVERY = "Storing the master login recovery copy in OpenBao"
-MASTER_SLUG = "--master takes no slug: the master login is one home for every swarm"
+MASTER_SLUG = "--master takes no slug: the login names itself from its account"
+MASTER_ONLY = "--list and --remove need --master"
+STORED = "Stored master claude ai login {slug} in {home}"
+REMOVED = "Removed master claude ai login {slug}"
+LISTED = "{slug}  {holder}  5h {five:.0f}% used  7d {week:.0f}% used"
 _write = os.write
 
 
@@ -153,6 +159,9 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=PROG)
     parser.add_argument("slug", nargs="?")
     parser.add_argument("--master", action="store_true")
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument("--list", action="store_true")
+    action.add_argument("--remove", metavar="SLUG")
     store = parser.add_mutually_exclusive_group()
     store.add_argument("--openbao", action="store_true", default=None)
     store.add_argument("--no-openbao", dest="openbao", action="store_false")
@@ -203,12 +212,13 @@ def _rendered(profile: str) -> Path:
 def master(openbao: bool | None, environ: Mapping[str, str], deps: Deps) -> int:
     from scripts import master_claude_login as login
 
+    incoming = login.slot(login.INCOMING)
     try:
-        epoch = login.claim(PROG, os.getpid(), alone=True)
+        login.hold(incoming, PROG, 0)
     except login.LoginRefused as exc:
         _fail(str(exc))
         return 1
-    target = login.build((deps.render or _rendered)(login.LANE))
+    target = login.build((deps.render or _rendered)(login.LANE), folder=incoming)
     print(term_colors.blue(STEP_MASTER.format(home=target)))
     argv = [shutil.which("claude") or "claude", *login.SETTINGS, *login.LOGIN]
     try:
@@ -220,17 +230,54 @@ def master(openbao: bool | None, environ: Mapping[str, str], deps: Deps) -> int:
         _fail(MASTER_FAILED.format(code=code))
         return code
     try:
+        folder = login.settle(incoming, hooks_config.MASTER_LOGIN_MAX)
         bao = openbao_step.target(openbao, environ, deps.console, deps.opener)
-    except StoreRefused as exc:
+    except (login.LoginRefused, StoreRefused) as exc:
         _fail(str(exc))
         return 1
-    if bao is not None:
-        print(term_colors.blue(STEP_RECOVERY))
-        try:
-            login.publish(bao, target, epoch)
-        except openbao_kv.OpenBaoError as exc:
-            _fail(str(exc))
-            return 1
+    print(term_colors.blue(STORED.format(slug=login.login_slug(folder, {}), home=login.home(folder))))
+    if bao is None:
+        return 0
+    print(term_colors.blue(STEP_RECOVERY))
+    try:
+        login.publish(bao, login.home(folder), login.hold(folder, PROG, int(login.stored(bao, folder).get("epoch", 0))))
+        login.index(bao)
+    except openbao_kv.OpenBaoError as exc:
+        _fail(str(exc))
+        return 1
+    return 0
+
+
+def listed() -> int:
+    from scripts import master_claude_login as login
+    from scripts import master_logins
+
+    now = time.time()
+    for found, folder in sorted(login.logins().items()):
+        five, week, _ = master_logins.usage(found, now)
+        holder = ", ".join(sorted(login.holders(folder))) or "free"
+        print(LISTED.format(slug=found, holder=holder, five=five, week=week))
+    return 0
+
+
+def removed(found: str, openbao: bool | None, environ: Mapping[str, str], deps: Deps) -> int:
+    from scripts import master_claude_login as login
+
+    try:
+        bao = openbao_step.target(openbao, environ, deps.console, deps.opener)
+        folder = login.remove(found)
+    except (login.LoginRefused, StoreRefused) as exc:
+        _fail(str(exc))
+        return 1
+    print(term_colors.blue(REMOVED.format(slug=found)))
+    if bao is None:
+        return 0
+    try:
+        login.forget(bao, folder)
+        login.index(bao)
+    except openbao_kv.OpenBaoError as exc:
+        _fail(str(exc))
+        return 1
     return 0
 
 
@@ -247,6 +294,12 @@ def main(
     options = parser.parse_args(args)
     if options.master and options.slug:
         parser.error(MASTER_SLUG)
+    if (options.list or options.remove) and not options.master:
+        parser.error(MASTER_ONLY)
+    if options.list:
+        return listed()
+    if options.remove:
+        return removed(options.remove, options.openbao, environ, Deps(console=console, opener=opener))
     if options.master:
         return master(options.openbao, environ, Deps(console=console, opener=opener))
     raw = _raw_slug(options.slug, console, parser)
