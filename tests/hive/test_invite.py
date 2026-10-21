@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import os
 import urllib.parse
 
 import pytest
@@ -139,6 +140,43 @@ def test_without_like_the_flags_and_this_hosts_redis_and_ca_fill_the_record(admi
     assert _redis(admin, env) == ("redis", f"hive-{env['AGENTIHOOKS_HIVE_ID']}", "127.0.0.1", 6379, "/0")
 
 
+def test_a_like_record_without_a_credential_still_lends_its_ledger_address(admin):
+    fake = Bao({LIKE: {"swarm_url": SWARM, "ca_pem": CA}})
+
+    invite.invite(admin, _bao(fake), invite.Request("lab", RECORD, like=LIKE, url=URL), LOCAL)
+
+    record = fake.records[RECORD]
+    env = _env(record["credential"])
+    assert env["AGENTIHOOKS_HIVE_URL"] == URL
+    assert _redis(admin, env) == ("redis", f"hive-{env['AGENTIHOOKS_HIVE_ID']}", "127.0.0.1", 6379, "/0")
+    assert record["swarm_url"] == SWARM
+
+
+def test_a_like_redis_url_keeps_the_query_after_its_first_equals_sign(admin):
+    sample = _sample()
+    sample["credential"] = sample["credential"].replace(PUBLIC, f"{PUBLIC}?ssl_cert_reqs=required")
+    fake = Bao({LIKE: sample})
+
+    invite.invite(admin, _bao(fake), invite.Request("lab", RECORD, like=LIKE), LOCAL)
+
+    url = _env(fake.records[RECORD]["credential"])["AGENTIHOOKS_HIVE_REDIS_URL"]
+    assert urllib.parse.urlsplit(url).query == "ssl_cert_reqs=required"
+
+
+def test_the_invite_parser_names_its_record_and_addresses():
+    sub = next(action for action in cli._parser()._actions if action.dest == "command")
+    helps = {choice.dest: choice.help for choice in sub._choices_actions}
+    assert helps["invite"] == "Mint a hive member and write its credential into an OpenBao record"
+    assert [(action.option_strings, action.dest, action.help) for action in sub.choices["invite"]._actions[1:]] == [
+        ([], "label", "hive member name"),
+        (["--path"], "path", "OpenBao record under the secret mount; defaults to k8s/agentihooks-hive-LABEL"),
+        (["--like"], "like", "OpenBao record of another hive to copy addresses and the ledger CA from"),
+        (["--url"], "url", "this hive's endpoint as the new hive reaches it, for hive refresh"),
+        (["--redis-url"], "redis_url", "Redis URL the new hive connects to"),
+        (["--swarm-url"], "swarm_url", "ledger address the new hive reaches"),
+    ]
+
+
 def test_an_unknown_hive_url_is_refused_before_any_member_is_minted(admin):
     fake = Bao()
 
@@ -233,7 +271,7 @@ def test_the_cli_passes_its_flags_and_prints_the_outcome(monkeypatch, capsys):
     monkeypatch.setenv("OPENBAO_TOKEN", BAO_TOKEN)
     monkeypatch.setattr(cli, "redis_client", lambda: "redis")
     monkeypatch.setattr(cli.ledger_ca, "served", lambda: "served-ca")
-    monkeypatch.setattr("scripts.swarm.store.redis_url", lambda environ: LOCAL)
+    monkeypatch.setattr("scripts.swarm.store.redis_url", lambda environ: LOCAL if environ is os.environ else None)
     monkeypatch.setattr(invite, "invite", lambda *args: seen.append(args) or "invited")
 
     assert cli.main(["invite", "lab", "--like", LIKE, "--url", URL, "--redis-url", PUBLIC, "--swarm-url", SWARM]) == 0

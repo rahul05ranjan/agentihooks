@@ -37,7 +37,7 @@ def invite(redis: "Redis", bao: openbao_kv.OpenBao, request: Request, local_redi
     like = _read(bao, request.like) if request.like else {}
     if request.like and not like:
         raise auth.HiveError(f"the record {request.like} that --like names is empty or missing")
-    sample = _env(like.get(CREDENTIAL, ""))
+    sample = _env(like.get(CREDENTIAL))
     url = request.url or sample.get(HIVE_URL)
     if not url:
         raise auth.HiveError("the hive URL is unknown: pass --url or --like with a hive record")
@@ -57,7 +57,7 @@ def invite(redis: "Redis", bao: openbao_kv.OpenBao, request: Request, local_redi
             raise auth.HiveError(f"{exc}; the new member {grant['id']} was not revoked ({revoked})") from None
         raise auth.HiveError(str(exc)) from None
     done = f"invited hive member {grant['id']} as {request.label}; {openbao_kv.summary(request.path, entries, total)}"
-    previous = _env(current.get(CREDENTIAL, "")).get(HIVE_ID)
+    previous = _env(current.get(CREDENTIAL)).get(HIVE_ID)
     if previous and previous != grant["id"]:
         try:
             auth.revoke(redis, previous)
@@ -74,5 +74,6 @@ def _read(bao: openbao_kv.OpenBao, path: str) -> dict[str, str]:
         raise auth.HiveError(str(exc)) from None
 
 
-def _env(text: str) -> dict[str, str]:
-    return dict(line.partition("=")[::2] for line in text.splitlines() if "=" in line)
+def _env(text: str | None) -> dict[str, str]:
+    lines = text.splitlines() if text else []
+    return dict(line.partition("=")[::2] for line in lines if "=" in line)
